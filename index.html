@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2025-12-28 09:10)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2025-12-28 10:05)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -173,6 +173,7 @@
   th, td { padding: 12px 10px; border-top: 1px solid #1d2738; }
   th { background: #0f1928; color: #cbd5e1; text-align: left; position: sticky; top: 0; }
   tr:hover td { background: #0d1423; }
+  tr.void-row td { color: #9ca3af; opacity: 0.65; }
 
   /* Toast */
   .toast {
@@ -224,7 +225,7 @@
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2025-12-28 09:10</span>
+        Build <span class="kbd" id="buildId">2025-12-28 10:05</span>
       </div>
     </div>
 
@@ -236,7 +237,7 @@
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2025-12-28 09:10
+      Build 2025-12-28 10:05
     </div>
 
     <div class="metaRow">
@@ -377,6 +378,7 @@
       <div class="inline" style="margin:12px 0 12px 0;">
         <button id="btnExport" class="btn brand" type="button">Export CSV</button>
         <button id="btnCopy" class="btn" type="button">Copy CSV</button>
+        <button id="btnVoidLast" class="btn warn" type="button">Void last sign‑in</button>
         <button id="btnClearSignins" class="btn danger" type="button">Clear All Sign‑ins</button>
       </div>
 
@@ -430,7 +432,7 @@
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2025-12-28 09:10';
+  const BUILD = '2025-12-28 10:05';
   const TZ = 'America/New_York';
 
   // Storage keys (new)
@@ -826,13 +828,31 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   // Sign-ins
   function loadSignins() {
     const rows = safeParse(SIGNINS_KEY, null);
-    if (Array.isArray(rows)) return rows;
+    if (Array.isArray(rows)) {
+      let updated = false;
+      rows.forEach(r => {
+        if (!r.Status) {
+          r.Status = 'OK';
+          updated = true;
+        }
+      });
+      if (updated) saveSignins(rows);
+      return rows;
+    }
 
     // Back-compat: if new key empty, load from old
     for (const k of OLD_SIGNINS_KEYS) {
       const old = safeParse(k, null);
       if (Array.isArray(old) && old.length) {
+        let updated = false;
+        old.forEach(r => {
+          if (!r.Status) {
+            r.Status = 'OK';
+            updated = true;
+          }
+        });
         safeSet(SIGNINS_KEY, old);
+        if (updated) saveSignins(old);
         return old;
       }
     }
@@ -849,11 +869,18 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       return;
     }
     let html = '<div style="overflow:auto; max-height:420px;"><table><thead><tr>' +
-      '<th>#</th><th>Timestamp</th><th>Date</th><th>Class</th><th>Duration (hr)</th><th>Instructor</th><th>Site</th><th>Notes</th>' +
+      '<th>#</th><th>Status</th><th>Timestamp</th><th>Date</th><th>Class</th><th>Duration (hr)</th><th>Instructor</th><th>Site</th><th>Notes</th>' +
       '</tr></thead><tbody>';
     rows.forEach((r,i) => {
-      html += '<tr>' +
+      const status = r.Status || 'OK';
+      const isVoid = status === 'VOID';
+      const voidDetails = [
+        r.voided_at ? `Voided: ${r.voided_at}` : '',
+        r.void_reason ? `Reason: ${r.void_reason}` : ''
+      ].filter(Boolean).join(' · ');
+      html += `<tr class="${isVoid ? 'void-row' : ''}">` +
         `<td>${i+1}</td>` +
+        `<td title="${isVoid ? voidDetails : ''}">${status}</td>` +
         `<td style="font-family:ui-monospace,monospace;">${r.Timestamp || ''}</td>` +
         `<td style="font-family:ui-monospace,monospace;">${r.Date || ''}</td>` +
         `<td>${(r['Class Label'] || '')}</td>` +
@@ -868,7 +895,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   function buildCSV() {
-    const rows = loadSignins();
+    const rows = loadSignins().filter(r => (r.Status || 'OK') !== 'VOID');
     const headers = ['Timestamp','Date','Class Label','Duration (hr)','Instructor','Site','Notes'];
     const lines = [headers.join(',')];
     rows.forEach(r => {
@@ -883,7 +910,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   async function exportCSV() {
-    const rows = loadSignins();
+    const rows = loadSignins().filter(r => (r.Status || 'OK') !== 'VOID');
     if (!rows.length) { alert('No sign-ins to export.'); return; }
     const csv = buildCSV();
     const blob = new Blob([csv], { type:'text/csv;charset=utf-8' });
@@ -922,7 +949,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   async function copyCSV() {
-    const rows = loadSignins();
+    const rows = loadSignins().filter(r => (r.Status || 'OK') !== 'VOID');
     if (!rows.length) { alert('No sign-ins to copy.'); return; }
     const csv = buildCSV();
     try {
@@ -981,7 +1008,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         'Duration (hr)': 1,
         'Instructor': name,
         'Site': site,
-        'Notes': notes
+        'Notes': notes,
+        'Status': 'OK'
       });
     });
     saveSignins(rows);
@@ -1027,6 +1055,33 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     } else {
       updateSyncStatus();
     }
+  }
+
+  function voidLastSignin() {
+    const rows = loadSignins();
+    if (!rows.length) {
+      alert('No sign-ins to void.');
+      return;
+    }
+    let idx = -1;
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const status = rows[i].Status || 'OK';
+      if (status !== 'VOID') {
+        idx = i;
+        break;
+      }
+    }
+    if (idx === -1) {
+      alert('All sign-ins are already voided.');
+      return;
+    }
+    const reason = prompt('Optional void reason (leave blank if none):') || '';
+    rows[idx].Status = 'VOID';
+    rows[idx].void_reason = reason.trim();
+    rows[idx].voided_at = fmtTS(new Date());
+    saveSignins(rows);
+    renderAdminTable();
+    showToast('Last sign-in voided');
   }
 
   // --- Sync helpers ---
@@ -1322,6 +1377,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   // Sign-ins actions
   $('#btnExport').addEventListener('click', exportCSV);
   $('#btnCopy').addEventListener('click', copyCSV);
+  $('#btnVoidLast').addEventListener('click', voidLastSignin);
   $('#btnClearSignins').addEventListener('click', () => {
     if (!confirm('Clear ALL locally stored sign-ins on this device?')) return;
     saveSignins([]);
