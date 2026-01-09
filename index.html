@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2025-12-28 10:05)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2025-12-29 09:15)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -30,6 +30,19 @@
     max-width: 1060px;
     margin: 0 auto;
     padding: 22px;
+  }
+  body.kiosk-mode header {
+    padding: 14px;
+  }
+  body.kiosk-mode header .kiosk-hide {
+    display: none;
+  }
+  body.kiosk-mode header nav {
+    margin-top: 0;
+    justify-content: flex-end;
+  }
+  body.kiosk-mode #btnKiosk {
+    display: none;
   }
   header {
     background: radial-gradient(1200px 600px at 10% -10%, #1e293b 0%, transparent 60%);
@@ -108,6 +121,7 @@
     color: var(--text);
   }
   textarea { min-height: 160px; resize: vertical; }
+  #notesInput { min-height: 90px; }
   input:focus, select:focus, textarea:focus {
     border-color: var(--brand);
     outline: none;
@@ -221,40 +235,37 @@
 <body>
 <div class="container">
   <header>
-    <div class="inline">
+    <div class="inline kiosk-hide">
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2025-12-28 10:05</span>
+        Build <span class="kbd" id="buildId">2025-12-29 09:15</span>
       </div>
     </div>
 
-    <h1 id="hdrGym">Gym in a Box — Module 1</h1>
-    <div class="subtitle" id="hdrSub">
+    <h1 id="hdrGym" class="kiosk-hide">Gym in a Box — Module 1</h1>
+    <div class="subtitle kiosk-hide" id="hdrSub">
       <span id="hdrLoc">Set device location in Admin.</span>
       <span id="todayName"></span>
     </div>
 
     <!-- Large build stamp for easy verification -->
-    <div id="buildStampLarge" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2025-12-28 10:05
+    <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
+      Build 2025-12-29 09:15
     </div>
 
-    <div class="metaRow">
+    <div class="metaRow kiosk-hide">
       <span>Goal: tap‑fast sign‑in, clean export, no typos.</span>
     </div>
 
     <nav>
       <button id="btnKiosk" class="btn brand" type="button">Instructor Sign‑In</button>
       <button id="btnAdmin" class="btn" type="button">Admin View</button>
-      <button id="btnHardRefresh" class="btn small" type="button" title="Reload page (helps if a host cached an older version)">Reload</button>
     </nav>
   </header>
 
   <!-- KIOSK -->
   <section id="kiosk" class="card">
-    <h2>Instructor Sign‑In</h2>
-
     <div class="grid two" id="classesGrid">
       <div>
         <label>Name</label>
@@ -271,18 +282,20 @@
 
     <div class="grid twoEq" style="margin-top: 12px;">
       <div style="grid-column: 1 / -1;">
-        <label>Site</label>
+        <label>Site (optional)</label>
         <input type="text" id="siteInput" value="Rev" />
       </div>
     </div>
 
-    <div style="margin-top: 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-      <button id="btnSignIn" class="btn brand" type="button">Sign In</button>
-      <button id="btnResetKiosk" class="btn warn" type="button" title="Clears current inputs (does not delete sign-ins)">Reset Screen</button>
-      <span id="signInMsg"></span>
+    <div style="margin-top: 12px;">
+      <label>Notes (optional)</label>
+      <textarea id="notesInput" placeholder="Add a quick note if needed"></textarea>
     </div>
 
-    <div class="statusRow" id="kioskStatus"></div>
+    <div style="margin-top: 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <button id="btnSignIn" class="btn brand" type="button">Sign In</button>
+      <span id="signInMsg"></span>
+    </div>
   </section>
 
   <!-- ADMIN -->
@@ -432,7 +445,7 @@
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2025-12-28 10:05';
+  const BUILD = '2025-12-29 09:15';
   const TZ = 'America/New_York';
 
   // Storage keys (new)
@@ -820,9 +833,6 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         wrap.appendChild(label);
       });
     }
-    // Update kiosk status
-    const upd = meta.updatedAt ? new Date(meta.updatedAt).toLocaleString() : 'default';
-    $('#kioskStatus').innerHTML = `Schedule: <span class="kbd">${meta.source}</span> · Updated: <span class="kbd">${upd}</span> · Today: <span class="kbd">${day}</span> · Classes: <span class="kbd">${classes.length}</span>`;
   }
 
   // Sign-ins
@@ -972,15 +982,6 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     setTimeout(() => t.classList.remove('show'), 2000);
   }
 
-  function resetKioskInputs() {
-    $('#nameInput').value = '';
-    // Keep site as-is (it is device-level)
-    document.querySelectorAll('#classListWrap input[type="checkbox"]').forEach(cb => cb.checked = false);
-    $('#classListWrap').style.display = 'none';
-    $('#signInMsg').textContent = '';
-    showToast('Screen reset');
-  }
-
   function selectedClasses() {
     return Array.from(document.querySelectorAll('#classListWrap input[type="checkbox"]:checked'))
       .map(cb => cb.value)
@@ -991,7 +992,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const name = ($('#nameInput').value || '').trim();
     const classes = selectedClasses();
     const site = ($('#siteInput').value || '').trim() || 'Rev';
-    const notes = '';
+    const notes = ($('#notesInput').value || '').trim();
 
     if (!name || !classes.length) {
       alert('Please enter a name and select one or more classes.');
@@ -1016,6 +1017,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
     // Clear screen for next instructor
     $('#nameInput').value = '';
+    $('#notesInput').value = '';
     document.querySelectorAll('#classListWrap input[type="checkbox"]').forEach(cb => cb.checked = false);
     $('#classListWrap').style.display = 'none';
 
@@ -1201,6 +1203,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
   // Wire events
   function showKiosk() {
+    document.body.classList.add('kiosk-mode');
     $('#kiosk').style.display = 'block';
     $('#admin').style.display = 'none';
     applyDeviceToUI();
@@ -1211,6 +1214,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   function showAdmin() {
+    document.body.classList.remove('kiosk-mode');
     $('#kiosk').style.display = 'none';
     $('#admin').style.display = 'block';
 
@@ -1245,8 +1249,6 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
   $('#btnKiosk').addEventListener('click', showKiosk);
   $('#btnAdmin').addEventListener('click', showAdmin);
-  $('#btnHardRefresh').addEventListener('click', () => location.reload(true));
-  $('#btnResetKiosk').addEventListener('click', resetKioskInputs);
   $('#btnSignIn').addEventListener('click', signIn);
 
   // Device actions
@@ -1403,6 +1405,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
   // Init
   initScheduleEditor();
+  document.body.classList.add('kiosk-mode');
   loadScheduleIntoAdmin();
   applyDeviceToUI();
   populateClassesForToday();
