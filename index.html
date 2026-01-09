@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-06 09:00)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-06 09:30)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -231,6 +231,39 @@
     padding: 2px 6px;
     border-radius: 8px;
   }
+  .modal {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, 0.7);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s ease;
+    z-index: 50;
+    padding: 18px;
+  }
+  .modal.show {
+    opacity: 1;
+    pointer-events: all;
+  }
+  .modal-card {
+    width: min(420px, 96vw);
+    background: var(--card);
+    border: 1px solid var(--outline);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+    padding: 18px;
+  }
+  .modal-card h3 { margin: 0 0 8px 0; }
+  .modal-card .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
 </style>
 </head>
 <body>
@@ -240,7 +273,7 @@
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-01-06 09:00</span>
+        Build <span class="kbd" id="buildId">2026-01-06 09:30</span>
       </div>
     </div>
 
@@ -252,7 +285,7 @@
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-01-06 09:00
+      Build 2026-01-06 09:30
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -297,10 +330,13 @@
   <section id="admin" class="card" style="display:none;">
     <div class="inline" style="justify-content: space-between; align-items:center;">
       <h2 style="margin: 0;">Admin View</h2>
-      <button id="btnAdminLogout" class="btn warn small" type="button">Log out Admin</button>
+      <div class="inline" style="gap:8px;">
+        <button id="btnAdminPinToggle" class="btn small" type="button" style="display:none;">Change PIN</button>
+        <button id="btnAdminLogout" class="btn warn small" type="button">Log out Admin</button>
+      </div>
     </div>
 
-    <div class="card" style="background: var(--panel);">
+    <div id="adminPinPanel" class="card" style="background: var(--panel); display:none;">
       <h3>Admin access</h3>
       <div class="subtle" id="adminPinHint">Set a PIN to lock Admin view on this device.</div>
 
@@ -457,12 +493,30 @@
 </div>
 
 <div id="toast" class="toast">Saved</div>
+<div id="adminPinModal" class="modal" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="adminPinModalTitle">
+    <h3 id="adminPinModalTitle">Set Admin PIN</h3>
+    <div class="subtle">Create a PIN to protect Admin access on this device.</div>
+    <div style="margin-top: 12px;">
+      <label for="adminPinSetup">PIN</label>
+      <input id="adminPinSetup" type="password" inputmode="numeric" placeholder="Enter a 4-6 digit PIN" />
+    </div>
+    <div style="margin-top: 12px;">
+      <label for="adminPinSetupConfirm">Confirm PIN</label>
+      <input id="adminPinSetupConfirm" type="password" inputmode="numeric" placeholder="Re-enter PIN" />
+    </div>
+    <div class="actions">
+      <button id="btnCancelAdminPin" class="btn" type="button">Cancel</button>
+      <button id="btnConfirmAdminPin" class="btn brand" type="button">Save PIN</button>
+    </div>
+  </div>
+</div>
 
 <script>
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2026-01-06 09:00';
+  const BUILD = '2026-01-06 09:30';
   const TZ = 'America/New_York';
 
   // Storage keys (new)
@@ -904,29 +958,59 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     localStorage.setItem(ADMIN_PIN_KEY, pin);
   }
 
+  function toggleAdminPinModal(show) {
+    const modal = $('#adminPinModal');
+    if (!modal) return;
+    if (show) {
+      modal.classList.add('show');
+      modal.setAttribute('aria-hidden', 'false');
+      const input = $('#adminPinSetup');
+      if (input) input.focus();
+    } else {
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  function clearAdminPinModal() {
+    const pinInput = $('#adminPinSetup');
+    const confirmInput = $('#adminPinSetupConfirm');
+    if (pinInput) pinInput.value = '';
+    if (confirmInput) confirmInput.value = '';
+  }
+
   function updateAdminPinUI() {
     const pin = getAdminPin();
     const label = $('#adminPinLabel');
     const hint = $('#adminPinHint');
     const button = $('#btnSaveAdminPin');
     const input = $('#adminPinInput');
+    const toggle = $('#btnAdminPinToggle');
+    const panel = $('#adminPinPanel');
     if (!pin) {
       label.textContent = 'Set PIN';
       hint.textContent = 'No PIN set yet. Set one now to lock Admin view on this device.';
       button.textContent = 'Save PIN';
+      if (toggle) toggle.style.display = 'none';
+      if (panel) panel.style.display = 'block';
     } else {
       label.textContent = 'Change PIN';
       hint.textContent = 'Admin is locked. Enter a new PIN to change it.';
       button.textContent = 'Update PIN';
+      if (toggle) toggle.style.display = 'inline-flex';
+      if (panel) panel.style.display = 'none';
     }
     if (input) input.value = '';
+    if (toggle && panel && panel.style.display === 'none') {
+      toggle.textContent = 'Change PIN';
+    }
   }
 
   function requestAdminAccess() {
     const pin = getAdminPin();
     if (!pin) {
-      adminAuthenticated = true;
-      return true;
+      toggleAdminPinModal(true);
+      return false;
     }
     if (adminAuthenticated) return true;
     const entry = prompt('Enter Admin PIN to continue:');
@@ -1324,6 +1408,18 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   $('#btnAdminLogout').addEventListener('click', showKiosk);
   $('#btnSignIn').addEventListener('click', signIn);
 
+  $('#btnAdminPinToggle').addEventListener('click', () => {
+    const panel = $('#adminPinPanel');
+    if (!panel) return;
+    const isOpen = panel.style.display !== 'none';
+    panel.style.display = isOpen ? 'none' : 'block';
+    $('#btnAdminPinToggle').textContent = isOpen ? 'Change PIN' : 'Hide PIN';
+    if (!isOpen) {
+      const input = $('#adminPinInput');
+      if (input) input.focus();
+    }
+  });
+
   // Device actions
   $('#btnSaveDevice').addEventListener('click', () => {
     const cfg = {
@@ -1363,8 +1459,34 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       return;
     }
     setAdminPin(nextPin);
+    adminAuthenticated = true;
     updateAdminPinUI();
     showToast('Admin PIN saved');
+  });
+
+  $('#btnCancelAdminPin').addEventListener('click', () => {
+    clearAdminPinModal();
+    toggleAdminPinModal(false);
+  });
+
+  $('#btnConfirmAdminPin').addEventListener('click', () => {
+    const pin = ($('#adminPinSetup').value || '').trim();
+    const confirmPin = ($('#adminPinSetupConfirm').value || '').trim();
+    if (!pin) {
+      alert('Please enter a PIN.');
+      return;
+    }
+    if (pin !== confirmPin) {
+      alert('PIN entries do not match.');
+      return;
+    }
+    setAdminPin(pin);
+    adminAuthenticated = true;
+    updateAdminPinUI();
+    clearAdminPinModal();
+    toggleAdminPinModal(false);
+    showToast('Admin PIN saved');
+    showAdmin();
   });
 
   // Schedule actions
