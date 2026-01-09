@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2025-12-28 09:10)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-06 09:30)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -30,6 +30,19 @@
     max-width: 1060px;
     margin: 0 auto;
     padding: 22px;
+  }
+  body.kiosk-mode header {
+    padding: 14px;
+  }
+  body.kiosk-mode header .kiosk-hide {
+    display: none;
+  }
+  body.kiosk-mode header nav {
+    margin-top: 0;
+    justify-content: flex-end;
+  }
+  body.kiosk-mode #btnKiosk {
+    display: none;
   }
   header {
     background: radial-gradient(1200px 600px at 10% -10%, #1e293b 0%, transparent 60%);
@@ -90,6 +103,7 @@
   }
   .card h2 { margin: 0 0 10px 0; font-size: 20px; }
   .card h3 { margin: 0 0 10px 0; font-size: 16px; color: #dbeafe; }
+  .kiosk-heading { margin: 0 0 12px 0; font-size: 22px; }
   .subtle { color: var(--muted); font-size: 13px; line-height: 1.35; }
 
   .grid { display: grid; gap: 14px; }
@@ -108,10 +122,17 @@
     color: var(--text);
   }
   textarea { min-height: 160px; resize: vertical; }
+  #notesInput { min-height: 90px; }
   input:focus, select:focus, textarea:focus {
     border-color: var(--brand);
     outline: none;
     box-shadow: 0 0 0 3px rgba(59,130,246,.3);
+  }
+  button:disabled,
+  .btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    box-shadow: none;
   }
 
   /* Class list */
@@ -173,6 +194,7 @@
   th, td { padding: 12px 10px; border-top: 1px solid #1d2738; }
   th { background: #0f1928; color: #cbd5e1; text-align: left; position: sticky; top: 0; }
   tr:hover td { background: #0d1423; }
+  tr.void-row td { color: #9ca3af; opacity: 0.65; }
 
   /* Toast */
   .toast {
@@ -215,45 +237,76 @@
     padding: 2px 6px;
     border-radius: 8px;
   }
+  .modal {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, 0.7);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s ease;
+    z-index: 50;
+    padding: 18px;
+  }
+  .modal.show {
+    opacity: 1;
+    pointer-events: all;
+  }
+  .modal-card {
+    width: min(420px, 96vw);
+    background: var(--card);
+    border: 1px solid var(--outline);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+    padding: 18px;
+  }
+  .modal-card h3 { margin: 0 0 8px 0; }
+  .modal-card .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
 </style>
 </head>
 <body>
 <div class="container">
   <header>
-    <div class="inline">
+    <div class="inline kiosk-hide">
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2025-12-28 09:10</span>
+        Build <span class="kbd" id="buildId">2026-01-06 09:30</span>
       </div>
     </div>
 
-    <h1 id="hdrGym">Gym in a Box — Module 1</h1>
-    <div class="subtitle" id="hdrSub">
+    <h1 id="hdrGym" class="kiosk-hide">Gym in a Box — Module 1</h1>
+    <div class="subtitle kiosk-hide" id="hdrSub">
       <span id="hdrLoc">Set device location in Admin.</span>
       <span id="todayName"></span>
     </div>
 
     <!-- Large build stamp for easy verification -->
-    <div id="buildStampLarge" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2025-12-28 09:10
+    <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
+      Build 2026-01-06 09:30
     </div>
 
-    <div class="metaRow">
+    <div class="metaRow kiosk-hide">
       <span>Goal: tap‑fast sign‑in, clean export, no typos.</span>
     </div>
 
     <nav>
       <button id="btnKiosk" class="btn brand" type="button">Instructor Sign‑In</button>
       <button id="btnAdmin" class="btn" type="button">Admin View</button>
-      <button id="btnHardRefresh" class="btn small" type="button" title="Reload page (helps if a host cached an older version)">Reload</button>
     </nav>
   </header>
 
   <!-- KIOSK -->
   <section id="kiosk" class="card">
-    <h2>Instructor Sign‑In</h2>
-
+    <h2 class="kiosk-heading">Instructor Sign-In</h2>
     <div class="grid two" id="classesGrid">
       <div>
         <label>Name</label>
@@ -268,25 +321,45 @@
       </div>
     </div>
 
-    <div class="grid twoEq" style="margin-top: 12px;">
-      <div style="grid-column: 1 / -1;">
-        <label>Site</label>
-        <input type="text" id="siteInput" value="Rev" />
-      </div>
+    <div style="margin-top: 12px;">
+      <label>Notes (optional)</label>
+      <textarea id="notesInput" placeholder="Add a quick note if needed"></textarea>
     </div>
 
     <div style="margin-top: 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
       <button id="btnSignIn" class="btn brand" type="button">Sign In</button>
-      <button id="btnResetKiosk" class="btn warn" type="button" title="Clears current inputs (does not delete sign-ins)">Reset Screen</button>
       <span id="signInMsg"></span>
     </div>
-
-    <div class="statusRow" id="kioskStatus"></div>
   </section>
 
   <!-- ADMIN -->
   <section id="admin" class="card" style="display:none;">
-    <h2>Admin View</h2>
+    <div class="inline" style="justify-content: space-between; align-items:center;">
+      <h2 style="margin: 0;">Admin View</h2>
+      <div class="inline" style="gap:8px;">
+        <button id="btnAdminPinToggle" class="btn small" type="button" style="display:none;">Change PIN</button>
+        <button id="btnAdminLogout" class="btn warn small" type="button">Log out Admin</button>
+      </div>
+    </div>
+
+    <div id="adminPinPanel" class="card" style="background: var(--panel); display:none;">
+      <h3>Admin access</h3>
+      <div class="subtle" id="adminPinHint">Set a PIN to lock Admin view on this device.</div>
+
+      <div class="grid twoEq" style="margin-top: 12px;">
+        <div>
+          <label id="adminPinLabel">Set PIN</label>
+          <input id="adminPinInput" type="password" inputmode="numeric" placeholder="Enter a 4-6 digit PIN" />
+          <div class="hint">Stored locally on this device.</div>
+        </div>
+        <div>
+          <label>Actions</label>
+          <div class="inline">
+            <button id="btnSaveAdminPin" class="btn brand" type="button">Save PIN</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <div class="card" style="background: var(--panel);">
       <h3>Device setup</h3>
@@ -307,7 +380,7 @@
         <div>
           <label>Default site code</label>
           <input id="cfgSiteCode" type="text" placeholder="Rev" />
-          <div class="hint">This pre-fills the kiosk “Site” field.</div>
+          <div class="hint">Used as the Site value for kiosk sign-ins and exports.</div>
         </div>
         <div>
           <label>Actions</label>
@@ -377,6 +450,7 @@
       <div class="inline" style="margin:12px 0 12px 0;">
         <button id="btnExport" class="btn brand" type="button">Export CSV</button>
         <button id="btnCopy" class="btn" type="button">Copy CSV</button>
+        <button id="btnVoidLast" class="btn warn" type="button">Void last sign‑in</button>
         <button id="btnClearSignins" class="btn danger" type="button">Clear All Sign‑ins</button>
       </div>
 
@@ -425,18 +499,38 @@
 </div>
 
 <div id="toast" class="toast">Saved</div>
+<div id="adminPinModal" class="modal" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="adminPinModalTitle">
+    <h3 id="adminPinModalTitle">Set Admin PIN</h3>
+    <div class="subtle">Create a PIN to protect Admin access on this device.</div>
+    <div style="margin-top: 12px;">
+      <label for="adminPinSetup">PIN</label>
+      <input id="adminPinSetup" type="password" inputmode="numeric" placeholder="Enter a 4-6 digit PIN" />
+    </div>
+    <div style="margin-top: 12px;">
+      <label for="adminPinSetupConfirm">Confirm PIN</label>
+      <input id="adminPinSetupConfirm" type="password" inputmode="numeric" placeholder="Re-enter PIN" />
+      <div id="adminPinMatchHint" class="hint warn" style="display:none;">PINs must match.</div>
+    </div>
+    <div class="actions">
+      <button id="btnCancelAdminPin" class="btn" type="button">Cancel</button>
+      <button id="btnConfirmAdminPin" class="btn brand" type="button">Save PIN</button>
+    </div>
+  </div>
+</div>
 
 <script>
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2025-12-28 09:10';
+  const BUILD = '2026-01-06 09:30';
   const TZ = 'America/New_York';
 
   // Storage keys (new)
   const SIGNINS_KEY = 'gib_m1_signins_v1';
   const SCHEDULE_KEY = 'gib_m1_schedule_v1';
   const DEVICE_KEY  = 'gib_m1_device_v1';
+  const ADMIN_PIN_KEY = 'gib_m1_admin_pin_v1';
 // New keys: store the schedule source URL and mode. These are kept separate from
 // SCHEDULE_KEY so that a remote schedule can be recalled after reset or refresh.
 const SCHEDULE_URL_KEY  = 'gib_m1_schedule_url_v1';
@@ -667,6 +761,12 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     showToast('Factory reset complete');
   }
 
+  function getSiteCode() {
+    const cfg = loadDevice();
+    const siteCode = cfg && cfg.siteCode ? String(cfg.siteCode).trim() : '';
+    return siteCode || 'Rev';
+  }
+
   function applyDeviceToUI() {
     const cfg = loadDevice();
     const configured = !!(cfg && (cfg.gymName || cfg.location || cfg.siteCode));
@@ -681,15 +781,12 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       pillText.textContent = `${cfg.gymName || 'Gym'} · ${cfg.location || 'Location'}`;
       hdrGym.textContent = cfg.gymName || 'Gym';
       hdrLoc.textContent = cfg.location ? `Location: ${cfg.location}` : 'Location set';
-      if (cfg.siteCode) $('#siteInput').value = cfg.siteCode;
     } else {
       pill.classList.add('gray');
       pill.querySelector('.dot').style.background = 'rgba(148,163,184,.85)';
       pillText.textContent = 'Unconfigured device';
       hdrGym.textContent = 'Gym in a Box — Module 1';
       hdrLoc.textContent = 'Set device location in Admin.';
-      // Leave the site input blank for true first-time setup
-      $('#siteInput').value = '';
     }
 
     const dn = todayName();
@@ -818,21 +915,36 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         wrap.appendChild(label);
       });
     }
-    // Update kiosk status
-    const upd = meta.updatedAt ? new Date(meta.updatedAt).toLocaleString() : 'default';
-    $('#kioskStatus').innerHTML = `Schedule: <span class="kbd">${meta.source}</span> · Updated: <span class="kbd">${upd}</span> · Today: <span class="kbd">${day}</span> · Classes: <span class="kbd">${classes.length}</span>`;
   }
 
   // Sign-ins
   function loadSignins() {
     const rows = safeParse(SIGNINS_KEY, null);
-    if (Array.isArray(rows)) return rows;
+    if (Array.isArray(rows)) {
+      let updated = false;
+      rows.forEach(r => {
+        if (!r.Status) {
+          r.Status = 'OK';
+          updated = true;
+        }
+      });
+      if (updated) saveSignins(rows);
+      return rows;
+    }
 
     // Back-compat: if new key empty, load from old
     for (const k of OLD_SIGNINS_KEYS) {
       const old = safeParse(k, null);
       if (Array.isArray(old) && old.length) {
+        let updated = false;
+        old.forEach(r => {
+          if (!r.Status) {
+            r.Status = 'OK';
+            updated = true;
+          }
+        });
         safeSet(SIGNINS_KEY, old);
+        if (updated) saveSignins(old);
         return old;
       }
     }
@@ -842,6 +954,100 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     safeSet(SIGNINS_KEY, rows);
   }
 
+  // Admin PIN
+  let adminAuthenticated = false;
+
+  function getAdminPin() {
+    return (localStorage.getItem(ADMIN_PIN_KEY) || '').trim();
+  }
+
+  function setAdminPin(pin) {
+    localStorage.setItem(ADMIN_PIN_KEY, pin);
+  }
+
+  function toggleAdminPinModal(show) {
+    const modal = $('#adminPinModal');
+    if (!modal) return;
+    if (show) {
+      modal.classList.add('show');
+      modal.setAttribute('aria-hidden', 'false');
+      const input = $('#adminPinSetup');
+      if (input) input.focus();
+      updateAdminPinConfirmState();
+    } else {
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  function clearAdminPinModal() {
+    const pinInput = $('#adminPinSetup');
+    const confirmInput = $('#adminPinSetupConfirm');
+    if (pinInput) pinInput.value = '';
+    if (confirmInput) confirmInput.value = '';
+    updateAdminPinConfirmState();
+  }
+
+  function updateAdminPinConfirmState() {
+    const pinInput = $('#adminPinSetup');
+    const confirmInput = $('#adminPinSetupConfirm');
+    const hint = $('#adminPinMatchHint');
+    const button = $('#btnConfirmAdminPin');
+    if (!pinInput || !confirmInput || !button) return;
+    const pin = (pinInput.value || '').trim();
+    const confirmPin = (confirmInput.value || '').trim();
+    const bothFilled = Boolean(pin) && Boolean(confirmPin);
+    const matches = pin === confirmPin;
+    if (hint) {
+      hint.style.display = bothFilled && !matches ? 'block' : 'none';
+    }
+    button.disabled = !(bothFilled && matches);
+  }
+
+  function updateAdminPinUI() {
+    const pin = getAdminPin();
+    const label = $('#adminPinLabel');
+    const hint = $('#adminPinHint');
+    const button = $('#btnSaveAdminPin');
+    const input = $('#adminPinInput');
+    const toggle = $('#btnAdminPinToggle');
+    const panel = $('#adminPinPanel');
+    if (!pin) {
+      label.textContent = 'Set PIN';
+      hint.textContent = 'No PIN set yet. Set one now to lock Admin view on this device.';
+      button.textContent = 'Save PIN';
+      if (toggle) toggle.style.display = 'none';
+      if (panel) panel.style.display = 'block';
+    } else {
+      label.textContent = 'Change PIN';
+      hint.textContent = 'Admin is locked. Enter a new PIN to change it.';
+      button.textContent = 'Update PIN';
+      if (toggle) toggle.style.display = 'inline-flex';
+      if (panel) panel.style.display = 'none';
+    }
+    if (input) input.value = '';
+    if (toggle && panel && panel.style.display === 'none') {
+      toggle.textContent = 'Change PIN';
+    }
+  }
+
+  function requestAdminAccess() {
+    const pin = getAdminPin();
+    if (!pin) {
+      toggleAdminPinModal(true);
+      return false;
+    }
+    if (adminAuthenticated) return true;
+    const entry = prompt('Enter Admin PIN to continue:');
+    if (entry == null) return false;
+    if (String(entry).trim() === pin) {
+      adminAuthenticated = true;
+      return true;
+    }
+    alert('Incorrect PIN.');
+    return false;
+  }
+
   function renderAdminTable() {
     const rows = loadSignins();
     if (!rows.length) {
@@ -849,11 +1055,18 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       return;
     }
     let html = '<div style="overflow:auto; max-height:420px;"><table><thead><tr>' +
-      '<th>#</th><th>Timestamp</th><th>Date</th><th>Class</th><th>Duration (hr)</th><th>Instructor</th><th>Site</th><th>Notes</th>' +
+      '<th>#</th><th>Status</th><th>Timestamp</th><th>Date</th><th>Class</th><th>Duration (hr)</th><th>Instructor</th><th>Site</th><th>Notes</th>' +
       '</tr></thead><tbody>';
     rows.forEach((r,i) => {
-      html += '<tr>' +
+      const status = r.Status || 'OK';
+      const isVoid = status === 'VOID';
+      const voidDetails = [
+        r.voided_at ? `Voided: ${r.voided_at}` : '',
+        r.void_reason ? `Reason: ${r.void_reason}` : ''
+      ].filter(Boolean).join(' · ');
+      html += `<tr class="${isVoid ? 'void-row' : ''}">` +
         `<td>${i+1}</td>` +
+        `<td title="${isVoid ? voidDetails : ''}">${status}</td>` +
         `<td style="font-family:ui-monospace,monospace;">${r.Timestamp || ''}</td>` +
         `<td style="font-family:ui-monospace,monospace;">${r.Date || ''}</td>` +
         `<td>${(r['Class Label'] || '')}</td>` +
@@ -868,7 +1081,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   function buildCSV() {
-    const rows = loadSignins();
+    const rows = loadSignins().filter(r => (r.Status || 'OK') !== 'VOID');
     const headers = ['Timestamp','Date','Class Label','Duration (hr)','Instructor','Site','Notes'];
     const lines = [headers.join(',')];
     rows.forEach(r => {
@@ -883,7 +1096,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   async function exportCSV() {
-    const rows = loadSignins();
+    const rows = loadSignins().filter(r => (r.Status || 'OK') !== 'VOID');
     if (!rows.length) { alert('No sign-ins to export.'); return; }
     const csv = buildCSV();
     const blob = new Blob([csv], { type:'text/csv;charset=utf-8' });
@@ -922,7 +1135,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   async function copyCSV() {
-    const rows = loadSignins();
+    const rows = loadSignins().filter(r => (r.Status || 'OK') !== 'VOID');
     if (!rows.length) { alert('No sign-ins to copy.'); return; }
     const csv = buildCSV();
     try {
@@ -945,15 +1158,6 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     setTimeout(() => t.classList.remove('show'), 2000);
   }
 
-  function resetKioskInputs() {
-    $('#nameInput').value = '';
-    // Keep site as-is (it is device-level)
-    document.querySelectorAll('#classListWrap input[type="checkbox"]').forEach(cb => cb.checked = false);
-    $('#classListWrap').style.display = 'none';
-    $('#signInMsg').textContent = '';
-    showToast('Screen reset');
-  }
-
   function selectedClasses() {
     return Array.from(document.querySelectorAll('#classListWrap input[type="checkbox"]:checked'))
       .map(cb => cb.value)
@@ -963,8 +1167,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   function signIn() {
     const name = ($('#nameInput').value || '').trim();
     const classes = selectedClasses();
-    const site = ($('#siteInput').value || '').trim() || 'Rev';
-    const notes = '';
+    const site = getSiteCode();
+    const notes = ($('#notesInput').value || '').trim();
 
     if (!name || !classes.length) {
       alert('Please enter a name and select one or more classes.');
@@ -981,13 +1185,15 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         'Duration (hr)': 1,
         'Instructor': name,
         'Site': site,
-        'Notes': notes
+        'Notes': notes,
+        'Status': 'OK'
       });
     });
     saveSignins(rows);
 
     // Clear screen for next instructor
     $('#nameInput').value = '';
+    $('#notesInput').value = '';
     document.querySelectorAll('#classListWrap input[type="checkbox"]').forEach(cb => cb.checked = false);
     $('#classListWrap').style.display = 'none';
 
@@ -1027,6 +1233,33 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     } else {
       updateSyncStatus();
     }
+  }
+
+  function voidLastSignin() {
+    const rows = loadSignins();
+    if (!rows.length) {
+      alert('No sign-ins to void.');
+      return;
+    }
+    let idx = -1;
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const status = rows[i].Status || 'OK';
+      if (status !== 'VOID') {
+        idx = i;
+        break;
+      }
+    }
+    if (idx === -1) {
+      alert('All sign-ins are already voided.');
+      return;
+    }
+    const reason = prompt('Optional void reason (leave blank if none):') || '';
+    rows[idx].Status = 'VOID';
+    rows[idx].void_reason = reason.trim();
+    rows[idx].voided_at = fmtTS(new Date());
+    saveSignins(rows);
+    renderAdminTable();
+    showToast('Last sign-in voided');
   }
 
   // --- Sync helpers ---
@@ -1146,8 +1379,10 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
   // Wire events
   function showKiosk() {
+    document.body.classList.add('kiosk-mode');
     $('#kiosk').style.display = 'block';
     $('#admin').style.display = 'none';
+    adminAuthenticated = false;
     applyDeviceToUI();
     // Important: always populate from the SAME stored schedule.
     populateClassesForToday();
@@ -1156,6 +1391,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   function showAdmin() {
+    document.body.classList.remove('kiosk-mode');
     $('#kiosk').style.display = 'none';
     $('#admin').style.display = 'block';
 
@@ -1164,6 +1400,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     $('#cfgGymName').value = (cfg && cfg.gymName) ? cfg.gymName : '';
     $('#cfgLocation').value = (cfg && cfg.location) ? cfg.location : '';
     $('#cfgSiteCode').value = (cfg && cfg.siteCode) ? cfg.siteCode : '';
+    updateAdminPinUI();
 
     // Schedule editor
     loadScheduleIntoAdmin();
@@ -1189,10 +1426,24 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   });
 
   $('#btnKiosk').addEventListener('click', showKiosk);
-  $('#btnAdmin').addEventListener('click', showAdmin);
-  $('#btnHardRefresh').addEventListener('click', () => location.reload(true));
-  $('#btnResetKiosk').addEventListener('click', resetKioskInputs);
+  $('#btnAdmin').addEventListener('click', () => {
+    if (!requestAdminAccess()) return;
+    showAdmin();
+  });
+  $('#btnAdminLogout').addEventListener('click', showKiosk);
   $('#btnSignIn').addEventListener('click', signIn);
+
+  $('#btnAdminPinToggle').addEventListener('click', () => {
+    const panel = $('#adminPinPanel');
+    if (!panel) return;
+    const isOpen = panel.style.display !== 'none';
+    panel.style.display = isOpen ? 'none' : 'block';
+    $('#btnAdminPinToggle').textContent = isOpen ? 'Change PIN' : 'Hide PIN';
+    if (!isOpen) {
+      const input = $('#adminPinInput');
+      if (input) input.focus();
+    }
+  });
 
   // Device actions
   $('#btnSaveDevice').addEventListener('click', () => {
@@ -1224,6 +1475,43 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     factoryReset();
     $('#deviceStatus').innerHTML = 'Factory reset complete. Configure again above.';
   });
+
+  // Admin PIN actions
+  $('#btnSaveAdminPin').addEventListener('click', () => {
+    const nextPin = ($('#adminPinInput').value || '').trim();
+    if (!nextPin) {
+      alert('Please enter a PIN.');
+      return;
+    }
+    setAdminPin(nextPin);
+    adminAuthenticated = true;
+    updateAdminPinUI();
+    showToast('Admin PIN saved');
+  });
+
+  $('#btnCancelAdminPin').addEventListener('click', () => {
+    clearAdminPinModal();
+    toggleAdminPinModal(false);
+  });
+
+  $('#btnConfirmAdminPin').addEventListener('click', () => {
+    const pin = ($('#adminPinSetup').value || '').trim();
+    const confirmPin = ($('#adminPinSetupConfirm').value || '').trim();
+    if (!pin || !confirmPin || pin !== confirmPin) {
+      updateAdminPinConfirmState();
+      return;
+    }
+    setAdminPin(pin);
+    adminAuthenticated = true;
+    updateAdminPinUI();
+    clearAdminPinModal();
+    toggleAdminPinModal(false);
+    showToast('Admin PIN saved');
+    showAdmin();
+  });
+
+  $('#adminPinSetup').addEventListener('input', updateAdminPinConfirmState);
+  $('#adminPinSetupConfirm').addEventListener('input', updateAdminPinConfirmState);
 
   // Schedule actions
   $('#btnSaveSchedule').addEventListener('click', () => {
@@ -1322,6 +1610,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   // Sign-ins actions
   $('#btnExport').addEventListener('click', exportCSV);
   $('#btnCopy').addEventListener('click', copyCSV);
+  $('#btnVoidLast').addEventListener('click', voidLastSignin);
   $('#btnClearSignins').addEventListener('click', () => {
     if (!confirm('Clear ALL locally stored sign-ins on this device?')) return;
     saveSignins([]);
@@ -1347,6 +1636,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
   // Init
   initScheduleEditor();
+  document.body.classList.add('kiosk-mode');
   loadScheduleIntoAdmin();
   applyDeviceToUI();
   populateClassesForToday();
