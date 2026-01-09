@@ -1,0 +1,1 @@
+- Add Admin “Void last sign-in” to mark mistaken entries VOID and exclude them from payroll export (no delete).
