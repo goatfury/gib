@@ -1,1 +1,2 @@
+- Simplify kiosk sign-in to show only instructor essentials (name, classes, site, notes, sign-in) for faster check-ins.
 - Add Admin “Void last sign-in” to mark mistaken entries VOID and exclude them from payroll export (no delete).
