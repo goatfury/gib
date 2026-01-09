@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-05 10:30)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-06 09:00)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -240,7 +240,7 @@
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-01-05 10:30</span>
+        Build <span class="kbd" id="buildId">2026-01-06 09:00</span>
       </div>
     </div>
 
@@ -252,7 +252,7 @@
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-01-05 10:30
+      Build 2026-01-06 09:00
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -295,7 +295,29 @@
 
   <!-- ADMIN -->
   <section id="admin" class="card" style="display:none;">
-    <h2>Admin View</h2>
+    <div class="inline" style="justify-content: space-between; align-items:center;">
+      <h2 style="margin: 0;">Admin View</h2>
+      <button id="btnAdminLogout" class="btn warn small" type="button">Log out Admin</button>
+    </div>
+
+    <div class="card" style="background: var(--panel);">
+      <h3>Admin access</h3>
+      <div class="subtle" id="adminPinHint">Set a PIN to lock Admin view on this device.</div>
+
+      <div class="grid twoEq" style="margin-top: 12px;">
+        <div>
+          <label id="adminPinLabel">Set PIN</label>
+          <input id="adminPinInput" type="password" inputmode="numeric" placeholder="Enter a 4-6 digit PIN" />
+          <div class="hint">Stored locally on this device.</div>
+        </div>
+        <div>
+          <label>Actions</label>
+          <div class="inline">
+            <button id="btnSaveAdminPin" class="btn brand" type="button">Save PIN</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <div class="card" style="background: var(--panel);">
       <h3>Device setup</h3>
@@ -440,13 +462,14 @@
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2026-01-05 10:30';
+  const BUILD = '2026-01-06 09:00';
   const TZ = 'America/New_York';
 
   // Storage keys (new)
   const SIGNINS_KEY = 'gib_m1_signins_v1';
   const SCHEDULE_KEY = 'gib_m1_schedule_v1';
   const DEVICE_KEY  = 'gib_m1_device_v1';
+  const ADMIN_PIN_KEY = 'gib_m1_admin_pin_v1';
 // New keys: store the schedule source URL and mode. These are kept separate from
 // SCHEDULE_KEY so that a remote schedule can be recalled after reset or refresh.
 const SCHEDULE_URL_KEY  = 'gib_m1_schedule_url_v1';
@@ -870,6 +893,52 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     safeSet(SIGNINS_KEY, rows);
   }
 
+  // Admin PIN
+  let adminAuthenticated = false;
+
+  function getAdminPin() {
+    return (localStorage.getItem(ADMIN_PIN_KEY) || '').trim();
+  }
+
+  function setAdminPin(pin) {
+    localStorage.setItem(ADMIN_PIN_KEY, pin);
+  }
+
+  function updateAdminPinUI() {
+    const pin = getAdminPin();
+    const label = $('#adminPinLabel');
+    const hint = $('#adminPinHint');
+    const button = $('#btnSaveAdminPin');
+    const input = $('#adminPinInput');
+    if (!pin) {
+      label.textContent = 'Set PIN';
+      hint.textContent = 'No PIN set yet. Set one now to lock Admin view on this device.';
+      button.textContent = 'Save PIN';
+    } else {
+      label.textContent = 'Change PIN';
+      hint.textContent = 'Admin is locked. Enter a new PIN to change it.';
+      button.textContent = 'Update PIN';
+    }
+    if (input) input.value = '';
+  }
+
+  function requestAdminAccess() {
+    const pin = getAdminPin();
+    if (!pin) {
+      adminAuthenticated = true;
+      return true;
+    }
+    if (adminAuthenticated) return true;
+    const entry = prompt('Enter Admin PIN to continue:');
+    if (entry == null) return false;
+    if (String(entry).trim() === pin) {
+      adminAuthenticated = true;
+      return true;
+    }
+    alert('Incorrect PIN.');
+    return false;
+  }
+
   function renderAdminTable() {
     const rows = loadSignins();
     if (!rows.length) {
@@ -1204,6 +1273,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     document.body.classList.add('kiosk-mode');
     $('#kiosk').style.display = 'block';
     $('#admin').style.display = 'none';
+    adminAuthenticated = false;
     applyDeviceToUI();
     // Important: always populate from the SAME stored schedule.
     populateClassesForToday();
@@ -1221,6 +1291,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     $('#cfgGymName').value = (cfg && cfg.gymName) ? cfg.gymName : '';
     $('#cfgLocation').value = (cfg && cfg.location) ? cfg.location : '';
     $('#cfgSiteCode').value = (cfg && cfg.siteCode) ? cfg.siteCode : '';
+    updateAdminPinUI();
 
     // Schedule editor
     loadScheduleIntoAdmin();
@@ -1246,7 +1317,11 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   });
 
   $('#btnKiosk').addEventListener('click', showKiosk);
-  $('#btnAdmin').addEventListener('click', showAdmin);
+  $('#btnAdmin').addEventListener('click', () => {
+    if (!requestAdminAccess()) return;
+    showAdmin();
+  });
+  $('#btnAdminLogout').addEventListener('click', showKiosk);
   $('#btnSignIn').addEventListener('click', signIn);
 
   // Device actions
@@ -1278,6 +1353,18 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     }
     factoryReset();
     $('#deviceStatus').innerHTML = 'Factory reset complete. Configure again above.';
+  });
+
+  // Admin PIN actions
+  $('#btnSaveAdminPin').addEventListener('click', () => {
+    const nextPin = ($('#adminPinInput').value || '').trim();
+    if (!nextPin) {
+      alert('Please enter a PIN.');
+      return;
+    }
+    setAdminPin(nextPin);
+    updateAdminPinUI();
+    showToast('Admin PIN saved');
   });
 
   // Schedule actions
