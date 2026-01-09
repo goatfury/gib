@@ -1,2 +1,2 @@
-- Simplify kiosk sign-in to show only instructor essentials (name, classes, site, notes, sign-in) for faster check-ins.
+- Add a simple Instructor Sign-In kiosk header and remove the Site field so sign-ins stay focused on device-configured defaults.
 - Add Admin “Void last sign-in” to mark mistaken entries VOID and exclude them from payroll export (no delete).
