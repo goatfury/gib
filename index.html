@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2025-12-29 09:15)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-05 10:30)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -103,6 +103,7 @@
   }
   .card h2 { margin: 0 0 10px 0; font-size: 20px; }
   .card h3 { margin: 0 0 10px 0; font-size: 16px; color: #dbeafe; }
+  .kiosk-heading { margin: 0 0 12px 0; font-size: 22px; }
   .subtle { color: var(--muted); font-size: 13px; line-height: 1.35; }
 
   .grid { display: grid; gap: 14px; }
@@ -239,7 +240,7 @@
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2025-12-29 09:15</span>
+        Build <span class="kbd" id="buildId">2026-01-05 10:30</span>
       </div>
     </div>
 
@@ -251,7 +252,7 @@
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2025-12-29 09:15
+      Build 2026-01-05 10:30
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -266,6 +267,7 @@
 
   <!-- KIOSK -->
   <section id="kiosk" class="card">
+    <h2 class="kiosk-heading">Instructor Sign-In</h2>
     <div class="grid two" id="classesGrid">
       <div>
         <label>Name</label>
@@ -277,13 +279,6 @@
         <button id="toggleClasses" class="btn" type="button" style="width:100%; margin-bottom:6px;">Select class(es)</button>
         <div id="classListWrap" style="display:none;"></div>
         <div class="hint" id="classesHint">Select one or more classes.</div>
-      </div>
-    </div>
-
-    <div class="grid twoEq" style="margin-top: 12px;">
-      <div style="grid-column: 1 / -1;">
-        <label>Site (optional)</label>
-        <input type="text" id="siteInput" value="Rev" />
       </div>
     </div>
 
@@ -321,7 +316,7 @@
         <div>
           <label>Default site code</label>
           <input id="cfgSiteCode" type="text" placeholder="Rev" />
-          <div class="hint">This pre-fills the kiosk “Site” field.</div>
+          <div class="hint">Used as the Site value for kiosk sign-ins and exports.</div>
         </div>
         <div>
           <label>Actions</label>
@@ -445,7 +440,7 @@
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2025-12-29 09:15';
+  const BUILD = '2026-01-05 10:30';
   const TZ = 'America/New_York';
 
   // Storage keys (new)
@@ -682,6 +677,12 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     showToast('Factory reset complete');
   }
 
+  function getSiteCode() {
+    const cfg = loadDevice();
+    const siteCode = cfg && cfg.siteCode ? String(cfg.siteCode).trim() : '';
+    return siteCode || 'Rev';
+  }
+
   function applyDeviceToUI() {
     const cfg = loadDevice();
     const configured = !!(cfg && (cfg.gymName || cfg.location || cfg.siteCode));
@@ -696,15 +697,12 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       pillText.textContent = `${cfg.gymName || 'Gym'} · ${cfg.location || 'Location'}`;
       hdrGym.textContent = cfg.gymName || 'Gym';
       hdrLoc.textContent = cfg.location ? `Location: ${cfg.location}` : 'Location set';
-      if (cfg.siteCode) $('#siteInput').value = cfg.siteCode;
     } else {
       pill.classList.add('gray');
       pill.querySelector('.dot').style.background = 'rgba(148,163,184,.85)';
       pillText.textContent = 'Unconfigured device';
       hdrGym.textContent = 'Gym in a Box — Module 1';
       hdrLoc.textContent = 'Set device location in Admin.';
-      // Leave the site input blank for true first-time setup
-      $('#siteInput').value = '';
     }
 
     const dn = todayName();
@@ -991,7 +989,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   function signIn() {
     const name = ($('#nameInput').value || '').trim();
     const classes = selectedClasses();
-    const site = ($('#siteInput').value || '').trim() || 'Rev';
+    const site = getSiteCode();
     const notes = ($('#notesInput').value || '').trim();
 
     if (!name || !classes.length) {
