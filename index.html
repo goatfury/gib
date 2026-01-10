@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-06 09:30)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-06 10:00)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -212,6 +212,26 @@
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
 
+  .undo-banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(34,197,94,.35);
+    background: rgba(34,197,94,.12);
+    color: #bbf7d0;
+    font-size: 13px;
+  }
+  .undo-banner.show {
+    display: inline-flex;
+  }
+  .undo-countdown {
+    color: #86efac;
+    font-variant-numeric: tabular-nums;
+  }
+
   #signInMsg {
     margin-left: 10px;
     font-size: 14px;
@@ -279,7 +299,7 @@
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-01-06 09:30</span>
+        Build <span class="kbd" id="buildId">2026-01-06 10:00</span>
       </div>
     </div>
 
@@ -291,7 +311,7 @@
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-01-06 09:30
+      Build 2026-01-06 10:00
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -329,6 +349,11 @@
     <div style="margin-top: 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
       <button id="btnSignIn" class="btn brand" type="button">Sign In</button>
       <span id="signInMsg"></span>
+    </div>
+    <div id="undoBanner" class="undo-banner" role="status" aria-live="polite">
+      <span id="undoBannerText">Saved.</span>
+      <button id="btnUndoSignIn" class="btn small" type="button">Undo</button>
+      <span id="undoCountdown" class="undo-countdown">15s</span>
     </div>
   </section>
 
@@ -523,7 +548,7 @@
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2026-01-06 09:30';
+  const BUILD = '2026-01-06 10:00';
   const TZ = 'America/New_York';
 
   // Storage keys (new)
@@ -954,6 +979,70 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     safeSet(SIGNINS_KEY, rows);
   }
 
+  // Undo banner state (kiosk sign-ins)
+  let lastSigninBatchId = null;
+  let undoCountdownId = null;
+  let undoTimeoutId = null;
+  let undoSecondsRemaining = 0;
+
+  function clearUndoTimers() {
+    if (undoCountdownId) {
+      clearInterval(undoCountdownId);
+      undoCountdownId = null;
+    }
+    if (undoTimeoutId) {
+      clearTimeout(undoTimeoutId);
+      undoTimeoutId = null;
+    }
+  }
+
+  function hideUndoBanner() {
+    clearUndoTimers();
+    const banner = $('#undoBanner');
+    banner.classList.remove('show');
+    lastSigninBatchId = null;
+  }
+
+  function renderUndoCountdown() {
+    $('#undoCountdown').textContent = `${undoSecondsRemaining}s`;
+  }
+
+  function showUndoBanner(batchId) {
+    clearUndoTimers();
+    lastSigninBatchId = batchId;
+    undoSecondsRemaining = 15;
+    $('#undoBannerText').textContent = 'Saved. Undo?';
+    renderUndoCountdown();
+    $('#undoBanner').classList.add('show');
+    undoCountdownId = setInterval(() => {
+      undoSecondsRemaining -= 1;
+      if (undoSecondsRemaining <= 0) {
+        hideUndoBanner();
+        return;
+      }
+      renderUndoCountdown();
+    }, 1000);
+    undoTimeoutId = setTimeout(() => {
+      hideUndoBanner();
+    }, 15000);
+  }
+
+  function undoLastSigninBatch() {
+    if (!lastSigninBatchId) return;
+    const rows = loadSignins();
+    const nextRows = rows.filter(r => r.__batchId !== lastSigninBatchId);
+    if (nextRows.length !== rows.length) {
+      saveSignins(nextRows);
+    }
+    $('#undoBannerText').textContent = 'Undone.';
+    $('#undoCountdown').textContent = '';
+    clearUndoTimers();
+    lastSigninBatchId = null;
+    setTimeout(() => {
+      $('#undoBanner').classList.remove('show');
+    }, 2000);
+  }
+
   // Admin PIN
   let adminAuthenticated = false;
 
@@ -1177,6 +1266,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
     const rows = loadSignins();
     const now = new Date();
+    const batchId = `${now.getTime()}-${Math.random().toString(16).slice(2, 8)}`;
     classes.forEach(cls => {
       rows.push({
         'Timestamp': fmtTS(now),
@@ -1186,7 +1276,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         'Instructor': name,
         'Site': site,
         'Notes': notes,
-        'Status': 'OK'
+        'Status': 'OK',
+        '__batchId': batchId
       });
     });
     saveSignins(rows);
@@ -1202,6 +1293,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     msg.textContent = `${name} — ${classes.join(', ')} saved`;
     setTimeout(() => msg.textContent = '', 4000);
     showToast('Saved');
+    showUndoBanner(batchId);
 
     // Build sync rows and queue them for upload.  Each class selected produces
     // its own row in the sync queue so that multi‑class sign‑ins are treated as
@@ -1432,6 +1524,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   });
   $('#btnAdminLogout').addEventListener('click', showKiosk);
   $('#btnSignIn').addEventListener('click', signIn);
+  $('#btnUndoSignIn').addEventListener('click', undoLastSigninBatch);
 
   $('#btnAdminPinToggle').addEventListener('click', () => {
     const panel = $('#adminPinPanel');
