@@ -1,4 +1,4 @@
-- Add a kiosk duration toggle (0.5 hr/1.0 hr) that saves selected duration to sign-ins.
+- Add admin-set per-class duration overrides (0.5 hr or 1.0 hr) that auto-fill sign-ins from local settings.
 - Add kiosk undo banner with 15-second countdown to reverse the most recent sign-in batch.
 - Refine the Set Admin PIN modal to show inline mismatch guidance and only enable saving when entries match.
 - Add modal-based Admin PIN setup on first access and hide Admin PIN management behind a change link.
