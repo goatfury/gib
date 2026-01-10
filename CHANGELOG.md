@@ -1,3 +1,4 @@
+- Add kiosk undo banner with 15-second countdown to reverse the most recent sign-in batch.
 - Refine the Set Admin PIN modal to show inline mismatch guidance and only enable saving when entries match.
 - Add modal-based Admin PIN setup on first access and hide Admin PIN management behind a change link.
 - Add a simple Instructor Sign-In kiosk header and remove the Site field so sign-ins stay focused on device-configured defaults.
