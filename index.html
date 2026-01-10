@@ -488,6 +488,7 @@
       <div id="durationRulesWrap" class="duration-rule-list" style="margin-top: 10px;"></div>
       <div class="inline" style="margin-top: 10px;">
         <button id="btnAddDurationRule" class="btn" type="button">Add rule</button>
+        <button id="btnGenerateDurationRules" class="btn" type="button">Generate rules from weekly schedule</button>
       </div>
       <div class="statusRow" id="durationRulesStatus"></div>
     </div>
@@ -1056,6 +1057,34 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       wrap.appendChild(row);
     });
     updateDurationRulesStatus(`Saved <span class="kbd">${rules.length}</span> rule(s).`);
+  }
+
+  function generateDurationRulesFromSchedule() {
+    const sch = loadSchedule();
+    const labels = new Set();
+    DAYS.forEach(day => {
+      (sch.days[day] || []).forEach(label => {
+        const trimmed = String(label || '').trim();
+        if (trimmed) labels.add(trimmed);
+      });
+    });
+
+    const rules = loadDurationRules().map(normalizeDurationRule);
+    const existing = new Set(rules.map(rule => rule.match));
+    let added = 0;
+    labels.forEach(label => {
+      if (!existing.has(label)) {
+        rules.push({ match: label, duration: 1 });
+        existing.add(label);
+        added += 1;
+      }
+    });
+
+    if (added) {
+      saveDurationRules(rules);
+      renderDurationRules();
+    }
+    showToast(`Generated ${added} rule${added === 1 ? '' : 's'}`);
   }
 
   function classesForToday() {
@@ -1778,6 +1807,9 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     if (inputs.length) {
       inputs[inputs.length - 1].focus();
     }
+  });
+  $('#btnGenerateDurationRules').addEventListener('click', () => {
+    generateDurationRulesFromSchedule();
   });
 
   $('#btnLoadDefaultSchedule').addEventListener('click', () => {
