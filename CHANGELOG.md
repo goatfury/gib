@@ -1,3 +1,4 @@
+- Replace per-day duration overrides with stored duration rules that auto-fill sign-in hours based on class text.
 - Add admin-set per-class duration overrides (0.5 hr or 1.0 hr) that auto-fill sign-ins from local settings.
 - Add kiosk undo banner with 15-second countdown to reverse the most recent sign-in batch.
 - Refine the Set Admin PIN modal to show inline mismatch guidance and only enable saving when entries match.
