@@ -188,6 +188,27 @@
     flex-wrap:wrap;
     align-items:center;
   }
+  .duration-toggle {
+    display: inline-flex;
+    gap: 6px;
+    padding: 4px;
+    border-radius: 999px;
+    border: 1px solid var(--outline);
+    background: #0b1322;
+  }
+  .duration-toggle button {
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .duration-toggle button.active {
+    background: var(--brand);
+    color: #fff;
+  }
 
   /* Table */
   table { width: 100%; border-collapse: collapse; }
@@ -338,6 +359,14 @@
         <button id="toggleClasses" class="btn" type="button" style="width:100%; margin-bottom:6px;">Select class(es)</button>
         <div id="classListWrap" style="display:none;"></div>
         <div class="hint" id="classesHint">Select one or more classes.</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 12px;">
+      <label>Duration</label>
+      <div class="duration-toggle" role="group" aria-label="Duration">
+        <button type="button" class="duration-option" data-duration="0.5">0.5 hr</button>
+        <button type="button" class="duration-option active" data-duration="1">1.0 hr</button>
       </div>
     </div>
 
@@ -1247,6 +1276,18 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     setTimeout(() => t.classList.remove('show'), 2000);
   }
 
+  let selectedDuration = 1;
+  function setDuration(duration) {
+    selectedDuration = duration;
+    document.querySelectorAll('.duration-option').forEach(btn => {
+      const value = parseFloat(btn.dataset.duration);
+      btn.classList.toggle('active', value === duration);
+    });
+  }
+  function getSelectedDuration() {
+    return selectedDuration;
+  }
+
   function selectedClasses() {
     return Array.from(document.querySelectorAll('#classListWrap input[type="checkbox"]:checked'))
       .map(cb => cb.value)
@@ -1258,6 +1299,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const classes = selectedClasses();
     const site = getSiteCode();
     const notes = ($('#notesInput').value || '').trim();
+    const duration = getSelectedDuration();
 
     if (!name || !classes.length) {
       alert('Please enter a name and select one or more classes.');
@@ -1272,7 +1314,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         'Timestamp': fmtTS(now),
         'Date': fmtDate(now),
         'Class Label': cls,
-        'Duration (hr)': 1,
+        'Duration (hr)': duration,
         'Instructor': name,
         'Site': site,
         'Notes': notes,
@@ -1309,7 +1351,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         'Timestamp': fmtTS(now),
         'Date': fmtDate(now),
         'Class Label': cls,
-        'Duration (hr)': 1,
+        'Duration (hr)': duration,
         'Instructor': name,
         'Site': site,
         'Device': deviceLabel,
@@ -1515,6 +1557,15 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     // If list is empty, re-populate (fixes the “admin has schedule but kiosk empty” failure mode)
     if (!wrap.hasChildNodes()) populateClassesForToday();
     wrap.style.display = (wrap.style.display === 'none' || wrap.style.display === '') ? 'block' : 'none';
+  });
+
+  document.querySelectorAll('.duration-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const value = parseFloat(btn.dataset.duration);
+      if (!Number.isNaN(value)) {
+        setDuration(value);
+      }
+    });
   });
 
   $('#btnKiosk').addEventListener('click', showKiosk);
@@ -1728,6 +1779,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   });
 
   // Init
+  setDuration(1);
   initScheduleEditor();
   document.body.classList.add('kiosk-mode');
   loadScheduleIntoAdmin();
