@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-06 10:00)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-06 12:00)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -188,26 +188,25 @@
     flex-wrap:wrap;
     align-items:center;
   }
-  .duration-toggle {
-    display: inline-flex;
-    gap: 6px;
-    padding: 4px;
-    border-radius: 999px;
+  .duration-override-list {
+    display: grid;
+    gap: 8px;
+  }
+  .duration-override-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 120px;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: 10px;
     border: 1px solid var(--outline);
     background: #0b1322;
   }
-  .duration-toggle button {
-    border: 0;
-    background: transparent;
-    color: var(--muted);
-    padding: 6px 10px;
-    border-radius: 999px;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .duration-toggle button.active {
-    background: var(--brand);
-    color: #fff;
+  .duration-override-row .label {
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.35;
+    word-break: break-word;
   }
 
   /* Table */
@@ -320,7 +319,7 @@
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-01-06 10:00</span>
+        Build <span class="kbd" id="buildId">2026-01-06 12:00</span>
       </div>
     </div>
 
@@ -332,7 +331,7 @@
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-01-06 10:00
+      Build 2026-01-06 12:00
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -359,14 +358,6 @@
         <button id="toggleClasses" class="btn" type="button" style="width:100%; margin-bottom:6px;">Select class(es)</button>
         <div id="classListWrap" style="display:none;"></div>
         <div class="hint" id="classesHint">Select one or more classes.</div>
-      </div>
-    </div>
-
-    <div style="margin-top: 12px;">
-      <label>Duration</label>
-      <div class="duration-toggle" role="group" aria-label="Duration">
-        <button type="button" class="duration-option" data-duration="0.5">0.5 hr</button>
-        <button type="button" class="duration-option active" data-duration="1">1.0 hr</button>
       </div>
     </div>
 
@@ -494,6 +485,12 @@
         <div class="hint" id="scheduleHint"></div>
       </div>
 
+      <div style="margin-top: 12px;">
+        <label>Class duration overrides</label>
+        <div class="subtle">Default duration is 1.0 hr. Switch to 0.5 hr for any class label below.</div>
+        <div id="durationOverridesWrap" class="duration-override-list" style="margin-top: 10px;"></div>
+      </div>
+
       <div class="statusRow" id="scheduleStatus"></div>
     </div>
 
@@ -577,7 +574,7 @@
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2026-01-06 10:00';
+  const BUILD = '2026-01-06 12:00';
   const TZ = 'America/New_York';
 
   // Storage keys (new)
@@ -585,6 +582,7 @@
   const SCHEDULE_KEY = 'gib_m1_schedule_v1';
   const DEVICE_KEY  = 'gib_m1_device_v1';
   const ADMIN_PIN_KEY = 'gib_m1_admin_pin_v1';
+  const DURATION_OVERRIDES_KEY = 'gib_m1_duration_overrides_v1';
 // New keys: store the schedule source URL and mode. These are kept separate from
 // SCHEDULE_KEY so that a remote schedule can be recalled after reset or refresh.
 const SCHEDULE_URL_KEY  = 'gib_m1_schedule_url_v1';
@@ -751,6 +749,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     // Clear device + schedule overrides (for clean setup tests)
     localStorage.removeItem(DEVICE_KEY);
     localStorage.removeItem(SCHEDULE_KEY);
+    localStorage.removeItem(DURATION_OVERRIDES_KEY);
     // Also clear a few older keys if present (safe no-ops)
     localStorage.removeItem('gib_device');
     localStorage.removeItem('rbjj_device');
@@ -793,6 +792,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     localStorage.removeItem(SCHEDULE_KEY);
     localStorage.removeItem(SCHEDULE_URL_KEY);
     localStorage.removeItem(SCHEDULE_MODE_KEY);
+    localStorage.removeItem(DURATION_OVERRIDES_KEY);
     // After all keys are removed, set the schedule to a disabled empty baseline so
     // that the app does not immediately fall back to the default schedule.  This
     // produces a true blank state for testing.
@@ -891,6 +891,22 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     });
   }
 
+  function loadDurationOverrides() {
+    const overrides = safeParse(DURATION_OVERRIDES_KEY, {});
+    return (overrides && typeof overrides === 'object') ? overrides : {};
+  }
+
+  function saveDurationOverrides(overrides) {
+    safeSet(DURATION_OVERRIDES_KEY, overrides);
+  }
+
+  function getDurationForClass(label) {
+    const overrides = loadDurationOverrides();
+    const raw = overrides[label];
+    const value = Number(raw);
+    return value === 0.5 ? 0.5 : 1;
+  }
+
   // Admin schedule editor state
   let scheduleDraft = null;
   let activeDay = null;
@@ -911,6 +927,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     });
     $('#schedText').addEventListener('input', () => {
       $('#scheduleHint').textContent = 'Unsaved changes…';
+      renderDurationOverrides();
     });
   }
 
@@ -918,6 +935,10 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     if (!scheduleDraft || !activeDay) return;
     const lines = ($('#schedText').value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     scheduleDraft[activeDay] = lines;
+  }
+
+  function currentScheduleLines() {
+    return ($('#schedText').value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
   }
 
   function loadScheduleIntoAdmin() {
@@ -938,6 +959,51 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     $('#schedText').value = (scheduleDraft[activeDay] || []).join('\n');
     const count = (scheduleDraft[activeDay] || []).length;
     $('#scheduleHint').textContent = `${count} class(es) for ${activeDay}.`;
+    renderDurationOverrides();
+  }
+
+  function renderDurationOverrides() {
+    const wrap = $('#durationOverridesWrap');
+    if (!wrap) return;
+    const labels = currentScheduleLines();
+    wrap.innerHTML = '';
+    if (!labels.length) {
+      wrap.innerHTML = '<div class="subtle">No classes listed for this day yet.</div>';
+      return;
+    }
+    const overrides = loadDurationOverrides();
+    labels.forEach(label => {
+      const row = document.createElement('div');
+      row.className = 'duration-override-row';
+      const text = document.createElement('div');
+      text.className = 'label';
+      text.textContent = label;
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', `Duration for ${label}`);
+      const opt1 = document.createElement('option');
+      opt1.value = '1';
+      opt1.textContent = '1.0 hr';
+      const optHalf = document.createElement('option');
+      optHalf.value = '0.5';
+      optHalf.textContent = '0.5 hr';
+      select.appendChild(opt1);
+      select.appendChild(optHalf);
+      const current = Number(overrides[label]);
+      select.value = current === 0.5 ? '0.5' : '1';
+      select.addEventListener('change', () => {
+        const next = Number(select.value);
+        const nextOverrides = loadDurationOverrides();
+        if (next === 1) {
+          delete nextOverrides[label];
+        } else {
+          nextOverrides[label] = 0.5;
+        }
+        saveDurationOverrides(nextOverrides);
+      });
+      row.appendChild(text);
+      row.appendChild(select);
+      wrap.appendChild(row);
+    });
   }
 
   function classesForToday() {
@@ -1276,18 +1342,6 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     setTimeout(() => t.classList.remove('show'), 2000);
   }
 
-  let selectedDuration = 1;
-  function setDuration(duration) {
-    selectedDuration = duration;
-    document.querySelectorAll('.duration-option').forEach(btn => {
-      const value = parseFloat(btn.dataset.duration);
-      btn.classList.toggle('active', value === duration);
-    });
-  }
-  function getSelectedDuration() {
-    return selectedDuration;
-  }
-
   function selectedClasses() {
     return Array.from(document.querySelectorAll('#classListWrap input[type="checkbox"]:checked'))
       .map(cb => cb.value)
@@ -1299,8 +1353,6 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const classes = selectedClasses();
     const site = getSiteCode();
     const notes = ($('#notesInput').value || '').trim();
-    const duration = getSelectedDuration();
-
     if (!name || !classes.length) {
       alert('Please enter a name and select one or more classes.');
       return;
@@ -1310,6 +1362,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const now = new Date();
     const batchId = `${now.getTime()}-${Math.random().toString(16).slice(2, 8)}`;
     classes.forEach(cls => {
+      const duration = getDurationForClass(cls);
       rows.push({
         'Timestamp': fmtTS(now),
         'Date': fmtDate(now),
@@ -1345,6 +1398,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const deviceLabel = (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim();
     const queuedRows = [];
     classes.forEach(cls => {
+      const duration = getDurationForClass(cls);
       const rowId = `${fmtTS(now)}|${name}|${cls}|${site}`;
       const row = {
         'RowID': rowId,
@@ -1559,15 +1613,6 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     wrap.style.display = (wrap.style.display === 'none' || wrap.style.display === '') ? 'block' : 'none';
   });
 
-  document.querySelectorAll('.duration-option').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const value = parseFloat(btn.dataset.duration);
-      if (!Number.isNaN(value)) {
-        setDuration(value);
-      }
-    });
-  });
-
   $('#btnKiosk').addEventListener('click', showKiosk);
   $('#btnAdmin').addEventListener('click', () => {
     if (!requestAdminAccess()) return;
@@ -1779,7 +1824,6 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   });
 
   // Init
-  setDuration(1);
   initScheduleEditor();
   document.body.classList.add('kiosk-mode');
   loadScheduleIntoAdmin();
