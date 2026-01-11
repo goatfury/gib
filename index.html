@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-07 09:00)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-07 12:30)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -202,6 +202,31 @@
     border: 1px solid var(--outline);
     background: #0b1322;
   }
+  .week-glance {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+  .week-day {
+    border: 1px solid var(--outline);
+    border-radius: 12px;
+    padding: 10px 12px;
+    background: #0b1322;
+    min-height: 110px;
+  }
+  .week-day h4 {
+    margin: 0 0 6px 0;
+    font-size: 14px;
+    color: #c7d2fe;
+  }
+  .week-day ul {
+    margin: 0;
+    padding-left: 16px;
+    display: grid;
+    gap: 4px;
+    font-size: 12px;
+    color: #e2e8f0;
+  }
 
   /* Table */
   table { width: 100%; border-collapse: collapse; }
@@ -313,7 +338,7 @@
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-01-07 09:00</span>
+        Build <span class="kbd" id="buildId">2026-01-07 12:30</span>
       </div>
     </div>
 
@@ -325,7 +350,7 @@
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-01-07 09:00
+      Build 2026-01-07 12:30
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -483,12 +508,18 @@
     </div>
 
     <div class="card" style="background: var(--panel);">
+      <h3>Week at a glance</h3>
+      <div class="subtle">Read-only view of the saved weekly schedule.</div>
+      <div id="weekAtGlance" class="week-glance" style="margin-top: 12px;"></div>
+    </div>
+
+    <div class="card" style="background: var(--panel);">
       <h3>Duration rules</h3>
       <div class="subtle">Match text → duration (first match wins, case-insensitive “contains”).</div>
       <div id="durationRulesWrap" class="duration-rule-list" style="margin-top: 10px;"></div>
       <div class="inline" style="margin-top: 10px;">
         <button id="btnAddDurationRule" class="btn" type="button">Add rule</button>
-        <button id="btnGenerateDurationRules" class="btn" type="button">Generate rules from weekly schedule</button>
+        <button id="btnGenerateDurationRules" class="btn" type="button">Generate duration rules from weekly schedule</button>
       </div>
       <div class="statusRow" id="durationRulesStatus"></div>
     </div>
@@ -573,7 +604,7 @@
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2026-01-07 09:00';
+  const BUILD = '2026-01-07 12:30';
   const TZ = 'America/New_York';
 
   // Storage keys (new)
@@ -963,6 +994,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     activeDay = DAYS.includes(dn) ? dn : 'Monday';
     $('#schedDay').value = activeDay;
     renderScheduleDay();
+    renderWeekAtGlance();
 
     const upd = sch.updatedAt ? new Date(sch.updatedAt).toLocaleString() : '(default schedule)';
     $('#scheduleStatus').innerHTML = `Source: <span class="kbd">${sch.source}</span> · Updated: <span class="kbd">${upd}</span>`;
@@ -1059,6 +1091,36 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     updateDurationRulesStatus(`Saved <span class="kbd">${rules.length}</span> rule(s).`);
   }
 
+  function renderWeekAtGlance() {
+    const wrap = $('#weekAtGlance');
+    if (!wrap) return;
+    const sch = loadSchedule();
+    wrap.innerHTML = '';
+    DAYS.forEach(day => {
+      const card = document.createElement('div');
+      card.className = 'week-day';
+      const title = document.createElement('h4');
+      title.textContent = day;
+      card.appendChild(title);
+      const classes = sch.days[day] || [];
+      if (!classes.length) {
+        const empty = document.createElement('div');
+        empty.className = 'subtle';
+        empty.textContent = 'No classes';
+        card.appendChild(empty);
+      } else {
+        const list = document.createElement('ul');
+        classes.forEach(label => {
+          const item = document.createElement('li');
+          item.textContent = label;
+          list.appendChild(item);
+        });
+        card.appendChild(list);
+      }
+      wrap.appendChild(card);
+    });
+  }
+
   function generateDurationRulesFromSchedule() {
     const sch = loadSchedule();
     const labels = new Set();
@@ -1084,6 +1146,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       saveDurationRules(rules);
       renderDurationRules();
     }
+    updateDurationRulesStatus(`Generated <span class="kbd">${added}</span> rule${added === 1 ? '' : 's'}.`);
     showToast(`Generated ${added} rule${added === 1 ? '' : 's'}`);
   }
 
@@ -1793,6 +1856,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     $('#scheduleStatus').innerHTML = `Source: <span class="kbd">${sch.source}</span> · Updated: <span class="kbd">${upd}</span>`;
     $('#scheduleHint').textContent = 'Saved.';
     showToast('Schedule saved');
+    renderWeekAtGlance();
 
     // Immediately refresh kiosk list in case user switches over
     populateClassesForToday();

@@ -7,3 +7,4 @@
 - Add a simple Instructor Sign-In kiosk header and remove the Site field so sign-ins stay focused on device-configured defaults.
 - Add Admin “Void last sign-in” to mark mistaken entries VOID and exclude them from payroll export (no delete).
 - Add local Admin PIN gating with logout control so kiosks require a PIN before access.
+- Add an Admin week-at-a-glance schedule view with improved duration rule generation feedback.
