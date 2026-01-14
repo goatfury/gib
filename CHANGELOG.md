@@ -1,3 +1,4 @@
+- Add a tablet-friendly launcher at / that links to Module 1 at /m1 so sign-ins remain accessible while keeping Module 1 intact.
 - Replace per-day duration overrides with stored duration rules that auto-fill sign-in hours based on class text.
 - Add a Duration Rules action to generate missing rule entries from the saved weekly schedule.
 - Add admin-set per-class duration overrides (0.5 hr or 1.0 hr) that auto-fill sign-ins from local settings.
