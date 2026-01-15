@@ -1,3 +1,4 @@
+- Add a full-screen sign-in confirmation modal with DONE/UNDO countdown so instructors can't miss successful sign-ins and can reverse mistakes quickly.
 - Add a tablet-friendly launcher at / that links to Module 1 at /m1 so sign-ins remain accessible while keeping Module 1 intact.
 - Replace per-day duration overrides with stored duration rules that auto-fill sign-in hours based on class text.
 - Add a Duration Rules action to generate missing rule entries from the saved weekly schedule.

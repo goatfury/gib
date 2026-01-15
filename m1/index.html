@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-07 12:30)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-07 13:45)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -251,33 +251,6 @@
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
 
-  .undo-banner {
-    display: none;
-    align-items: center;
-    gap: 10px;
-    margin-top: 10px;
-    padding: 8px 12px;
-    border-radius: 999px;
-    border: 1px solid rgba(34,197,94,.35);
-    background: rgba(34,197,94,.12);
-    color: #bbf7d0;
-    font-size: 13px;
-  }
-  .undo-banner.show {
-    display: inline-flex;
-  }
-  .undo-countdown {
-    color: #86efac;
-    font-variant-numeric: tabular-nums;
-  }
-
-  #signInMsg {
-    margin-left: 10px;
-    font-size: 14px;
-    color: var(--accent);
-    white-space: nowrap;
-  }
-
   .statusRow {
     display:flex;
     gap:10px;
@@ -329,6 +302,63 @@
     margin-top: 12px;
     flex-wrap: wrap;
   }
+  .modal.signin-modal {
+    background: rgba(15, 23, 42, 0.82);
+    backdrop-filter: blur(2px);
+  }
+  .modal-card.signin-card {
+    width: min(540px, 96vw);
+    text-align: center;
+    border: 2px solid rgba(59, 130, 246, 0.5);
+    background: linear-gradient(180deg, rgba(17, 24, 39, 0.95), rgba(11, 18, 32, 0.98));
+  }
+  .signin-title {
+    margin: 0 0 8px 0;
+    font-size: 28px;
+    letter-spacing: 0.5px;
+  }
+  .signin-name {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 6px 0;
+    color: #bfdbfe;
+  }
+  .signin-classes {
+    margin-top: 10px;
+    display: grid;
+    gap: 6px;
+    font-size: 15px;
+    color: #e2e8f0;
+  }
+  .signin-classes ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 6px;
+  }
+  .signin-classes li {
+    padding: 8px 10px;
+    border-radius: 12px;
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+  }
+  .signin-actions {
+    justify-content: center;
+  }
+  .signin-actions .btn {
+    min-width: 140px;
+    padding: 12px 16px;
+    font-size: 14px;
+  }
+  .btn.secondary {
+    background: rgba(148,163,184,.12);
+    border-color: rgba(148,163,184,.35);
+    color: #e2e8f0;
+  }
+  .btn.secondary:disabled {
+    opacity: 0.45;
+  }
 </style>
 </head>
 <body>
@@ -338,7 +368,7 @@
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-01-07 12:30</span>
+        Build <span class="kbd" id="buildId">2026-01-07 13:45</span>
       </div>
     </div>
 
@@ -350,7 +380,7 @@
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-01-07 12:30
+      Build 2026-01-07 13:45
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -387,12 +417,6 @@
 
     <div style="margin-top: 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
       <button id="btnSignIn" class="btn brand" type="button">Sign In</button>
-      <span id="signInMsg"></span>
-    </div>
-    <div id="undoBanner" class="undo-banner" role="status" aria-live="polite">
-      <span id="undoBannerText">Saved.</span>
-      <button id="btnUndoSignIn" class="btn small" type="button">Undo</button>
-      <span id="undoCountdown" class="undo-countdown">15s</span>
     </div>
   </section>
 
@@ -580,6 +604,18 @@
 </div>
 
 <div id="toast" class="toast">Saved</div>
+<div id="signInModal" class="modal signin-modal" aria-hidden="true">
+  <div class="modal-card signin-card" role="dialog" aria-modal="true" aria-labelledby="signInModalTitle">
+    <h2 id="signInModalTitle" class="signin-title">Signed in</h2>
+    <div class="signin-name" id="signInModalName">Instructor</div>
+    <div class="signin-classes" id="signInModalClasses"></div>
+    <div class="subtle" style="margin-top: 10px;">Tap DONE to prepare the kiosk for the next instructor.</div>
+    <div class="actions signin-actions">
+      <button id="btnConfirmSignInDone" class="btn brand" type="button">DONE</button>
+      <button id="btnConfirmSignInUndo" class="btn secondary" type="button">UNDO (15s)</button>
+    </div>
+  </div>
+</div>
 <div id="adminPinModal" class="modal" aria-hidden="true">
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="adminPinModalTitle">
     <h3 id="adminPinModalTitle">Set Admin PIN</h3>
@@ -604,7 +640,7 @@
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2026-01-07 12:30';
+  const BUILD = '2026-01-07 13:45';
   const TZ = 'America/New_York';
 
   // Storage keys (new)
@@ -1218,68 +1254,117 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     safeSet(SIGNINS_KEY, rows);
   }
 
-  // Undo banner state (kiosk sign-ins)
+  // Sign-in confirmation modal state (kiosk sign-ins)
   let lastSigninBatchId = null;
-  let undoCountdownId = null;
-  let undoTimeoutId = null;
-  let undoSecondsRemaining = 0;
+  let signInCountdownId = null;
+  let signInSecondsRemaining = 0;
+  let lastSigninFormSnapshot = null;
 
-  function clearUndoTimers() {
-    if (undoCountdownId) {
-      clearInterval(undoCountdownId);
-      undoCountdownId = null;
-    }
-    if (undoTimeoutId) {
-      clearTimeout(undoTimeoutId);
-      undoTimeoutId = null;
+  function clearSignInCountdown() {
+    if (signInCountdownId) {
+      clearInterval(signInCountdownId);
+      signInCountdownId = null;
     }
   }
 
-  function hideUndoBanner() {
-    clearUndoTimers();
-    const banner = $('#undoBanner');
-    banner.classList.remove('show');
-    lastSigninBatchId = null;
+  function updateSignInUndoLabel() {
+    const btn = $('#btnConfirmSignInUndo');
+    if (!btn) return;
+    btn.textContent = `UNDO (${signInSecondsRemaining}s)`;
   }
 
-  function renderUndoCountdown() {
-    $('#undoCountdown').textContent = `${undoSecondsRemaining}s`;
+  function toggleSignInModal(show) {
+    const modal = $('#signInModal');
+    if (!modal) return;
+    if (show) {
+      modal.classList.add('show');
+      modal.setAttribute('aria-hidden', 'false');
+      $('#btnSignIn').disabled = true;
+    } else {
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+      $('#btnSignIn').disabled = false;
+    }
   }
 
-  function showUndoBanner(batchId) {
-    clearUndoTimers();
+  function resetKioskForm() {
+    $('#nameInput').value = '';
+    $('#notesInput').value = '';
+    document.querySelectorAll('#classListWrap input[type="checkbox"]').forEach(cb => cb.checked = false);
+    $('#classListWrap').style.display = 'none';
+  }
+
+  function restoreKioskForm(snapshot) {
+    if (!snapshot) return;
+    $('#nameInput').value = snapshot.name || '';
+    $('#notesInput').value = snapshot.notes || '';
+    const wrap = $('#classListWrap');
+    if (!wrap.hasChildNodes()) populateClassesForToday();
+    const selected = new Set(snapshot.classes || []);
+    document.querySelectorAll('#classListWrap input[type="checkbox"]').forEach(cb => {
+      cb.checked = selected.has(cb.value);
+    });
+    wrap.style.display = 'block';
+  }
+
+  function openSignInModal({ name, classes, batchId, formSnapshot }) {
     lastSigninBatchId = batchId;
-    undoSecondsRemaining = 15;
-    $('#undoBannerText').textContent = 'Saved. Undo?';
-    renderUndoCountdown();
-    $('#undoBanner').classList.add('show');
-    undoCountdownId = setInterval(() => {
-      undoSecondsRemaining -= 1;
-      if (undoSecondsRemaining <= 0) {
-        hideUndoBanner();
+    lastSigninFormSnapshot = formSnapshot;
+    $('#signInModalName').textContent = name;
+    const classesWrap = $('#signInModalClasses');
+    classesWrap.innerHTML = '';
+    const list = document.createElement('ul');
+    (classes || []).forEach(cls => {
+      const item = document.createElement('li');
+      item.textContent = cls;
+      list.appendChild(item);
+    });
+    classesWrap.appendChild(list);
+
+    signInSecondsRemaining = 15;
+    const undoBtn = $('#btnConfirmSignInUndo');
+    undoBtn.disabled = false;
+    updateSignInUndoLabel();
+    clearSignInCountdown();
+    signInCountdownId = setInterval(() => {
+      signInSecondsRemaining -= 1;
+      if (signInSecondsRemaining <= 0) {
+        signInSecondsRemaining = 0;
+        updateSignInUndoLabel();
+        undoBtn.disabled = true;
+        clearSignInCountdown();
+        lastSigninBatchId = null;
         return;
       }
-      renderUndoCountdown();
+      updateSignInUndoLabel();
     }, 1000);
-    undoTimeoutId = setTimeout(() => {
-      hideUndoBanner();
-    }, 15000);
+    toggleSignInModal(true);
+  }
+
+  function closeSignInModal() {
+    clearSignInCountdown();
+    signInSecondsRemaining = 0;
+    toggleSignInModal(false);
   }
 
   function undoLastSigninBatch() {
-    if (!lastSigninBatchId) return;
+    if (!lastSigninBatchId || signInSecondsRemaining <= 0) return;
     const rows = loadSignins();
     const nextRows = rows.filter(r => r.__batchId !== lastSigninBatchId);
     if (nextRows.length !== rows.length) {
       saveSignins(nextRows);
     }
-    $('#undoBannerText').textContent = 'Undone.';
-    $('#undoCountdown').textContent = '';
-    clearUndoTimers();
+    renderAdminTable();
+    closeSignInModal();
+    restoreKioskForm(lastSigninFormSnapshot);
     lastSigninBatchId = null;
-    setTimeout(() => {
-      $('#undoBanner').classList.remove('show');
-    }, 2000);
+  }
+
+  function confirmSigninDone() {
+    closeSignInModal();
+    resetKioskForm();
+    lastSigninBatchId = null;
+    lastSigninFormSnapshot = null;
   }
 
   // Admin PIN
@@ -1521,18 +1606,13 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     });
     saveSignins(rows);
 
-    // Clear screen for next instructor
-    $('#nameInput').value = '';
-    $('#notesInput').value = '';
-    document.querySelectorAll('#classListWrap input[type="checkbox"]').forEach(cb => cb.checked = false);
-    $('#classListWrap').style.display = 'none';
-
     // Confirmation
-    const msg = $('#signInMsg');
-    msg.textContent = `${name} — ${classes.join(', ')} saved`;
-    setTimeout(() => msg.textContent = '', 4000);
-    showToast('Saved');
-    showUndoBanner(batchId);
+    openSignInModal({
+      name,
+      classes,
+      batchId,
+      formSnapshot: { name, notes, classes }
+    });
 
     // Build sync rows and queue them for upload.  Each class selected produces
     // its own row in the sync queue so that multi‑class sign‑ins are treated as
@@ -1765,7 +1845,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   });
   $('#btnAdminLogout').addEventListener('click', showKiosk);
   $('#btnSignIn').addEventListener('click', signIn);
-  $('#btnUndoSignIn').addEventListener('click', undoLastSigninBatch);
+  $('#btnConfirmSignInUndo').addEventListener('click', undoLastSigninBatch);
+  $('#btnConfirmSignInDone').addEventListener('click', confirmSigninDone);
 
   $('#btnAdminPinToggle').addEventListener('click', () => {
     const panel = $('#adminPinPanel');
