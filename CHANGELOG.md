@@ -1,3 +1,4 @@
+- M1: Week-at-a-Glance now shows active Series classes per day (tagged ‘(Series)’).
 - Add a full-screen sign-in confirmation modal with DONE/UNDO countdown so instructors can't miss successful sign-ins and can reverse mistakes quickly.
 - Update Series classes to use a week-count input with auto-calculated end dates for a cleaner admin form.
 - Add Series classes in Admin so limited-run weekly blocks (like 8-week intros) appear in Classes Today only during their active dates.
