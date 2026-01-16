@@ -1,0 +1,2080 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-07 13:45)</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #0b1220;
+    --panel: #111827;
+    --text: #e5e7eb;
+    --muted: #94a3b8;
+    --brand: #3b82f6;
+    --accent: #22c55e;
+    --danger: #ef4444;
+    --warn: #f59e0b;
+    --outline: #1f2937;
+    --shadow: 0 6px 24px rgba(0,0,0,.25), 0 2px 8px rgba(0,0,0,.35);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: linear-gradient(145deg, #0b1220 0%, #0f172a 60%, #0b1220 100%);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  .container {
+    max-width: 1060px;
+    margin: 0 auto;
+    padding: 22px;
+  }
+  body.kiosk-mode header {
+    padding: 14px;
+  }
+  body.kiosk-mode header .kiosk-hide {
+    display: none;
+  }
+  body.kiosk-mode header nav {
+    margin-top: 0;
+    justify-content: flex-end;
+  }
+  body.kiosk-mode #btnKiosk {
+    display: none;
+  }
+  header {
+    background: radial-gradient(1200px 600px at 10% -10%, #1e293b 0%, transparent 60%);
+    padding: 26px;
+    border-radius: 18px;
+    border: 1px solid var(--outline);
+    box-shadow: var(--shadow);
+  }
+  header h1 { margin: 10px 0 0 0; font-size: 26px; }
+  header .subtitle { color: var(--muted); margin-top: 6px; line-height: 1.35; }
+  header nav { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; align-items:center; }
+  .pill {
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    background: rgba(96,165,250,.12);
+    color:#bfdbfe;
+    border: 1px solid rgba(96,165,250,.35);
+    padding:4px 10px;
+    border-radius:999px;
+    font-size:12px;
+  }
+  .pill .dot { width:8px; height:8px; border-radius:99px; background: rgba(34,197,94,.85); box-shadow: 0 0 0 2px rgba(34,197,94,.15); }
+  .pill.gray .dot { background: rgba(148,163,184,.85); box-shadow: 0 0 0 2px rgba(148,163,184,.15); }
+  .metaRow {
+    margin-top: 10px;
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    align-items:center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .btn {
+    border: 1px solid var(--outline);
+    background: var(--panel);
+    color: var(--text);
+    padding: 10px 14px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all .15s ease;
+  }
+  .btn:hover { border-color: #374151; }
+  .btn:active { transform: translateY(1px); }
+  .btn.brand { background: var(--brand); color: white; border-color: var(--brand); }
+  .btn.danger { background: var(--danger); color: white; border-color: var(--danger); }
+  .btn.warn { background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.35); color: #fde68a; }
+  .btn.small { padding: 8px 10px; border-radius: 9px; font-size: 12px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--outline);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+    padding: 18px;
+    margin-top: 18px;
+  }
+  .card h2 { margin: 0 0 10px 0; font-size: 20px; }
+  .card h3 { margin: 0 0 10px 0; font-size: 16px; color: #dbeafe; }
+  .kiosk-heading { margin: 0 0 12px 0; font-size: 22px; }
+  .subtle { color: var(--muted); font-size: 13px; line-height: 1.35; }
+
+  .grid { display: grid; gap: 14px; }
+  @media (min-width: 900px) {
+    .grid.two { grid-template-columns: minmax(0,1fr) minmax(0,2.4fr); }
+    .grid.twoEq { grid-template-columns: 1fr 1fr; }
+  }
+
+  label { display:block; margin-bottom: 6px; color: #cbd5e1; font-size: 13px; }
+  input, select, textarea {
+    width: 100%;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid #243045;
+    background: #0b1322;
+    color: var(--text);
+  }
+  textarea { min-height: 160px; resize: vertical; }
+  #notesInput { min-height: 90px; }
+  input:focus, select:focus, textarea:focus {
+    border-color: var(--brand);
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(59,130,246,.3);
+  }
+  button:disabled,
+  .btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+
+  /* Class list */
+  #classListWrap {
+    width: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    max-height: 260px;
+    border: 1px solid var(--outline);
+    border-radius: 12px;
+    background: #0b1322;
+    padding: 6px;
+  }
+  #classListWrap label {
+    /* Use a two‑column grid so the checkbox and text occupy the full width and wrap nicely. */
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: flex-start;
+    gap: 10px;
+    width: 100%;
+    margin: 0;
+    padding: 10px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    line-height: 1.35;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  /* Ensure the text spans the remaining width and doesn’t overlap the scrollbar */
+  #classListWrap label span {
+    display: block;
+    padding-right: 12px;
+  }
+  #classListWrap label:hover { background: rgba(59,130,246,0.12); }
+  #classListWrap input[type="checkbox"] {
+    flex: none;
+    margin: 2px 0 0 0;
+    transform: scale(1.1);
+  }
+
+  .hint {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .hint.warn {
+    color: #fde68a;
+  }
+  .inline {
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    align-items:center;
+  }
+  .duration-rule-list {
+    display: grid;
+    gap: 8px;
+  }
+  .duration-rule-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 120px auto;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--outline);
+    background: #0b1322;
+  }
+  .week-glance {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+  .week-day {
+    border: 1px solid var(--outline);
+    border-radius: 12px;
+    padding: 10px 12px;
+    background: #0b1322;
+    min-height: 110px;
+  }
+  .week-day h4 {
+    margin: 0 0 6px 0;
+    font-size: 14px;
+    color: #c7d2fe;
+  }
+  .week-day ul {
+    margin: 0;
+    padding-left: 16px;
+    display: grid;
+    gap: 4px;
+    font-size: 12px;
+    color: #e2e8f0;
+  }
+
+  /* Table */
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 12px 10px; border-top: 1px solid #1d2738; }
+  th { background: #0f1928; color: #cbd5e1; text-align: left; position: sticky; top: 0; }
+  tr:hover td { background: #0d1423; }
+  tr.void-row td { color: #9ca3af; opacity: 0.65; }
+
+  /* Toast */
+  .toast {
+    position: fixed; left: 50%; bottom: 24px;
+    transform: translateX(-50%);
+    background: #052e1a; color: #b9f2cb;
+    border: 1px solid #195a39;
+    padding: 10px 14px;
+    border-radius: 999px;
+    box-shadow: var(--shadow);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .25s ease, transform .25s ease;
+    font-size: 14px;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
+
+  .statusRow {
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    align-items:center;
+    font-size:12px;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+  .kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 12px;
+    color: #e2e8f0;
+    background: rgba(148,163,184,.12);
+    border: 1px solid rgba(148,163,184,.25);
+    padding: 2px 6px;
+    border-radius: 8px;
+  }
+  .modal {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, 0.7);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s ease;
+    z-index: 50;
+    padding: 18px;
+  }
+  .modal.show {
+    opacity: 1;
+    pointer-events: all;
+  }
+  .modal-card {
+    width: min(420px, 96vw);
+    background: var(--card);
+    border: 1px solid var(--outline);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+    padding: 18px;
+  }
+  .modal-card h3 { margin: 0 0 8px 0; }
+  .modal-card .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  .modal.signin-modal {
+    background: rgba(15, 23, 42, 0.82);
+    backdrop-filter: blur(2px);
+  }
+  .modal-card.signin-card {
+    width: min(540px, 96vw);
+    text-align: center;
+    border: 2px solid rgba(59, 130, 246, 0.5);
+    background: linear-gradient(180deg, rgba(17, 24, 39, 0.95), rgba(11, 18, 32, 0.98));
+  }
+  .signin-title {
+    margin: 0 0 8px 0;
+    font-size: 28px;
+    letter-spacing: 0.5px;
+  }
+  .signin-name {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 6px 0;
+    color: #bfdbfe;
+  }
+  .signin-classes {
+    margin-top: 10px;
+    display: grid;
+    gap: 6px;
+    font-size: 15px;
+    color: #e2e8f0;
+  }
+  .signin-classes ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 6px;
+  }
+  .signin-classes li {
+    padding: 8px 10px;
+    border-radius: 12px;
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+  }
+  .signin-actions {
+    justify-content: center;
+  }
+  .signin-actions .btn {
+    min-width: 140px;
+    padding: 12px 16px;
+    font-size: 14px;
+  }
+  .btn.secondary {
+    background: rgba(148,163,184,.12);
+    border-color: rgba(148,163,184,.35);
+    color: #e2e8f0;
+  }
+  .btn.secondary:disabled {
+    opacity: 0.45;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="inline kiosk-hide">
+      <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
+      <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
+      <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
+        Build <span class="kbd" id="buildId">2026-01-07 13:45</span>
+      </div>
+    </div>
+
+    <h1 id="hdrGym" class="kiosk-hide">Gym in a Box — Module 1</h1>
+    <div class="subtitle kiosk-hide" id="hdrSub">
+      <span id="hdrLoc">Set device location in Admin.</span>
+      <span id="todayName"></span>
+    </div>
+
+    <!-- Large build stamp for easy verification -->
+    <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
+      Build 2026-01-07 13:45
+    </div>
+
+    <div class="metaRow kiosk-hide">
+      <span>Goal: tap‑fast sign‑in, clean export, no typos.</span>
+    </div>
+
+    <nav>
+      <button id="btnKiosk" class="btn brand" type="button">Instructor Sign‑In</button>
+      <button id="btnAdmin" class="btn" type="button">Admin View</button>
+    </nav>
+  </header>
+
+  <!-- KIOSK -->
+  <section id="kiosk" class="card">
+    <h2 class="kiosk-heading">Instructor Sign-In</h2>
+    <div class="grid two" id="classesGrid">
+      <div>
+        <label>Name</label>
+        <input type="text" id="nameInput" placeholder="Enter your name" autocomplete="off" />
+      </div>
+
+      <div>
+        <label>Class(es) (Today)</label>
+        <button id="toggleClasses" class="btn" type="button" style="width:100%; margin-bottom:6px;">Select class(es)</button>
+        <div id="classListWrap" style="display:none;"></div>
+        <div class="hint" id="classesHint">Select one or more classes.</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 12px;">
+      <label>Notes (optional)</label>
+      <textarea id="notesInput" placeholder="Add a quick note if needed"></textarea>
+    </div>
+
+    <div style="margin-top: 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <button id="btnSignIn" class="btn brand" type="button">Sign In</button>
+    </div>
+  </section>
+
+  <!-- ADMIN -->
+  <section id="admin" class="card" style="display:none;">
+    <div class="inline" style="justify-content: space-between; align-items:center;">
+      <h2 style="margin: 0;">Admin View</h2>
+      <div class="inline" style="gap:8px;">
+        <button id="btnAdminPinToggle" class="btn small" type="button" style="display:none;">Change PIN</button>
+        <button id="btnAdminLogout" class="btn warn small" type="button">Log out Admin</button>
+      </div>
+    </div>
+
+    <div id="adminPinPanel" class="card" style="background: var(--panel); display:none;">
+      <h3>Admin access</h3>
+      <div class="subtle" id="adminPinHint">Set a PIN to lock Admin view on this device.</div>
+
+      <div class="grid twoEq" style="margin-top: 12px;">
+        <div>
+          <label id="adminPinLabel">Set PIN</label>
+          <input id="adminPinInput" type="password" inputmode="numeric" placeholder="Enter a 4-6 digit PIN" />
+          <div class="hint">Stored locally on this device.</div>
+        </div>
+        <div>
+          <label>Actions</label>
+          <div class="inline">
+            <button id="btnSaveAdminPin" class="btn brand" type="button">Save PIN</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="background: var(--panel);">
+      <h3>Device setup</h3>
+      <div class="subtle">This is stored <b>on this device</b> (local storage). Use it to label exports and auto-fill Site.</div>
+
+      <div class="grid twoEq" style="margin-top: 12px;">
+        <div>
+          <label>Gym name</label>
+          <input id="cfgGymName" type="text" placeholder="e.g. Revolution BJJ" />
+        </div>
+        <div>
+          <label>Location / device label</label>
+          <input id="cfgLocation" type="text" placeholder="e.g. Front Desk iPad (Rev)" />
+        </div>
+      </div>
+
+      <div class="grid twoEq" style="margin-top: 12px;">
+        <div>
+          <label>Default site code</label>
+          <input id="cfgSiteCode" type="text" placeholder="Rev" />
+          <div class="hint">Used as the Site value for kiosk sign-ins and exports.</div>
+        </div>
+        <div>
+          <label>Actions</label>
+          <div class="inline" style="flex-wrap: wrap; gap:6px;">
+            <button id="btnSaveDevice" class="btn brand" type="button">Save device</button>
+            <button id="btnResetDevice" class="btn danger" type="button">Reset device location</button>
+            <button id="btnFactoryReset" class="btn danger" type="button">Factory reset</button>
+          </div>
+          <div class="hint warn">Reset device clears: gym name, location label, site code, schedule data, and duration rules (sign‑ins preserved).  Factory reset clears <em>all</em> local data (device, schedule, duration rules, sign‑ins).</div>
+        </div>
+      </div>
+
+      <div class="statusRow" id="deviceStatus"></div>
+    </div>
+
+    <div class="card" style="background: var(--panel);">
+      <h3>Schedule (used by “Classes Today”)</h3>
+      <div class="subtle">
+        If the kiosk list is empty, it usually means: schedule not saved, or the day key didn’t match.
+        This build fixes that by using one shared schedule source.
+      </div>
+
+      <div class="grid twoEq" style="margin-top: 12px; display: none;">
+  <div>
+    <label>Schedule URL (optional)</label>
+    <input id="cfgScheduleUrl" type="url" placeholder="https://example.com/schedule.json" />
+    <div class="hint">Paste a JSON schedule URL here to import classes automatically.</div>
+  </div>
+  <div>
+    <label>&nbsp;</label>
+    <div class="inline">
+      <button id="btnLoadScheduleUrl" class="btn" type="button">Load from URL</button>
+    </div>
+    <div class="hint">Fetches a remote JSON schedule and saves it.</div>
+  </div>
+</div>
+<div style="margin-top: 12px;">
+  <label>Day</label>
+  <select id="schedDay"></select>
+</div>
+<div style="margin-top: 12px;">
+  <label>Schedule actions</label>
+  <div class="inline">
+    <button id="btnSaveSchedule" class="btn brand" type="button">Save schedule</button>
+    <button id="btnLoadDefaultSchedule" class="btn" type="button">Load default Rev schedule</button>
+    <button id="btnLoadRichSchedule" class="btn" type="button">Load Richmond BJJ schedule</button>
+    <button id="btnClearSchedule" class="btn" type="button">Revert to default</button>
+    <button id="btnDisableSchedule" class="btn warn" type="button">Disable schedule</button>
+  </div>
+</div>
+
+      <div style="margin-top: 12px;">
+        <label>Classes for selected day (one per line)</label>
+        <textarea id="schedText" placeholder="6:00 AM BJJ (Level 2)
+12:00 PM BJJ (Level 2)
+..."></textarea>
+        <div class="hint" id="scheduleHint"></div>
+      </div>
+
+      <div class="statusRow" id="scheduleStatus"></div>
+    </div>
+
+    <div class="card" style="background: var(--panel);">
+      <h3>Week at a glance</h3>
+      <div class="subtle">Read-only view of the saved weekly schedule.</div>
+      <div id="weekAtGlance" class="week-glance" style="margin-top: 12px;"></div>
+    </div>
+
+    <div class="card" style="background: var(--panel);">
+      <h3>Duration rules</h3>
+      <div class="subtle">Match text → duration (first match wins, case-insensitive “contains”).</div>
+      <div id="durationRulesWrap" class="duration-rule-list" style="margin-top: 10px;"></div>
+      <div class="inline" style="margin-top: 10px;">
+        <button id="btnAddDurationRule" class="btn" type="button">Add rule</button>
+        <button id="btnGenerateDurationRules" class="btn" type="button">Generate duration rules from weekly schedule</button>
+      </div>
+      <div class="statusRow" id="durationRulesStatus"></div>
+    </div>
+
+    <div class="card" style="background: var(--panel);">
+      <h3>Sign-ins</h3>
+      <div class="subtle">Export CSV compatible with payroll. Columns: Timestamp, Date, Class Label, Duration (hr), Instructor, Site, Notes.</div>
+
+      <div class="inline" style="margin:12px 0 12px 0;">
+        <button id="btnExport" class="btn brand" type="button">Export CSV</button>
+        <button id="btnCopy" class="btn" type="button">Copy CSV</button>
+        <button id="btnVoidLast" class="btn warn" type="button">Void last sign‑in</button>
+        <button id="btnClearSignins" class="btn danger" type="button">Clear All Sign‑ins</button>
+      </div>
+
+      <div id="adminTableWrap"></div>
+
+      <div id="csvPanel" class="card" style="display:none; margin-top:16px; background: rgba(148,163,184,.06);">
+        <div style="color:var(--muted); margin-bottom:6px;">CSV preview (for browsers that block downloads)</div>
+        <textarea id="csvTextarea" readonly></textarea>
+      </div>
+    </div>
+
+    <!-- Google Sheets sync configuration -->
+    <div class="card" style="background: var(--panel);">
+      <h3>Google Sheets Sync</h3>
+      <div class="subtle">Configure a webhook URL and token to push sign‑ins to your intake sheet.</div>
+      <div style="margin-top:12px;">
+        <label for="cfgSyncUrl" style="display:block; margin-bottom:4px;">Webhook URL</label>
+        <input id="cfgSyncUrl" type="text" placeholder="https://script.google.com/macros/s/.../exec" style="width:100%;">
+      </div>
+      <div style="margin-top:12px;">
+        <label for="cfgSyncToken" style="display:block; margin-bottom:4px;">Sync token</label>
+        <input id="cfgSyncToken" type="text" placeholder="Secret token" style="width:100%;">
+      </div>
+      <div style="margin-top:12px;">
+        <label for="cfgDeviceLabel" style="display:block; margin-bottom:4px;">Device label</label>
+        <input id="cfgDeviceLabel" type="text" placeholder="Front Desk iPad" style="width:100%;">
+      </div>
+      <div style="margin-top:12px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <label style="display:flex; align-items:center; gap:6px;"><input id="cfgAutoSync" type="checkbox">Auto‑sync after sign‑in</label>
+        <button id="btnSyncNow" class="btn" type="button">Sync now</button>
+      </div>
+      <div id="syncStatus" class="statusRow" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="card" style="background: rgba(148,163,184,.06); border-color: rgba(148,163,184,.18);">
+      <h3>Quick debug</h3>
+      <div class="subtle">If something feels “stuck”, copy this into chat and I’ll patch fast.</div>
+      <div class="inline" style="margin-top:10px;">
+        <button id="btnCopyDebug" class="btn" type="button">Copy debug snapshot</button>
+        <button id="btnSelectDebug" class="btn" type="button">Select debug text</button>
+      </div>
+      <!-- render debug output in a textarea for reliable selection on tablets -->
+      <textarea id="debugBox" readonly style="margin-top:10px; white-space:pre-wrap; color:#e2e8f0; font-size:12px; background:#0b1322; border:1px solid #243045; border-radius:10px; padding:12px; width:100%; min-height:160px;"></textarea>
+    </div>
+  </section>
+</div>
+
+<div id="toast" class="toast">Saved</div>
+<div id="signInModal" class="modal signin-modal" aria-hidden="true">
+  <div class="modal-card signin-card" role="dialog" aria-modal="true" aria-labelledby="signInModalTitle">
+    <h2 id="signInModalTitle" class="signin-title">Signed in</h2>
+    <div class="signin-name" id="signInModalName">Instructor</div>
+    <div class="signin-classes" id="signInModalClasses"></div>
+    <div class="subtle" style="margin-top: 10px;">Tap DONE to prepare the kiosk for the next instructor.</div>
+    <div class="actions signin-actions">
+      <button id="btnConfirmSignInDone" class="btn brand" type="button">DONE</button>
+      <button id="btnConfirmSignInUndo" class="btn secondary" type="button">UNDO (15s)</button>
+    </div>
+  </div>
+</div>
+<div id="adminPinModal" class="modal" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="adminPinModalTitle">
+    <h3 id="adminPinModalTitle">Set Admin PIN</h3>
+    <div class="subtle">Create a PIN to protect Admin access on this device.</div>
+    <div style="margin-top: 12px;">
+      <label for="adminPinSetup">PIN</label>
+      <input id="adminPinSetup" type="password" inputmode="numeric" placeholder="Enter a 4-6 digit PIN" />
+    </div>
+    <div style="margin-top: 12px;">
+      <label for="adminPinSetupConfirm">Confirm PIN</label>
+      <input id="adminPinSetupConfirm" type="password" inputmode="numeric" placeholder="Re-enter PIN" />
+      <div id="adminPinMatchHint" class="hint warn" style="display:none;">PINs must match.</div>
+    </div>
+    <div class="actions">
+      <button id="btnCancelAdminPin" class="btn" type="button">Cancel</button>
+      <button id="btnConfirmAdminPin" class="btn brand" type="button">Save PIN</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // Update the build stamp so testers can verify they have the latest version.
+  // NOTE: bump this whenever you make changes to the kiosk or admin.
+  const BUILD = '2026-01-07 13:45';
+  const TZ = 'America/New_York';
+
+  // Storage keys (new)
+  const SIGNINS_KEY = 'gib_m1_signins_v1';
+  const SCHEDULE_KEY = 'gib_m1_schedule_v1';
+  const DEVICE_KEY  = 'gib_m1_device_v1';
+  const ADMIN_PIN_KEY = 'gib_m1_admin_pin_v1';
+  const DURATION_RULES_KEY = 'gib_m1_duration_rules_v1';
+// New keys: store the schedule source URL and mode. These are kept separate from
+// SCHEDULE_KEY so that a remote schedule can be recalled after reset or refresh.
+const SCHEDULE_URL_KEY  = 'gib_m1_schedule_url_v1';
+const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
+
+  // Sync keys
+  const SYNC_QUEUE_KEY   = 'gib_m1_sync_queue_v1';
+  const SYNC_URL_KEY     = 'gib_m1_sync_url_v1';
+  const SYNC_TOKEN_KEY   = 'gib_m1_sync_token_v1';
+  const SYNC_AUTO_KEY    = 'gib_m1_sync_auto_v1';
+  const DEVICE_LABEL_KEY = 'gib_m1_device_label_v1';
+
+
+  // Back-compat keys (older builds we created)
+  const OLD_SIGNINS_KEYS = ['rbjj_signins_v2', 'rbjj_signins_roster_mode_v1'];
+
+  const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+
+  // Default schedule snapshot (Rev)
+  const DEFAULT_SCHEDULE = {
+    'Monday': [
+      '6:00 AM BJJ (Level 2)', '12:00 PM BJJ (Level 2)', '4:30 PM Yoga (Core)', '4:30 PM Kids’ BJJ',
+      '4:30 PM BJJ (Level 1)', '5:30 PM BJJ (Level 2)', '5:30 PM Lapel Guard Class (Level 4)',
+      '6:30 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)',
+      '6:30 PM Muay Thai (Fundamentals/Intermediate, and intros when scheduled)',
+      '6:30 PM Leglock Fundamentals (No-Gi, Level 3)', '7:00 PM BJJ (Level 2)',
+      '7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ'
+    ],
+    'Tuesday': [
+      '6:00 AM BJJ (Level 4) / Gi BJJ Intro Class', '6:00 AM No-Gi BJJ (Level 2)', '7:15 AM Conditioning',
+      '12:00 PM BJJ (Level 2)', '4:30 PM Yoga (Flow)', '4:30 PM Kids’ BJJ', '5:30 PM BJJ (Level 2)',
+      '5:30 PM Gi BJJ Intro Class / Level 1', '5:30 PM BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)',
+      '6:30 PM Guard Passing Class (Level 3)', '6:30 PM Judo', '7:00 PM BJJ Competition Class (Level 2, gi)'
+    ],
+    'Wednesday': [
+      '6:00 AM BJJ (Level 2)', '12:00 PM No-Gi BJJ (Level 2)', '4:30 PM Kids’ BJJ', '4:30 PM BJJ (Level 1)',
+      '5:30 PM BJJ (Level 2)', '5:30 PM BJJ (Level 4)',
+      '6:30 PM Muay Thai (Fundamentals/Intermediate, and intros when scheduled)',
+      '6:30 PM BJJ Drills (Level 3)', '7:00 PM BJJ (Level 4)', '7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ'
+    ],
+    'Thursday': [
+      '6:00 AM No-Gi BJJ (Level 4)', '6:00 AM No-Gi BJJ (Level 2) / Gi BJJ Intro Class', '7:15 AM Conditioning',
+      '12:00 PM BJJ (Level 2)', '4:30 PM Kids’ BJJ', '5:00 PM Get Warm', '5:30 PM BJJ (Level 2)',
+      '5:30 PM Gi BJJ Intro Class / Level 1', '5:30 PM No-Gi BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)',
+      '6:30 PM Advanced Leglocks (No-Gi, Level 3)', '6:30 PM Judo', '7:00 PM BJJ Competition Class (Level 2, no-gi)'
+    ],
+    'Friday': [
+      '6:00 AM Drill/Roll Class – BJJ', '12:00 PM Drill/Roll Class – BJJ', '4:30 PM Yoga (Flow)',
+      '5:00 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)', '5:30 PM BJJ (Level 2)',
+      '6:00 PM Muay Thai (Fundamentals/Intermediate)'
+    ],
+    'Saturday': [
+      '10:00 AM Kids’ BJJ', '10:00 AM Wrestling', '11:00 AM BJJ (Level 2)', '12:00 PM Conditioning'
+    ],
+    'Sunday': [
+      '12:00 PM BJJ Competition Class (Level 4, gi and no-gi)', '12:30 PM Get Warm', '1:00 PM BJJ Open Mat'
+    ]
+  };
+
+  // Additional default schedule for Richmond BJJ.  This snapshot was copied from
+  // the Richmond BJJ Academy schedule page as of late‑2025.  Each line
+  // represents a class with a time and description.  You can edit this
+  // constant if the Richmond schedule changes in the future.  It is only
+  // loaded when the admin clicks “Load Richmond BJJ schedule” in the
+  // schedule editor.
+  const DEFAULT_SCHEDULE_RICHMOND = {
+    'Monday': [
+      '6:00-7:00 AM – Muay Thai Fundamentals',
+      '7:00-8:00 AM – Brazilian Jiu-Jitsu No-Gi',
+      '6:00-7:00 PM – Muay Thai Fundamentals',
+      '7:15-9:00 PM – Brazilian Jiu-Jitsu Fundamentals'
+    ],
+    'Tuesday': [
+      '6:00-7:00 AM – Muay Thai Mixed Levels',
+      '7:00-8:00 AM – Brazilian Jiu-Jitsu Gi',
+      '6:00-7:00 PM – Muay Thai Mixed Levels',
+      '7:15-9:00 PM – Brazilian Jiu-Jitsu Fundamentals',
+      '7:15-9:00 PM – Brazilian Jiu-Jitsu Mixed Levels'
+    ],
+    'Wednesday': [
+      '6:00-7:00 AM – Muay Thai Fundamentals',
+      '7:00-8:00 AM – Brazilian Jiu-Jitsu No-Gi',
+      '6:00-7:00 PM – Muay Thai Fundamentals',
+      '7:15-9:00 PM – Brazilian Jiu-Jitsu No-Gi Fundamentals'
+    ],
+    'Thursday': [
+      '6:00-7:00 AM – Muay Thai Mixed Levels',
+      '7:00-8:00 AM – Brazilian Jiu-Jitsu Gi',
+      '6:00-7:00 PM – Muay Thai Mixed Levels',
+      '7:15-9:00 PM – Brazilian Jiu-Jitsu Fundamentals',
+      '7:15-9:00 PM – Brazilian Jiu-Jitsu Mixed Levels'
+    ],
+    'Friday': [
+      '6:00-7:00 AM – Muay Thai Fundamentals',
+      '7:00-8:00 AM – Brazilian Jiu-Jitsu No-Gi',
+      '6:00-7:00 PM – Muay Thai Open Mat',
+      '7:15-9:00 PM – Brazilian Jiu-Jitsu Fundamentals'
+    ],
+    'Saturday': [
+      '10:00-11:00 AM – Muay Thai Fundamentals',
+      '11:15-1:00 PM – Brazilian Jiu-Jitsu Fundamentals'
+    ],
+    'Sunday': [
+      '10:00-11:00 AM – Ladies Muay Thai'
+    ]
+  };
+
+  // Elements
+  const $ = (sel) => document.querySelector(sel);
+
+  // Time helpers
+  function todayName() {
+    return new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'long' }).format(new Date());
+  }
+  function fmtDate(d) {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit' }).format(d);
+  }
+  function fmtTS(d) {
+    const date = fmtDate(d);
+    const hh = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour:'2-digit', hour12:false }).format(d);
+    const mm = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, minute:'2-digit' }).format(d);
+    const ss = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, second:'2-digit' }).format(d);
+    return `${date} ${hh}:${mm}:${ss}`;
+  }
+
+  // Storage helpers
+  function safeParse(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return fallback;
+      return JSON.parse(raw);
+    } catch (e) {
+      return fallback;
+    }
+  }
+  function safeSet(key, value) {
+    localStorage.setItem(key, JSON.stringify(value));
+  }
+
+  // Normalize day keys so admin + kiosk always match
+  const dayMap = {
+    'mon':'Monday','monday':'Monday',
+    'tue':'Tuesday','tues':'Tuesday','tuesday':'Tuesday',
+    'wed':'Wednesday','wednesday':'Wednesday',
+    'thu':'Thursday','thur':'Thursday','thurs':'Thursday','thursday':'Thursday',
+    'fri':'Friday','friday':'Friday',
+    'sat':'Saturday','saturday':'Saturday',
+    'sun':'Sunday','sunday':'Sunday'
+  };
+  function normalizeDayKey(s) {
+    const raw = String(s || '').trim().toLowerCase();
+    const letters = raw.replace(/[^a-z]/g,'');
+    return dayMap[letters] || null;
+  }
+
+  // Device config
+  function loadDevice() {
+    return safeParse(DEVICE_KEY, null);
+  }
+  function saveDevice(cfg) {
+    safeSet(DEVICE_KEY, cfg);
+  }
+  function resetDevice() {
+    // Clear device + schedule data + duration rules (for clean setup tests)
+    localStorage.removeItem(DEVICE_KEY);
+    localStorage.removeItem(SCHEDULE_KEY);
+    localStorage.removeItem(DURATION_RULES_KEY);
+    // Also clear a few older keys if present (safe no-ops)
+    localStorage.removeItem('gib_device');
+    localStorage.removeItem('rbjj_device');
+    localStorage.removeItem('rbjj_schedule');
+    localStorage.removeItem('rbjj_schedule_v1');
+    // Wipe legacy gib_* and rbjj_* keys (except current sign-ins) that could confuse installs
+    try {
+      Object.keys(localStorage).forEach(k => {
+        if ((k.startsWith('gib_') || k.startsWith('rbjj_')) && k !== SIGNINS_KEY) {
+          localStorage.removeItem(k);
+        }
+      });
+    } catch (e) {}
+
+    // Clear any values in the admin form fields so they appear empty after reset
+    const g = document.getElementById('cfgGymName');
+    const l = document.getElementById('cfgLocation');
+    const s = document.getElementById('cfgSiteCode');
+    if (g) g.value = '';
+    if (l) l.value = '';
+    if (s) s.value = '';
+    applyDeviceToUI();
+    loadScheduleIntoAdmin(); // resets admin editor to default schedule state
+    renderDurationRules();
+    populateClassesForToday(); // ensures kiosk is not empty if defaults exist
+    showToast('Device reset');
+  }
+
+  // Remove all GiB/M1 and legacy RBJJ keys from localStorage and restore the app
+  // to a true blank first‑run state.  This is used by the Factory Reset button.
+  function factoryReset() {
+    try {
+      Object.keys(localStorage).forEach(k => {
+        if (k.startsWith('gib_') || k.startsWith('rbjj_')) {
+          localStorage.removeItem(k);
+        }
+      });
+    } catch (e) {}
+    // Explicitly remove known keys for schedule, device, remote URL, and sign‑ins
+    localStorage.removeItem(SIGNINS_KEY);
+    localStorage.removeItem(SCHEDULE_KEY);
+    localStorage.removeItem(SCHEDULE_URL_KEY);
+    localStorage.removeItem(SCHEDULE_MODE_KEY);
+    localStorage.removeItem(DURATION_RULES_KEY);
+    // After all keys are removed, set the schedule to a disabled empty baseline so
+    // that the app does not immediately fall back to the default schedule.  This
+    // produces a true blank state for testing.
+    const empty = {};
+    DAYS.forEach(d => { empty[d] = []; });
+    saveSchedule(empty, 'disabled');
+    localStorage.setItem(SCHEDULE_MODE_KEY, 'disabled');
+    // Clear device form fields
+    const g = document.getElementById('cfgGymName');
+    const l = document.getElementById('cfgLocation');
+    const s = document.getElementById('cfgSiteCode');
+    if (g) g.value = '';
+    if (l) l.value = '';
+    if (s) s.value = '';
+    // Refresh UI state
+    applyDeviceToUI();
+    loadScheduleIntoAdmin();
+    renderDurationRules();
+    populateClassesForToday();
+    renderAdminTable();
+    showToast('Factory reset complete');
+  }
+
+  function getSiteCode() {
+    const cfg = loadDevice();
+    const siteCode = cfg && cfg.siteCode ? String(cfg.siteCode).trim() : '';
+    return siteCode || 'Rev';
+  }
+
+  function applyDeviceToUI() {
+    const cfg = loadDevice();
+    const configured = !!(cfg && (cfg.gymName || cfg.location || cfg.siteCode));
+    const pill = $('#devicePill');
+    const pillText = $('#pillText');
+    const hdrGym = $('#hdrGym');
+    const hdrLoc = $('#hdrLoc');
+
+    if (configured) {
+      pill.classList.remove('gray');
+      pill.querySelector('.dot').style.background = 'rgba(34,197,94,.85)';
+      pillText.textContent = `${cfg.gymName || 'Gym'} · ${cfg.location || 'Location'}`;
+      hdrGym.textContent = cfg.gymName || 'Gym';
+      hdrLoc.textContent = cfg.location ? `Location: ${cfg.location}` : 'Location set';
+    } else {
+      pill.classList.add('gray');
+      pill.querySelector('.dot').style.background = 'rgba(148,163,184,.85)';
+      pillText.textContent = 'Unconfigured device';
+      hdrGym.textContent = 'Gym in a Box — Module 1';
+      hdrLoc.textContent = 'Set device location in Admin.';
+    }
+
+    const dn = todayName();
+    $('#todayName').textContent = ` · (Today: ${dn})`;
+  }
+
+  // Schedule
+  function loadSchedule() {
+    const saved = safeParse(SCHEDULE_KEY, null);
+    if (saved && saved.days && typeof saved.days === 'object') {
+      // Canonicalize keys if needed
+      const out = {};
+      for (const [k, v] of Object.entries(saved.days)) {
+        const nk = normalizeDayKey(k) || k;
+        if (DAYS.includes(nk)) {
+          out[nk] = Array.isArray(v) ? v.map(x => String(x)).filter(Boolean) : [];
+        }
+      }
+      // Ensure all days exist
+      for (const d of DAYS) if (!out[d]) out[d] = [];
+      return {
+        days: out,
+        source: saved.source || 'saved',
+        updatedAt: saved.updatedAt || null
+      };
+    }
+    // fallback default
+    const def = {};
+    for (const d of DAYS) def[d] = (DEFAULT_SCHEDULE[d] || []).slice();
+    return {
+      days: def,
+      source: 'default',
+      updatedAt: null
+    };
+  }
+
+  function saveSchedule(daysObj, source='manual') {
+    // Ensure canonical keys + arrays of strings
+    const clean = {};
+    for (const d of DAYS) {
+      const arr = Array.isArray(daysObj[d]) ? daysObj[d] : [];
+      clean[d] = arr.map(x => String(x).trim()).filter(Boolean);
+    }
+    safeSet(SCHEDULE_KEY, {
+      days: clean,
+      source,
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  function defaultDurationRules() {
+    return [
+      { match: 'Kids', duration: 0.5 },
+      { match: 'Wrestling', duration: 1 }
+    ];
+  }
+
+  function loadDurationRules() {
+    const stored = localStorage.getItem(DURATION_RULES_KEY);
+    if (stored == null) {
+      const defaults = defaultDurationRules();
+      safeSet(DURATION_RULES_KEY, defaults);
+      return defaults;
+    }
+    const rules = safeParse(DURATION_RULES_KEY, []);
+    return Array.isArray(rules) ? rules : [];
+  }
+
+  function saveDurationRules(rules) {
+    safeSet(DURATION_RULES_KEY, rules);
+  }
+
+  function getDurationForClass(label) {
+    const rules = loadDurationRules();
+    const haystack = String(label || '').toLowerCase();
+    for (const rule of rules) {
+      const needle = String(rule?.match || '').trim().toLowerCase();
+      if (!needle) continue;
+      if (haystack.includes(needle)) {
+        return Number(rule.duration) === 0.5 ? 0.5 : 1;
+      }
+    }
+    return 1;
+  }
+
+  // Admin schedule editor state
+  let scheduleDraft = null;
+  let activeDay = null;
+
+  function initScheduleEditor() {
+    const sel = $('#schedDay');
+    sel.innerHTML = '';
+    for (const d of DAYS) {
+      const opt = document.createElement('option');
+      opt.value = d;
+      opt.textContent = d;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener('change', () => {
+      persistActiveDayText();
+      activeDay = sel.value;
+      renderScheduleDay();
+    });
+    $('#schedText').addEventListener('input', () => {
+      $('#scheduleHint').textContent = 'Unsaved changes…';
+    });
+  }
+
+  function persistActiveDayText() {
+    if (!scheduleDraft || !activeDay) return;
+    const lines = ($('#schedText').value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    scheduleDraft[activeDay] = lines;
+  }
+
+  function loadScheduleIntoAdmin() {
+    const sch = loadSchedule();
+    scheduleDraft = JSON.parse(JSON.stringify(sch.days)); // deep-ish copy
+    const dn = todayName();
+    activeDay = DAYS.includes(dn) ? dn : 'Monday';
+    $('#schedDay').value = activeDay;
+    renderScheduleDay();
+    renderWeekAtGlance();
+
+    const upd = sch.updatedAt ? new Date(sch.updatedAt).toLocaleString() : '(default schedule)';
+    $('#scheduleStatus').innerHTML = `Source: <span class="kbd">${sch.source}</span> · Updated: <span class="kbd">${upd}</span>`;
+    $('#scheduleHint').textContent = '';
+  }
+
+  function renderScheduleDay() {
+    if (!scheduleDraft || !activeDay) return;
+    $('#schedText').value = (scheduleDraft[activeDay] || []).join('\n');
+    const count = (scheduleDraft[activeDay] || []).length;
+    $('#scheduleHint').textContent = `${count} class(es) for ${activeDay}.`;
+  }
+
+  function normalizeDurationRule(rule) {
+    const match = String(rule?.match || '').trim();
+    const duration = Number(rule?.duration) === 0.5 ? 0.5 : 1;
+    return { match, duration };
+  }
+
+  function readDurationRulesFromUI() {
+    const rows = Array.from(document.querySelectorAll('[data-duration-rule-row]'));
+    return rows.map(row => {
+      const match = row.querySelector('input')?.value || '';
+      const durationValue = row.querySelector('select')?.value || '1';
+      return normalizeDurationRule({ match, duration: Number(durationValue) });
+    });
+  }
+
+  function updateDurationRulesStatus(message) {
+    const status = $('#durationRulesStatus');
+    if (!status) return;
+    status.innerHTML = message ? message : '';
+  }
+
+  function persistDurationRulesFromUI() {
+    const rules = readDurationRulesFromUI();
+    saveDurationRules(rules);
+    const count = rules.length;
+    updateDurationRulesStatus(`Saved <span class="kbd">${count}</span> rule(s).`);
+  }
+
+  function renderDurationRules() {
+    const wrap = $('#durationRulesWrap');
+    if (!wrap) return;
+    const rules = loadDurationRules().map(normalizeDurationRule);
+    wrap.innerHTML = '';
+    if (!rules.length) {
+      wrap.innerHTML = '<div class="subtle">No rules yet. Add one to auto-fill durations.</div>';
+      updateDurationRulesStatus('');
+      return;
+    }
+    rules.forEach((rule, index) => {
+      const row = document.createElement('div');
+      row.className = 'duration-rule-row';
+      row.dataset.durationRuleRow = String(index);
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'Match text (e.g. Kids)';
+      input.value = rule.match;
+      input.addEventListener('input', () => {
+        persistDurationRulesFromUI();
+      });
+
+      const select = document.createElement('select');
+      const opt1 = document.createElement('option');
+      opt1.value = '1';
+      opt1.textContent = '1.0 hr';
+      const optHalf = document.createElement('option');
+      optHalf.value = '0.5';
+      optHalf.textContent = '0.5 hr';
+      select.appendChild(opt1);
+      select.appendChild(optHalf);
+      select.value = rule.duration === 0.5 ? '0.5' : '1';
+      select.addEventListener('change', () => {
+        persistDurationRulesFromUI();
+      });
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'btn small';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => {
+        row.remove();
+        persistDurationRulesFromUI();
+        renderDurationRules();
+      });
+
+      row.appendChild(input);
+      row.appendChild(select);
+      row.appendChild(remove);
+      wrap.appendChild(row);
+    });
+    updateDurationRulesStatus(`Saved <span class="kbd">${rules.length}</span> rule(s).`);
+  }
+
+  function renderWeekAtGlance() {
+    const wrap = $('#weekAtGlance');
+    if (!wrap) return;
+    const sch = loadSchedule();
+    wrap.innerHTML = '';
+    DAYS.forEach(day => {
+      const card = document.createElement('div');
+      card.className = 'week-day';
+      const title = document.createElement('h4');
+      title.textContent = day;
+      card.appendChild(title);
+      const classes = sch.days[day] || [];
+      if (!classes.length) {
+        const empty = document.createElement('div');
+        empty.className = 'subtle';
+        empty.textContent = 'No classes';
+        card.appendChild(empty);
+      } else {
+        const list = document.createElement('ul');
+        classes.forEach(label => {
+          const item = document.createElement('li');
+          item.textContent = label;
+          list.appendChild(item);
+        });
+        card.appendChild(list);
+      }
+      wrap.appendChild(card);
+    });
+  }
+
+  function generateDurationRulesFromSchedule() {
+    const sch = loadSchedule();
+    const labels = new Set();
+    DAYS.forEach(day => {
+      (sch.days[day] || []).forEach(label => {
+        const trimmed = String(label || '').trim();
+        if (trimmed) labels.add(trimmed);
+      });
+    });
+
+    const rules = loadDurationRules().map(normalizeDurationRule);
+    const existing = new Set(rules.map(rule => rule.match));
+    let added = 0;
+    labels.forEach(label => {
+      if (!existing.has(label)) {
+        rules.push({ match: label, duration: 1 });
+        existing.add(label);
+        added += 1;
+      }
+    });
+
+    if (added) {
+      saveDurationRules(rules);
+      renderDurationRules();
+    }
+    updateDurationRulesStatus(`Generated <span class="kbd">${added}</span> rule${added === 1 ? '' : 's'}.`);
+    showToast(`Generated ${added} rule${added === 1 ? '' : 's'}`);
+  }
+
+  function classesForToday() {
+    const dn = todayName();
+    const sch = loadSchedule();
+    const arr = sch.days[dn] || [];
+    return { day: dn, classes: arr, meta: sch };
+  }
+
+  function populateClassesForToday() {
+    const { day, classes, meta } = classesForToday();
+    const wrap = $('#classListWrap');
+    wrap.innerHTML = '';
+    if (!classes.length) {
+      $('#classesHint').textContent = `No classes found for ${day}. Go to Admin → Schedule and save your schedule.`;
+      $('#classesHint').classList.add('warn');
+    } else {
+      $('#classesHint').textContent = 'Select one or more classes.';
+      $('#classesHint').classList.remove('warn');
+      classes.forEach(c => {
+        const label = document.createElement('label');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = c;
+        label.appendChild(cb);
+        const span = document.createElement('span');
+        span.textContent = c;
+        label.appendChild(span);
+        wrap.appendChild(label);
+      });
+    }
+  }
+
+  // Sign-ins
+  function loadSignins() {
+    const rows = safeParse(SIGNINS_KEY, null);
+    if (Array.isArray(rows)) {
+      let updated = false;
+      rows.forEach(r => {
+        if (!r.Status) {
+          r.Status = 'OK';
+          updated = true;
+        }
+      });
+      if (updated) saveSignins(rows);
+      return rows;
+    }
+
+    // Back-compat: if new key empty, load from old
+    for (const k of OLD_SIGNINS_KEYS) {
+      const old = safeParse(k, null);
+      if (Array.isArray(old) && old.length) {
+        let updated = false;
+        old.forEach(r => {
+          if (!r.Status) {
+            r.Status = 'OK';
+            updated = true;
+          }
+        });
+        safeSet(SIGNINS_KEY, old);
+        if (updated) saveSignins(old);
+        return old;
+      }
+    }
+    return [];
+  }
+  function saveSignins(rows) {
+    safeSet(SIGNINS_KEY, rows);
+  }
+
+  // Sign-in confirmation modal state (kiosk sign-ins)
+  let lastSigninBatchId = null;
+  let signInCountdownId = null;
+  let signInSecondsRemaining = 0;
+  let lastSigninFormSnapshot = null;
+
+  function clearSignInCountdown() {
+    if (signInCountdownId) {
+      clearInterval(signInCountdownId);
+      signInCountdownId = null;
+    }
+  }
+
+  function updateSignInUndoLabel() {
+    const btn = $('#btnConfirmSignInUndo');
+    if (!btn) return;
+    btn.textContent = `UNDO (${signInSecondsRemaining}s)`;
+  }
+
+  function toggleSignInModal(show) {
+    const modal = $('#signInModal');
+    if (!modal) return;
+    if (show) {
+      modal.classList.add('show');
+      modal.setAttribute('aria-hidden', 'false');
+      $('#btnSignIn').disabled = true;
+    } else {
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+      $('#btnSignIn').disabled = false;
+    }
+  }
+
+  function resetKioskForm() {
+    $('#nameInput').value = '';
+    $('#notesInput').value = '';
+    document.querySelectorAll('#classListWrap input[type="checkbox"]').forEach(cb => cb.checked = false);
+    $('#classListWrap').style.display = 'none';
+  }
+
+  function restoreKioskForm(snapshot) {
+    if (!snapshot) return;
+    $('#nameInput').value = snapshot.name || '';
+    $('#notesInput').value = snapshot.notes || '';
+    const wrap = $('#classListWrap');
+    if (!wrap.hasChildNodes()) populateClassesForToday();
+    const selected = new Set(snapshot.classes || []);
+    document.querySelectorAll('#classListWrap input[type="checkbox"]').forEach(cb => {
+      cb.checked = selected.has(cb.value);
+    });
+    wrap.style.display = 'block';
+  }
+
+  function openSignInModal({ name, classes, batchId, formSnapshot }) {
+    lastSigninBatchId = batchId;
+    lastSigninFormSnapshot = formSnapshot;
+    $('#signInModalName').textContent = name;
+    const classesWrap = $('#signInModalClasses');
+    classesWrap.innerHTML = '';
+    const list = document.createElement('ul');
+    (classes || []).forEach(cls => {
+      const item = document.createElement('li');
+      item.textContent = cls;
+      list.appendChild(item);
+    });
+    classesWrap.appendChild(list);
+
+    signInSecondsRemaining = 15;
+    const undoBtn = $('#btnConfirmSignInUndo');
+    undoBtn.disabled = false;
+    updateSignInUndoLabel();
+    clearSignInCountdown();
+    signInCountdownId = setInterval(() => {
+      signInSecondsRemaining -= 1;
+      if (signInSecondsRemaining <= 0) {
+        signInSecondsRemaining = 0;
+        updateSignInUndoLabel();
+        undoBtn.disabled = true;
+        clearSignInCountdown();
+        lastSigninBatchId = null;
+        return;
+      }
+      updateSignInUndoLabel();
+    }, 1000);
+    toggleSignInModal(true);
+  }
+
+  function closeSignInModal() {
+    clearSignInCountdown();
+    signInSecondsRemaining = 0;
+    toggleSignInModal(false);
+  }
+
+  function undoLastSigninBatch() {
+    if (!lastSigninBatchId || signInSecondsRemaining <= 0) return;
+    const rows = loadSignins();
+    const nextRows = rows.filter(r => r.__batchId !== lastSigninBatchId);
+    if (nextRows.length !== rows.length) {
+      saveSignins(nextRows);
+    }
+    renderAdminTable();
+    closeSignInModal();
+    restoreKioskForm(lastSigninFormSnapshot);
+    lastSigninBatchId = null;
+  }
+
+  function confirmSigninDone() {
+    closeSignInModal();
+    resetKioskForm();
+    lastSigninBatchId = null;
+    lastSigninFormSnapshot = null;
+  }
+
+  // Admin PIN
+  let adminAuthenticated = false;
+
+  function getAdminPin() {
+    return (localStorage.getItem(ADMIN_PIN_KEY) || '').trim();
+  }
+
+  function setAdminPin(pin) {
+    localStorage.setItem(ADMIN_PIN_KEY, pin);
+  }
+
+  function toggleAdminPinModal(show) {
+    const modal = $('#adminPinModal');
+    if (!modal) return;
+    if (show) {
+      modal.classList.add('show');
+      modal.setAttribute('aria-hidden', 'false');
+      const input = $('#adminPinSetup');
+      if (input) input.focus();
+      updateAdminPinConfirmState();
+    } else {
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  function clearAdminPinModal() {
+    const pinInput = $('#adminPinSetup');
+    const confirmInput = $('#adminPinSetupConfirm');
+    if (pinInput) pinInput.value = '';
+    if (confirmInput) confirmInput.value = '';
+    updateAdminPinConfirmState();
+  }
+
+  function updateAdminPinConfirmState() {
+    const pinInput = $('#adminPinSetup');
+    const confirmInput = $('#adminPinSetupConfirm');
+    const hint = $('#adminPinMatchHint');
+    const button = $('#btnConfirmAdminPin');
+    if (!pinInput || !confirmInput || !button) return;
+    const pin = (pinInput.value || '').trim();
+    const confirmPin = (confirmInput.value || '').trim();
+    const bothFilled = Boolean(pin) && Boolean(confirmPin);
+    const matches = pin === confirmPin;
+    if (hint) {
+      hint.style.display = bothFilled && !matches ? 'block' : 'none';
+    }
+    button.disabled = !(bothFilled && matches);
+  }
+
+  function updateAdminPinUI() {
+    const pin = getAdminPin();
+    const label = $('#adminPinLabel');
+    const hint = $('#adminPinHint');
+    const button = $('#btnSaveAdminPin');
+    const input = $('#adminPinInput');
+    const toggle = $('#btnAdminPinToggle');
+    const panel = $('#adminPinPanel');
+    if (!pin) {
+      label.textContent = 'Set PIN';
+      hint.textContent = 'No PIN set yet. Set one now to lock Admin view on this device.';
+      button.textContent = 'Save PIN';
+      if (toggle) toggle.style.display = 'none';
+      if (panel) panel.style.display = 'block';
+    } else {
+      label.textContent = 'Change PIN';
+      hint.textContent = 'Admin is locked. Enter a new PIN to change it.';
+      button.textContent = 'Update PIN';
+      if (toggle) toggle.style.display = 'inline-flex';
+      if (panel) panel.style.display = 'none';
+    }
+    if (input) input.value = '';
+    if (toggle && panel && panel.style.display === 'none') {
+      toggle.textContent = 'Change PIN';
+    }
+  }
+
+  function requestAdminAccess() {
+    const pin = getAdminPin();
+    if (!pin) {
+      toggleAdminPinModal(true);
+      return false;
+    }
+    if (adminAuthenticated) return true;
+    const entry = prompt('Enter Admin PIN to continue:');
+    if (entry == null) return false;
+    if (String(entry).trim() === pin) {
+      adminAuthenticated = true;
+      return true;
+    }
+    alert('Incorrect PIN.');
+    return false;
+  }
+
+  function renderAdminTable() {
+    const rows = loadSignins();
+    if (!rows.length) {
+      $('#adminTableWrap').innerHTML = '<div class="subtle">No sign-ins yet.</div>';
+      return;
+    }
+    let html = '<div style="overflow:auto; max-height:420px;"><table><thead><tr>' +
+      '<th>#</th><th>Status</th><th>Timestamp</th><th>Date</th><th>Class</th><th>Duration (hr)</th><th>Instructor</th><th>Site</th><th>Notes</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach((r,i) => {
+      const status = r.Status || 'OK';
+      const isVoid = status === 'VOID';
+      const voidDetails = [
+        r.voided_at ? `Voided: ${r.voided_at}` : '',
+        r.void_reason ? `Reason: ${r.void_reason}` : ''
+      ].filter(Boolean).join(' · ');
+      html += `<tr class="${isVoid ? 'void-row' : ''}">` +
+        `<td>${i+1}</td>` +
+        `<td title="${isVoid ? voidDetails : ''}">${status}</td>` +
+        `<td style="font-family:ui-monospace,monospace;">${r.Timestamp || ''}</td>` +
+        `<td style="font-family:ui-monospace,monospace;">${r.Date || ''}</td>` +
+        `<td>${(r['Class Label'] || '')}</td>` +
+        `<td>${(r['Duration (hr)'] ?? '')}</td>` +
+        `<td>${r.Instructor || ''}</td>` +
+        `<td>${r.Site || ''}</td>` +
+        `<td>${r.Notes || ''}</td>` +
+      '</tr>';
+    });
+    html += '</tbody></table></div>';
+    $('#adminTableWrap').innerHTML = html;
+  }
+
+  function buildCSV() {
+    const rows = loadSignins().filter(r => (r.Status || 'OK') !== 'VOID');
+    const headers = ['Timestamp','Date','Class Label','Duration (hr)','Instructor','Site','Notes'];
+    const lines = [headers.join(',')];
+    rows.forEach(r => {
+      const vals = headers.map(h => {
+        let v = (r[h] == null ? '' : String(r[h]));
+        if (/[",\n]/.test(v)) v = '"' + v.replace(/"/g,'""') + '"';
+        return v;
+      });
+      lines.push(vals.join(','));
+    });
+    return lines.join('\n');
+  }
+
+  async function exportCSV() {
+    const rows = loadSignins().filter(r => (r.Status || 'OK') !== 'VOID');
+    if (!rows.length) { alert('No sign-ins to export.'); return; }
+    const csv = buildCSV();
+    const blob = new Blob([csv], { type:'text/csv;charset=utf-8' });
+
+    if ('showSaveFilePicker' in window) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: 'GiB_M1_SignIns.csv',
+          types: [{ description:'CSV', accept: { 'text/csv': ['.csv'] } }]
+        });
+        const w = await handle.createWritable();
+        await w.write(blob);
+        await w.close();
+        showToast('CSV saved');
+        $('#csvTextarea').value = csv;
+        $('#csvPanel').style.display = 'block';
+        return;
+      } catch(e) {
+        if (e && e.name === 'AbortError') return;
+      }
+    }
+
+    try {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'GiB_M1_SignIns.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+      showToast('Download started');
+    } catch(e) {}
+
+    $('#csvTextarea').value = csv;
+    $('#csvPanel').style.display = 'block';
+  }
+
+  async function copyCSV() {
+    const rows = loadSignins().filter(r => (r.Status || 'OK') !== 'VOID');
+    if (!rows.length) { alert('No sign-ins to copy.'); return; }
+    const csv = buildCSV();
+    try {
+      await navigator.clipboard.writeText(csv);
+      showToast('CSV copied');
+    } catch(e) {
+      const area = $('#csvTextarea');
+      area.value = csv;
+      $('#csvPanel').style.display = 'block';
+      area.focus(); area.select();
+      alert('Clipboard not available. CSV shown for copy.');
+    }
+  }
+
+  // UI helpers
+  function showToast(msg) {
+    const t = $('#toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2000);
+  }
+
+  function selectedClasses() {
+    return Array.from(document.querySelectorAll('#classListWrap input[type="checkbox"]:checked'))
+      .map(cb => cb.value)
+      .filter(Boolean);
+  }
+
+  function signIn() {
+    const name = ($('#nameInput').value || '').trim();
+    const classes = selectedClasses();
+    const site = getSiteCode();
+    const notes = ($('#notesInput').value || '').trim();
+    if (!name || !classes.length) {
+      alert('Please enter a name and select one or more classes.');
+      return;
+    }
+
+    const rows = loadSignins();
+    const now = new Date();
+    const batchId = `${now.getTime()}-${Math.random().toString(16).slice(2, 8)}`;
+    classes.forEach(cls => {
+      const duration = getDurationForClass(cls);
+      rows.push({
+        'Timestamp': fmtTS(now),
+        'Date': fmtDate(now),
+        'Class Label': cls,
+        'Duration (hr)': duration,
+        'Instructor': name,
+        'Site': site,
+        'Notes': notes,
+        'Status': 'OK',
+        '__batchId': batchId
+      });
+    });
+    saveSignins(rows);
+
+    // Confirmation
+    openSignInModal({
+      name,
+      classes,
+      batchId,
+      formSnapshot: { name, notes, classes }
+    });
+
+    // Build sync rows and queue them for upload.  Each class selected produces
+    // its own row in the sync queue so that multi‑class sign‑ins are treated as
+    // separate events.  A unique RowID is constructed from the timestamp,
+    // instructor name, class label and site to allow de‑duplication server‑side.
+    const autoSync = (localStorage.getItem(SYNC_AUTO_KEY) === 'true');
+    const deviceLabel = (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim();
+    const queuedRows = [];
+    classes.forEach(cls => {
+      const duration = getDurationForClass(cls);
+      const rowId = `${fmtTS(now)}|${name}|${cls}|${site}`;
+      const row = {
+        'RowID': rowId,
+        'Timestamp': fmtTS(now),
+        'Date': fmtDate(now),
+        'Class Label': cls,
+        'Duration (hr)': duration,
+        'Instructor': name,
+        'Site': site,
+        'Device': deviceLabel,
+        'Build': BUILD
+      };
+      queuedRows.push(row);
+    });
+    // Enqueue rows in one batch to minimize queue writes
+    queuedRows.forEach(r => enqueueRow(r));
+    // Attempt auto‑sync if configured
+    if (autoSync) {
+      syncNow();
+    } else {
+      updateSyncStatus();
+    }
+  }
+
+  function voidLastSignin() {
+    const rows = loadSignins();
+    if (!rows.length) {
+      alert('No sign-ins to void.');
+      return;
+    }
+    let idx = -1;
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const status = rows[i].Status || 'OK';
+      if (status !== 'VOID') {
+        idx = i;
+        break;
+      }
+    }
+    if (idx === -1) {
+      alert('All sign-ins are already voided.');
+      return;
+    }
+    const reason = prompt('Optional void reason (leave blank if none):') || '';
+    rows[idx].Status = 'VOID';
+    rows[idx].void_reason = reason.trim();
+    rows[idx].voided_at = fmtTS(new Date());
+    saveSignins(rows);
+    renderAdminTable();
+    showToast('Last sign-in voided');
+  }
+
+  // --- Sync helpers ---
+  function loadSyncQueue() {
+    const q = safeParse(SYNC_QUEUE_KEY, null);
+    return Array.isArray(q) ? q : [];
+  }
+  function saveSyncQueue(q) {
+    safeSet(SYNC_QUEUE_KEY, q);
+  }
+  function enqueueRow(row) {
+    const q = loadSyncQueue();
+    q.push(row);
+    saveSyncQueue(q);
+  }
+  function loadSyncSettings() {
+    $('#cfgSyncUrl').value = localStorage.getItem(SYNC_URL_KEY) || '';
+    $('#cfgSyncToken').value = localStorage.getItem(SYNC_TOKEN_KEY) || '';
+    $('#cfgDeviceLabel').value = localStorage.getItem(DEVICE_LABEL_KEY) || '';
+    $('#cfgAutoSync').checked = (localStorage.getItem(SYNC_AUTO_KEY) === 'true');
+  }
+  function saveSyncSettings() {
+    localStorage.setItem(SYNC_URL_KEY, ($('#cfgSyncUrl').value || '').trim());
+    localStorage.setItem(SYNC_TOKEN_KEY, ($('#cfgSyncToken').value || '').trim());
+    localStorage.setItem(DEVICE_LABEL_KEY, ($('#cfgDeviceLabel').value || '').trim());
+    localStorage.setItem(SYNC_AUTO_KEY, $('#cfgAutoSync').checked ? 'true' : 'false');
+    updateSyncStatus();
+  }
+  function updateSyncStatus() {
+    const q = loadSyncQueue();
+    const last = localStorage.getItem('gib_m1_sync_last') || '';
+    const err = localStorage.getItem('gib_m1_sync_error') || '';
+    const parts = [];
+    parts.push(`Queued: <span class="kbd">${q.length}</span>`);
+    if (last) parts.push(`Last sync: <span class="kbd">${new Date(last).toLocaleString()}</span>`);
+    if (err) parts.push(`<span style="color:#f87171;">Error: ${err}</span>`);
+    $('#syncStatus').innerHTML = parts.join(' · ');
+  }
+  async function syncNow() {
+    const url = (localStorage.getItem(SYNC_URL_KEY) || '').trim();
+    const token = (localStorage.getItem(SYNC_TOKEN_KEY) || '').trim();
+    if (!url || !token) {
+      alert('Please configure the webhook URL and token first.');
+      return;
+    }
+    const queue = loadSyncQueue();
+    if (!queue.length) {
+      showToast('No rows to sync');
+      updateSyncStatus();
+      return;
+    }
+    try {
+      const body = JSON.stringify({ token, rows: queue });
+
+      // IMPORTANT: Google Apps Script web apps do not reliably return CORS headers.
+      // If we use Content-Type: application/json, browsers will preflight and fail.
+      // To keep this MVP reliable, we send a SIMPLE request:
+      // - Content-Type: text/plain (no preflight)
+      // - mode: no-cors (browser doesn't require allow-origin response)
+      // This means we cannot read the JSON response, but the request will be delivered
+      // as long as the network is available.
+      await fetch(url, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body
+      });
+
+      // Clear queue on successful network send (response is opaque in no-cors)
+      saveSyncQueue([]);
+      localStorage.setItem('gib_m1_sync_last', new Date().toISOString());
+      localStorage.removeItem('gib_m1_sync_error');
+      updateSyncStatus();
+      showToast(`Sync sent (${queue.length})`);
+    } catch (err) {
+      localStorage.setItem('gib_m1_sync_error', (err && err.message) ? err.message : String(err));
+      updateSyncStatus();
+      showToast('Sync failed');
+    }
+  }
+
+  function debugSnapshot() {
+    const cfg = loadDevice();
+    const sch = loadSchedule();
+    const today = todayName();
+    const cls = (sch.days[today] || []);
+    const signins = loadSignins();
+    return {
+      build: BUILD,
+      url: location.href,
+      time: new Date().toISOString(),
+      device: cfg,
+      schedule: {
+        source: sch.source,
+        updatedAt: sch.updatedAt,
+        today,
+        todayCount: cls.length,
+        todaySample: cls.slice(0, 5)
+      },
+      scheduleUrl: localStorage.getItem(SCHEDULE_URL_KEY) || null,
+      signinsCount: signins.length,
+      storageKeys: Object.keys(localStorage).filter(k => k.includes('gib_') || k.includes('rbjj_')).sort()
+    };
+  }
+
+  async function copyDebug() {
+    const snap = debugSnapshot();
+    const text = JSON.stringify(snap, null, 2);
+    $('#debugBox').value = text;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Debug copied');
+    } catch(e) {
+      showToast('Debug shown');
+    }
+  }
+
+  // Wire events
+  function showKiosk() {
+    document.body.classList.add('kiosk-mode');
+    $('#kiosk').style.display = 'block';
+    $('#admin').style.display = 'none';
+    adminAuthenticated = false;
+    applyDeviceToUI();
+    // Important: always populate from the SAME stored schedule.
+    populateClassesForToday();
+    // Hide list by default so it doesn't appear "stuck open"
+    $('#classListWrap').style.display = 'none';
+  }
+
+  function showAdmin() {
+    document.body.classList.remove('kiosk-mode');
+    $('#kiosk').style.display = 'none';
+    $('#admin').style.display = 'block';
+
+    // Fill device fields (leave blank if unset)
+    const cfg = loadDevice();
+    $('#cfgGymName').value = (cfg && cfg.gymName) ? cfg.gymName : '';
+    $('#cfgLocation').value = (cfg && cfg.location) ? cfg.location : '';
+    $('#cfgSiteCode').value = (cfg && cfg.siteCode) ? cfg.siteCode : '';
+    updateAdminPinUI();
+
+    // Schedule editor
+    loadScheduleIntoAdmin();
+    renderDurationRules();
+
+    // Sign-ins
+    renderAdminTable();
+
+    // Load sync settings into admin controls and refresh status so that
+    // the current queue count and last sync information are visible.
+    loadSyncSettings();
+    updateSyncStatus();
+
+    // Debug box
+    $('#debugBox').value = JSON.stringify(debugSnapshot(), null, 2);
+  }
+
+  // Toggle class list
+  $('#toggleClasses').addEventListener('click', () => {
+    const wrap = $('#classListWrap');
+    // If list is empty, re-populate (fixes the “admin has schedule but kiosk empty” failure mode)
+    if (!wrap.hasChildNodes()) populateClassesForToday();
+    wrap.style.display = (wrap.style.display === 'none' || wrap.style.display === '') ? 'block' : 'none';
+  });
+
+  $('#btnKiosk').addEventListener('click', showKiosk);
+  $('#btnAdmin').addEventListener('click', () => {
+    if (!requestAdminAccess()) return;
+    showAdmin();
+  });
+  $('#btnAdminLogout').addEventListener('click', showKiosk);
+  $('#btnSignIn').addEventListener('click', signIn);
+  $('#btnConfirmSignInUndo').addEventListener('click', undoLastSigninBatch);
+  $('#btnConfirmSignInDone').addEventListener('click', confirmSigninDone);
+
+  $('#btnAdminPinToggle').addEventListener('click', () => {
+    const panel = $('#adminPinPanel');
+    if (!panel) return;
+    const isOpen = panel.style.display !== 'none';
+    panel.style.display = isOpen ? 'none' : 'block';
+    $('#btnAdminPinToggle').textContent = isOpen ? 'Change PIN' : 'Hide PIN';
+    if (!isOpen) {
+      const input = $('#adminPinInput');
+      if (input) input.focus();
+    }
+  });
+
+  // Device actions
+  $('#btnSaveDevice').addEventListener('click', () => {
+    const cfg = {
+      // Preserve user-entered values without falling back to defaults so that blank values remain blank
+      gymName: ($('#cfgGymName').value || '').trim(),
+      location: ($('#cfgLocation').value || '').trim(),
+      siteCode: ($('#cfgSiteCode').value || '').trim()
+    };
+    saveDevice(cfg);
+    applyDeviceToUI();
+    $('#deviceStatus').innerHTML = `Saved: <span class="kbd">${cfg.gymName}</span> · <span class="kbd">${cfg.location}</span> · Site <span class="kbd">${cfg.siteCode}</span>`;
+    showToast('Device saved');
+  });
+
+  $('#btnResetDevice').addEventListener('click', () => {
+    if (!confirm('Reset this device location + schedule data + duration rules? (Sign-ins are NOT deleted)')) return;
+    resetDevice();
+    $('#deviceStatus').innerHTML = 'Device reset. Configure again above.';
+  });
+
+  $('#btnFactoryReset').addEventListener('click', () => {
+    // Use a prompt to ask the user to type RESET as a safeguard against accidental clicks.
+    const answer = prompt('Factory reset will DELETE all device info, schedule data and sign‑ins on this device.\n\nType “RESET” (all caps) to proceed.');
+    if (!answer || answer.trim().toUpperCase() !== 'RESET') {
+      alert('Factory reset cancelled');
+      return;
+    }
+    factoryReset();
+    $('#deviceStatus').innerHTML = 'Factory reset complete. Configure again above.';
+  });
+
+  // Admin PIN actions
+  $('#btnSaveAdminPin').addEventListener('click', () => {
+    const nextPin = ($('#adminPinInput').value || '').trim();
+    if (!nextPin) {
+      alert('Please enter a PIN.');
+      return;
+    }
+    setAdminPin(nextPin);
+    adminAuthenticated = true;
+    updateAdminPinUI();
+    showToast('Admin PIN saved');
+  });
+
+  $('#btnCancelAdminPin').addEventListener('click', () => {
+    clearAdminPinModal();
+    toggleAdminPinModal(false);
+  });
+
+  $('#btnConfirmAdminPin').addEventListener('click', () => {
+    const pin = ($('#adminPinSetup').value || '').trim();
+    const confirmPin = ($('#adminPinSetupConfirm').value || '').trim();
+    if (!pin || !confirmPin || pin !== confirmPin) {
+      updateAdminPinConfirmState();
+      return;
+    }
+    setAdminPin(pin);
+    adminAuthenticated = true;
+    updateAdminPinUI();
+    clearAdminPinModal();
+    toggleAdminPinModal(false);
+    showToast('Admin PIN saved');
+    showAdmin();
+  });
+
+  $('#adminPinSetup').addEventListener('input', updateAdminPinConfirmState);
+  $('#adminPinSetupConfirm').addEventListener('input', updateAdminPinConfirmState);
+
+  // Schedule actions
+  $('#btnSaveSchedule').addEventListener('click', () => {
+    persistActiveDayText();
+    saveSchedule(scheduleDraft, 'manual');
+    const sch = loadSchedule();
+    const upd = sch.updatedAt ? new Date(sch.updatedAt).toLocaleString() : '';
+    $('#scheduleStatus').innerHTML = `Source: <span class="kbd">${sch.source}</span> · Updated: <span class="kbd">${upd}</span>`;
+    $('#scheduleHint').textContent = 'Saved.';
+    showToast('Schedule saved');
+    renderWeekAtGlance();
+
+    // Immediately refresh kiosk list in case user switches over
+    populateClassesForToday();
+  });
+
+  $('#btnAddDurationRule').addEventListener('click', () => {
+    const rules = loadDurationRules().map(normalizeDurationRule);
+    rules.push({ match: '', duration: 1 });
+    saveDurationRules(rules);
+    renderDurationRules();
+    const inputs = $('#durationRulesWrap')?.querySelectorAll('input') || [];
+    if (inputs.length) {
+      inputs[inputs.length - 1].focus();
+    }
+  });
+  $('#btnGenerateDurationRules').addEventListener('click', () => {
+    generateDurationRulesFromSchedule();
+  });
+
+  $('#btnLoadDefaultSchedule').addEventListener('click', () => {
+    if (!confirm('Load the default Revolution BJJ schedule? This will overwrite any unsaved changes.')) return;
+    // Load the default Rev schedule into the draft and immediately save it so that
+    // the kiosk reflects the change without requiring a separate “Save schedule” click.
+    scheduleDraft = JSON.parse(JSON.stringify(DEFAULT_SCHEDULE));
+    // Persisting old draft values here would override the newly loaded data for the
+    // current day; therefore do not call persistActiveDayText() before saving.
+    saveSchedule(scheduleDraft, 'manual');
+    loadScheduleIntoAdmin();
+    populateClassesForToday();
+    $('#scheduleHint').textContent = 'Default schedule loaded and saved.';
+    showToast('Rev schedule loaded');
+  });
+
+  $('#btnLoadRichSchedule').addEventListener('click', () => {
+    if (!confirm('Load the Richmond BJJ schedule? This will overwrite any unsaved changes.')) return;
+    // Load the Richmond schedule into the draft and immediately save it so that
+    // the kiosk reflects the change without requiring a separate “Save schedule” click.
+    scheduleDraft = JSON.parse(JSON.stringify(DEFAULT_SCHEDULE_RICHMOND));
+    // Do not persist current draft here; it would overwrite the new data for the current day.
+    saveSchedule(scheduleDraft, 'manual');
+    loadScheduleIntoAdmin();
+    populateClassesForToday();
+    $('#scheduleHint').textContent = 'Richmond schedule loaded and saved.';
+    showToast('Richmond schedule loaded');
+  });
+
+  $('#btnClearSchedule').addEventListener('click', () => {
+    if (!confirm('Revert to the default schedule? This will remove all saved overrides.')) return;
+    localStorage.removeItem(SCHEDULE_KEY);
+    loadScheduleIntoAdmin();
+    populateClassesForToday();
+    showToast('Default schedule restored');
+  });
+
+  $('#btnDisableSchedule').addEventListener('click', () => {
+    if (!confirm('Disable the schedule? All days will have no classes until you save a new one.')) return;
+    const empty = {};
+    DAYS.forEach(d => { empty[d] = []; });
+    saveSchedule(empty, 'disabled');
+    loadScheduleIntoAdmin();
+    populateClassesForToday();
+    showToast('Schedule disabled');
+  });
+
+  // Load schedule from a remote JSON URL.  This event handler must live at the top
+  // level (not inside another handler) so it always works regardless of other actions.
+  $('#btnLoadScheduleUrl').addEventListener('click', async () => {
+    const url = ($('#cfgScheduleUrl').value || '').trim();
+    if (!url) {
+      alert('Please enter a URL to load the schedule.');
+      return;
+    }
+    $('#scheduleStatus').innerHTML = 'Loading schedule from URL…';
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        throw new Error(`Network error (HTTP ${resp.status})`);
+      }
+      const data = await resp.json();
+      if (!data || typeof data !== 'object' || !data.days) {
+        throw new Error('Invalid JSON format; expected an object with a `days` property');
+      }
+      // Save remote days into schedule and tag source
+      saveSchedule(data.days, 'url');
+      // Persist URL and mode for later reference
+      localStorage.setItem(SCHEDULE_URL_KEY, url);
+      localStorage.setItem(SCHEDULE_MODE_KEY, 'url');
+      // Reload admin editor and kiosk
+      loadScheduleIntoAdmin();
+      populateClassesForToday();
+      $('#scheduleStatus').innerHTML = 'Schedule loaded from URL';
+      showToast('Schedule loaded');
+    } catch (err) {
+      console.error(err);
+      $('#scheduleStatus').innerHTML = 'Failed to load schedule';
+      alert('Failed to load schedule: ' + (err?.message || err));
+    }
+  });
+
+  // Sign-ins actions
+  $('#btnExport').addEventListener('click', exportCSV);
+  $('#btnCopy').addEventListener('click', copyCSV);
+  $('#btnVoidLast').addEventListener('click', voidLastSignin);
+  $('#btnClearSignins').addEventListener('click', () => {
+    if (!confirm('Clear ALL locally stored sign-ins on this device?')) return;
+    saveSignins([]);
+    renderAdminTable();
+    showToast('Sign-ins cleared');
+  });
+
+  // Sync field & button listeners
+  $('#cfgSyncUrl').addEventListener('change', saveSyncSettings);
+  $('#cfgSyncToken').addEventListener('change', saveSyncSettings);
+  $('#cfgDeviceLabel').addEventListener('change', saveSyncSettings);
+  $('#cfgAutoSync').addEventListener('change', saveSyncSettings);
+  $('#btnSyncNow').addEventListener('click', syncNow);
+
+  // Debug action
+  $('#btnCopyDebug').addEventListener('click', copyDebug);
+  // Select debug text for manual copy
+  $('#btnSelectDebug').addEventListener('click', () => {
+    const area = $('#debugBox');
+    area.focus();
+    area.select();
+  });
+
+  // Init
+  initScheduleEditor();
+  document.body.classList.add('kiosk-mode');
+  loadScheduleIntoAdmin();
+  renderDurationRules();
+  applyDeviceToUI();
+  populateClassesForToday();
+  // Load sync settings and refresh status on first load
+  loadSyncSettings();
+  updateSyncStatus();
+})();
+</script>
+</body>
+</html>

@@ -1,5 +1,12 @@
+- Add a full-screen sign-in confirmation modal with DONE/UNDO countdown so instructors can't miss successful sign-ins and can reverse mistakes quickly.
+- Add a tablet-friendly launcher at / that links to Module 1 at /m1 so sign-ins remain accessible while keeping Module 1 intact.
+- Replace per-day duration overrides with stored duration rules that auto-fill sign-in hours based on class text.
+- Add a Duration Rules action to generate missing rule entries from the saved weekly schedule.
+- Add admin-set per-class duration overrides (0.5 hr or 1.0 hr) that auto-fill sign-ins from local settings.
+- Add kiosk undo banner with 15-second countdown to reverse the most recent sign-in batch.
 - Refine the Set Admin PIN modal to show inline mismatch guidance and only enable saving when entries match.
 - Add modal-based Admin PIN setup on first access and hide Admin PIN management behind a change link.
 - Add a simple Instructor Sign-In kiosk header and remove the Site field so sign-ins stay focused on device-configured defaults.
 - Add Admin “Void last sign-in” to mark mistaken entries VOID and exclude them from payroll export (no delete).
 - Add local Admin PIN gating with logout control so kiosks require a PIN before access.
+- Add an Admin week-at-a-glance schedule view with improved duration rule generation feedback.
