@@ -604,10 +604,12 @@
           <input id="seriesStart" type="date" />
         </div>
         <div>
-          <label>End date</label>
-          <input id="seriesEnd" type="date" />
+          <label>Weeks</label>
+          <input id="seriesWeeks" type="number" min="1" step="1" value="8" />
         </div>
       </div>
+      <input id="seriesEnd" type="hidden" />
+      <div class="subtle" id="seriesEndDisplay" style="margin-top: 6px;">Ends: —</div>
       <div class="inline" style="margin-top: 12px;">
         <button id="btnAddSeries" class="btn brand" type="button">Add series</button>
         <button id="btnClearSeriesForm" class="btn" type="button">Clear</button>
@@ -1131,11 +1133,39 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     hint.classList.toggle('warn', Boolean(isWarn));
   }
 
+  function getSeriesWeeks() {
+    const raw = parseInt($('#seriesWeeks').value, 10);
+    return Number.isFinite(raw) && raw > 0 ? raw : 0;
+  }
+
+  function computeSeriesEndDate(startDate, weeks) {
+    if (!startDate || !weeks) return '';
+    const start = new Date(`${startDate}T00:00:00`);
+    if (Number.isNaN(start.getTime())) return '';
+    const end = new Date(start);
+    end.setDate(end.getDate() + weeks * 7);
+    return fmtDate(end);
+  }
+
+  function updateSeriesEndDisplay() {
+    const startDate = ($('#seriesStart').value || '').trim();
+    const weeks = getSeriesWeeks();
+    const endDate = computeSeriesEndDate(startDate, weeks);
+    $('#seriesEnd').value = endDate;
+    const display = $('#seriesEndDisplay');
+    if (display) {
+      display.textContent = `Ends: ${endDate || '—'}`;
+    }
+    return endDate;
+  }
+
   function clearSeriesForm() {
     $('#seriesLabel').value = '';
     $('#seriesTime').value = '';
     $('#seriesStart').value = '';
+    $('#seriesWeeks').value = '8';
     $('#seriesEnd').value = '';
+    updateSeriesEndDisplay();
     document.querySelectorAll('[data-series-day]').forEach(cb => {
       cb.checked = false;
     });
@@ -1146,11 +1176,12 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const label = ($('#seriesLabel').value || '').trim();
     const time = ($('#seriesTime').value || '').trim();
     const startDate = ($('#seriesStart').value || '').trim();
-    const endDate = ($('#seriesEnd').value || '').trim();
+    const weeks = getSeriesWeeks();
+    const endDate = computeSeriesEndDate(startDate, weeks);
     const days = Array.from(document.querySelectorAll('[data-series-day]:checked'))
       .map(cb => cb.value)
       .filter(Boolean);
-    return { label, time, startDate, endDate, days };
+    return { label, time, startDate, endDate, days, weeks };
   }
 
   function renderSeriesList() {
@@ -1216,8 +1247,16 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       updateSeriesHint('Select at least one day.', true);
       return;
     }
-    if (!data.startDate || !data.endDate) {
-      updateSeriesHint('Choose a start and end date.', true);
+    if (!data.startDate) {
+      updateSeriesHint('Choose a start date.', true);
+      return;
+    }
+    if (!data.weeks) {
+      updateSeriesHint('Enter the number of weeks.', true);
+      return;
+    }
+    if (!data.endDate) {
+      updateSeriesHint('Enter a valid start date and week count.', true);
       return;
     }
     if (data.startDate > data.endDate) {
@@ -2300,10 +2339,15 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   $('#btnClearSeriesForm').addEventListener('click', () => {
     clearSeriesForm();
   });
-  ['seriesLabel', 'seriesTime', 'seriesStart', 'seriesEnd'].forEach(id => {
+  ['seriesLabel', 'seriesTime', 'seriesStart', 'seriesWeeks'].forEach(id => {
     const field = document.getElementById(id);
     if (field) {
-      field.addEventListener('input', () => updateSeriesHint(''));
+      field.addEventListener('input', () => {
+        updateSeriesHint('');
+        if (id === 'seriesStart' || id === 'seriesWeeks') {
+          updateSeriesEndDisplay();
+        }
+      });
     }
   });
   document.querySelectorAll('[data-series-day]').forEach(cb => {
