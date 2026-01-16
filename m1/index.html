@@ -202,6 +202,42 @@
     border: 1px solid var(--outline);
     background: #0b1322;
   }
+  .series-days {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .series-days label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    margin: 0;
+    border-radius: 999px;
+    border: 1px solid var(--outline);
+    background: rgba(59,130,246,0.08);
+    font-size: 12px;
+    color: #cbd5e1;
+  }
+  .series-list {
+    display: grid;
+    gap: 8px;
+  }
+  .series-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid var(--outline);
+    border-radius: 12px;
+    background: #0b1322;
+  }
+  .series-row .meta {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 4px;
+  }
   .week-glance {
     display: grid;
     gap: 12px;
@@ -477,7 +513,7 @@
             <button id="btnResetDevice" class="btn danger" type="button">Reset device location</button>
             <button id="btnFactoryReset" class="btn danger" type="button">Factory reset</button>
           </div>
-          <div class="hint warn">Reset device clears: gym name, location label, site code, schedule data, and duration rules (sign‑ins preserved).  Factory reset clears <em>all</em> local data (device, schedule, duration rules, sign‑ins).</div>
+          <div class="hint warn">Reset device clears: gym name, location label, site code, schedule data, series classes, and duration rules (sign‑ins preserved).  Factory reset clears <em>all</em> local data (device, schedule, series classes, duration rules, sign‑ins).</div>
         </div>
       </div>
 
@@ -535,6 +571,49 @@
       <h3>Week at a glance</h3>
       <div class="subtle">Read-only view of the saved weekly schedule.</div>
       <div id="weekAtGlance" class="week-glance" style="margin-top: 12px;"></div>
+    </div>
+
+    <div class="card" style="background: var(--panel);">
+      <h3>Series classes</h3>
+      <div class="subtle">Add limited-run recurring classes that appear in Classes Today only within their date range.</div>
+      <div class="grid twoEq" style="margin-top: 12px;">
+        <div>
+          <label>Label</label>
+          <input id="seriesLabel" type="text" placeholder="Intro" />
+        </div>
+        <div>
+          <label>Time (optional)</label>
+          <input id="seriesTime" type="text" placeholder="6:00 AM" />
+        </div>
+      </div>
+      <div style="margin-top: 12px;">
+        <label>Days of week</label>
+        <div class="series-days">
+          <label><input type="checkbox" data-series-day value="Monday" />Mon</label>
+          <label><input type="checkbox" data-series-day value="Tuesday" />Tue</label>
+          <label><input type="checkbox" data-series-day value="Wednesday" />Wed</label>
+          <label><input type="checkbox" data-series-day value="Thursday" />Thu</label>
+          <label><input type="checkbox" data-series-day value="Friday" />Fri</label>
+          <label><input type="checkbox" data-series-day value="Saturday" />Sat</label>
+          <label><input type="checkbox" data-series-day value="Sunday" />Sun</label>
+        </div>
+      </div>
+      <div class="grid twoEq" style="margin-top: 12px;">
+        <div>
+          <label>Start date</label>
+          <input id="seriesStart" type="date" />
+        </div>
+        <div>
+          <label>End date</label>
+          <input id="seriesEnd" type="date" />
+        </div>
+      </div>
+      <div class="inline" style="margin-top: 12px;">
+        <button id="btnAddSeries" class="btn brand" type="button">Add series</button>
+        <button id="btnClearSeriesForm" class="btn" type="button">Clear</button>
+      </div>
+      <div class="hint" id="seriesHint"></div>
+      <div id="seriesList" class="series-list" style="margin-top: 12px;"></div>
     </div>
 
     <div class="card" style="background: var(--panel);">
@@ -649,6 +728,7 @@
   const DEVICE_KEY  = 'gib_m1_device_v1';
   const ADMIN_PIN_KEY = 'gib_m1_admin_pin_v1';
   const DURATION_RULES_KEY = 'gib_m1_duration_rules_v1';
+  const SERIES_KEY = 'gib_m1_series_v1';
 // New keys: store the schedule source URL and mode. These are kept separate from
 // SCHEDULE_KEY so that a remote schedule can be recalled after reset or refresh.
 const SCHEDULE_URL_KEY  = 'gib_m1_schedule_url_v1';
@@ -816,6 +896,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     localStorage.removeItem(DEVICE_KEY);
     localStorage.removeItem(SCHEDULE_KEY);
     localStorage.removeItem(DURATION_RULES_KEY);
+    localStorage.removeItem(SERIES_KEY);
     // Also clear a few older keys if present (safe no-ops)
     localStorage.removeItem('gib_device');
     localStorage.removeItem('rbjj_device');
@@ -860,6 +941,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     localStorage.removeItem(SCHEDULE_URL_KEY);
     localStorage.removeItem(SCHEDULE_MODE_KEY);
     localStorage.removeItem(DURATION_RULES_KEY);
+    localStorage.removeItem(SERIES_KEY);
     // After all keys are removed, set the schedule to a disabled empty baseline so
     // that the app does not immediately fall back to the default schedule.  This
     // produces a true blank state for testing.
@@ -957,6 +1039,207 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       source,
       updatedAt: new Date().toISOString()
     });
+  }
+
+  const DAY_ABBREV = {
+    Monday: 'Mon',
+    Tuesday: 'Tue',
+    Wednesday: 'Wed',
+    Thursday: 'Thu',
+    Friday: 'Fri',
+    Saturday: 'Sat',
+    Sunday: 'Sun'
+  };
+
+  function normalizeSeriesItem(raw) {
+    const label = String(raw?.label || '').trim();
+    const time = String(raw?.time || '').trim();
+    const startDate = String(raw?.startDate || '').trim();
+    const endDate = String(raw?.endDate || '').trim();
+    const rawDays = Array.isArray(raw?.days) ? raw.days : [];
+    const days = [];
+    rawDays.forEach(day => {
+      const normalized = normalizeDayKey(day);
+      if (normalized && !days.includes(normalized)) days.push(normalized);
+    });
+    if (!label || !days.length || !startDate || !endDate) return null;
+    const id = String(raw?.id || '').trim() || `series_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+    return {
+      id,
+      label,
+      time,
+      startDate,
+      endDate,
+      days,
+      enabled: raw?.enabled !== false
+    };
+  }
+
+  function loadSeries() {
+    const stored = safeParse(SERIES_KEY, []);
+    if (!Array.isArray(stored)) return [];
+    return stored.map(normalizeSeriesItem).filter(Boolean);
+  }
+
+  function saveSeries(series) {
+    safeSet(SERIES_KEY, series);
+  }
+
+  function seriesLabel(series) {
+    const time = String(series?.time || '').trim();
+    const label = String(series?.label || '').trim();
+    return `${time ? `${time} ` : ''}${label}`.trim();
+  }
+
+  function seriesDaysLabel(days) {
+    return (days || []).map(day => DAY_ABBREV[day] || day.slice(0, 3)).join('/');
+  }
+
+  function seriesIsActiveForDate(series, dayName, dateStr) {
+    if (!series?.enabled) return false;
+    if (!series.days.includes(dayName)) return false;
+    if (!series.startDate || !series.endDate) return false;
+    if (series.startDate > series.endDate) return false;
+    return dateStr >= series.startDate && dateStr <= series.endDate;
+  }
+
+  function seriesClassesForToday() {
+    const dayName = todayName();
+    const today = fmtDate(new Date());
+    return loadSeries()
+      .filter(series => seriesIsActiveForDate(series, dayName, today))
+      .map(seriesLabel)
+      .filter(Boolean);
+  }
+
+  function mergeUniqueClasses(primary, secondary) {
+    const seen = new Set();
+    const out = [];
+    [...primary, ...secondary].forEach(item => {
+      const label = String(item || '').trim();
+      if (!label || seen.has(label)) return;
+      seen.add(label);
+      out.push(label);
+    });
+    return out;
+  }
+
+  function updateSeriesHint(message, isWarn = false) {
+    const hint = $('#seriesHint');
+    if (!hint) return;
+    hint.textContent = message || '';
+    hint.classList.toggle('warn', Boolean(isWarn));
+  }
+
+  function clearSeriesForm() {
+    $('#seriesLabel').value = '';
+    $('#seriesTime').value = '';
+    $('#seriesStart').value = '';
+    $('#seriesEnd').value = '';
+    document.querySelectorAll('[data-series-day]').forEach(cb => {
+      cb.checked = false;
+    });
+    updateSeriesHint('');
+  }
+
+  function readSeriesForm() {
+    const label = ($('#seriesLabel').value || '').trim();
+    const time = ($('#seriesTime').value || '').trim();
+    const startDate = ($('#seriesStart').value || '').trim();
+    const endDate = ($('#seriesEnd').value || '').trim();
+    const days = Array.from(document.querySelectorAll('[data-series-day]:checked'))
+      .map(cb => cb.value)
+      .filter(Boolean);
+    return { label, time, startDate, endDate, days };
+  }
+
+  function renderSeriesList() {
+    const wrap = $('#seriesList');
+    if (!wrap) return;
+    const series = loadSeries();
+    wrap.innerHTML = '';
+    if (!series.length) {
+      wrap.innerHTML = '<div class="subtle">No series yet. Add one above.</div>';
+      return;
+    }
+
+    series.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'series-row';
+
+      const toggle = document.createElement('input');
+      toggle.type = 'checkbox';
+      toggle.checked = item.enabled !== false;
+      toggle.addEventListener('change', () => {
+        item.enabled = toggle.checked;
+        saveSeries(series);
+        populateClassesForToday();
+        renderSeriesList();
+      });
+
+      const body = document.createElement('div');
+      const title = document.createElement('div');
+      title.textContent = seriesLabel(item) || 'Untitled series';
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = `${seriesDaysLabel(item.days)} · ${item.startDate} → ${item.endDate}`;
+      body.appendChild(title);
+      body.appendChild(meta);
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'btn small';
+      remove.textContent = 'Delete';
+      remove.addEventListener('click', () => {
+        if (!confirm('Delete this series?')) return;
+        const next = series.filter(s => s.id !== item.id);
+        saveSeries(next);
+        renderSeriesList();
+        populateClassesForToday();
+        showToast('Series deleted');
+      });
+
+      row.appendChild(toggle);
+      row.appendChild(body);
+      row.appendChild(remove);
+      wrap.appendChild(row);
+    });
+  }
+
+  function addSeriesFromForm() {
+    const data = readSeriesForm();
+    if (!data.label) {
+      updateSeriesHint('Enter a label for the series.', true);
+      return;
+    }
+    if (!data.days.length) {
+      updateSeriesHint('Select at least one day.', true);
+      return;
+    }
+    if (!data.startDate || !data.endDate) {
+      updateSeriesHint('Choose a start and end date.', true);
+      return;
+    }
+    if (data.startDate > data.endDate) {
+      updateSeriesHint('Start date must be on or before the end date.', true);
+      return;
+    }
+    const series = loadSeries();
+    series.push({
+      id: `series_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+      label: data.label,
+      time: data.time,
+      startDate: data.startDate,
+      endDate: data.endDate,
+      days: data.days,
+      enabled: true
+    });
+    saveSeries(series);
+    renderSeriesList();
+    clearSeriesForm();
+    populateClassesForToday();
+    updateSeriesHint('Series saved.');
+    showToast('Series saved');
   }
 
   function defaultDurationRules() {
@@ -1189,8 +1472,10 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   function classesForToday() {
     const dn = todayName();
     const sch = loadSchedule();
-    const arr = sch.days[dn] || [];
-    return { day: dn, classes: arr, meta: sch };
+    const scheduled = sch.days[dn] || [];
+    const series = seriesClassesForToday();
+    const combined = mergeUniqueClasses(scheduled, series);
+    return { day: dn, classes: combined, meta: sch };
   }
 
   function populateClassesForToday() {
@@ -1198,7 +1483,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const wrap = $('#classListWrap');
     wrap.innerHTML = '';
     if (!classes.length) {
-      $('#classesHint').textContent = `No classes found for ${day}. Go to Admin → Schedule and save your schedule.`;
+      $('#classesHint').textContent = `No classes found for ${day}. Add a schedule or series classes in Admin.`;
       $('#classesHint').classList.add('warn');
     } else {
       $('#classesHint').textContent = 'Select one or more classes.';
@@ -1758,6 +2043,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const sch = loadSchedule();
     const today = todayName();
     const cls = (sch.days[today] || []);
+    const series = loadSeries();
+    const activeSeriesToday = seriesClassesForToday();
     const signins = loadSignins();
     return {
       build: BUILD,
@@ -1769,7 +2056,9 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         updatedAt: sch.updatedAt,
         today,
         todayCount: cls.length,
-        todaySample: cls.slice(0, 5)
+        todaySample: cls.slice(0, 5),
+        seriesCount: series.length,
+        seriesActiveToday: activeSeriesToday.slice(0, 5)
       },
       scheduleUrl: localStorage.getItem(SCHEDULE_URL_KEY) || null,
       signinsCount: signins.length,
@@ -1817,6 +2106,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     // Schedule editor
     loadScheduleIntoAdmin();
     renderDurationRules();
+    renderSeriesList();
+    clearSeriesForm();
 
     // Sign-ins
     renderAdminTable();
@@ -2000,6 +2291,23 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     loadScheduleIntoAdmin();
     populateClassesForToday();
     showToast('Schedule disabled');
+  });
+
+  // Series classes actions
+  $('#btnAddSeries').addEventListener('click', () => {
+    addSeriesFromForm();
+  });
+  $('#btnClearSeriesForm').addEventListener('click', () => {
+    clearSeriesForm();
+  });
+  ['seriesLabel', 'seriesTime', 'seriesStart', 'seriesEnd'].forEach(id => {
+    const field = document.getElementById(id);
+    if (field) {
+      field.addEventListener('input', () => updateSeriesHint(''));
+    }
+  });
+  document.querySelectorAll('[data-series-day]').forEach(cb => {
+    cb.addEventListener('change', () => updateSeriesHint(''));
   });
 
   // Load schedule from a remote JSON URL.  This event handler must live at the top
