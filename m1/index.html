@@ -1105,13 +1105,27 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     return dateStr >= series.startDate && dateStr <= series.endDate;
   }
 
+  function seriesClassesForDate(dayName, dateStr) {
+    return loadSeries()
+      .filter(series => seriesIsActiveForDate(series, dayName, dateStr))
+      .map(seriesLabel)
+      .filter(Boolean);
+  }
+
   function seriesClassesForToday() {
     const dayName = todayName();
     const today = fmtDate(new Date());
-    return loadSeries()
-      .filter(series => seriesIsActiveForDate(series, dayName, today))
-      .map(seriesLabel)
-      .filter(Boolean);
+    return seriesClassesForDate(dayName, today);
+  }
+
+  function weekDateForDay(dayName) {
+    const todayIndex = DAYS.indexOf(todayName());
+    const dayIndex = DAYS.indexOf(dayName);
+    const baseDate = fmtDate(new Date());
+    if (todayIndex === -1 || dayIndex === -1) return baseDate;
+    const start = new Date(`${baseDate}T00:00:00`);
+    start.setDate(start.getDate() - todayIndex + dayIndex);
+    return fmtDate(start);
   }
 
   function mergeUniqueClasses(primary, secondary) {
@@ -1455,12 +1469,14 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const sch = loadSchedule();
     wrap.innerHTML = '';
     DAYS.forEach(day => {
+      const weekDate = weekDateForDay(day);
+      const seriesClasses = seriesClassesForDate(day, weekDate).map(label => `${label} (Series)`);
       const card = document.createElement('div');
       card.className = 'week-day';
       const title = document.createElement('h4');
       title.textContent = day;
       card.appendChild(title);
-      const classes = sch.days[day] || [];
+      const classes = (sch.days[day] || []).concat(seriesClasses);
       if (!classes.length) {
         const empty = document.createElement('div');
         empty.className = 'subtle';
