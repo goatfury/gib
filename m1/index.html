@@ -1408,6 +1408,28 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     updateDurationRulesStatus(`Saved <span class="kbd">${count}</span> rule(s).`);
   }
 
+  function parseStartMinutes(classItem) {
+    const raw = String(classItem || '').trim();
+    if (!raw) return Infinity;
+    const match = raw.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+    if (!match) return Infinity;
+    let hour = parseInt(match[1], 10);
+    let minutes = parseInt(match[2] || '0', 10);
+    if (Number.isNaN(hour) || Number.isNaN(minutes)) return Infinity;
+    if (minutes < 0 || minutes > 59) return Infinity;
+    const meridian = match[3] ? match[3].toLowerCase() : '';
+    if (meridian) {
+      if (hour === 12) {
+        hour = meridian === 'am' ? 0 : 12;
+      } else if (meridian === 'pm') {
+        hour += 12;
+      }
+    }
+    if (hour === 24 && minutes === 0) hour = 0;
+    if (hour < 0 || hour > 23) return Infinity;
+    return (hour * 60) + minutes;
+  }
+
   function renderDurationRules() {
     const wrap = $('#durationRulesWrap');
     if (!wrap) return;
@@ -1477,6 +1499,10 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       title.textContent = day;
       card.appendChild(title);
       const classes = (sch.days[day] || []).concat(seriesClasses);
+      const sortedClasses = classes
+        .map((label, index) => ({ label, index, minutes: parseStartMinutes(label) }))
+        .sort((a, b) => (a.minutes === b.minutes ? a.index - b.index : a.minutes - b.minutes))
+        .map(item => item.label);
       if (!classes.length) {
         const empty = document.createElement('div');
         empty.className = 'subtle';
@@ -1484,7 +1510,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         card.appendChild(empty);
       } else {
         const list = document.createElement('ul');
-        classes.forEach(label => {
+        sortedClasses.forEach(label => {
           const item = document.createElement('li');
           item.textContent = label;
           list.appendChild(item);
