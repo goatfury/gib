@@ -128,6 +128,10 @@
     outline: none;
     box-shadow: 0 0 0 3px rgba(59,130,246,.3);
   }
+  .input-error {
+    border-color: var(--danger);
+    box-shadow: 0 0 0 3px rgba(239,68,68,.25);
+  }
   button:disabled,
   .btn:disabled {
     opacity: 0.55;
@@ -582,8 +586,9 @@
           <input id="seriesLabel" type="text" placeholder="Intro" />
         </div>
         <div>
-          <label>Time (optional)</label>
-          <input id="seriesTime" type="text" placeholder="6:00 AM" />
+          <label for="seriesTime">Start time</label>
+          <input id="seriesTime" type="time" step="900" required />
+          <div class="hint warn" id="seriesTimeHint" style="display:none;"></div>
         </div>
       </div>
       <div style="margin-top: 12px;">
@@ -1088,13 +1093,36 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   function seriesLabel(series) {
-    const time = String(series?.time || '').trim();
+    const timeInfo = getSeriesTimeDisplay(series?.time);
     const label = String(series?.label || '').trim();
-    return `${time ? `${time} ` : ''}${label}`.trim();
+    return `${timeInfo.label} ${label}`.trim();
   }
 
   function seriesDaysLabel(days) {
     return (days || []).map(day => DAY_ABBREV[day] || day.slice(0, 3)).join('/');
+  }
+
+  function formatMinutesToTimeLabel(totalMinutes) {
+    if (!Number.isFinite(totalMinutes)) return '';
+    const minutes = Math.max(0, Math.floor(totalMinutes));
+    const hours24 = Math.floor(minutes / 60) % 24;
+    const mins = minutes % 60;
+    const period = hours24 >= 12 ? 'PM' : 'AM';
+    let hours12 = hours24 % 12;
+    if (hours12 === 0) hours12 = 12;
+    return `${hours12}:${String(mins).padStart(2, '0')} ${period}`;
+  }
+
+  function getSeriesTimeDisplay(rawTime) {
+    const raw = String(rawTime || '').trim();
+    if (!raw) {
+      return { label: '(No time)', minutes: Infinity, status: 'missing' };
+    }
+    const minutes = parseStartMinutes(raw);
+    if (!Number.isFinite(minutes) || minutes === Infinity) {
+      return { label: '(Invalid time)', minutes: Infinity, status: 'invalid' };
+    }
+    return { label: formatMinutesToTimeLabel(minutes), minutes, status: 'valid' };
   }
 
   function seriesIsActiveForDate(series, dayName, dateStr) {
@@ -1147,6 +1175,21 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     hint.classList.toggle('warn', Boolean(isWarn));
   }
 
+  function updateSeriesTimeError(message) {
+    const field = $('#seriesTime');
+    const hint = $('#seriesTimeHint');
+    if (!field || !hint) return;
+    if (message) {
+      field.classList.add('input-error');
+      hint.textContent = message;
+      hint.style.display = 'block';
+    } else {
+      field.classList.remove('input-error');
+      hint.textContent = '';
+      hint.style.display = 'none';
+    }
+  }
+
   function getSeriesWeeks() {
     const raw = parseInt($('#seriesWeeks').value, 10);
     return Number.isFinite(raw) && raw > 0 ? raw : 0;
@@ -1184,6 +1227,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       cb.checked = false;
     });
     updateSeriesHint('');
+    updateSeriesTimeError('');
   }
 
   function readSeriesForm() {
@@ -1257,6 +1301,14 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       updateSeriesHint('Enter a label for the series.', true);
       return;
     }
+    const timeMinutes = parseStartMinutes(data.time);
+    if (!data.time || !Number.isFinite(timeMinutes) || timeMinutes === Infinity) {
+      updateSeriesTimeError('Pick a valid start time.');
+      updateSeriesHint('');
+      $('#seriesTime').focus();
+      return;
+    }
+    updateSeriesTimeError('');
     if (!data.days.length) {
       updateSeriesHint('Select at least one day.', true);
       return;
@@ -2386,6 +2438,9 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     if (field) {
       field.addEventListener('input', () => {
         updateSeriesHint('');
+        if (id === 'seriesTime') {
+          updateSeriesTimeError('');
+        }
         if (id === 'seriesStart' || id === 'seriesWeeks') {
           updateSeriesEndDisplay();
         }
