@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GiB · Module 2 · Guest Check-In (Build 2026-01-07 13:45)</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #0b1220;
+      --panel: #111827;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --brand: #3b82f6;
+      --accent: #22c55e;
+      --danger: #ef4444;
+      --outline: #1f2937;
+      --shadow: 0 6px 24px rgba(0,0,0,.25), 0 2px 8px rgba(0,0,0,.35);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: linear-gradient(145deg, #0b1220 0%, #0f172a 60%, #0b1220 100%);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+    }
+    .container {
+      max-width: 1060px;
+      margin: 0 auto;
+      padding: 22px;
+    }
+    header {
+      background: radial-gradient(1200px 600px at 10% -10%, #1e293b 0%, transparent 60%);
+      padding: 26px;
+      border-radius: 18px;
+      border: 1px solid var(--outline);
+      box-shadow: var(--shadow);
+    }
+    header h1 { margin: 0 0 8px 0; font-size: 26px; }
+    header .subtitle { color: var(--muted); margin-top: 6px; line-height: 1.35; }
+    header nav { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; align-items:center; }
+
+    .pill {
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      background: rgba(96,165,250,.12);
+      color:#bfdbfe;
+      border: 1px solid rgba(96,165,250,.35);
+      padding:4px 10px;
+      border-radius:999px;
+      font-size:12px;
+    }
+    .pill .dot { width:8px; height:8px; border-radius:99px; background: rgba(34,197,94,.85); box-shadow: 0 0 0 2px rgba(34,197,94,.15); }
+
+    .btn {
+      border: 1px solid var(--outline);
+      background: var(--panel);
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all .15s ease;
+    }
+    .btn:hover { border-color: #374151; }
+    .btn:active { transform: translateY(1px); }
+    .btn.brand { background: var(--brand); color: white; border-color: var(--brand); }
+    .btn.danger { background: var(--danger); color: white; border-color: var(--danger); }
+    .btn.small { padding: 8px 10px; border-radius: 9px; font-size: 12px; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--outline);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      padding: 18px;
+      margin-top: 18px;
+    }
+    .card h2 { margin: 0 0 10px 0; font-size: 20px; }
+    .grid { display: grid; gap: 14px; }
+    @media (min-width: 900px) {
+      .grid.two { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+      .grid.three { grid-template-columns: minmax(0,1fr) minmax(0,1fr) minmax(0,1fr); }
+    }
+
+    label { display:block; margin-bottom: 6px; color: #cbd5e1; font-size: 13px; }
+    input, select, textarea {
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid #243045;
+      background: #0b1322;
+      color: var(--text);
+    }
+    textarea { min-height: 120px; resize: vertical; }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--brand);
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(59,130,246,.3);
+    }
+
+    .subtle { color: var(--muted); font-size: 13px; line-height: 1.35; }
+
+    .guest-list {
+      display: grid;
+      gap: 10px;
+    }
+    .guest-card {
+      border: 1px solid var(--outline);
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: #0b1322;
+      display: grid;
+      gap: 6px;
+    }
+    .guest-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .guest-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 20px;
+      color: var(--muted);
+      border: 1px dashed #243045;
+      border-radius: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="pill"><span class="dot"></span> Module 2 · Guests</div>
+      <h1>Guest Check-In</h1>
+      <p class="subtitle">Capture guest visits, host details, and quick notes for the front desk.</p>
+      <nav>
+        <button class="btn small" id="btnExport">Export JSON</button>
+        <button class="btn small" id="btnClear">Clear All</button>
+      </nav>
+    </header>
+
+    <section class="card">
+      <h2>New Guest Entry</h2>
+      <div class="grid two">
+        <div>
+          <label for="guestName">Guest name</label>
+          <input id="guestName" placeholder="e.g., Taylor Morgan" />
+        </div>
+        <div>
+          <label for="hostName">Host / Contact</label>
+          <input id="hostName" placeholder="e.g., Coach Sam" />
+        </div>
+      </div>
+      <div class="grid three" style="margin-top: 12px;">
+        <div>
+          <label for="visitDate">Visit date</label>
+          <input id="visitDate" type="date" />
+        </div>
+        <div>
+          <label for="visitTime">Visit time</label>
+          <input id="visitTime" type="time" />
+        </div>
+        <div>
+          <label for="visitType">Visit type</label>
+          <select id="visitType">
+            <option value="Drop-in">Drop-in</option>
+            <option value="Class">Class</option>
+            <option value="Event">Event</option>
+            <option value="Tour">Tour</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top: 12px;">
+        <label for="guestNotes">Notes</label>
+        <textarea id="guestNotes" placeholder="Add quick notes, waivers, or follow-ups..."></textarea>
+      </div>
+      <div class="guest-actions" style="margin-top: 12px;">
+        <button class="btn brand" id="btnSave">Save Guest</button>
+        <button class="btn" id="btnReset">Reset</button>
+      </div>
+      <p class="subtle" id="saveHint" aria-live="polite"></p>
+    </section>
+
+    <section class="card">
+      <h2>Today’s Guest Log</h2>
+      <div class="guest-list" id="guestList"></div>
+    </section>
+  </div>
+
+  <script>
+    const STORAGE_KEYS = {
+      guests: "gib_m2_guests",
+      exportCache: "gib_m2_export_cache"
+    };
+
+    const guestName = document.getElementById("guestName");
+    const hostName = document.getElementById("hostName");
+    const visitDate = document.getElementById("visitDate");
+    const visitTime = document.getElementById("visitTime");
+    const visitType = document.getElementById("visitType");
+    const guestNotes = document.getElementById("guestNotes");
+    const guestList = document.getElementById("guestList");
+    const saveHint = document.getElementById("saveHint");
+
+    const btnSave = document.getElementById("btnSave");
+    const btnReset = document.getElementById("btnReset");
+    const btnClear = document.getElementById("btnClear");
+    const btnExport = document.getElementById("btnExport");
+
+    const today = new Date();
+    visitDate.value = today.toISOString().slice(0, 10);
+    visitTime.value = today.toTimeString().slice(0, 5);
+
+    const loadGuests = () => {
+      try {
+        const stored = localStorage.getItem(STORAGE_KEYS.guests);
+        return stored ? JSON.parse(stored) : [];
+      } catch (error) {
+        return [];
+      }
+    };
+
+    const saveGuests = (guests) => {
+      localStorage.setItem(STORAGE_KEYS.guests, JSON.stringify(guests));
+    };
+
+    const resetForm = () => {
+      guestName.value = "";
+      hostName.value = "";
+      visitType.value = "Drop-in";
+      guestNotes.value = "";
+      guestName.focus();
+    };
+
+    const renderGuests = () => {
+      const guests = loadGuests();
+      guestList.innerHTML = "";
+
+      if (!guests.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty-state";
+        empty.textContent = "No guest check-ins yet. Add the first guest above.";
+        guestList.appendChild(empty);
+        return;
+      }
+
+      guests.forEach((guest, index) => {
+        const card = document.createElement("div");
+        card.className = "guest-card";
+
+        const name = document.createElement("strong");
+        name.textContent = guest.name;
+        card.appendChild(name);
+
+        const meta = document.createElement("div");
+        meta.className = "guest-meta";
+        meta.innerHTML = `
+          <span>Host: ${guest.host || "—"}</span>
+          <span>${guest.date} · ${guest.time}</span>
+          <span>${guest.type}</span>
+        `;
+        card.appendChild(meta);
+
+        if (guest.notes) {
+          const notes = document.createElement("div");
+          notes.className = "subtle";
+          notes.textContent = guest.notes;
+          card.appendChild(notes);
+        }
+
+        const actions = document.createElement("div");
+        actions.className = "guest-actions";
+        const removeBtn = document.createElement("button");
+        removeBtn.className = "btn small danger";
+        removeBtn.textContent = "Remove";
+        removeBtn.addEventListener("click", () => {
+          const updated = loadGuests().filter((_, i) => i !== index);
+          saveGuests(updated);
+          renderGuests();
+        });
+        actions.appendChild(removeBtn);
+        card.appendChild(actions);
+
+        guestList.appendChild(card);
+      });
+    };
+
+    btnSave.addEventListener("click", () => {
+      const name = guestName.value.trim();
+      if (!name) {
+        saveHint.textContent = "Guest name is required.";
+        saveHint.style.color = "#fca5a5";
+        guestName.focus();
+        return;
+      }
+
+      const guests = loadGuests();
+      guests.unshift({
+        name,
+        host: hostName.value.trim(),
+        date: visitDate.value || today.toISOString().slice(0, 10),
+        time: visitTime.value || today.toTimeString().slice(0, 5),
+        type: visitType.value,
+        notes: guestNotes.value.trim()
+      });
+
+      saveGuests(guests);
+      saveHint.textContent = "Guest saved to today’s log.";
+      saveHint.style.color = "#86efac";
+      resetForm();
+      renderGuests();
+    });
+
+    btnReset.addEventListener("click", () => {
+      resetForm();
+      saveHint.textContent = "";
+    });
+
+    btnClear.addEventListener("click", () => {
+      if (!confirm("Clear all guest entries?")) return;
+      saveGuests([]);
+      saveHint.textContent = "Guest log cleared.";
+      saveHint.style.color = "#fca5a5";
+      renderGuests();
+    });
+
+    btnExport.addEventListener("click", () => {
+      const guests = loadGuests();
+      const payload = {
+        exportedAt: new Date().toISOString(),
+        total: guests.length,
+        guests
+      };
+      const content = JSON.stringify(payload, null, 2);
+      localStorage.setItem(STORAGE_KEYS.exportCache, content);
+      const blob = new Blob([content], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `gib-module2-guests-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      saveHint.textContent = "Guest log exported.";
+      saveHint.style.color = "#bfdbfe";
+    });
+
+    renderGuests();
+  </script>
+</body>
+</html>
