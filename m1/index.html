@@ -656,13 +656,17 @@
     <!-- Google Sheets sync configuration -->
     <div class="card" style="background: var(--panel);">
       <h3>Google Sheets Sync</h3>
-      <div class="subtle">Configure a webhook URL and token to push sign‑ins to your intake sheet.</div>
+      <div class="subtle">Configure a Sync Link and Sync Code to push sign‑ins to your intake sheet.</div>
+      <div id="syncWarning" class="hint warn" style="margin-top:8px; display:none;">
+        Not connected to your spreadsheet yet. This data is only saved on this device.<br>
+        To turn on auto-sync: paste the Sync Link and Sync Code below, then click Test Sync.
+      </div>
       <div style="margin-top:12px;">
-        <label for="cfgSyncUrl" style="display:block; margin-bottom:4px;">Webhook URL</label>
+        <label for="cfgSyncUrl" style="display:block; margin-bottom:4px;">Sync Link</label>
         <input id="cfgSyncUrl" type="text" placeholder="https://script.google.com/macros/s/.../exec" style="width:100%;">
       </div>
       <div style="margin-top:12px;">
-        <label for="cfgSyncToken" style="display:block; margin-bottom:4px;">Sync token</label>
+        <label for="cfgSyncToken" style="display:block; margin-bottom:4px;">Sync Code</label>
         <input id="cfgSyncToken" type="text" placeholder="Secret token" style="width:100%;">
       </div>
       <div style="margin-top:12px;">
@@ -671,6 +675,7 @@
       </div>
       <div style="margin-top:12px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
         <label style="display:flex; align-items:center; gap:6px;"><input id="cfgAutoSync" type="checkbox">Auto‑sync after sign‑in</label>
+        <button id="btnTestSync" class="btn" type="button">Test Sync</button>
         <button id="btnSyncNow" class="btn" type="button">Sync now</button>
       </div>
       <div id="syncStatus" class="statusRow" style="margin-top:8px;"></div>
@@ -726,7 +731,7 @@
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2026-01-07 13:45';
+  const BUILD = '2026-01-07 14:18';
   const TZ = 'America/New_York';
 
   // Storage keys (new)
@@ -746,6 +751,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   const SYNC_URL_KEY     = 'gib_m1_sync_url_v1';
   const SYNC_TOKEN_KEY   = 'gib_m1_sync_token_v1';
   const SYNC_AUTO_KEY    = 'gib_m1_sync_auto_v1';
+  const SYNC_WARNING_KEY = 'gib_m1_sync_warning_last_v1';
   const DEVICE_LABEL_KEY = 'gib_m1_device_label_v1';
 
 
@@ -2117,6 +2123,28 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     localStorage.setItem(DEVICE_LABEL_KEY, ($('#cfgDeviceLabel').value || '').trim());
     localStorage.setItem(SYNC_AUTO_KEY, $('#cfgAutoSync').checked ? 'true' : 'false');
     updateSyncStatus();
+    updateSyncWarning();
+  }
+  function isAutoSyncConfigured() {
+    const url = ($('#cfgSyncUrl').value || '').trim();
+    const token = ($('#cfgSyncToken').value || '').trim();
+    return $('#cfgAutoSync').checked && url && token;
+  }
+  function updateSyncWarning() {
+    const warning = $('#syncWarning');
+    if (!warning) return;
+    if (isAutoSyncConfigured()) {
+      warning.style.display = 'none';
+      return;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const lastShown = localStorage.getItem(SYNC_WARNING_KEY);
+    if (lastShown === today) {
+      warning.style.display = 'none';
+      return;
+    }
+    warning.style.display = 'block';
+    localStorage.setItem(SYNC_WARNING_KEY, today);
   }
   function updateSyncStatus() {
     const q = loadSyncQueue();
@@ -2132,7 +2160,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const url = (localStorage.getItem(SYNC_URL_KEY) || '').trim();
     const token = (localStorage.getItem(SYNC_TOKEN_KEY) || '').trim();
     if (!url || !token) {
-      alert('Please configure the webhook URL and token first.');
+      alert('Please configure the Sync Link and Sync Code first.');
       return;
     }
     const queue = loadSyncQueue();
@@ -2249,6 +2277,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     // the current queue count and last sync information are visible.
     loadSyncSettings();
     updateSyncStatus();
+    updateSyncWarning();
 
     // Debug box
     $('#debugBox').value = JSON.stringify(debugSnapshot(), null, 2);
@@ -2502,6 +2531,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   $('#cfgSyncToken').addEventListener('change', saveSyncSettings);
   $('#cfgDeviceLabel').addEventListener('change', saveSyncSettings);
   $('#cfgAutoSync').addEventListener('change', saveSyncSettings);
+  $('#btnTestSync').addEventListener('click', syncNow);
   $('#btnSyncNow').addEventListener('click', syncNow);
 
   // Debug action
