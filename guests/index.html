@@ -142,9 +142,13 @@
         <span>Entries are stored locally on this device.</span>
         <span>Use Export to copy the saved JSON.</span>
       </div>
+      <div class="btn-group" style="margin-top: 16px;">
+        <button class="btn" type="button" id="btnAdmin">Admin</button>
+        <button class="btn brand" type="button" id="btnBackToGuest" style="display:none;">Back to Guest Check-In</button>
+      </div>
     </header>
 
-    <section class="card" aria-label="Guest check-in form">
+    <section class="card" aria-label="Guest check-in form" id="guestPanel">
       <h2>Guest / Visitor Check-In</h2>
       <p class="subtle">Capture guest details and record the check-in time. No host or contact details are stored.</p>
       <form id="guestForm" class="grid two" autocomplete="off">
@@ -181,7 +185,7 @@
       </form>
     </section>
 
-    <section class="card" aria-label="Recent guest entries">
+    <section class="card" aria-label="Recent guest entries" id="adminPanel" style="display:none;">
       <h2>Saved Entries</h2>
       <div id="entriesWrap"></div>
       <div class="btn-group" style="margin-top: 12px;">
@@ -210,6 +214,10 @@
     const clearEntries = document.getElementById('clearEntries');
     const clearForm = document.getElementById('clearForm');
     const jsonOutput = document.getElementById('jsonOutput');
+    const btnAdmin = document.getElementById('btnAdmin');
+    const btnBackToGuest = document.getElementById('btnBackToGuest');
+    const guestPanel = document.getElementById('guestPanel');
+    const adminPanel = document.getElementById('adminPanel');
 
     let entries = [];
 
@@ -288,6 +296,20 @@
       guestName.focus();
     };
 
+    const showGuestView = () => {
+      guestPanel.style.display = 'block';
+      adminPanel.style.display = 'none';
+      btnAdmin.style.display = 'inline-flex';
+      btnBackToGuest.style.display = 'none';
+    };
+
+    const showAdminView = () => {
+      guestPanel.style.display = 'none';
+      adminPanel.style.display = 'block';
+      btnAdmin.style.display = 'none';
+      btnBackToGuest.style.display = 'inline-flex';
+    };
+
     form.addEventListener('submit', (event) => {
       event.preventDefault();
       if (!guestName.value.trim()) {
@@ -337,9 +359,18 @@
       resetForm();
     });
 
+    btnAdmin.addEventListener('click', () => {
+      showAdminView();
+    });
+
+    btnBackToGuest.addEventListener('click', () => {
+      showGuestView();
+    });
+
     loadEntries();
     updateTimeField();
     renderEntries();
+    showGuestView();
     setInterval(updateTimeField, 60000);
   </script>
 </body>
