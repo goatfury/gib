@@ -439,7 +439,8 @@
     <div class="grid two" id="classesGrid">
       <div>
         <label>Name</label>
-        <input type="text" id="nameInput" placeholder="Enter your name" autocomplete="off" />
+<input type="text" id="nameInput" list="nameDatalist" placeholder="Enter your name" autocomplete="off" />
+<datalist id="nameDatalist"></datalist>
       </div>
 
       <div>
@@ -728,6 +729,71 @@
   // NOTE: bump this whenever you make changes to the kiosk or admin.
   const BUILD = '2026-01-07 13:45';
   const TZ = 'America/New_York';
+// --- Instructor name suggestions (local roster) ---
+const NAME_ROSTER_KEY = 'gib_m1_instructor_names_v1';
+
+function normName(s) {
+  return String(s || '').trim().replace(/\s+/g, ' ');
+}
+function normKey(s) {
+  return normName(s).toLowerCase();
+}
+function loadNameRoster() {
+  try { return JSON.parse(localStorage.getItem(NAME_ROSTER_KEY) || '[]'); }
+  catch (e) { return []; }
+}
+function saveNameRoster(list) {
+  localStorage.setItem(NAME_ROSTER_KEY, JSON.stringify(list));
+}
+function upsertName(name) {
+  const clean = normName(name);
+  if (!clean) return;
+  const roster = loadNameRoster();
+  const key = normKey(clean);
+  const exists = roster.some(n => normKey(n) === key);
+  if (!exists) {
+    roster.push(clean);
+    roster.sort((a,b) => a.localeCompare(b));
+    saveNameRoster(roster);
+  }
+}
+function seedRosterFromExistingSignins() {
+  const roster = loadNameRoster();
+  if (roster.length) return;
+
+  // Prefer using your existing loader if it exists
+  try {
+    if (typeof loadSignins === 'function') {
+      const rows = loadSignins() || [];
+      rows.forEach(r => upsertName(r.Instructor || r.instructor || r.Name || r.name));
+      return;
+    }
+  } catch(e) {}
+
+  // Fallback: try common keys
+  const keysToTry = ['gib_m1_signins_v1','rbjj_signins_v2','gib_m1_signins','rbjj_signins'];
+  for (const k of keysToTry) {
+    try {
+      const rows = JSON.parse(localStorage.getItem(k) || '[]');
+      if (Array.isArray(rows) && rows.length) {
+        rows.forEach(r => upsertName(r.Instructor || r.instructor || r.Name || r.name));
+        return;
+      }
+    } catch(e) {}
+  }
+}
+function refreshNameDatalist() {
+  const dl = document.getElementById('nameDatalist');
+  if (!dl) return;
+  seedRosterFromExistingSignins();
+  const roster = loadNameRoster();
+  dl.innerHTML = '';
+  roster.forEach(n => {
+    const opt = document.createElement('option');
+    opt.value = n;
+    dl.appendChild(opt);
+  });
+}
 
   // Storage keys (new)
   const SIGNINS_KEY = 'gib_m1_signins_v1';
@@ -2004,6 +2070,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       alert('Please enter a name and select one or more classes.');
       return;
     }
+upsertName(name);
+refreshNameDatalist();
 
     const rows = loadSignins();
     const now = new Date();
@@ -2523,6 +2591,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   // Load sync settings and refresh status on first load
   loadSyncSettings();
   updateSyncStatus();
+  refreshNameDatalist();
+
 })();
 </script>
 </body>
