@@ -130,6 +130,15 @@
       color: var(--muted);
       background: rgba(15,23,42,0.35);
     }
+    .warning {
+      border: 1px solid rgba(248,113,113,0.6);
+      background: rgba(239,68,68,0.12);
+      color: #fecaca;
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-size: 13px;
+      margin-bottom: 14px;
+    }
   </style>
 </head>
 <body>
@@ -194,10 +203,47 @@
         <textarea id="jsonOutput" class="json-output" readonly></textarea>
       </div>
     </section>
+
+    <section class="card" aria-label="Admin sync settings">
+      <h2>Admin</h2>
+      <div id="syncWarning" class="warning" style="display: none;">
+        Not connected… Save a Sync Link + Sync Code to enable sync.
+      </div>
+      <div class="grid two">
+        <div>
+          <label for="syncLink">Sync Link</label>
+          <input id="syncLink" name="syncLink" type="url" placeholder="https://example.com/sync" />
+        </div>
+        <div>
+          <label for="syncCode">Sync Code</label>
+          <input id="syncCode" name="syncCode" type="text" placeholder="Enter sync code" />
+        </div>
+        <div>
+          <label for="syncAuto">Auto-sync</label>
+          <select id="syncAuto" name="syncAuto">
+            <option value="off">Off</option>
+            <option value="on">On</option>
+          </select>
+        </div>
+      </div>
+      <div class="btn-group" style="margin-top: 12px;">
+        <button class="btn brand" type="button" id="saveSync">Save Sync Settings</button>
+        <button class="btn secondary" type="button" id="testSync">Test Sync</button>
+      </div>
+      <p class="subtle" style="margin-top: 10px;">
+        Sync sends queued guest entries to your Sync Link and keeps the local log intact.
+      </p>
+    </section>
   </div>
 
   <script>
     const STORAGE_KEY = 'gibGuestEntries';
+    const SYNC_URL_KEY = 'gib_m2_sync_url';
+    const SYNC_CODE_KEY = 'gib_m2_sync_code';
+    const SYNC_AUTO_KEY = 'gib_m2_sync_auto';
+    const SYNC_QUEUE_KEY = 'gib_m2_sync_queue';
+    const SYNC_WARNING_LAST_KEY = 'gib_m2_sync_warning_last';
+
     const form = document.getElementById('guestForm');
     const guestName = document.getElementById('guestName');
     const guestOrg = document.getElementById('guestOrg');
@@ -210,8 +256,15 @@
     const clearEntries = document.getElementById('clearEntries');
     const clearForm = document.getElementById('clearForm');
     const jsonOutput = document.getElementById('jsonOutput');
+    const syncLink = document.getElementById('syncLink');
+    const syncCode = document.getElementById('syncCode');
+    const syncAuto = document.getElementById('syncAuto');
+    const saveSync = document.getElementById('saveSync');
+    const testSync = document.getElementById('testSync');
+    const syncWarning = document.getElementById('syncWarning');
 
     let entries = [];
+    let syncQueue = [];
 
     const formatTimestamp = (date) => (
       date.toLocaleString(undefined, {
@@ -237,6 +290,71 @@
 
     const saveEntries = () => {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    };
+
+    const loadSyncSettings = () => {
+      syncLink.value = localStorage.getItem(SYNC_URL_KEY) || '';
+      syncCode.value = localStorage.getItem(SYNC_CODE_KEY) || '';
+      syncAuto.value = localStorage.getItem(SYNC_AUTO_KEY) || 'off';
+      try {
+        syncQueue = JSON.parse(localStorage.getItem(SYNC_QUEUE_KEY) || '[]');
+      } catch (error) {
+        syncQueue = [];
+      }
+    };
+
+    const saveSyncSettings = () => {
+      localStorage.setItem(SYNC_URL_KEY, syncLink.value.trim());
+      localStorage.setItem(SYNC_CODE_KEY, syncCode.value.trim());
+      localStorage.setItem(SYNC_AUTO_KEY, syncAuto.value);
+      updateSyncWarning();
+    };
+
+    const saveSyncQueue = () => {
+      localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(syncQueue));
+    };
+
+    const getTodayKey = () => new Date().toISOString().slice(0, 10);
+
+    const updateSyncWarning = () => {
+      const hasLink = Boolean(syncLink.value.trim());
+      const hasCode = Boolean(syncCode.value.trim());
+      if (hasLink && hasCode) {
+        syncWarning.style.display = 'none';
+        return;
+      }
+      const lastShown = localStorage.getItem(SYNC_WARNING_LAST_KEY);
+      const today = getTodayKey();
+      if (lastShown !== today) {
+        syncWarning.style.display = 'block';
+        localStorage.setItem(SYNC_WARNING_LAST_KEY, today);
+      } else {
+        syncWarning.style.display = 'none';
+      }
+    };
+
+    const enqueueSync = (entry) => {
+      syncQueue.unshift(entry);
+      saveSyncQueue();
+    };
+
+    const sendSyncQueue = async () => {
+      const link = syncLink.value.trim();
+      const code = syncCode.value.trim();
+      if (!link || !code || !syncQueue.length) return;
+      const payload = { token: code, rows: syncQueue };
+      try {
+        await fetch(link, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          body: JSON.stringify(payload)
+        });
+        syncQueue = [];
+        saveSyncQueue();
+      } catch (error) {
+        saveSyncQueue();
+      }
     };
 
     const updateTimeField = () => {
@@ -308,6 +426,11 @@
       saveEntries();
       renderEntries();
       resetForm();
+
+      if (syncAuto.value === 'on') {
+        enqueueSync(entry);
+        sendSyncQueue();
+      }
     });
 
     refreshJson.addEventListener('click', () => {
@@ -337,9 +460,20 @@
       resetForm();
     });
 
+    saveSync.addEventListener('click', () => {
+      saveSyncSettings();
+    });
+
+    testSync.addEventListener('click', () => {
+      saveSyncSettings();
+      sendSyncQueue();
+    });
+
     loadEntries();
+    loadSyncSettings();
     updateTimeField();
     renderEntries();
+    updateSyncWarning();
     setInterval(updateTimeField, 60000);
   </script>
 </body>
