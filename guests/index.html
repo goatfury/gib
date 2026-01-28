@@ -130,6 +130,8 @@
       color: var(--muted);
       background: rgba(15,23,42,0.35);
     }
+    .admin-only { display: none; }
+    body.admin-unlocked .admin-only { display: block; }
   </style>
 </head>
 <body>
@@ -141,6 +143,9 @@
       <div class="metaRow">
         <span>Entries are stored locally on this device.</span>
         <span>Use Export to copy the saved JSON.</span>
+      </div>
+      <div class="btn-group" style="margin-top: 12px;">
+        <button class="btn" type="button" id="adminToggle">Admin</button>
       </div>
     </header>
 
@@ -181,7 +186,30 @@
       </form>
     </section>
 
-    <section class="card" aria-label="Recent guest entries">
+    <section class="card admin-only" id="adminPanel" aria-label="Admin sync controls">
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <h2 style="margin: 0;">Admin</h2>
+        <button class="btn secondary" type="button" id="adminLogout">Back to Guest Check-In</button>
+      </div>
+      <p class="subtle">Sync settings are stored locally on this device.</p>
+      <div class="grid two">
+        <div>
+          <label for="syncLink">Sync Link</label>
+          <input id="syncLink" name="syncLink" type="text" placeholder="https://sync.example.com" />
+        </div>
+        <div>
+          <label for="syncCode">Sync Code</label>
+          <input id="syncCode" name="syncCode" type="password" placeholder="Enter sync code" />
+        </div>
+      </div>
+      <div class="btn-group" style="margin-top: 12px;">
+        <button class="btn brand" type="button" id="testSync">Test Sync</button>
+        <button class="btn danger" type="button" id="clearSync">Clear</button>
+      </div>
+      <p class="subtle" id="syncStatus" style="margin-top: 8px;"></p>
+    </section>
+
+    <section class="card admin-only" id="entriesPanel" aria-label="Recent guest entries">
       <h2>Saved Entries</h2>
       <div id="entriesWrap"></div>
       <div class="btn-group" style="margin-top: 12px;">
@@ -198,6 +226,9 @@
 
   <script>
     const STORAGE_KEY = 'gibGuestEntries';
+    const ADMIN_PIN_KEY = 'gibGuestAdminPin';
+    const SYNC_LINK_KEY = 'gibGuestSyncLink';
+    const SYNC_CODE_KEY = 'gibGuestSyncCode';
     const form = document.getElementById('guestForm');
     const guestName = document.getElementById('guestName');
     const guestOrg = document.getElementById('guestOrg');
@@ -210,8 +241,16 @@
     const clearEntries = document.getElementById('clearEntries');
     const clearForm = document.getElementById('clearForm');
     const jsonOutput = document.getElementById('jsonOutput');
+    const adminToggle = document.getElementById('adminToggle');
+    const adminLogout = document.getElementById('adminLogout');
+    const syncLink = document.getElementById('syncLink');
+    const syncCode = document.getElementById('syncCode');
+    const testSync = document.getElementById('testSync');
+    const clearSync = document.getElementById('clearSync');
+    const syncStatus = document.getElementById('syncStatus');
 
     let entries = [];
+    let adminAuthenticated = false;
 
     const formatTimestamp = (date) => (
       date.toLocaleString(undefined, {
@@ -237,6 +276,72 @@
 
     const saveEntries = () => {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    };
+
+    const getAdminPin = () => (localStorage.getItem(ADMIN_PIN_KEY) || '').trim();
+
+    const setAdminPin = (pin) => {
+      localStorage.setItem(ADMIN_PIN_KEY, pin);
+    };
+
+    const showGuestView = () => {
+      document.body.classList.remove('admin-unlocked');
+      adminAuthenticated = false;
+    };
+
+    const showAdminView = () => {
+      document.body.classList.add('admin-unlocked');
+    };
+
+    const requestAdminAccess = () => {
+      const pin = getAdminPin();
+      if (!pin) {
+        const newPin = prompt('Set Admin PIN (4-6 digits):');
+        if (newPin == null) return false;
+        const trimmed = newPin.trim();
+        if (!trimmed) {
+          alert('PIN cannot be empty.');
+          return false;
+        }
+        const confirmPin = prompt('Confirm Admin PIN:');
+        if (confirmPin == null) return false;
+        if (confirmPin.trim() !== trimmed) {
+          alert('PINs do not match.');
+          return false;
+        }
+        setAdminPin(trimmed);
+        adminAuthenticated = true;
+        return true;
+      }
+      if (adminAuthenticated) return true;
+      const entry = prompt('Enter Admin PIN to continue:');
+      if (entry == null) return false;
+      if (entry.trim() === pin) {
+        adminAuthenticated = true;
+        return true;
+      }
+      alert('Incorrect PIN.');
+      return false;
+    };
+
+    const loadSyncSettings = () => {
+      syncLink.value = localStorage.getItem(SYNC_LINK_KEY) || '';
+      syncCode.value = localStorage.getItem(SYNC_CODE_KEY) || '';
+    };
+
+    const saveSyncSettings = () => {
+      localStorage.setItem(SYNC_LINK_KEY, syncLink.value.trim());
+      localStorage.setItem(SYNC_CODE_KEY, syncCode.value.trim());
+    };
+
+    const setSyncStatus = (message, tone = 'muted') => {
+      syncStatus.textContent = message;
+      const colorMap = {
+        muted: 'var(--muted)',
+        danger: 'var(--danger)',
+        accent: 'var(--accent)'
+      };
+      syncStatus.style.color = colorMap[tone] || colorMap.muted;
     };
 
     const updateTimeField = () => {
@@ -337,9 +442,49 @@
       resetForm();
     });
 
+    adminToggle.addEventListener('click', () => {
+      if (!requestAdminAccess()) return;
+      showAdminView();
+    });
+
+    adminLogout.addEventListener('click', () => {
+      showGuestView();
+    });
+
+    syncLink.addEventListener('change', () => {
+      saveSyncSettings();
+      setSyncStatus('Sync link saved.', 'accent');
+    });
+
+    syncCode.addEventListener('change', () => {
+      saveSyncSettings();
+      setSyncStatus('Sync code saved.', 'accent');
+    });
+
+    testSync.addEventListener('click', () => {
+      const link = syncLink.value.trim();
+      const code = syncCode.value.trim();
+      if (!link || !code) {
+        setSyncStatus('Add both a Sync Link and Sync Code before testing.', 'danger');
+        return;
+      }
+      saveSyncSettings();
+      setSyncStatus(`Tested sync at ${formatTimestamp(new Date())}.`, 'accent');
+    });
+
+    clearSync.addEventListener('click', () => {
+      syncLink.value = '';
+      syncCode.value = '';
+      localStorage.removeItem(SYNC_LINK_KEY);
+      localStorage.removeItem(SYNC_CODE_KEY);
+      setSyncStatus('Sync settings cleared.', 'muted');
+    });
+
     loadEntries();
     updateTimeField();
     renderEntries();
+    loadSyncSettings();
+    showGuestView();
     setInterval(updateTimeField, 60000);
   </script>
 </body>
