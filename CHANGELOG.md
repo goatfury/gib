@@ -1,4 +1,4 @@
-- M1: Series start time now uses a time picker and blocks invalid values.
+WIP: M1 name suggestions- M1: Series start time now uses a time picker and blocks invalid values.
 - M1: Week-at-a-Glance now sorts classes chronologically (including Series).
 - M1: Week-at-a-Glance now shows active Series classes per day (tagged ‘(Series)’).
 - Add a full-screen sign-in confirmation modal with DONE/UNDO countdown so instructors can't miss successful sign-ins and can reverse mistakes quickly.
