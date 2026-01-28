@@ -1,4 +1,8 @@
+M1: persistent instructor name suggestions (reduce typing).- M1: Week-at-a-Glance now sorts classes chronologically (including Series).
+- M1: Week-at-a-Glance now shows active Series classes per day (tagged ‘(Series)’).
 - Add a full-screen sign-in confirmation modal with DONE/UNDO countdown so instructors can't miss successful sign-ins and can reverse mistakes quickly.
+- Update Series classes to use a week-count input with auto-calculated end dates for a cleaner admin form.
+- Add Series classes in Admin so limited-run weekly blocks (like 8-week intros) appear in Classes Today only during their active dates.
 - Add a tablet-friendly launcher at / that links to Module 1 at /m1 so sign-ins remain accessible while keeping Module 1 intact.
 - Replace per-day duration overrides with stored duration rules that auto-fill sign-in hours based on class text.
 - Add a Duration Rules action to generate missing rule entries from the saved weekly schedule.
