@@ -132,6 +132,23 @@
     }
     .admin-only { display: none; }
     body.admin-unlocked .admin-only { display: block; }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      transform: translateX(-50%);
+      z-index: 9999;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      background: rgba(15, 23, 42, 0.95);
+      color: #fff;
+      padding: 12px 18px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
   </style>
 </head>
 <body>
@@ -224,6 +241,7 @@
     </section>
   </div>
 
+  <div id="toast" class="toast">Saved</div>
   <script>
     const STORAGE_KEY = 'gibGuestEntries';
     const ADMIN_PIN_KEY = 'gibGuestAdminPin';
@@ -344,6 +362,16 @@
       syncStatus.style.color = colorMap[tone] || colorMap.muted;
     };
 
+    const showToast = (message) => {
+      const toast = document.getElementById('toast');
+      if (!toast) return;
+      toast.textContent = message;
+      toast.classList.add('show');
+      setTimeout(() => {
+        toast.classList.remove('show');
+      }, 2000);
+    };
+
     const updateTimeField = () => {
       guestTime.value = formatTimestamp(new Date());
     };
@@ -413,6 +441,7 @@
       saveEntries();
       renderEntries();
       resetForm();
+      showToast('Saved');
     });
 
     refreshJson.addEventListener('click', () => {
