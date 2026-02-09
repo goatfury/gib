@@ -25,29 +25,13 @@
       background: linear-gradient(145deg, #0b1220 0%, #0f172a 60%, #0b1220 100%);
       color: var(--text);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      font-size: 18px;
       -webkit-font-smoothing: antialiased;
     }
     .container {
       max-width: 980px;
       margin: 0 auto;
       padding: 24px;
-    }
-    header {
-      background: radial-gradient(1200px 600px at 10% -10%, #1e293b 0%, transparent 60%);
-      padding: 26px;
-      border-radius: 18px;
-      border: 1px solid var(--outline);
-      box-shadow: var(--shadow);
-    }
-    header h1 { margin: 6px 0 0 0; font-size: 26px; }
-    header .subtitle { color: var(--muted); margin-top: 8px; line-height: 1.35; }
-    .metaRow {
-      margin-top: 10px;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      font-size: 12px;
-      color: var(--muted);
     }
     .card {
       background: var(--card);
@@ -57,16 +41,17 @@
       padding: 18px;
       margin-top: 18px;
     }
-    .card h2 { margin: 0 0 10px 0; font-size: 20px; }
-    .subtle { color: var(--muted); font-size: 13px; line-height: 1.4; }
-    label { display: block; margin-bottom: 6px; color: #cbd5e1; font-size: 13px; }
+    .card h2 { margin: 0 0 10px 0; font-size: 24px; }
+    .subtle { color: var(--muted); font-size: 16px; line-height: 1.4; }
+    label { display: block; margin-bottom: 6px; color: #cbd5e1; font-size: 15px; }
     input, select, textarea {
       width: 100%;
-      padding: 12px;
+      padding: 14px;
       border-radius: 10px;
       border: 1px solid #243045;
       background: #0b1322;
       color: var(--text);
+      font-size: 16px;
     }
     textarea { min-height: 120px; resize: vertical; }
     input:focus, select:focus, textarea:focus {
@@ -83,10 +68,11 @@
       border: 1px solid var(--outline);
       background: var(--panel);
       color: var(--text);
-      padding: 10px 14px;
+      padding: 12px 16px;
       border-radius: 10px;
       cursor: pointer;
       transition: all .15s ease;
+      font-size: 16px;
     }
     .btn:hover { border-color: #374151; }
     .btn:active { transform: translateY(1px); }
@@ -97,7 +83,7 @@
     .table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 13px;
+      font-size: 15px;
     }
     .table th, .table td {
       text-align: left;
@@ -106,22 +92,11 @@
       vertical-align: top;
     }
     .table th { color: #cbd5e1; font-weight: 600; }
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      background: rgba(96,165,250,.12);
-      color: #bfdbfe;
-      border: 1px solid rgba(96,165,250,.35);
-      padding: 4px 10px;
-      border-radius: 999px;
-      font-size: 12px;
-    }
     .json-output {
       width: 100%;
       min-height: 150px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      font-size: 12px;
+      font-size: 14px;
     }
     .empty-state {
       padding: 18px;
@@ -136,18 +111,9 @@
 </head>
 <body>
   <div class="container">
-    <header>
-      <div class="pill">Guest Log</div>
-      <h1>Guest / Visitor Check-In</h1>
-      <div class="subtitle">Log guest arrivals quickly and keep a clean local record for the day.</div>
-      <div class="metaRow">
-        <span>Entries are stored locally on this device.</span>
-        <span>Use Export to copy the saved JSON.</span>
-      </div>
-      <div class="btn-group" style="margin-top: 12px;">
-        <button class="btn" type="button" id="adminToggle">Admin</button>
-      </div>
-    </header>
+    <div class="btn-group" style="justify-content: flex-end;">
+      <button class="btn" type="button" id="adminToggle">Admin</button>
+    </div>
 
     <section class="card" aria-label="Guest check-in form">
       <h2>Guest / Visitor Check-In</h2>
@@ -160,16 +126,6 @@
         <div>
           <label for="guestOrg">Gym (optional)</label>
           <input id="guestOrg" name="guestOrg" type="text" placeholder="Gym name" />
-        </div>
-        <div>
-          <label for="guestType">Visit type</label>
-          <select id="guestType" name="guestType">
-            <option value="Visitor">Visitor</option>
-            <option value="Vendor">Vendor</option>
-            <option value="Contractor">Contractor</option>
-            <option value="Interview">Interview</option>
-            <option value="Other">Other</option>
-          </select>
         </div>
         <div>
           <label for="guestTime">Check-in time</label>
@@ -232,7 +188,6 @@
     const form = document.getElementById('guestForm');
     const guestName = document.getElementById('guestName');
     const guestOrg = document.getElementById('guestOrg');
-    const guestType = document.getElementById('guestType');
     const guestTime = document.getElementById('guestTime');
     const guestNotes = document.getElementById('guestNotes');
     const entriesWrap = document.getElementById('entriesWrap');
@@ -360,7 +315,6 @@
           <tr>
             <td>${entry.name}</td>
             <td>${entry.organization || '—'}</td>
-            <td>${entry.type}</td>
             <td>${entry.checkIn}</td>
             <td>${entry.notes || '—'}</td>
           </tr>
@@ -374,7 +328,6 @@
               <tr>
                 <th>Name</th>
                 <th>Organization</th>
-                <th>Visit type</th>
                 <th>Check-in</th>
                 <th>Notes</th>
               </tr>
@@ -389,7 +342,6 @@
     const resetForm = () => {
       form.reset();
       updateTimeField();
-      guestType.value = 'Visitor';
       guestName.focus();
     };
 
@@ -404,7 +356,6 @@
         id: crypto.randomUUID(),
         name: guestName.value.trim(),
         organization: guestOrg.value.trim(),
-        type: guestType.value,
         checkIn: guestTime.value,
         notes: guestNotes.value.trim()
       };
