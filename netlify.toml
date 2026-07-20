@@ -1,6 +1,7 @@
 [build]
-  command = "node qa/netlify-fetch-and-push.mjs"
+  command = "npx playwright install chromium && node qa/netlify-browser-gate.mjs"
   publish = "qa-public"
 
 [build.environment]
   NODE_VERSION = "22"
+  PLAYWRIGHT_BROWSERS_PATH = "0"
