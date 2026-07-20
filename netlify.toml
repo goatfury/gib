@@ -1,7 +1,8 @@
 [build]
-  command = "node qa/netlify-probe.mjs"
+  command = "npx playwright install chromium && node qa/netlify-probe.mjs"
   publish = "qa-public"
 
 [build.environment]
   NODE_VERSION = "22"
-  PROBE = "source_2min"
+  PLAYWRIGHT_BROWSERS_PATH = "0"
+  PROBE = "browser_initial"
