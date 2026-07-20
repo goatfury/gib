@@ -1,8 +1,7 @@
 [build]
-  command = "mkdir -p qa-public && echo ok > qa-public/index.html && node qa/source-term-probe.mjs"
+  command = "npx playwright install chromium && node qa/netlify-browser-clean-probe.mjs"
   publish = "qa-public"
 
 [build.environment]
   NODE_VERSION = "22"
-  SOURCE_TERM = "skeletonCorpseCount"
-  SOURCE_MODE = "literal"
+  PLAYWRIGHT_BROWSERS_PATH = "0"
