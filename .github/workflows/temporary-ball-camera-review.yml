@@ -1,0 +1,58 @@
+name: Temporary Ball Camera Cut review
+
+on:
+  push:
+    branches:
+      - review/tecmo-ball-camera-20260720
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  review:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out review branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install isolated browser
+        run: |
+          npm init -y
+          npm install playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Review live Ball Camera Cut
+        run: node qa/tecmo-ball-camera-review.mjs
+
+      - name: Persist evidence to review branch
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f qa/tecmo-ball-camera-review-output/
+          if git diff --cached --quiet; then
+            echo "No evidence files to commit"
+          else
+            git commit -m "Add Ball Camera Cut browser evidence"
+            git push
+          fi
+
+      - name: Upload review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tecmo-ball-camera-review
+          path: qa/tecmo-ball-camera-review-output/
+          retention-days: 1
+          if-no-files-found: warn
