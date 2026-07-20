@@ -1,7 +1,7 @@
 [build]
-  command = "npx playwright install chromium && node qa/netlify-clean-static-gate.mjs"
+  command = "node qa/netlify-probe.mjs"
   publish = "qa-public"
 
 [build.environment]
   NODE_VERSION = "22"
-  PLAYWRIGHT_BROWSERS_PATH = "0"
+  PROBE = "source_2min"
