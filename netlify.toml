@@ -4,5 +4,5 @@
 
 [build.environment]
   NODE_VERSION = "22"
-  SOURCE_TERM = "activeCarrierVisible"
+  SOURCE_TERM = "boOffscreenDirection"
   SOURCE_MODE = "literal"
