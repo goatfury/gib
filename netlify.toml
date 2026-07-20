@@ -1,5 +1,5 @@
 [build]
-  command = "npx playwright install chromium && node qa/netlify-browser-clock-probe.mjs"
+  command = "npx playwright install chromium && node qa/netlify-browser-story-probe.mjs"
   publish = "qa-public"
 
 [build.environment]
