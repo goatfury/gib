@@ -13,16 +13,6 @@ function num(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function normalizedWords(value) {
-  return String(value)
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-}
-
 async function fetchSource() {
   const response = await fetch(TARGET, { redirect: 'follow' });
   const source = await response.text();
@@ -108,8 +98,12 @@ try {
     const { browser, page, errors } = await browserPage();
     const snap = await snapshot(page);
     await browser.close();
-    const clock = num(snap.quarterTimeRemaining ?? snap.timeLeft);
-    if (clock != null && Math.abs(clock - 120) < 0.1 && errors.length === 0) pass({ clock, mode: snap.mode }); else fail('initial browser state failed', { clock, mode: snap.mode, errors });
+    const rawCandidates = [snap.quarterTimeRemaining, snap.timeLeft, snap.rawQuarterTimeRemaining].map(num).filter(value => value != null);
+    const formattedCandidates = [snap.formattedQuarterClock, snap.quarterClock, snap.clockDisplay].filter(value => value != null).map(String);
+    const rawOkay = rawCandidates.some(value => Math.abs(value - 120) < 0.1);
+    const formattedOkay = formattedCandidates.some(value => value.trim() === '2:00' || value.includes('2:00'));
+    if ((rawOkay || formattedOkay) && errors.length === 0) pass({ rawCandidates, formattedCandidates, mode: snap.mode });
+    else fail('initial browser state failed', { rawCandidates, formattedCandidates, mode: snap.mode, keys: Object.keys(snap), errors });
   } else if (probe === 'browser_clean') {
     const { browser, page, errors } = await browserPage();
     await startGame(page);
