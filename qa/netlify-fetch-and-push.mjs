@@ -1,61 +1,58 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { spawnSync } from 'node:child_process';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const TARGET = 'https://6a5d70003c4efd9e026ee2b3--tecmo-super-bo-apocalypse-preview.netlify.app/';
-const BRANCH = 'review/tecmo-ball-camera-20260720';
-const OUT_DIR = path.resolve('qa/netlify-ball-camera-source');
-const HTML_PATH = path.join(OUT_DIR, 'ball-camera-live.html');
-const META_PATH = path.join(OUT_DIR, 'metadata.json');
+const OUT = path.resolve('qa-public');
+await mkdir(OUT, { recursive: true });
 
-const run = (command, args, { allowFailure = false } = {}) => {
-  const result = spawnSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
-  if (!allowFailure && result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} failed with status ${result.status}`);
-  }
-  return result;
-};
-
-const response = await fetch(TARGET, { redirect: 'follow' });
-if (!response.ok) throw new Error(`Target fetch failed: ${response.status} ${response.statusText}`);
-const html = await response.text();
-const sha256 = createHash('sha256').update(html).digest('hex');
-const metadata = {
+const report = {
   target: TARGET,
-  status: response.status,
-  finalUrl: response.url,
-  contentType: response.headers.get('content-type'),
-  bytes: Buffer.byteLength(html),
-  sha256,
   fetchedAt: new Date().toISOString(),
+  ok: false,
+  status: null,
+  finalUrl: null,
+  contentType: null,
+  bytes: 0,
+  sha256: null,
+  markers: {},
+  error: null,
 };
-console.log(JSON.stringify(metadata));
 
-run('git', ['config', 'user.name', 'netlify-build[bot]']);
-run('git', ['config', 'user.email', 'netlify-build[bot]@users.noreply.github.com']);
-run('git', ['fetch', 'origin', BRANCH]);
-run('git', ['checkout', '-B', BRANCH, `origin/${BRANCH}`]);
-
-await mkdir(OUT_DIR, { recursive: true });
-let previousSha = null;
 try {
-  previousSha = JSON.parse(await readFile(META_PATH, 'utf8')).sha256 || null;
-} catch (_) {}
+  const response = await fetch(TARGET, { redirect: 'follow' });
+  const source = await response.text();
+  report.ok = response.ok;
+  report.status = response.status;
+  report.finalUrl = response.url;
+  report.contentType = response.headers.get('content-type');
+  report.bytes = Buffer.byteLength(source);
+  report.sha256 = createHash('sha256').update(source).digest('hex');
 
-if (previousSha === sha256) {
-  console.log('Source unchanged; no repository update needed.');
-  process.exit(0);
+  const markerPatterns = {
+    twoMinuteQuarter: /QUARTER_SECONDS\s*=\s*(?:120|2\s*\*\s*60)\b/,
+    oldFiveMinuteQuarter: /QUARTER_SECONDS\s*=\s*5\s*\*\s*60\b/,
+    ballCameraTelemetry: /cameraSubject|footballScreenX|activeCarrierVisible|footballWorldX/gi,
+    offscreenBoTelemetry: /boOffscreenDirection|boOffscreenDistance|boVisible/gi,
+    cleanStartTelemetry: /freshGameSceneClean|giantSkeletonCorpseCount|skeletonCorpseCount/gi,
+    q2Story: /ALIENS INVADE EARTH|DESTROY THE MOTHERSHIP|ALIEN INVASION/gi,
+    q3Story: /OLYMPUS TAKES THE FIELD|DEFEAT THE GODS|ZEUS WAITS/gi,
+    q4Story: /ONLY BO SURVIVES|LAST GAME ON EARTH|BEAT THE MACHINES/gi,
+    qaApi: /__tecmoBoQA/,
+    snapshotApi: /__tecmoBoSnapshot/,
+  };
+  for (const [name, expression] of Object.entries(markerPatterns)) {
+    const matches = source.match(expression) || [];
+    report.markers[name] = { present: matches.length > 0, count: matches.length };
+  }
+
+  await writeFile(path.join(OUT, 'live-source.html'), source);
+} catch (error) {
+  report.error = String(error?.stack || error);
 }
 
-await writeFile(HTML_PATH, html);
-await writeFile(META_PATH, `${JSON.stringify(metadata, null, 2)}\n`);
-run('git', ['add', '-f', 'qa/netlify-ball-camera-source/ball-camera-live.html', 'qa/netlify-ball-camera-source/metadata.json']);
-const commit = run('git', ['commit', '-m', 'Capture exact Ball Camera Cut preview source'], { allowFailure: true });
-if (commit.status !== 0) {
-  console.log('No source commit created.');
-  process.exit(0);
-}
-run('git', ['push', 'origin', `${BRANCH}:${BRANCH}`]);
+await writeFile(path.join(OUT, 'metadata.json'), `${JSON.stringify(report, null, 2)}\n`);
+await writeFile(path.join(OUT, 'index.html'), `<!doctype html><meta charset="utf-8"><title>Ball Camera Cut QA Evidence</title><style>body{font:16px system-ui;max-width:860px;margin:40px auto;padding:0 20px;background:#111;color:#eee}a{color:#7ee7ff}pre{white-space:pre-wrap;background:#1b1b1b;padding:18px;border-radius:8px}</style><h1>Ball Camera Cut QA Evidence</h1><p><a href="metadata.json">metadata.json</a> · <a href="live-source.html">exact captured source</a></p><pre id="out">Loading…</pre><script>fetch('metadata.json').then(r=>r.json()).then(x=>out.textContent=JSON.stringify(x,null,2)).catch(e=>out.textContent=String(e))</script>`);
+
+console.log(JSON.stringify(report));
+process.exitCode = 0;
