@@ -1,8 +1,7 @@
 [build]
-  command = "mkdir -p qa-public && echo ok > qa-public/index.html && node qa/source-term-probe.mjs"
+  command = "node qa/netlify-probe.mjs"
   publish = "qa-public"
 
 [build.environment]
   NODE_VERSION = "22"
-  SOURCE_TERM = "activeCarrierVisible"
-  SOURCE_MODE = "literal"
+  PROBE = "source_clean"
