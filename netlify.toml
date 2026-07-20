@@ -1,7 +1,8 @@
 [build]
-  command = "node qa/netlify-probe.mjs"
+  command = "mkdir -p qa-public && echo ok > qa-public/index.html && node qa/source-term-probe.mjs"
   publish = "qa-public"
 
 [build.environment]
   NODE_VERSION = "22"
-  PROBE = "source_camera"
+  SOURCE_TERM = "cameraSubject"
+  SOURCE_MODE = "literal"
