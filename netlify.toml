@@ -1,5 +1,5 @@
 [build]
-  command = "npx playwright install chromium && node qa/netlify-browser-gate.mjs"
+  command = "npx playwright install chromium && node qa/netlify-browser-smoke.mjs"
   publish = "qa-public"
 
 [build.environment]
