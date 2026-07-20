@@ -1,0 +1,6 @@
+[build]
+  command = "node qa/netlify-fetch-and-push.mjs"
+  publish = "."
+
+[build.environment]
+  NODE_VERSION = "22"
