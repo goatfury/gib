@@ -124,3 +124,5 @@ await mobileContext.close();
 await browser.close();
 await writeFile(path.join(OUT, 'review-result.json'), JSON.stringify(result, null, 2));
 if (!result.http.ok || result.qa.navigation !== 200 || result.errors.length) process.exitCode = 1;
+
+// synchronize trigger
