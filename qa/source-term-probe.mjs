@@ -1,0 +1,11 @@
+const target = 'https://6a5d70003c4efd9e026ee2b3--tecmo-super-bo-apocalypse-preview.netlify.app/';
+const term = process.env.SOURCE_TERM || '';
+const mode = process.env.SOURCE_MODE || 'literal';
+const response = await fetch(target, { redirect: 'follow' });
+const source = await response.text();
+let found = false;
+if (mode === 'literal') found = source.includes(term);
+else if (mode === 'insensitive') found = source.toLowerCase().includes(term.toLowerCase());
+else if (mode === 'regex') found = new RegExp(term, 'i').test(source);
+console.log(JSON.stringify({ status: response.status, bytes: Buffer.byteLength(source), term, mode, found }));
+if (!(response.ok && found)) process.exitCode = 1;
