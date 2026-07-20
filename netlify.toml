@@ -4,5 +4,5 @@
 
 [build.environment]
   NODE_VERSION = "22"
-  SOURCE_TERM = "boOffscreenDirection"
+  SOURCE_TERM = "boOffscreenDistance"
   SOURCE_MODE = "literal"
