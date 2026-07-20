@@ -1,5 +1,5 @@
 [build]
-  command = "npx playwright install chromium && node qa/netlify-browser-camera-basic.mjs"
+  command = "npx playwright install chromium && node qa/netlify-browser-camera-stress.mjs"
   publish = "qa-public"
 
 [build.environment]
