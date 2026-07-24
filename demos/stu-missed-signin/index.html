@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow">
-  <title>TEST ONLY — Admin Sign-In Lookup</title>
+  <title>TEST ONLY — Daily Sign-in Review</title>
   <style>
     :root {
       color-scheme: light;
@@ -32,7 +32,7 @@
     [hidden] { display: none !important; }
 
     main {
-      width: min(100%, 72rem);
+      width: min(100%, 74rem);
       margin: 0 auto;
       padding: max(14px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
     }
@@ -51,7 +51,7 @@
     }
 
     h1 { margin: 0; font-size: clamp(1.8rem, 6vw, 2.75rem); line-height: 1.08; }
-    h2 { margin: 0 0 7px; font-size: clamp(1.25rem, 4vw, 1.6rem); }
+    h2 { margin: 0 0 7px; font-size: clamp(1.25rem, 4vw, 1.65rem); }
     h3 { margin: 0 0 9px; font-size: 1.05rem; }
     p { line-height: 1.5; }
     .subtitle { margin: 8px 0 0; color: var(--muted); }
@@ -67,12 +67,17 @@
       box-shadow: var(--shadow);
     }
 
-    .top-actions {
+    .top-actions,
+    .button-row,
+    .date-actions {
       display: flex;
       flex-wrap: wrap;
       gap: 10px;
-      margin-top: 16px;
+      align-items: center;
     }
+    .top-actions { margin-top: 16px; }
+    .button-row { margin-top: 18px; }
+    .date-actions { margin: 14px 0 10px; }
 
     .notice, .warning, .success, .error {
       margin: 14px 0;
@@ -96,8 +101,9 @@
       background: #fff;
       color: var(--ink);
     }
+    input[readonly] { background: #f1f4f8; color: #344158; }
     textarea { min-height: 92px; resize: vertical; }
-    input:focus, textarea:focus, select:focus, button:focus-visible {
+    input:focus, textarea:focus, select:focus, button:focus-visible, summary:focus-visible {
       outline: 3px solid rgba(23, 89, 210, .24);
       outline-offset: 2px;
     }
@@ -110,12 +116,76 @@
       font-weight: 850;
       cursor: pointer;
     }
-    button:disabled { opacity: .55; cursor: wait; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
     .primary { background: var(--blue); color: #fff; }
     .primary:hover:not(:disabled) { background: var(--blue-dark); }
     .secondary { background: #e7edf5; color: var(--ink); }
+    .quiet { background: transparent; color: var(--blue-dark); border: 1px solid #b8c6dd; }
     .danger { background: #8f2828; color: #fff; }
-    .small-button { min-height: 42px; padding: 9px 13px; }
+    .small-button { min-height: 40px; padding: 8px 12px; font-size: .92rem; }
+
+    .date-picker-wrap {
+      display: grid;
+      grid-template-columns: minmax(11rem, 16rem);
+      align-items: end;
+    }
+    .date-picker-wrap label { margin-top: 0; }
+
+    .day-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px 16px;
+      margin: 20px 0 12px;
+    }
+    .day-heading h3 { margin: 0; font-size: clamp(1.18rem, 3vw, 1.45rem); }
+    .summary-count { color: var(--muted); font-weight: 700; }
+
+    .class-list {
+      display: grid;
+      gap: 10px;
+    }
+    .class-row {
+      display: grid;
+      grid-template-columns: minmax(15rem, 1.4fr) minmax(12rem, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcfe;
+    }
+    .class-row.missing {
+      border-color: #d6a04b;
+      background: #fffaf0;
+    }
+    .class-name { font-weight: 850; line-height: 1.35; }
+    .class-time {
+      display: block;
+      margin-bottom: 3px;
+      color: var(--blue-dark);
+      font-size: .86rem;
+      font-weight: 900;
+      letter-spacing: .02em;
+      text-transform: uppercase;
+    }
+    .signin-status { min-width: 0; }
+    .missing-label { color: var(--amber); font-weight: 900; }
+    .coach-list { display: grid; gap: 6px; }
+    .coach-entry { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .coach-name { font-weight: 850; overflow-wrap: anywhere; }
+    .source-label {
+      display: inline-block;
+      width: fit-content;
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: #e4eaf3;
+      color: #2b3850;
+      font-size: .75rem;
+      font-weight: 850;
+    }
+    .source-label.admin { background: #f6d994; color: #563600; }
 
     .grid-two {
       display: grid;
@@ -123,45 +193,12 @@
       gap: 0 16px;
     }
 
-    .button-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 18px;
-    }
-
-    .record-list {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-      margin-top: 12px;
-    }
-
-    .record {
-      min-width: 0;
-      padding: 15px;
-      border: 1px solid var(--line);
+    .confirmation {
+      padding: 14px;
+      border: 2px solid #4b6ca8;
       border-radius: 12px;
-      background: #fbfcfe;
+      background: #f4f7fd;
     }
-    .record.voided { background: #fff8f8; border-color: #c9a3a3; }
-
-    .badge {
-      display: inline-block;
-      margin: 0 7px 9px 0;
-      padding: 4px 8px;
-      border-radius: 999px;
-      background: #53647b;
-      color: #fff;
-      font-size: .78rem;
-      font-weight: 900;
-      text-transform: uppercase;
-      letter-spacing: .03em;
-    }
-    .badge.active { background: var(--green); }
-    .badge.voided { background: var(--red); }
-    .badge.admin { background: #f0c66d; color: #533400; }
-    .badge.override { background: #d9811d; color: #fff; }
 
     dl {
       display: grid;
@@ -172,33 +209,41 @@
     dt { font-weight: 800; }
     dd { margin: 0; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 
-    .recent-list, .audit-list {
+    details.card { padding: 0; }
+    details.card > summary {
+      padding: clamp(16px, 4vw, 23px);
+      cursor: pointer;
+      font-size: 1.15rem;
+      font-weight: 900;
+      list-style-position: inside;
+    }
+    details.card[open] > summary { border-bottom: 1px solid var(--line); }
+    .details-body { padding: 0 clamp(16px, 4vw, 23px) clamp(16px, 4vw, 23px); }
+
+    .search-results { display: grid; gap: 14px; margin-top: 16px; }
+    .result-block {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcfe;
+    }
+    .result-list, .history-list {
       display: grid;
-      gap: 9px;
-      margin: 12px 0 0;
+      gap: 8px;
+      margin: 10px 0 0;
       padding: 0;
       list-style: none;
     }
-    .recent-item, .audit-item {
+    .result-item, .history-item {
       display: grid;
-      grid-template-columns: 8rem minmax(0, 1fr) minmax(7rem, .55fr) auto;
-      gap: 10px;
+      grid-template-columns: minmax(8rem, .6fr) minmax(0, 1.5fr) minmax(7rem, .6fr) auto;
+      gap: 9px;
       align-items: center;
-      padding: 12px;
+      padding: 10px 12px;
       border: 1px solid var(--line);
       border-radius: 10px;
-      background: #fbfcfe;
+      background: #fff;
     }
-    .source-label {
-      width: fit-content;
-      padding: 4px 7px;
-      border-radius: 999px;
-      background: #e4eaf3;
-      color: #2b3850;
-      font-size: .8rem;
-      font-weight: 850;
-    }
-    .source-label.admin { background: #f6d994; color: #563600; }
 
     .summary-bar {
       display: flex;
@@ -213,29 +258,50 @@
       background: #fff;
     }
 
-    .confirmation {
-      padding: 14px;
-      border: 2px solid #4b6ca8;
-      border-radius: 12px;
-      background: #f4f7fd;
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: max(22px, env(safe-area-inset-bottom));
+      z-index: 20;
+      max-width: min(92vw, 34rem);
+      transform: translateX(-50%) translateY(12px);
+      padding: 11px 15px;
+      border-radius: 999px;
+      background: #10233f;
+      color: #fff;
+      box-shadow: 0 10px 30px rgba(0,0,0,.22);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .2s ease, transform .2s ease;
+      text-align: center;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    @media (max-width: 820px) {
+      .class-row { grid-template-columns: minmax(0, 1fr) auto; }
+      .signin-status { grid-column: 1; }
+      .class-row > button { grid-column: 2; grid-row: 1 / span 2; }
+      .result-item, .history-item { grid-template-columns: minmax(7rem, .45fr) minmax(0, 1fr); }
+      .result-item .site, .result-item .source-label,
+      .history-item .site, .history-item .source-label { grid-column: 2; }
     }
 
-    @media (max-width: 760px) {
-      .record-list { grid-template-columns: 1fr; }
-      .recent-item, .audit-item { grid-template-columns: minmax(6.5rem, .4fr) minmax(0, 1fr); }
-      .recent-item .site, .recent-item .source-label,
-      .audit-item .site, .audit-item .source-label { grid-column: 2; }
-    }
-
-    @media (max-width: 540px) {
+    @media (max-width: 560px) {
       .grid-two { grid-template-columns: 1fr; }
-      .button-row { display: grid; grid-template-columns: 1fr; }
+      .date-picker-wrap { grid-template-columns: 1fr; width: 100%; }
+      .date-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .date-actions button { width: 100%; }
+      .date-actions .date-picker-wrap { grid-column: 1 / -1; }
+      .class-row { grid-template-columns: 1fr; align-items: stretch; }
+      .signin-status, .class-row > button { grid-column: 1; grid-row: auto; }
+      .class-row > button { width: 100%; }
+      .button-row, .top-actions { display: grid; grid-template-columns: 1fr; }
       .button-row button, .top-actions button { width: 100%; }
       dl { grid-template-columns: 1fr; gap: 2px; }
       dd { margin-bottom: 8px; }
-      .recent-item, .audit-item { grid-template-columns: 1fr; gap: 4px; }
-      .recent-item .site, .recent-item .source-label,
-      .audit-item .site, .audit-item .source-label { grid-column: 1; }
+      .result-item, .history-item { grid-template-columns: 1fr; gap: 4px; }
+      .result-item .site, .result-item .source-label,
+      .history-item .site, .history-item .source-label { grid-column: 1; }
     }
   </style>
 </head>
@@ -244,42 +310,77 @@
   <div class="test-banner">TEST DEMO — FAKE DATA ONLY</div>
 
   <header>
-    <h1>Admin — Instructor Sign-ins</h1>
-    <p class="subtitle">Test the “instructor isn’t sure they signed in” workflow.</p>
+    <h1>Admin — Daily Sign-in Review</h1>
+    <p class="subtitle">Review the day’s class list, spot blanks, and add a missed instructor only when needed.</p>
     <div class="notice">
       <p><strong>This is only a clickable demo.</strong> It does not touch Revolution BJJ, payroll, Google Sheets, or the live M1 site. Anything you add stays in this browser.</p>
     </div>
     <div class="top-actions">
-      <button id="scenarioButton" class="primary" type="button">Load the missed-sign-in scenario</button>
+      <button id="scenarioButton" class="primary" type="button">Load a Bruno-type scenario</button>
       <button id="resetButton" class="secondary" type="button">Reset demo data</button>
     </div>
   </header>
 
-  <section class="card" aria-labelledby="lookupTitle">
-    <h2 id="lookupTitle">1. Check an instructor and date</h2>
-    <p class="muted">The demo starts with a fake instructor who has recent sign-ins but no record for yesterday.</p>
-    <form id="lookupForm" novalidate>
-      <div class="grid-two">
+  <section class="card" aria-labelledby="dailyReviewTitle">
+    <h2 id="dailyReviewTitle">Review a day</h2>
+    <p class="muted">Yesterday opens first. Choose any earlier date when someone reports a missed sign-in later.</p>
+
+    <div class="date-actions" aria-label="Choose review date">
+      <button id="previousButton" class="secondary" type="button">Previous day</button>
+      <button id="yesterdayButton" class="secondary" type="button">Yesterday</button>
+      <button id="todayButton" class="secondary" type="button">Today</button>
+      <button id="nextButton" class="secondary" type="button">Next day</button>
+      <div class="date-picker-wrap">
         <div>
-          <label for="instructorInput">Instructor</label>
-          <input id="instructorInput" list="instructorList" autocomplete="off" required>
-          <datalist id="instructorList"></datalist>
-        </div>
-        <div>
-          <label for="dateInput">Date</label>
-          <input id="dateInput" type="date" required>
+          <label for="datePicker">Choose another date</label>
+          <input id="datePicker" type="date">
         </div>
       </div>
-      <div class="button-row">
-        <button class="primary" type="submit">Check Sign-ins</button>
-      </div>
-    </form>
+    </div>
+
+    <div class="notice">
+      <p>This shows the sign-ins recorded for the selected date. A blank does not confirm whether the class occurred.</p>
+    </div>
+
+    <div id="scenarioNotice" class="success" hidden></div>
+    <div id="dayHeading" class="day-heading"></div>
+    <div id="classList" class="class-list"></div>
   </section>
 
-  <section id="dateResults" class="card" hidden></section>
-  <section id="recentResults" class="card" hidden></section>
-  <section id="addSection" class="card" hidden></section>
-  <section id="auditSection" class="card" hidden></section>
+  <section id="addPanel" class="card" aria-labelledby="addPanelTitle" hidden></section>
+
+  <details id="instructorSearchDetails" class="card">
+    <summary>Find an Instructor</summary>
+    <div class="details-body">
+      <p class="muted">Use this when someone names a particular instructor or when you want to review their recent history.</p>
+      <form id="instructorSearchForm" novalidate>
+        <div class="grid-two">
+          <div>
+            <label for="searchInstructor">Instructor</label>
+            <input id="searchInstructor" list="instructorSuggestions" autocomplete="off" required>
+          </div>
+          <div>
+            <label for="searchDate">Date</label>
+            <input id="searchDate" type="date" required>
+          </div>
+        </div>
+        <div class="button-row">
+          <button class="primary" type="submit">Find sign-ins</button>
+        </div>
+      </form>
+      <div id="instructorResults" class="search-results" hidden></div>
+    </div>
+  </details>
+
+  <details id="historyDetails" class="card">
+    <summary>Demo Admin history</summary>
+    <div class="details-body">
+      <p class="muted">Every demo addition appears here so the action remains traceable.</p>
+      <div id="historyResults"></div>
+    </div>
+  </details>
+
+  <datalist id="instructorSuggestions"></datalist>
 
   <div class="summary-bar">
     <span><strong>Demo goal:</strong> decide whether this would replace a text to Andrew.</span>
@@ -287,48 +388,60 @@
   </div>
 </main>
 
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
 <script>
 (() => {
   'use strict';
 
-  const STORAGE_KEY = 'gib_stu_missed_signin_demo_v1';
+  const STORAGE_KEY = 'gib_stu_daily_review_demo_v2';
   const TZ = 'America/New_York';
-  const DEMO_INSTRUCTOR = 'TEST INSTRUCTOR - DO NOT PAY';
-  const DEMO_SITE = 'Rev';
+  const SITE = 'Rev';
+  const SCENARIO_INSTRUCTOR = 'TEST COACH A';
+  const COACHES = ['TEST COACH A', 'TEST COACH B', 'TEST COACH C', 'TEST COACH D'];
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  const SCHEDULE = {
+    Monday: [
+      '6:00 AM BJJ (Level 2)', '12:00 PM BJJ (Level 2)', '4:30 PM Yoga (Core)', '4:30 PM Kids’ BJJ',
+      '4:30 PM BJJ (Level 1)', '5:30 PM BJJ (Level 2)', '5:30 PM Lapel Guard Class (Level 4)',
+      '6:30 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)',
+      '6:30 PM Muay Thai (Fundamentals/Intermediate, and intros when scheduled)',
+      '6:30 PM Leglock Fundamentals (No-Gi, Level 3)', '7:00 PM BJJ (Level 2)',
+      '7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ'
+    ],
+    Tuesday: [
+      '6:00 AM BJJ (Level 4) / Gi BJJ Intro Class', '6:00 AM No-Gi BJJ (Level 2)', '7:15 AM Conditioning',
+      '12:00 PM BJJ (Level 2)', '4:30 PM Yoga (Flow)', '4:30 PM Kids’ BJJ', '5:30 PM BJJ (Level 2)',
+      '5:30 PM Gi BJJ Intro Class / Level 1', '5:30 PM BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)',
+      '6:30 PM Guard Passing Class (Level 3)', '6:30 PM Judo', '7:00 PM BJJ Competition Class (Level 2, gi)'
+    ],
+    Wednesday: [
+      '6:00 AM BJJ (Level 2)', '12:00 PM No-Gi BJJ (Level 2)', '4:30 PM Kids’ BJJ', '4:30 PM BJJ (Level 1)',
+      '5:30 PM BJJ (Level 2)', '5:30 PM BJJ (Level 4)',
+      '6:30 PM Muay Thai (Fundamentals/Intermediate, and intros when scheduled)',
+      '6:30 PM BJJ Drills (Level 3)', '7:00 PM BJJ (Level 4)', '7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ'
+    ],
+    Thursday: [
+      '6:00 AM No-Gi BJJ (Level 4)', '6:00 AM No-Gi BJJ (Level 2) / Gi BJJ Intro Class', '7:15 AM Conditioning',
+      '12:00 PM BJJ (Level 2)', '4:30 PM Kids’ BJJ', '5:00 PM Get Warm', '5:30 PM BJJ (Level 2)',
+      '5:30 PM Gi BJJ Intro Class / Level 1', '5:30 PM No-Gi BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)',
+      '6:30 PM Advanced Leglocks (No-Gi, Level 3)', '6:30 PM Judo', '7:00 PM BJJ Competition Class (Level 2, no-gi)'
+    ],
+    Friday: [
+      '6:00 AM Drill/Roll Class – BJJ', '12:00 PM Drill/Roll Class – BJJ', '4:30 PM Yoga (Flow)',
+      '5:00 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)', '5:30 PM BJJ (Level 2)',
+      '6:00 PM Muay Thai (Fundamentals/Intermediate)'
+    ],
+    Saturday: [
+      '10:00 AM Kids’ BJJ', '10:00 AM Wrestling', '11:00 AM BJJ (Level 2)', '12:00 PM Conditioning'
+    ],
+    Sunday: [
+      '12:00 PM BJJ Competition Class (Level 4, gi and no-gi)', '12:30 PM Get Warm', '1:00 PM BJJ Open Mat'
+    ]
+  };
 
   const byId = id => document.getElementById(id);
-
-  function nyToday() {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: TZ,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
-    }).formatToParts(new Date());
-    const values = {};
-    parts.forEach(part => {
-      if (part.type !== 'literal') values[part.type] = part.value;
-    });
-    return `${values.year}-${values.month}-${values.day}`;
-  }
-
-  function shiftDate(dateString, days) {
-    const [year, month, day] = dateString.split('-').map(Number);
-    const date = new Date(Date.UTC(year, month - 1, day));
-    date.setUTCDate(date.getUTCDate() + days);
-    return date.toISOString().slice(0, 10);
-  }
-
-  function formatDate(dateString) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) return dateString;
-    const [year, month, day] = dateString.split('-').map(Number);
-    return new Intl.DateTimeFormat('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      timeZone: 'UTC'
-    }).format(new Date(Date.UTC(year, month - 1, day)));
-  }
 
   function clean(value) {
     return String(value == null ? '' : value).trim().replace(/\s+/g, ' ');
@@ -351,42 +464,168 @@
     return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
 
+  function nyToday() {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: TZ,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date());
+    const values = {};
+    parts.forEach(part => {
+      if (part.type !== 'literal') values[part.type] = part.value;
+    });
+    return `${values.year}-${values.month}-${values.day}`;
+  }
+
+  function shiftDate(dateString, days) {
+    const [year, month, day] = dateString.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+  }
+
+  function dayNameForDate(dateString) {
+    const [year, month, day] = dateString.split('-').map(Number);
+    return DAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+  }
+
+  function formatDate(dateString) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) return dateString;
+    const [year, month, day] = dateString.split('-').map(Number);
+    return new Intl.DateTimeFormat('en-US', {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      timeZone: 'UTC'
+    }).format(new Date(Date.UTC(year, month - 1, day)));
+  }
+
+  function displayClassName(label) {
+    return clean(label).replace(/^\d{1,2}:\d{2}\s*(AM|PM)\s*/i, '');
+  }
+
+  function leadingTime(label) {
+    const match = clean(label).match(/^(\d{1,2}):(\d{2})\s*(AM|PM)\b/i);
+    return match ? `${match[1]}:${match[2]} ${match[3].toUpperCase()}` : 'Time not listed';
+  }
+
+  function startMinutes(label) {
+    const match = clean(label).match(/^(\d{1,2}):(\d{2})\s*(AM|PM)\b/i);
+    if (!match) return Number.POSITIVE_INFINITY;
+    let hour = Number(match[1]) % 12;
+    if (match[3].toUpperCase() === 'PM') hour += 12;
+    return hour * 60 + Number(match[2]);
+  }
+
+  function scheduleForDate(dateString) {
+    return (SCHEDULE[dayNameForDate(dateString)] || [])
+      .map((label, index) => ({ label, index, minutes: startMinutes(label) }))
+      .sort((a, b) => a.minutes - b.minutes || a.index - b.index)
+      .map(item => item.label);
+  }
+
+  function durationForClass(label) {
+    return /Kids/i.test(label) ? 0.5 : 1;
+  }
+
+  function recordedTimeFor(dateString, classIndex, offset) {
+    const hour = String(8 + (classIndex % 10)).padStart(2, '0');
+    const minute = String((classIndex * 7 + offset * 3) % 60).padStart(2, '0');
+    return `${dateString}T${hour}:${minute}:00.000Z`;
+  }
+
   function seedState() {
     const today = nyToday();
-    const recorded = new Date().toISOString();
-    const rows = [
-      { id: makeId(), date: shiftDate(today, -3), className: '6:00 PM Intro Fundamentals', site: DEMO_SITE, duration: 1, instructor: DEMO_INSTRUCTOR, notes: '', source: 'Front desk', status: 'ACTIVE', recordedAt: recorded },
-      { id: makeId(), date: shiftDate(today, -5), className: '5:30 PM BJJ Level 2', site: DEMO_SITE, duration: 1, instructor: DEMO_INSTRUCTOR, notes: '', source: 'Front desk', status: 'ACTIVE', recordedAt: recorded },
-      { id: makeId(), date: shiftDate(today, -7), className: '6:00 PM Intro Fundamentals', site: DEMO_SITE, duration: 1, instructor: DEMO_INSTRUCTOR, notes: '', source: 'Front desk', status: 'ACTIVE', recordedAt: recorded },
-      { id: makeId(), date: shiftDate(today, -10), className: '12:00 PM BJJ Level 2', site: DEMO_SITE, duration: 1, instructor: DEMO_INSTRUCTOR, notes: '', source: 'Front desk', status: 'ACTIVE', recordedAt: recorded },
-      { id: makeId(), date: shiftDate(today, -14), className: '6:00 PM Intro Fundamentals', site: DEMO_SITE, duration: 1, instructor: DEMO_INSTRUCTOR, notes: '', source: 'Front desk', status: 'ACTIVE', recordedAt: recorded },
-      { id: makeId(), date: shiftDate(today, -1), className: '7:00 PM No-Gi BJJ', site: DEMO_SITE, duration: 1, instructor: 'DEMO COACH', notes: '', source: 'Front desk', status: 'ACTIVE', recordedAt: recorded }
-    ];
-    return { rows, audit: [] };
+    const scenarioDate = shiftDate(today, -3);
+    const yesterday = shiftDate(today, -1);
+    const rows = [];
+
+    for (let offset = 0; offset <= 7; offset += 1) {
+      const date = shiftDate(today, -offset);
+      const classes = scheduleForDate(date);
+      const blankIndexes = new Set();
+      if (date === yesterday && classes.length) blankIndexes.add(Math.min(1, classes.length - 1));
+      if (date === scenarioDate && classes.length) blankIndexes.add(Math.min(2, classes.length - 1));
+
+      classes.forEach((className, classIndex) => {
+        if (blankIndexes.has(classIndex)) return;
+        const instructor = classIndex === 0
+          ? SCENARIO_INSTRUCTOR
+          : COACHES[(classIndex + offset) % COACHES.length];
+        rows.push({
+          id: makeId('row'),
+          date,
+          className,
+          site: SITE,
+          duration: durationForClass(className),
+          instructor,
+          notes: '',
+          source: 'Front desk',
+          status: 'ACTIVE',
+          recordedAt: recordedTimeFor(date, classIndex, offset),
+          override: false,
+          requestId: ''
+        });
+
+        if (offset === 2 && classIndex === 0) {
+          rows.push({
+            id: makeId('row'),
+            date,
+            className,
+            site: SITE,
+            duration: durationForClass(className),
+            instructor: 'TEST COACH C',
+            notes: 'Fake co-teaching example.',
+            source: 'Front desk',
+            status: 'ACTIVE',
+            recordedAt: recordedTimeFor(date, classIndex + 1, offset),
+            override: false,
+            requestId: ''
+          });
+        }
+      });
+    }
+
+    const scenarioClasses = scheduleForDate(scenarioDate);
+    return {
+      version: 2,
+      rows,
+      audit: [],
+      selectedDate: yesterday,
+      scenario: {
+        date: scenarioDate,
+        className: scenarioClasses[Math.min(2, Math.max(0, scenarioClasses.length - 1))] || '',
+        instructor: SCENARIO_INSTRUCTOR
+      }
+    };
+  }
+
+  function saveState() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
   }
 
   function loadState() {
     try {
       const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-      if (parsed && Array.isArray(parsed.rows) && Array.isArray(parsed.audit)) return parsed;
+      if (
+        parsed &&
+        parsed.version === 2 &&
+        Array.isArray(parsed.rows) &&
+        Array.isArray(parsed.audit) &&
+        parsed.scenario
+      ) return parsed;
     } catch (error) {}
     const seeded = seedState();
-    saveState(seeded);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
     return seeded;
   }
 
-  function saveState(nextState) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
-  }
-
   let appState = loadState();
-  let currentQuery = null;
   let pendingDraft = null;
-
-  function clearSection(section) {
-    section.replaceChildren();
-    section.hidden = true;
-  }
+  let submissionLocked = false;
+  let toastTimer = null;
 
   function element(tag, className, content) {
     const item = document.createElement(tag);
@@ -395,43 +634,28 @@
     return item;
   }
 
-  function addDefinition(list, label, value) {
-    list.append(element('dt', '', label), element('dd', '', value || '—'));
+  function showToast(message) {
+    const toast = byId('toast');
+    toast.textContent = message;
+    toast.classList.add('show');
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => toast.classList.remove('show'), 2400);
   }
 
-  function sourceLabel(row) {
-    return row.source === 'Admin-added' ? 'Admin-added' : 'Front-desk sign-in';
-  }
-
-  function recordCard(row) {
-    const card = element('article', `record ${row.status === 'VOIDED' ? 'voided' : ''}`);
-    card.append(element('span', `badge ${row.status === 'VOIDED' ? 'voided' : 'active'}`, row.status === 'VOIDED' ? 'Voided' : 'Active'));
-    if (row.source === 'Admin-added') card.append(element('span', 'badge admin', 'Admin-added'));
-    if (row.override) card.append(element('span', 'badge override', 'Duplicate override'));
-    const details = element('dl');
-    addDefinition(details, 'Class', row.className);
-    addDefinition(details, 'Site', row.site);
-    addDefinition(details, 'Duration', `${row.duration} hr`);
-    addDefinition(details, 'Notes', row.notes);
-    addDefinition(details, 'Source', sourceLabel(row));
-    addDefinition(details, 'Recorded', row.recordedAt ? new Date(row.recordedAt).toLocaleString() : 'Demo record');
-    card.append(details);
-    return card;
-  }
-
-  function matchingRows(instructor, date) {
-    return appState.rows.filter(row => norm(row.instructor) === norm(instructor) && row.date === date);
-  }
-
-  function recentRows(instructor) {
+  function activeRowsForClass(date, className) {
     return appState.rows
-      .filter(row => norm(row.instructor) === norm(instructor) && row.status === 'ACTIVE')
-      .sort((a, b) => b.date.localeCompare(a.date) || String(b.recordedAt).localeCompare(String(a.recordedAt)))
-      .slice(0, 5);
+      .filter(row => row.status === 'ACTIVE' && row.date === date && norm(row.className) === norm(className))
+      .sort((a, b) => String(a.recordedAt).localeCompare(String(b.recordedAt)));
   }
 
-  function populateSuggestions() {
-    const list = byId('instructorList');
+  function activeRowsForInstructor(instructor) {
+    return appState.rows
+      .filter(row => row.status === 'ACTIVE' && norm(row.instructor) === norm(instructor))
+      .sort((a, b) => b.date.localeCompare(a.date) || String(b.recordedAt).localeCompare(String(a.recordedAt)));
+  }
+
+  function populateInstructorSuggestions() {
+    const list = byId('instructorSuggestions');
     list.replaceChildren();
     const names = [...new Set(appState.rows.map(row => clean(row.instructor)).filter(Boolean))].sort();
     names.forEach(name => {
@@ -441,192 +665,336 @@
     });
   }
 
-  function renderSelectedDate(instructor, date, successMessage = '') {
-    const section = byId('dateResults');
-    section.replaceChildren();
-    const title = element('h2', '', '2. Sign-ins for the selected date');
-    section.append(title, element('p', 'muted', `${instructor} — ${formatDate(date)}`));
-    if (successMessage) {
-      const success = element('div', 'success');
-      success.append(element('p', '', successMessage));
-      section.append(success);
+  function setSelectedDate(dateString, options = {}) {
+    const today = nyToday();
+    const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(dateString) && dateString <= today
+      ? dateString
+      : today;
+    appState.selectedDate = safeDate;
+    saveState();
+    byId('datePicker').value = safeDate;
+    byId('nextButton').disabled = safeDate >= today;
+    closeAddPanel();
+    renderDailyReview();
+    if (options.scroll) {
+      byId('dayHeading').scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-    const rows = matchingRows(instructor, date);
-    const active = rows.filter(row => row.status === 'ACTIVE');
-    const voided = rows.filter(row => row.status === 'VOIDED');
-
-    if (!active.length) {
-      const warning = element('div', 'warning');
-      warning.append(element('p', '', `No active sign-in was found in this demo for ${instructor} on ${formatDate(date)}.`));
-      section.append(warning);
-    } else {
-      section.append(element('h3', '', 'Active records'));
-      const list = element('div', 'record-list');
-      active.forEach(row => list.append(recordCard(row)));
-      section.append(list);
-    }
-
-    if (voided.length) {
-      section.append(element('h3', '', 'Voided records'));
-      const list = element('div', 'record-list');
-      voided.forEach(row => list.append(recordCard(row)));
-      section.append(list);
-    }
-    section.hidden = false;
-    return { active, voided };
   }
 
-  function renderRecent(instructor) {
-    const section = byId('recentResults');
-    section.replaceChildren();
-    section.append(element('h2', '', '3. Five most recent active sign-ins'));
-    const rows = recentRows(instructor);
-    if (!rows.length) {
-      section.append(element('p', 'muted', 'No recent sign-ins were found for this fake instructor.'));
-    } else {
-      const list = element('ol', 'recent-list');
-      rows.forEach(row => {
-        const item = element('li', 'recent-item');
-        item.append(
-          element('strong', '', formatDate(row.date)),
-          element('span', '', row.className),
-          element('span', 'site muted', row.site),
-          element('span', `source-label ${row.source === 'Admin-added' ? 'admin' : ''}`, sourceLabel(row))
-        );
-        list.append(item);
-      });
-      section.append(list);
+  function renderDailyReview(successMessage = '') {
+    const date = appState.selectedDate;
+    const classes = scheduleForDate(date);
+    const classList = byId('classList');
+    const heading = byId('dayHeading');
+    const scenarioNotice = byId('scenarioNotice');
+    classList.replaceChildren();
+    heading.replaceChildren();
+
+    const filledCount = classes.filter(className => activeRowsForClass(date, className).length > 0).length;
+    heading.append(
+      element('h3', '', formatDate(date)),
+      element('span', 'summary-count', `${filledCount} of ${classes.length} classes have recorded sign-ins`)
+    );
+
+    const isScenario = date === appState.scenario.date;
+    scenarioNotice.hidden = !isScenario;
+    scenarioNotice.replaceChildren();
+    if (isScenario) {
+      const message = successMessage ||
+        `${appState.scenario.instructor} says they may have taught “${appState.scenario.className}.” That class currently has no recorded sign-in.`;
+      scenarioNotice.append(element('p', '', message));
     }
-    section.hidden = false;
+
+    if (!classes.length) {
+      const empty = element('div', 'notice');
+      empty.append(element('p', '', 'No scheduled classes are stored for this day of the week.'));
+      classList.append(empty);
+      return;
+    }
+
+    classes.forEach(className => {
+      const rows = activeRowsForClass(date, className);
+      const row = element('article', `class-row ${rows.length ? '' : 'missing'}`.trim());
+      row.dataset.className = className;
+
+      const classInfo = element('div');
+      classInfo.append(
+        element('span', 'class-time', leadingTime(className)),
+        element('div', 'class-name', displayClassName(className))
+      );
+
+      const status = element('div', 'signin-status');
+      if (!rows.length) {
+        status.append(element('span', 'missing-label', 'No sign-in recorded'));
+      } else {
+        const coaches = element('div', 'coach-list');
+        rows.forEach(signin => {
+          const coach = element('div', 'coach-entry');
+          coach.append(element('span', 'coach-name', signin.instructor));
+          coach.append(element(
+            'span',
+            `source-label ${signin.source === 'Admin-added' ? 'admin' : ''}`,
+            signin.source === 'Admin-added' ? 'Admin-added' : 'Front-desk sign-in'
+          ));
+          coaches.append(coach);
+        });
+        status.append(coaches);
+      }
+
+      const addButton = element(
+        'button',
+        rows.length ? 'quiet small-button' : 'primary small-button',
+        rows.length ? 'Add another instructor' : 'Add instructor'
+      );
+      addButton.type = 'button';
+      addButton.addEventListener('click', () => openAddForm(date, className, rows.length > 0));
+
+      row.append(classInfo, status, addButton);
+      classList.append(row);
+    });
   }
 
-  function renderAddForm(instructor, date, hasActive) {
-    const section = byId('addSection');
-    section.replaceChildren();
-    section.append(element('h2', '', '4. Add a missed class'));
-    if (hasActive) {
-      const notice = element('div', 'notice');
-      notice.append(element('p', '', 'A sign-in already exists for this date. Add another class only if it is genuinely different.'));
-      section.append(notice);
-    } else {
-      section.append(element('p', 'muted', 'Use this only after checking the selected date and recent history.'));
-    }
+  function closeAddPanel() {
+    pendingDraft = null;
+    submissionLocked = false;
+    const panel = byId('addPanel');
+    panel.hidden = true;
+    panel.replaceChildren();
+  }
+
+  function field(labelText, input) {
+    const wrap = element('div');
+    const label = element('label', '', labelText);
+    label.htmlFor = input.id;
+    wrap.append(label, input);
+    return wrap;
+  }
+
+  function readOnlyInput(id, value, type = 'text') {
+    const input = document.createElement('input');
+    input.id = id;
+    input.type = type;
+    input.value = value;
+    input.readOnly = true;
+    return input;
+  }
+
+  function openAddForm(date, className, anotherInstructor, previousDraft = null) {
+    pendingDraft = null;
+    submissionLocked = false;
+    const panel = byId('addPanel');
+    panel.replaceChildren();
+    panel.hidden = false;
+
+    const title = element('h2', '', anotherInstructor ? 'Add another instructor' : 'Add a missed instructor');
+    title.id = 'addPanelTitle';
+    panel.append(title);
+    panel.append(element(
+      'p',
+      'muted',
+      anotherInstructor
+        ? 'Use this only when a second instructor genuinely taught the same class.'
+        : 'The date and class are already filled from the daily review.'
+    ));
 
     const form = document.createElement('form');
     form.noValidate = true;
-    form.innerHTML = `
-      <div class="grid-two">
-        <div>
-          <label for="addInstructor">Instructor</label>
-          <input id="addInstructor" value="${escapeHtml(instructor)}" readonly>
-        </div>
-        <div>
-          <label for="addDate">Class date</label>
-          <input id="addDate" type="date" value="${date}" readonly>
-        </div>
-      </div>
-      <div class="grid-two">
-        <div>
-          <label for="classInput">Class</label>
-          <input id="classInput" value="6:00 PM Intro Fundamentals" required>
-        </div>
-        <div>
-          <label for="siteInput">Site</label>
-          <input id="siteInput" value="${DEMO_SITE}" required>
-        </div>
-      </div>
-      <div class="grid-two">
-        <div>
-          <label for="durationInput">Duration in hours</label>
-          <input id="durationInput" type="number" min="0.25" max="12" step="0.25" value="1" required>
-        </div>
-        <div>
-          <label for="notesInput">Notes, optional</label>
-          <input id="notesInput" value="">
-        </div>
-      </div>
-      <label for="reasonInput">Reason for adding the missed class</label>
-      <textarea id="reasonInput" required>Instructor was not sure whether the class was recorded.</textarea>
-      <div class="button-row">
-        <button class="primary" type="submit">Review missed class</button>
-      </div>
-    `;
+
+    const readonlyGrid = element('div', 'grid-two');
+    readonlyGrid.append(
+      field('Class date', readOnlyInput('addDate', date, 'date')),
+      field('Site', readOnlyInput('addSite', SITE))
+    );
+
+    const classInput = readOnlyInput('addClass', className);
+    const durationInput = readOnlyInput('addDuration', String(durationForClass(className)), 'number');
+    const classGrid = element('div', 'grid-two');
+    classGrid.append(field('Class', classInput), field('Duration in hours', durationInput));
+
+    const instructor = document.createElement('input');
+    instructor.id = 'addInstructor';
+    instructor.setAttribute('list', 'instructorSuggestions');
+    instructor.autocomplete = 'off';
+    instructor.required = true;
+    instructor.maxLength = 160;
+    instructor.value = previousDraft?.instructor || (
+      date === appState.scenario.date && norm(className) === norm(appState.scenario.className)
+        ? appState.scenario.instructor
+        : ''
+    );
+
+    const notes = document.createElement('textarea');
+    notes.id = 'addNotes';
+    notes.maxLength = 500;
+    notes.value = previousDraft?.notes || '';
+
+    const reason = document.createElement('textarea');
+    reason.id = 'addReason';
+    reason.required = true;
+    reason.maxLength = 500;
+    reason.value = previousDraft?.reason || 'Instructor was not sure whether the class was recorded.';
+
+    const buttons = element('div', 'button-row');
+    const cancel = element('button', 'secondary', 'Cancel');
+    cancel.type = 'button';
+    cancel.addEventListener('click', closeAddPanel);
+    const review = element('button', 'primary', 'Review addition');
+    review.type = 'submit';
+    buttons.append(cancel, review);
+
+    form.append(
+      readonlyGrid,
+      classGrid,
+      field('Instructor', instructor),
+      field('Notes, optional', notes),
+      field('Reason for adding the sign-in', reason),
+      buttons
+    );
+
     form.addEventListener('submit', event => {
       event.preventDefault();
       if (!form.reportValidity()) return;
-      const duration = Number(byId('durationInput').value);
-      if (!Number.isFinite(duration) || duration <= 0 || duration > 12) return;
-      pendingDraft = {
-        instructor,
+      const draft = {
+        requestId: previousDraft?.requestId || makeId('request'),
         date,
-        className: clean(byId('classInput').value),
-        site: clean(byId('siteInput').value),
-        duration,
-        notes: clean(byId('notesInput').value),
-        reason: clean(byId('reasonInput').value)
+        className,
+        site: SITE,
+        duration: durationForClass(className),
+        instructor: clean(instructor.value),
+        notes: clean(notes.value),
+        reason: clean(reason.value),
+        anotherInstructor: Boolean(anotherInstructor)
       };
+      if (!draft.instructor || !draft.reason) return;
+      pendingDraft = draft;
       renderConfirmation();
     });
-    section.append(form);
-    section.hidden = false;
+
+    panel.append(form);
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    instructor.focus();
   }
 
-  function escapeHtml(value) {
-    return String(value)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+  function addDefinition(list, label, value) {
+    list.append(element('dt', '', label), element('dd', '', value || '—'));
   }
 
-  function renderConfirmation() {
-    const section = byId('addSection');
-    section.replaceChildren();
-    section.append(element('h2', '', 'Confirm the missed class'));
-    const box = element('div', 'confirmation');
-    box.append(element('p', '', 'You are adding this missed class to the demo instructor sign-in record.'));
+  function draftDetails() {
     const details = element('dl');
     addDefinition(details, 'Instructor', pendingDraft.instructor);
     addDefinition(details, 'Date', formatDate(pendingDraft.date));
     addDefinition(details, 'Class', pendingDraft.className);
     addDefinition(details, 'Site', pendingDraft.site);
     addDefinition(details, 'Duration', `${pendingDraft.duration} hr`);
+    addDefinition(details, 'Notes', pendingDraft.notes);
     addDefinition(details, 'Reason', pendingDraft.reason);
-    box.append(details);
-    section.append(box);
-    const row = element('div', 'button-row');
+    return details;
+  }
+
+  function renderConfirmation() {
+    const panel = byId('addPanel');
+    panel.replaceChildren();
+    const title = element('h2', '', 'Confirm the sign-in');
+    title.id = 'addPanelTitle';
+    panel.append(title);
+    const box = element('div', 'confirmation');
+    box.append(element('p', '', 'You are adding this instructor to the demo sign-in record.'));
+    box.append(draftDetails());
+    panel.append(box);
+
+    const buttons = element('div', 'button-row');
     const back = element('button', 'secondary', 'Go back');
     back.type = 'button';
     back.addEventListener('click', () => {
-      const rows = matchingRows(currentQuery.instructor, currentQuery.date);
-      renderAddForm(currentQuery.instructor, currentQuery.date, rows.some(item => item.status === 'ACTIVE'));
+      const draft = pendingDraft;
+      openAddForm(draft.date, draft.className, draft.anotherInstructor, draft);
     });
-    const add = element('button', 'primary', 'Add Missed Class');
+    const add = element('button', 'primary', 'Add instructor');
     add.type = 'button';
+    add.dataset.finalAdd = 'true';
     add.addEventListener('click', () => attemptAdd(false));
-    row.append(back, add);
-    section.append(row);
+    buttons.append(back, add);
+    panel.append(buttons);
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  function duplicateForDraft() {
-    return appState.rows.find(row => row.status === 'ACTIVE' &&
-      norm(row.instructor) === norm(pendingDraft.instructor) &&
-      row.date === pendingDraft.date &&
-      norm(row.className) === norm(pendingDraft.className) &&
-      norm(row.site) === norm(pendingDraft.site));
+  function isDuplicate(draft) {
+    return appState.rows.some(row =>
+      row.status === 'ACTIVE' &&
+      row.date === draft.date &&
+      norm(row.className) === norm(draft.className) &&
+      norm(row.site) === norm(draft.site) &&
+      norm(row.instructor) === norm(draft.instructor)
+    );
   }
 
-  function attemptAdd(override) {
-    const duplicate = duplicateForDraft();
-    if (duplicate && !override) {
+  function renderDuplicateWarning() {
+    const panel = byId('addPanel');
+    panel.replaceChildren();
+    const title = element('h2', '', 'Possible duplicate');
+    title.id = 'addPanelTitle';
+    panel.append(title);
+    const warning = element('div', 'warning');
+    warning.append(element('p', '', 'This instructor already has an active sign-in for the same date, class, and site. Nothing has been added.'));
+    panel.append(warning, draftDetails());
+
+    const buttons = element('div', 'button-row');
+    const cancel = element('button', 'secondary', 'Cancel');
+    cancel.type = 'button';
+    cancel.addEventListener('click', closeAddPanel);
+    const continueButton = element('button', 'danger', 'Review deliberate duplicate');
+    continueButton.type = 'button';
+    continueButton.addEventListener('click', renderOverrideConfirmation);
+    buttons.append(cancel, continueButton);
+    panel.append(buttons);
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function renderOverrideConfirmation() {
+    const panel = byId('addPanel');
+    panel.replaceChildren();
+    const title = element('h2', '', 'Second confirmation');
+    title.id = 'addPanelTitle';
+    panel.append(title);
+    const warning = element('div', 'warning');
+    warning.append(element('p', '', 'This appears to be a duplicate. Add it anyway and record that the warning was deliberately overridden?'));
+    panel.append(warning, draftDetails());
+
+    const buttons = element('div', 'button-row');
+    const back = element('button', 'secondary', 'Go back');
+    back.type = 'button';
+    back.addEventListener('click', renderDuplicateWarning);
+    const add = element('button', 'danger', 'Add duplicate anyway');
+    add.type = 'button';
+    add.dataset.finalAdd = 'true';
+    add.addEventListener('click', () => attemptAdd(true));
+    buttons.append(back, add);
+    panel.append(buttons);
+  }
+
+  function attemptAdd(overrideDuplicate) {
+    if (!pendingDraft || submissionLocked) return;
+    submissionLocked = true;
+    const buttons = byId('addPanel').querySelectorAll('button');
+    buttons.forEach(button => { button.disabled = true; });
+
+    const existingAudit = appState.audit.find(entry => entry.requestId === pendingDraft.requestId && entry.result === 'COMPLETED');
+    if (existingAudit) {
+      renderAddSuccess(existingAudit.recordId, 'This request was already completed once. No second record was created.');
+      return;
+    }
+
+    const duplicate = isDuplicate(pendingDraft);
+    if (duplicate && !overrideDuplicate) {
+      submissionLocked = false;
       renderDuplicateWarning();
       return;
     }
 
-    const recordedAt = new Date().toISOString();
-    const row = {
-      id: makeId('admin'),
+    const now = new Date().toISOString();
+    const recordId = makeId('record');
+    appState.rows.push({
+      id: recordId,
       date: pendingDraft.date,
       className: pendingDraft.className,
       site: pendingDraft.site,
@@ -635,130 +1003,178 @@
       notes: pendingDraft.notes,
       source: 'Admin-added',
       status: 'ACTIVE',
-      recordedAt,
-      override: Boolean(override)
-    };
-    appState.rows.push(row);
-    appState.audit.push({
+      recordedAt: now,
+      override: Boolean(duplicate && overrideDuplicate),
+      requestId: pendingDraft.requestId
+    });
+    appState.audit.unshift({
       id: makeId('audit'),
-      recordedAt,
-      action: override ? 'Added after duplicate warning' : 'Added missed class',
-      instructor: row.instructor,
-      date: row.date,
-      className: row.className,
-      site: row.site,
-      reason: pendingDraft.reason
+      requestId: pendingDraft.requestId,
+      recordId,
+      action: 'ADD_MISSED_SIGNIN',
+      date: pendingDraft.date,
+      className: pendingDraft.className,
+      instructor: pendingDraft.instructor,
+      site: pendingDraft.site,
+      reason: pendingDraft.reason,
+      duplicateWarning: duplicate,
+      duplicateOverride: Boolean(duplicate && overrideDuplicate),
+      result: 'COMPLETED',
+      recordedAt: now
     });
-    saveState(appState);
-    populateSuggestions();
-    pendingDraft = null;
-    const result = renderSelectedDate(currentQuery.instructor, currentQuery.date, 'The demo added one Admin record.');
-    renderRecent(currentQuery.instructor);
-    renderAddForm(currentQuery.instructor, currentQuery.date, result.active.length > 0);
-    renderAudit();
-    byId('dateResults').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    saveState();
+    populateInstructorSuggestions();
+    renderDailyReview(`Demo sign-in added for ${pendingDraft.instructor}.`);
+    renderHistory();
+    renderAddSuccess(recordId, 'One demo sign-in and one matching Admin-history entry were added.');
   }
 
-  function renderDuplicateWarning() {
-    const section = byId('addSection');
-    section.replaceChildren();
-    section.append(element('h2', '', 'Possible duplicate'));
-    const warning = element('div', 'warning');
-    warning.append(element('p', '', 'An active record already has the same instructor, date, class, and site. Nothing has been added.'));
-    section.append(warning);
-    const details = element('dl');
-    addDefinition(details, 'Instructor', pendingDraft.instructor);
-    addDefinition(details, 'Date', formatDate(pendingDraft.date));
-    addDefinition(details, 'Class', pendingDraft.className);
-    addDefinition(details, 'Site', pendingDraft.site);
-    section.append(details);
-    const row = element('div', 'button-row');
-    const cancel = element('button', 'secondary', 'Cancel');
-    cancel.type = 'button';
-    cancel.addEventListener('click', () => {
-      const result = renderSelectedDate(currentQuery.instructor, currentQuery.date, 'Duplicate cancelled. Nothing was added.');
-      renderRecent(currentQuery.instructor);
-      renderAddForm(currentQuery.instructor, currentQuery.date, result.active.length > 0);
-      pendingDraft = null;
-    });
-    const override = element('button', 'danger', 'Add duplicate anyway');
-    override.type = 'button';
-    override.addEventListener('click', () => {
-      const sure = window.confirm('This looks like a duplicate. Add it anyway for demo purposes?');
-      if (sure) attemptAdd(true);
-    });
-    row.append(cancel, override);
-    section.append(row);
+  function renderAddSuccess(recordId, message) {
+    const panel = byId('addPanel');
+    panel.replaceChildren();
+    const title = element('h2', '', 'Added');
+    title.id = 'addPanelTitle';
+    const success = element('div', 'success');
+    success.append(element('p', '', message));
+    panel.append(title, success, element('p', 'muted small', `Demo record: ${recordId}`));
+    const done = element('button', 'primary', 'Done');
+    done.type = 'button';
+    done.addEventListener('click', closeAddPanel);
+    panel.append(done);
+    showToast('Demo sign-in added');
   }
 
-  function renderAudit() {
-    const section = byId('auditSection');
-    section.replaceChildren();
-    section.append(element('h2', '', 'Demo Admin history'));
+  function renderInstructorResults(instructor, date) {
+    const container = byId('instructorResults');
+    container.replaceChildren();
+    const selectedRows = appState.rows
+      .filter(row => row.status === 'ACTIVE' && row.date === date && norm(row.instructor) === norm(instructor))
+      .sort((a, b) => startMinutes(a.className) - startMinutes(b.className));
+    const recentRows = activeRowsForInstructor(instructor).slice(0, 5);
+
+    const selected = element('section', 'result-block');
+    selected.append(element('h3', '', `${instructor} — ${formatDate(date)}`));
+    if (!selectedRows.length) {
+      selected.append(element('p', 'warning', `No active sign-in was found in this demo for ${instructor} on ${formatDate(date)}.`));
+    } else {
+      const list = element('ul', 'result-list');
+      selectedRows.forEach(row => {
+        const item = element('li', 'result-item');
+        item.append(
+          element('strong', '', leadingTime(row.className)),
+          element('span', '', displayClassName(row.className)),
+          element('span', 'site muted', row.site),
+          element('span', `source-label ${row.source === 'Admin-added' ? 'admin' : ''}`, row.source === 'Admin-added' ? 'Admin-added' : 'Front-desk sign-in')
+        );
+        list.append(item);
+      });
+      selected.append(list);
+    }
+
+    const recent = element('section', 'result-block');
+    recent.append(element('h3', '', 'Five most recent active sign-ins'));
+    if (!recentRows.length) {
+      recent.append(element('p', 'muted', 'No recent sign-ins were found for this fake instructor.'));
+    } else {
+      const list = element('ol', 'result-list');
+      recentRows.forEach(row => {
+        const item = element('li', 'result-item');
+        item.append(
+          element('strong', '', formatDate(row.date)),
+          element('span', '', displayClassName(row.className)),
+          element('span', 'site muted', row.site),
+          element('span', `source-label ${row.source === 'Admin-added' ? 'admin' : ''}`, row.source === 'Admin-added' ? 'Admin-added' : 'Front-desk sign-in')
+        );
+        list.append(item);
+      });
+      recent.append(list);
+    }
+
+    container.append(selected, recent);
+    container.hidden = false;
+  }
+
+  function renderHistory() {
+    const container = byId('historyResults');
+    container.replaceChildren();
     if (!appState.audit.length) {
-      section.append(element('p', 'muted', 'No demo Admin actions yet.'));
-      section.hidden = false;
+      container.append(element('p', 'muted', 'No Admin additions have been made in this demo yet.'));
       return;
     }
-    const list = element('ol', 'audit-list');
-    [...appState.audit].reverse().forEach(entry => {
-      const item = element('li', 'audit-item');
+    const list = element('ol', 'history-list');
+    appState.audit.slice(0, 12).forEach(entry => {
+      const item = element('li', 'history-item');
       item.append(
         element('strong', '', formatDate(entry.date)),
-        element('span', '', `${entry.action}: ${entry.className}`),
+        element('span', '', `${entry.className} — ${entry.instructor}`),
         element('span', 'site muted', entry.site),
-        element('span', 'source-label admin', 'Demo Admin')
+        element('span', 'source-label admin', entry.duplicateOverride ? 'Admin-added · duplicate override' : 'Admin-added')
       );
       list.append(item);
     });
-    section.append(list);
-    section.hidden = false;
+    container.append(list);
   }
 
-  function runLookup(instructor, date) {
-    currentQuery = { instructor: clean(instructor), date };
-    pendingDraft = null;
-    const result = renderSelectedDate(currentQuery.instructor, date);
-    renderRecent(currentQuery.instructor);
-    renderAddForm(currentQuery.instructor, date, result.active.length > 0);
-    renderAudit();
-    byId('dateResults').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
-
-  function loadScenario() {
-    byId('instructorInput').value = DEMO_INSTRUCTOR;
-    byId('dateInput').value = shiftDate(nyToday(), -1);
-    runLookup(DEMO_INSTRUCTOR, byId('dateInput').value);
-  }
-
-  byId('lookupForm').addEventListener('submit', event => {
-    event.preventDefault();
-    const instructor = clean(byId('instructorInput').value);
-    const date = byId('dateInput').value;
-    if (!instructor || !date) return;
-    runLookup(instructor, date);
-  });
-
-  byId('scenarioButton').addEventListener('click', loadScenario);
-  byId('resetButton').addEventListener('click', () => {
+  function resetDemo(loadScenario = false) {
     localStorage.removeItem(STORAGE_KEY);
-    appState = loadState();
-    currentQuery = null;
-    pendingDraft = null;
-    populateSuggestions();
-    clearSection(byId('dateResults'));
-    clearSection(byId('recentResults'));
-    clearSection(byId('addSection'));
-    clearSection(byId('auditSection'));
-    byId('instructorInput').value = DEMO_INSTRUCTOR;
-    byId('dateInput').value = shiftDate(nyToday(), -1);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    appState = seedState();
+    saveState();
+    populateInstructorSuggestions();
+    renderHistory();
+    byId('instructorResults').hidden = true;
+    byId('instructorResults').replaceChildren();
+    if (loadScenario) {
+      byId('searchInstructor').value = appState.scenario.instructor;
+      byId('searchDate').value = appState.scenario.date;
+      setSelectedDate(appState.scenario.date, { scroll: true });
+      showToast('Bruno-type scenario loaded');
+    } else {
+      byId('searchInstructor').value = '';
+      byId('searchDate').value = appState.selectedDate;
+      setSelectedDate(appState.selectedDate);
+      showToast('Demo data reset');
+    }
+  }
+
+  byId('previousButton').addEventListener('click', () => {
+    setSelectedDate(shiftDate(appState.selectedDate, -1));
+  });
+  byId('nextButton').addEventListener('click', () => {
+    setSelectedDate(shiftDate(appState.selectedDate, 1));
+  });
+  byId('yesterdayButton').addEventListener('click', () => {
+    setSelectedDate(shiftDate(nyToday(), -1));
+  });
+  byId('todayButton').addEventListener('click', () => {
+    setSelectedDate(nyToday());
+  });
+  byId('datePicker').addEventListener('change', event => {
+    setSelectedDate(event.target.value);
+  });
+  byId('scenarioButton').addEventListener('click', () => resetDemo(true));
+  byId('resetButton').addEventListener('click', () => resetDemo(false));
+
+  byId('instructorSearchForm').addEventListener('submit', event => {
+    event.preventDefault();
+    const instructor = clean(byId('searchInstructor').value);
+    const date = byId('searchDate').value;
+    if (!instructor || !date || date > nyToday()) {
+      byId('instructorSearchForm').reportValidity();
+      return;
+    }
+    renderInstructorResults(instructor, date);
   });
 
-  populateSuggestions();
-  byId('instructorInput').value = DEMO_INSTRUCTOR;
-  byId('dateInput').max = nyToday();
-  byId('dateInput').value = shiftDate(nyToday(), -1);
+  const today = nyToday();
+  byId('datePicker').max = today;
+  byId('searchDate').max = today;
+  if (!appState.selectedDate || appState.selectedDate > today) {
+    appState.selectedDate = shiftDate(today, -1);
+  }
+  byId('searchDate').value = appState.selectedDate;
+  populateInstructorSuggestions();
+  renderHistory();
+  setSelectedDate(appState.selectedDate);
 })();
 </script>
 </body>
