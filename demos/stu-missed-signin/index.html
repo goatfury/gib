@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow">
+  <title>TEST ONLY — Admin Sign-In Lookup</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #5e6a7d;
+      --line: #d7deea;
+      --panel: #ffffff;
+      --page: #f3f6fb;
+      --blue: #1759d2;
+      --blue-dark: #0f43a2;
+      --green: #17623c;
+      --green-bg: #edf9f2;
+      --amber: #744000;
+      --amber-bg: #fff4d9;
+      --red: #8d2424;
+      --red-bg: #fff0f0;
+      --shadow: 0 8px 28px rgba(29, 48, 82, 0.08);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--page); color: var(--ink); }
+    button, input, textarea, select { font: inherit; }
+    button { touch-action: manipulation; }
+    [hidden] { display: none !important; }
+
+    main {
+      width: min(100%, 72rem);
+      margin: 0 auto;
+      padding: max(14px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+    }
+
+    .test-banner {
+      margin-bottom: 18px;
+      padding: 15px 18px;
+      border: 3px solid #721818;
+      border-radius: 14px;
+      background: #a52a2a;
+      color: #fff;
+      text-align: center;
+      font-size: clamp(1.05rem, 4vw, 1.55rem);
+      font-weight: 900;
+      letter-spacing: .03em;
+    }
+
+    h1 { margin: 0; font-size: clamp(1.8rem, 6vw, 2.75rem); line-height: 1.08; }
+    h2 { margin: 0 0 7px; font-size: clamp(1.25rem, 4vw, 1.6rem); }
+    h3 { margin: 0 0 9px; font-size: 1.05rem; }
+    p { line-height: 1.5; }
+    .subtitle { margin: 8px 0 0; color: var(--muted); }
+    .muted { color: var(--muted); }
+    .small { font-size: .92rem; }
+
+    .card {
+      margin-top: 17px;
+      padding: clamp(16px, 4vw, 23px);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .top-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .notice, .warning, .success, .error {
+      margin: 14px 0;
+      padding: 13px 15px;
+      border-radius: 11px;
+      line-height: 1.45;
+    }
+    .notice { border: 1px solid #d3a244; background: var(--amber-bg); color: var(--amber); }
+    .warning { border: 2px solid #b7671d; background: #fff5e9; color: #663400; }
+    .success { border: 2px solid #3f815e; background: var(--green-bg); color: var(--green); }
+    .error { border: 1px solid #bd5c5c; background: var(--red-bg); color: #701f1f; }
+    .notice p, .warning p, .success p, .error p { margin: 0; }
+
+    label { display: block; margin: 14px 0 7px; font-weight: 800; }
+    input, textarea, select {
+      width: 100%;
+      min-height: 50px;
+      padding: 12px 13px;
+      border: 1px solid #8c99ae;
+      border-radius: 10px;
+      background: #fff;
+      color: var(--ink);
+    }
+    textarea { min-height: 92px; resize: vertical; }
+    input:focus, textarea:focus, select:focus, button:focus-visible {
+      outline: 3px solid rgba(23, 89, 210, .24);
+      outline-offset: 2px;
+    }
+
+    button {
+      min-height: 48px;
+      padding: 11px 16px;
+      border: 0;
+      border-radius: 10px;
+      font-weight: 850;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .55; cursor: wait; }
+    .primary { background: var(--blue); color: #fff; }
+    .primary:hover:not(:disabled) { background: var(--blue-dark); }
+    .secondary { background: #e7edf5; color: var(--ink); }
+    .danger { background: #8f2828; color: #fff; }
+    .small-button { min-height: 42px; padding: 9px 13px; }
+
+    .grid-two {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(12rem, .55fr);
+      gap: 0 16px;
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .record-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .record {
+      min-width: 0;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcfe;
+    }
+    .record.voided { background: #fff8f8; border-color: #c9a3a3; }
+
+    .badge {
+      display: inline-block;
+      margin: 0 7px 9px 0;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #53647b;
+      color: #fff;
+      font-size: .78rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: .03em;
+    }
+    .badge.active { background: var(--green); }
+    .badge.voided { background: var(--red); }
+    .badge.admin { background: #f0c66d; color: #533400; }
+    .badge.override { background: #d9811d; color: #fff; }
+
+    dl {
+      display: grid;
+      grid-template-columns: minmax(7rem, 34%) minmax(0, 1fr);
+      gap: 7px 12px;
+      margin: 0;
+    }
+    dt { font-weight: 800; }
+    dd { margin: 0; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+    .recent-list, .audit-list {
+      display: grid;
+      gap: 9px;
+      margin: 12px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+    .recent-item, .audit-item {
+      display: grid;
+      grid-template-columns: 8rem minmax(0, 1fr) minmax(7rem, .55fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fbfcfe;
+    }
+    .source-label {
+      width: fit-content;
+      padding: 4px 7px;
+      border-radius: 999px;
+      background: #e4eaf3;
+      color: #2b3850;
+      font-size: .8rem;
+      font-weight: 850;
+    }
+    .source-label.admin { background: #f6d994; color: #563600; }
+
+    .summary-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 18px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    .confirmation {
+      padding: 14px;
+      border: 2px solid #4b6ca8;
+      border-radius: 12px;
+      background: #f4f7fd;
+    }
+
+    @media (max-width: 760px) {
+      .record-list { grid-template-columns: 1fr; }
+      .recent-item, .audit-item { grid-template-columns: minmax(6.5rem, .4fr) minmax(0, 1fr); }
+      .recent-item .site, .recent-item .source-label,
+      .audit-item .site, .audit-item .source-label { grid-column: 2; }
+    }
+
+    @media (max-width: 540px) {
+      .grid-two { grid-template-columns: 1fr; }
+      .button-row { display: grid; grid-template-columns: 1fr; }
+      .button-row button, .top-actions button { width: 100%; }
+      dl { grid-template-columns: 1fr; gap: 2px; }
+      dd { margin-bottom: 8px; }
+      .recent-item, .audit-item { grid-template-columns: 1fr; gap: 4px; }
+      .recent-item .site, .recent-item .source-label,
+      .audit-item .site, .audit-item .source-label { grid-column: 1; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <div class="test-banner">TEST DEMO — FAKE DATA ONLY</div>
+
+  <header>
+    <h1>Admin — Instructor Sign-ins</h1>
+    <p class="subtitle">Test the “instructor isn’t sure they signed in” workflow.</p>
+    <div class="notice">
+      <p><strong>This is only a clickable demo.</strong> It does not touch Revolution BJJ, payroll, Google Sheets, or the live M1 site. Anything you add stays in this browser.</p>
+    </div>
+    <div class="top-actions">
+      <button id="scenarioButton" class="primary" type="button">Load the missed-sign-in scenario</button>
+      <button id="resetButton" class="secondary" type="button">Reset demo data</button>
+    </div>
+  </header>
+
+  <section class="card" aria-labelledby="lookupTitle">
+    <h2 id="lookupTitle">1. Check an instructor and date</h2>
+    <p class="muted">The demo starts with a fake instructor who has recent sign-ins but no record for yesterday.</p>
+    <form id="lookupForm" novalidate>
+      <div class="grid-two">
+        <div>
+          <label for="instructorInput">Instructor</label>
+          <input id="instructorInput" list="instructorList" autocomplete="off" required>
+          <datalist id="instructorList"></datalist>
+        </div>
+        <div>
+          <label for="dateInput">Date</label>
+          <input id="dateInput" type="date" required>
+        </div>
+      </div>
+      <div class="button-row">
+        <button class="primary" type="submit">Check Sign-ins</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="dateResults" class="card" hidden></section>
+  <section id="recentResults" class="card" hidden></section>
+  <section id="addSection" class="card" hidden></section>
+  <section id="auditSection" class="card" hidden></section>
+
+  <div class="summary-bar">
+    <span><strong>Demo goal:</strong> decide whether this would replace a text to Andrew.</span>
+    <span class="muted small">No live systems are connected.</span>
+  </div>
+</main>
+
+<script>
+(() => {
+  'use strict';
+
+  const STORAGE_KEY = 'gib_stu_missed_signin_demo_v1';
+  const TZ = 'America/New_York';
+  const DEMO_INSTRUCTOR = 'TEST INSTRUCTOR - DO NOT PAY';
+  const DEMO_SITE = 'Rev';
+
+  const byId = id => document.getElementById(id);
+
+  function nyToday() {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: TZ,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date());
+    const values = {};
+    parts.forEach(part => {
+      if (part.type !== 'literal') values[part.type] = part.value;
+    });
+    return `${values.year}-${values.month}-${values.day}`;
+  }
+
+  function shiftDate(dateString, days) {
+    const [year, month, day] = dateString.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+  }
+
+  function formatDate(dateString) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) return dateString;
+    const [year, month, day] = dateString.split('-').map(Number);
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      timeZone: 'UTC'
+    }).format(new Date(Date.UTC(year, month - 1, day)));
+  }
+
+  function clean(value) {
+    return String(value == null ? '' : value).trim().replace(/\s+/g, ' ');
+  }
+
+  function norm(value) {
+    return clean(value)
+      .toLocaleLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .replace(/\s+/g, ' ');
+  }
+
+  function makeId(prefix = 'demo') {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return `${prefix}-${window.crypto.randomUUID()}`;
+    }
+    return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function seedState() {
+    const today = nyToday();
+    const recorded = new Date().toISOString();
+    const rows = [
+      { id: makeId(), date: shiftDate(today, -3), className: '6:00 PM Intro Fundamentals', site: DEMO_SITE, duration: 1, instructor: DEMO_INSTRUCTOR, notes: '', source: 'Front desk', status: 'ACTIVE', recordedAt: recorded },
+      { id: makeId(), date: shiftDate(today, -5), className: '5:30 PM BJJ Level 2', site: DEMO_SITE, duration: 1, instructor: DEMO_INSTRUCTOR, notes: '', source: 'Front desk', status: 'ACTIVE', recordedAt: recorded },
+      { id: makeId(), date: shiftDate(today, -7), className: '6:00 PM Intro Fundamentals', site: DEMO_SITE, duration: 1, instructor: DEMO_INSTRUCTOR, notes: '', source: 'Front desk', status: 'ACTIVE', recordedAt: recorded },
+      { id: makeId(), date: shiftDate(today, -10), className: '12:00 PM BJJ Level 2', site: DEMO_SITE, duration: 1, instructor: DEMO_INSTRUCTOR, notes: '', source: 'Front desk', status: 'ACTIVE', recordedAt: recorded },
+      { id: makeId(), date: shiftDate(today, -14), className: '6:00 PM Intro Fundamentals', site: DEMO_SITE, duration: 1, instructor: DEMO_INSTRUCTOR, notes: '', source: 'Front desk', status: 'ACTIVE', recordedAt: recorded },
+      { id: makeId(), date: shiftDate(today, -1), className: '7:00 PM No-Gi BJJ', site: DEMO_SITE, duration: 1, instructor: 'DEMO COACH', notes: '', source: 'Front desk', status: 'ACTIVE', recordedAt: recorded }
+    ];
+    return { rows, audit: [] };
+  }
+
+  function loadState() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+      if (parsed && Array.isArray(parsed.rows) && Array.isArray(parsed.audit)) return parsed;
+    } catch (error) {}
+    const seeded = seedState();
+    saveState(seeded);
+    return seeded;
+  }
+
+  function saveState(nextState) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+  }
+
+  let appState = loadState();
+  let currentQuery = null;
+  let pendingDraft = null;
+
+  function clearSection(section) {
+    section.replaceChildren();
+    section.hidden = true;
+  }
+
+  function element(tag, className, content) {
+    const item = document.createElement(tag);
+    if (className) item.className = className;
+    if (content !== undefined) item.textContent = String(content);
+    return item;
+  }
+
+  function addDefinition(list, label, value) {
+    list.append(element('dt', '', label), element('dd', '', value || '—'));
+  }
+
+  function sourceLabel(row) {
+    return row.source === 'Admin-added' ? 'Admin-added' : 'Front-desk sign-in';
+  }
+
+  function recordCard(row) {
+    const card = element('article', `record ${row.status === 'VOIDED' ? 'voided' : ''}`);
+    card.append(element('span', `badge ${row.status === 'VOIDED' ? 'voided' : 'active'}`, row.status === 'VOIDED' ? 'Voided' : 'Active'));
+    if (row.source === 'Admin-added') card.append(element('span', 'badge admin', 'Admin-added'));
+    if (row.override) card.append(element('span', 'badge override', 'Duplicate override'));
+    const details = element('dl');
+    addDefinition(details, 'Class', row.className);
+    addDefinition(details, 'Site', row.site);
+    addDefinition(details, 'Duration', `${row.duration} hr`);
+    addDefinition(details, 'Notes', row.notes);
+    addDefinition(details, 'Source', sourceLabel(row));
+    addDefinition(details, 'Recorded', row.recordedAt ? new Date(row.recordedAt).toLocaleString() : 'Demo record');
+    card.append(details);
+    return card;
+  }
+
+  function matchingRows(instructor, date) {
+    return appState.rows.filter(row => norm(row.instructor) === norm(instructor) && row.date === date);
+  }
+
+  function recentRows(instructor) {
+    return appState.rows
+      .filter(row => norm(row.instructor) === norm(instructor) && row.status === 'ACTIVE')
+      .sort((a, b) => b.date.localeCompare(a.date) || String(b.recordedAt).localeCompare(String(a.recordedAt)))
+      .slice(0, 5);
+  }
+
+  function populateSuggestions() {
+    const list = byId('instructorList');
+    list.replaceChildren();
+    const names = [...new Set(appState.rows.map(row => clean(row.instructor)).filter(Boolean))].sort();
+    names.forEach(name => {
+      const option = document.createElement('option');
+      option.value = name;
+      list.append(option);
+    });
+  }
+
+  function renderSelectedDate(instructor, date, successMessage = '') {
+    const section = byId('dateResults');
+    section.replaceChildren();
+    const title = element('h2', '', '2. Sign-ins for the selected date');
+    section.append(title, element('p', 'muted', `${instructor} — ${formatDate(date)}`));
+    if (successMessage) {
+      const success = element('div', 'success');
+      success.append(element('p', '', successMessage));
+      section.append(success);
+    }
+    const rows = matchingRows(instructor, date);
+    const active = rows.filter(row => row.status === 'ACTIVE');
+    const voided = rows.filter(row => row.status === 'VOIDED');
+
+    if (!active.length) {
+      const warning = element('div', 'warning');
+      warning.append(element('p', '', `No active sign-in was found in this demo for ${instructor} on ${formatDate(date)}.`));
+      section.append(warning);
+    } else {
+      section.append(element('h3', '', 'Active records'));
+      const list = element('div', 'record-list');
+      active.forEach(row => list.append(recordCard(row)));
+      section.append(list);
+    }
+
+    if (voided.length) {
+      section.append(element('h3', '', 'Voided records'));
+      const list = element('div', 'record-list');
+      voided.forEach(row => list.append(recordCard(row)));
+      section.append(list);
+    }
+    section.hidden = false;
+    return { active, voided };
+  }
+
+  function renderRecent(instructor) {
+    const section = byId('recentResults');
+    section.replaceChildren();
+    section.append(element('h2', '', '3. Five most recent active sign-ins'));
+    const rows = recentRows(instructor);
+    if (!rows.length) {
+      section.append(element('p', 'muted', 'No recent sign-ins were found for this fake instructor.'));
+    } else {
+      const list = element('ol', 'recent-list');
+      rows.forEach(row => {
+        const item = element('li', 'recent-item');
+        item.append(
+          element('strong', '', formatDate(row.date)),
+          element('span', '', row.className),
+          element('span', 'site muted', row.site),
+          element('span', `source-label ${row.source === 'Admin-added' ? 'admin' : ''}`, sourceLabel(row))
+        );
+        list.append(item);
+      });
+      section.append(list);
+    }
+    section.hidden = false;
+  }
+
+  function renderAddForm(instructor, date, hasActive) {
+    const section = byId('addSection');
+    section.replaceChildren();
+    section.append(element('h2', '', '4. Add a missed class'));
+    if (hasActive) {
+      const notice = element('div', 'notice');
+      notice.append(element('p', '', 'A sign-in already exists for this date. Add another class only if it is genuinely different.'));
+      section.append(notice);
+    } else {
+      section.append(element('p', 'muted', 'Use this only after checking the selected date and recent history.'));
+    }
+
+    const form = document.createElement('form');
+    form.noValidate = true;
+    form.innerHTML = `
+      <div class="grid-two">
+        <div>
+          <label for="addInstructor">Instructor</label>
+          <input id="addInstructor" value="${escapeHtml(instructor)}" readonly>
+        </div>
+        <div>
+          <label for="addDate">Class date</label>
+          <input id="addDate" type="date" value="${date}" readonly>
+        </div>
+      </div>
+      <div class="grid-two">
+        <div>
+          <label for="classInput">Class</label>
+          <input id="classInput" value="6:00 PM Intro Fundamentals" required>
+        </div>
+        <div>
+          <label for="siteInput">Site</label>
+          <input id="siteInput" value="${DEMO_SITE}" required>
+        </div>
+      </div>
+      <div class="grid-two">
+        <div>
+          <label for="durationInput">Duration in hours</label>
+          <input id="durationInput" type="number" min="0.25" max="12" step="0.25" value="1" required>
+        </div>
+        <div>
+          <label for="notesInput">Notes, optional</label>
+          <input id="notesInput" value="">
+        </div>
+      </div>
+      <label for="reasonInput">Reason for adding the missed class</label>
+      <textarea id="reasonInput" required>Instructor was not sure whether the class was recorded.</textarea>
+      <div class="button-row">
+        <button class="primary" type="submit">Review missed class</button>
+      </div>
+    `;
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      if (!form.reportValidity()) return;
+      const duration = Number(byId('durationInput').value);
+      if (!Number.isFinite(duration) || duration <= 0 || duration > 12) return;
+      pendingDraft = {
+        instructor,
+        date,
+        className: clean(byId('classInput').value),
+        site: clean(byId('siteInput').value),
+        duration,
+        notes: clean(byId('notesInput').value),
+        reason: clean(byId('reasonInput').value)
+      };
+      renderConfirmation();
+    });
+    section.append(form);
+    section.hidden = false;
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function renderConfirmation() {
+    const section = byId('addSection');
+    section.replaceChildren();
+    section.append(element('h2', '', 'Confirm the missed class'));
+    const box = element('div', 'confirmation');
+    box.append(element('p', '', 'You are adding this missed class to the demo instructor sign-in record.'));
+    const details = element('dl');
+    addDefinition(details, 'Instructor', pendingDraft.instructor);
+    addDefinition(details, 'Date', formatDate(pendingDraft.date));
+    addDefinition(details, 'Class', pendingDraft.className);
+    addDefinition(details, 'Site', pendingDraft.site);
+    addDefinition(details, 'Duration', `${pendingDraft.duration} hr`);
+    addDefinition(details, 'Reason', pendingDraft.reason);
+    box.append(details);
+    section.append(box);
+    const row = element('div', 'button-row');
+    const back = element('button', 'secondary', 'Go back');
+    back.type = 'button';
+    back.addEventListener('click', () => {
+      const rows = matchingRows(currentQuery.instructor, currentQuery.date);
+      renderAddForm(currentQuery.instructor, currentQuery.date, rows.some(item => item.status === 'ACTIVE'));
+    });
+    const add = element('button', 'primary', 'Add Missed Class');
+    add.type = 'button';
+    add.addEventListener('click', () => attemptAdd(false));
+    row.append(back, add);
+    section.append(row);
+  }
+
+  function duplicateForDraft() {
+    return appState.rows.find(row => row.status === 'ACTIVE' &&
+      norm(row.instructor) === norm(pendingDraft.instructor) &&
+      row.date === pendingDraft.date &&
+      norm(row.className) === norm(pendingDraft.className) &&
+      norm(row.site) === norm(pendingDraft.site));
+  }
+
+  function attemptAdd(override) {
+    const duplicate = duplicateForDraft();
+    if (duplicate && !override) {
+      renderDuplicateWarning();
+      return;
+    }
+
+    const recordedAt = new Date().toISOString();
+    const row = {
+      id: makeId('admin'),
+      date: pendingDraft.date,
+      className: pendingDraft.className,
+      site: pendingDraft.site,
+      duration: pendingDraft.duration,
+      instructor: pendingDraft.instructor,
+      notes: pendingDraft.notes,
+      source: 'Admin-added',
+      status: 'ACTIVE',
+      recordedAt,
+      override: Boolean(override)
+    };
+    appState.rows.push(row);
+    appState.audit.push({
+      id: makeId('audit'),
+      recordedAt,
+      action: override ? 'Added after duplicate warning' : 'Added missed class',
+      instructor: row.instructor,
+      date: row.date,
+      className: row.className,
+      site: row.site,
+      reason: pendingDraft.reason
+    });
+    saveState(appState);
+    populateSuggestions();
+    pendingDraft = null;
+    const result = renderSelectedDate(currentQuery.instructor, currentQuery.date, 'The demo added one Admin record.');
+    renderRecent(currentQuery.instructor);
+    renderAddForm(currentQuery.instructor, currentQuery.date, result.active.length > 0);
+    renderAudit();
+    byId('dateResults').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function renderDuplicateWarning() {
+    const section = byId('addSection');
+    section.replaceChildren();
+    section.append(element('h2', '', 'Possible duplicate'));
+    const warning = element('div', 'warning');
+    warning.append(element('p', '', 'An active record already has the same instructor, date, class, and site. Nothing has been added.'));
+    section.append(warning);
+    const details = element('dl');
+    addDefinition(details, 'Instructor', pendingDraft.instructor);
+    addDefinition(details, 'Date', formatDate(pendingDraft.date));
+    addDefinition(details, 'Class', pendingDraft.className);
+    addDefinition(details, 'Site', pendingDraft.site);
+    section.append(details);
+    const row = element('div', 'button-row');
+    const cancel = element('button', 'secondary', 'Cancel');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => {
+      const result = renderSelectedDate(currentQuery.instructor, currentQuery.date, 'Duplicate cancelled. Nothing was added.');
+      renderRecent(currentQuery.instructor);
+      renderAddForm(currentQuery.instructor, currentQuery.date, result.active.length > 0);
+      pendingDraft = null;
+    });
+    const override = element('button', 'danger', 'Add duplicate anyway');
+    override.type = 'button';
+    override.addEventListener('click', () => {
+      const sure = window.confirm('This looks like a duplicate. Add it anyway for demo purposes?');
+      if (sure) attemptAdd(true);
+    });
+    row.append(cancel, override);
+    section.append(row);
+  }
+
+  function renderAudit() {
+    const section = byId('auditSection');
+    section.replaceChildren();
+    section.append(element('h2', '', 'Demo Admin history'));
+    if (!appState.audit.length) {
+      section.append(element('p', 'muted', 'No demo Admin actions yet.'));
+      section.hidden = false;
+      return;
+    }
+    const list = element('ol', 'audit-list');
+    [...appState.audit].reverse().forEach(entry => {
+      const item = element('li', 'audit-item');
+      item.append(
+        element('strong', '', formatDate(entry.date)),
+        element('span', '', `${entry.action}: ${entry.className}`),
+        element('span', 'site muted', entry.site),
+        element('span', 'source-label admin', 'Demo Admin')
+      );
+      list.append(item);
+    });
+    section.append(list);
+    section.hidden = false;
+  }
+
+  function runLookup(instructor, date) {
+    currentQuery = { instructor: clean(instructor), date };
+    pendingDraft = null;
+    const result = renderSelectedDate(currentQuery.instructor, date);
+    renderRecent(currentQuery.instructor);
+    renderAddForm(currentQuery.instructor, date, result.active.length > 0);
+    renderAudit();
+    byId('dateResults').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function loadScenario() {
+    byId('instructorInput').value = DEMO_INSTRUCTOR;
+    byId('dateInput').value = shiftDate(nyToday(), -1);
+    runLookup(DEMO_INSTRUCTOR, byId('dateInput').value);
+  }
+
+  byId('lookupForm').addEventListener('submit', event => {
+    event.preventDefault();
+    const instructor = clean(byId('instructorInput').value);
+    const date = byId('dateInput').value;
+    if (!instructor || !date) return;
+    runLookup(instructor, date);
+  });
+
+  byId('scenarioButton').addEventListener('click', loadScenario);
+  byId('resetButton').addEventListener('click', () => {
+    localStorage.removeItem(STORAGE_KEY);
+    appState = loadState();
+    currentQuery = null;
+    pendingDraft = null;
+    populateSuggestions();
+    clearSection(byId('dateResults'));
+    clearSection(byId('recentResults'));
+    clearSection(byId('addSection'));
+    clearSection(byId('auditSection'));
+    byId('instructorInput').value = DEMO_INSTRUCTOR;
+    byId('dateInput').value = shiftDate(nyToday(), -1);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+
+  populateSuggestions();
+  byId('instructorInput').value = DEMO_INSTRUCTOR;
+  byId('dateInput').max = nyToday();
+  byId('dateInput').value = shiftDate(nyToday(), -1);
+})();
+</script>
+</body>
+</html>
