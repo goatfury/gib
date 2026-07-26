@@ -8,6 +8,7 @@ import {
   ADMIN_COOKIE,
   createAdminSession,
   isDeployPreview,
+  postGoogle,
   runtimeConfig,
   sanitizeKioskRows,
   validNonFutureDate
@@ -98,7 +99,7 @@ test('01 first-run setup blocks sign-in until gym, location, and site exist', ()
 
 test('02 normal sign-in creates one safe row', () => {
   assert.equal(sanitizeKioskRows([kioskRow()]).length, 1);
-  assert.match(kioskHtml, /saveSignins\(rows\.concat\(newRows\)\)/);
+  assert.match(kioskHtml, /commitSigninTransaction\(rows, newRows, queuedRows\)/);
 });
 
 test('03 multi-class sign-in preserves two distinct waiting rows', () => {
@@ -124,6 +125,12 @@ test('04 duplicate warning normalizes harmless name, apostrophe, dash, and space
   );
   assert.equal(duplicates.length, 1);
   assert.match(kioskHtml, /Possible duplicate payroll sign-in/);
+  const duplicateGuard = kioskHtml.slice(
+    kioskHtml.indexOf('if (duplicateClasses.length)'),
+    kioskHtml.indexOf('const batchId')
+  );
+  assert.match(duplicateGuard, /return;/);
+  assert.doesNotMatch(duplicateGuard, /saveSignins|commitSigninTransaction/);
 });
 
 test('05 reload persistence keeps the established sign-in key', () => {
@@ -173,14 +180,37 @@ test('11 Undo removes its ledger batch and reconciles the waiting list', () => {
 });
 
 test('12 Void removes the corresponding unsent row and export excludes it', () => {
-  const voided = { ...kioskRow(), Status: 'VOID' };
+  const neverSent = { ...kioskRow(), Status: 'OK', __syncState: 'never-sent' };
+  const voided = { ...neverSent, Status: 'VOID' };
   assert.equal(safety.reconcileQueue([kioskRow()], [voided]).length, 0);
+  assert.equal(safety.queueContainsLedgerRow([kioskRow()], neverSent), true);
+  assert.equal(
+    safety.queueContainsLedgerRow(
+      [kioskRow({ RowID: 'different-id' })],
+      neverSent
+    ),
+    false
+  );
+  const attempted = safety.markAttemptedLedgerRows(
+    [neverSent],
+    [kioskRow()],
+    '2026-07-26T15:00:00.000Z'
+  );
+  assert.equal(attempted[0].__syncState, 'attempted');
+  assert.equal(safety.queueContainsLedgerRow([kioskRow()], attempted[0]), true);
+  const voidBody = kioskHtml.slice(
+    kioskHtml.indexOf('function voidLastSignin()'),
+    kioskHtml.indexOf('// --- Sync helpers ---')
+  );
+  assert.match(voidBody, /__syncState !== 'never-sent'/);
   assert.match(kioskHtml, /saveSignins\(rows\);\s+reconcileSyncQueue\(\);\s+updateSyncStatus\(\)/);
+  assert.match(kioskHtml, /Local Void is blocked so the payroll Sheet and export cannot disagree/);
 });
 
 test('13 Clear All leaves no orphaned waiting rows', () => {
   assert.equal(safety.reconcileQueue([kioskRow()], []).length, 0);
-  assert.match(kioskHtml, /saveSignins\(\[\]\);\s+reconcileSyncQueue\(\)/);
+  assert.match(kioskHtml, /hasConfirmedOrUnknown/);
+  assert.match(kioskHtml, /saveSignins\(\[\]\);[\s\S]*?reconcileSyncQueue\(\)/);
 });
 
 test('14 Reset preserves sign-ins and the waiting list while Factory Reset names both', () => {
@@ -429,6 +459,20 @@ test('29 Different class for the same instructor and date is not wrongly blocked
   assert.equal(apps.findExistingEvent_([first], second), null);
 });
 
+test('29b Different instructor for the same class, date, and site is not wrongly blocked', () => {
+  const first = {
+    rowId: 'one',
+    date: '2026-07-25',
+    instructor: 'QA First Instructor',
+    classLabel: '10:00 AM Kidsâ€™ BJJ',
+    site: 'Rev',
+    status: 'OK'
+  };
+  const second = { ...first, rowId: 'two', instructor: 'QA Second Instructor' };
+  assert.equal(apps.findExistingEvent_([first], second), null);
+  assert.doesNotMatch(appsScriptSource, /sameClassSlot_/);
+});
+
 test('30 A VOID or VOIDED matching record does not block a new active record', () => {
   const voided = {
     rowId: 'voided',
@@ -536,4 +580,129 @@ test('40 Candidate contains no command or configuration that changes Netlify pro
     ].map(read)
   ].join('\n');
   assert.doesNotMatch(allCandidateText, /netlify\s+deploy\s+--prod|updateEnvVar|setEnvVarValue|production_deploy/i);
+});
+
+test('41 A staged multi-class sign-in recovers after every partial-write phase without duplicates', () => {
+  const newRows = [
+    { ...kioskRow({ RowID: 'txn-one', __rowId: 'txn-one' }), Status: 'OK' },
+    {
+      ...kioskRow({
+        RowID: 'txn-two',
+        __rowId: 'txn-two',
+        'Class Label': '11:00 AM BJJ (Level 2)'
+      }),
+      Status: 'OK'
+    }
+  ];
+  const queuedRows = newRows.map(row => ({ ...row }));
+  const transaction = { version: 1, newRows, queuedRows };
+
+  const beforeEitherWrite = safety.mergeSigninTransaction([], [], transaction);
+  assert.equal(beforeEitherWrite.ledger.length, 2);
+  assert.equal(beforeEitherWrite.queue.length, 2);
+
+  const afterLedgerWrite = safety.mergeSigninTransaction(newRows, [], transaction);
+  assert.equal(afterLedgerWrite.ledger.length, 2);
+  assert.equal(afterLedgerWrite.queue.length, 2);
+
+  const afterBothWrites = safety.mergeSigninTransaction(newRows, queuedRows, transaction);
+  assert.equal(afterBothWrites.ledger.length, 2);
+  assert.equal(afterBothWrites.queue.length, 2);
+  assert.match(kioskHtml, /recoverPendingSigninTransaction\(\)/);
+  const commitBody = kioskHtml.slice(
+    kioskHtml.indexOf('function commitSigninTransaction'),
+    kioskHtml.indexOf('const PAYROLL_HEADERS')
+  );
+  assert.ok(commitBody.indexOf('safeSet(SIGNIN_TXN_KEY') < commitBody.indexOf('saveSignins'));
+  assert.ok(commitBody.indexOf('saveSignins') < commitBody.indexOf('saveSyncQueue'));
+});
+
+test('42 A confirmed Google result marks the ledger before removing the waiting row', () => {
+  const row = { ...kioskRow({ RowID: 'confirmed-one', __rowId: 'confirmed-one' }), Status: 'OK' };
+  const completed = [{
+    row,
+    result: { rowId: 'confirmed-one', result: 'added', linkedRecordId: 'sheet-one' }
+  }];
+  const marked = safety.markCompletedLedgerRows([row], completed);
+  assert.equal(marked[0].__syncState, 'confirmed');
+  assert.equal(marked[0].__linkedRecordId, 'sheet-one');
+  const syncNowBody = kioskHtml.slice(
+    kioskHtml.indexOf('async function syncNow()'),
+    kioskHtml.indexOf('function debugSnapshot()')
+  );
+  assert.ok(syncNowBody.indexOf('markAttemptedLedgerRows') < syncNowBody.indexOf("fetch('/.netlify/functions/m1-kiosk-sync'"));
+  const syncBody = kioskHtml.slice(
+    kioskHtml.indexOf('const applied = window.GibM1Safety.applyReadableResults'),
+    kioskHtml.indexOf('if (applied.completed.length)')
+  );
+  assert.ok(syncBody.indexOf('markCompletedLedgerRows') < syncBody.indexOf('saveSyncQueue'));
+});
+
+test('43 Netlify pins every authenticated request to the current TEST or production target', async () => {
+  const observed = [];
+  const fetchMock = async (_url, options) => {
+    observed.push(JSON.parse(options.body));
+    return googleResponse({ ok: true });
+  };
+  await postGoogle(
+    { preview: true, webhookUrl: previewEnv.GIB_TEST_WEBHOOK_URL, webhookToken: previewEnv.GIB_TEST_WEBHOOK_TOKEN },
+    'dailyReview',
+    { date: '2026-07-25', target: 'production' },
+    fetchMock
+  );
+  await postGoogle(
+    { preview: false, webhookUrl: productionEnv.GIB_M1_WEBHOOK_URL, webhookToken: productionEnv.GIB_M1_WEBHOOK_TOKEN },
+    'dailyReview',
+    { date: '2026-07-25', target: 'test' },
+    fetchMock
+  );
+  assert.equal(observed[0].target, 'test');
+  assert.equal(observed[1].target, 'production');
+  assert.equal(apps.requestTarget_({ target: 'test' }), 'test');
+  assert.equal(apps.requestTarget_({ rows: [] }), '');
+
+  const testOnlyContext = vm.createContext({
+    module: { exports: {} },
+    exports: {},
+    console,
+    TEST_SPREADSHEET_ID: 'test-only-id'
+  });
+  vm.runInContext(appsScriptSource, testOnlyContext);
+  assert.equal(
+    testOnlyContext.module.exports.configuredSpreadsheetId_({ rows: [] }),
+    'test-only-id'
+  );
+
+  const productionOnlyContext = vm.createContext({
+    module: { exports: {} },
+    exports: {},
+    console,
+    SPREADSHEET_ID: 'production-only-id'
+  });
+  vm.runInContext(appsScriptSource, productionOnlyContext);
+  assert.equal(
+    productionOnlyContext.module.exports.configuredSpreadsheetId_({ rows: [] }),
+    'production-only-id'
+  );
+
+  const ambiguousContext = vm.createContext({
+    module: { exports: {} },
+    exports: {},
+    console,
+    TEST_SPREADSHEET_ID: 'test-id',
+    SPREADSHEET_ID: 'production-id'
+  });
+  vm.runInContext(appsScriptSource, ambiguousContext);
+  assert.throws(() =>
+    ambiguousContext.module.exports.configuredSpreadsheetId_({ rows: [] })
+  );
+  assert.throws(() =>
+    productionOnlyContext.module.exports.configuredSpreadsheetId_({ target: 'test' })
+  );
+  assert.match(appsScriptSource, /Expected spreadsheet identity is not configured/);
+  assert.match(appsScriptSource, /if \(!action && Array\.isArray\(body\.rows\)\) action = 'kioskSignIn'/);
+});
+
+test('44 Admin success copy names TEST only in TEST mode', () => {
+  assert.match(adminHtml, /testMode \? 'Instructor added to the TEST Sheet' : 'Instructor added to the payroll Sheet'/);
 });

@@ -111,23 +111,53 @@ function constantTimeTextEqual_(left, right) {
   return mismatch === 0;
 }
 
-function configuredSpreadsheetId_() {
-  if (typeof TEST_SPREADSHEET_ID !== 'undefined' && cleanText_(TEST_SPREADSHEET_ID)) {
-    return cleanText_(TEST_SPREADSHEET_ID);
+function requestTarget_(body) {
+  var target = cleanText_(body && body.target).toLowerCase();
+  if (target && target !== 'test' && target !== 'production') {
+    throw new Error('Spreadsheet target is not configured.');
   }
-  if (typeof SPREADSHEET_ID !== 'undefined' && cleanText_(SPREADSHEET_ID)) {
-    return cleanText_(SPREADSHEET_ID);
-  }
-  throw new Error('Spreadsheet is not configured.');
+  return target;
 }
 
-function openExpectedSpreadsheet_() {
-  var spreadsheet = SpreadsheetApp.openById(configuredSpreadsheetId_());
+function configuredSpreadsheetId_(body) {
+  var target = requestTarget_(body);
+  var testId = typeof TEST_SPREADSHEET_ID === 'undefined'
+    ? ''
+    : cleanText_(TEST_SPREADSHEET_ID);
+  var productionId = typeof SPREADSHEET_ID === 'undefined'
+    ? ''
+    : cleanText_(SPREADSHEET_ID);
+
+  if (target === 'test') {
+    if (!testId) {
+      throw new Error('TEST spreadsheet is not configured.');
+    }
+    return testId;
+  }
+  if (target === 'production') {
+    if (!productionId) {
+      throw new Error('Production spreadsheet is not configured.');
+    }
+    return productionId;
+  }
+
+  // Preserve the direct legacy {token, rows} contract only when the Apps
+  // Script project is unambiguous. Never guess between TEST and production.
+  if (Boolean(testId) === Boolean(productionId)) {
+    throw new Error('Legacy spreadsheet target is ambiguous.');
+  }
+  return testId || productionId;
+}
+
+function openExpectedSpreadsheet_(body) {
   if (
-    typeof EXPECTED_SPREADSHEET_NAME !== 'undefined'
-    && cleanText_(EXPECTED_SPREADSHEET_NAME)
-    && spreadsheet.getName() !== EXPECTED_SPREADSHEET_NAME
+    typeof EXPECTED_SPREADSHEET_NAME === 'undefined'
+    || !cleanText_(EXPECTED_SPREADSHEET_NAME)
   ) {
+    throw new Error('Expected spreadsheet identity is not configured.');
+  }
+  var spreadsheet = SpreadsheetApp.openById(configuredSpreadsheetId_(body));
+  if (spreadsheet.getName() !== cleanText_(EXPECTED_SPREADSHEET_NAME)) {
     throw new Error('Spreadsheet identity check failed.');
   }
   return spreadsheet;
@@ -245,13 +275,6 @@ function sameEvent_(record, candidate) {
     && normalizeEventText_(record.site) === normalizeEventText_(candidate.site);
 }
 
-function sameClassSlot_(record, candidate) {
-  return activeRecord_(record)
-    && displayDate_(record.date) === displayDate_(candidate.date)
-    && normalizeEventText_(record.classLabel) === normalizeEventText_(candidate.classLabel)
-    && normalizeEventText_(record.site) === normalizeEventText_(candidate.site);
-}
-
 function findExistingEvent_(records, candidate) {
   var id = cleanText_(candidate.rowId);
   for (var i = 0; i < records.length; i += 1) {
@@ -335,7 +358,7 @@ function kioskSignInAction_(body) {
   }
 
   try {
-    var spreadsheet = openExpectedSpreadsheet_();
+    var spreadsheet = openExpectedSpreadsheet_(body);
     var sheet = signinsSheet_(spreadsheet);
     var state = readSignins_(sheet);
     var results = body.rows.map(function(row) {
@@ -391,7 +414,7 @@ function dailyReviewAction_(body) {
   if (!validCalendarDate_(date) || date > todayNewYork_()) {
     return jsonResult_({ ok: false, result: 'rejected', message: 'Choose a non-future date.' });
   }
-  var spreadsheet = openExpectedSpreadsheet_();
+  var spreadsheet = openExpectedSpreadsheet_(body);
   var state = readSignins_(signinsSheet_(spreadsheet));
   var records = state.records
     .filter(function(record) { return activeRecord_(record) && record.date === date; })
@@ -405,7 +428,7 @@ function instructorSearchAction_(body) {
   if (!instructor || !validCalendarDate_(date) || date > todayNewYork_()) {
     return jsonResult_({ ok: false, result: 'rejected', message: 'Enter an instructor and non-future date.' });
   }
-  var spreadsheet = openExpectedSpreadsheet_();
+  var spreadsheet = openExpectedSpreadsheet_(body);
   var state = readSignins_(signinsSheet_(spreadsheet));
   var key = normalizeEventText_(instructor);
   var matches = state.records.filter(function(record) {
@@ -521,7 +544,7 @@ function addMissedInstructorAction_(body) {
   }
 
   try {
-    var spreadsheet = openExpectedSpreadsheet_();
+    var spreadsheet = openExpectedSpreadsheet_(body);
     var value = validateAdminAddition_(body, spreadsheet);
     if (!value) {
       return jsonResult_({
@@ -550,14 +573,6 @@ function addMissedInstructorAction_(body) {
     };
     var auditSheet = adminAuditSheet_(spreadsheet);
     var existing = findExistingEvent_(state.records, candidate);
-    if (!existing) {
-      for (var i = 0; i < state.records.length; i += 1) {
-        if (sameClassSlot_(state.records[i], candidate)) {
-          existing = state.records[i];
-          break;
-        }
-      }
-    }
 
     if (existing) {
       var existingAuditNumber = appendAdminAudit_(
@@ -602,8 +617,9 @@ if (typeof module !== 'undefined' && module.exports) {
     validCalendarDate_: validCalendarDate_,
     activeRecord_: activeRecord_,
     sameEvent_: sameEvent_,
-    sameClassSlot_: sameClassSlot_,
     findExistingEvent_: findExistingEvent_,
+    requestTarget_: requestTarget_,
+    configuredSpreadsheetId_: configuredSpreadsheetId_,
     validateKioskRow_: validateKioskRow_
   };
 }

@@ -155,7 +155,8 @@ export async function postGoogle(config, action, data, fetchImpl = fetch) {
       body: JSON.stringify({
         token: config.webhookToken,
         action,
-        ...data
+        ...data,
+        target: config.preview ? 'test' : 'production'
       }),
       redirect: 'follow',
       signal: AbortSignal.timeout(8_000)

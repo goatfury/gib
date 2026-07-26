@@ -828,6 +828,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
   // Sync keys
   const SYNC_QUEUE_KEY   = 'gib_m1_sync_queue_v1';
+  const SIGNIN_TXN_KEY   = 'gib_m1_signin_txn_v1';
   const SYNC_AUTO_KEY    = 'gib_m1_sync_auto_v1';
   const DEVICE_LABEL_KEY = 'gib_m1_device_label_v1';
 
@@ -1739,6 +1740,59 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     safeSet(SIGNINS_KEY, rows);
   }
 
+  function recoverPendingSigninTransaction() {
+    const raw = localStorage.getItem(SIGNIN_TXN_KEY);
+    if (!raw) return true;
+    try {
+      const transaction = JSON.parse(raw);
+      if (
+        !transaction
+        || transaction.version !== 1
+        || !Array.isArray(transaction.newRows)
+        || !Array.isArray(transaction.queuedRows)
+      ) {
+        return false;
+      }
+      const currentLedger = safeParse(SIGNINS_KEY, []);
+      const currentQueue = safeParse(SYNC_QUEUE_KEY, []);
+      const merged = window.GibM1Safety.mergeSigninTransaction(
+        Array.isArray(currentLedger) ? currentLedger : [],
+        Array.isArray(currentQueue) ? currentQueue : [],
+        transaction
+      );
+      safeSet(SIGNINS_KEY, merged.ledger);
+      safeSet(SYNC_QUEUE_KEY, merged.queue);
+      localStorage.removeItem(SIGNIN_TXN_KEY);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function commitSigninTransaction(existingRows, newRows, queuedRows) {
+    let staged = false;
+    try {
+      safeSet(SIGNIN_TXN_KEY, {
+        version: 1,
+        createdAt: new Date().toISOString(),
+        newRows,
+        queuedRows
+      });
+      staged = true;
+      const merged = window.GibM1Safety.mergeSigninTransaction(
+        existingRows,
+        loadSyncQueue(),
+        { newRows, queuedRows }
+      );
+      saveSignins(merged.ledger);
+      saveSyncQueue(merged.queue);
+      localStorage.removeItem(SIGNIN_TXN_KEY);
+      return true;
+    } catch (error) {
+      return staged && recoverPendingSigninTransaction();
+    }
+  }
+
   const PAYROLL_HEADERS = ['Timestamp','Date','Class Label','Duration (hr)','Instructor','Site','Notes'];
   function isExportableSignin(row) {
     return window.GibM1Safety.isActiveLedgerRow(row);
@@ -2135,12 +2189,10 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const duplicateClasses = window.GibM1Safety.duplicateClasses(rows, date, name, site, classes);
     if (duplicateClasses.length) {
       const list = duplicateClasses.map(cls => `- ${cls}`).join('\n');
-      const accepted = confirm(`Possible duplicate payroll sign-in for ${name} on ${date} at ${site}:\n\n${list}\n\nChoose OK only if this duplicate is intentional.`);
-      if (!accepted) return;
+      const acknowledged = confirm(`Possible duplicate payroll sign-in for ${name} on ${date} at ${site}:\n\n${list}\n\nA matching active row already exists. Choose OK to keep the existing row, or Cancel to review the form.`);
+      if (acknowledged) showToast('Existing sign-in kept — no duplicate added');
+      return;
     }
-
-    upsertName(name);
-    refreshNameDatalist();
 
     const batchId = `${now.getTime()}-${Math.random().toString(16).slice(2, 8)}`;
     const newRows = classes.map((cls, index) => {
@@ -2154,13 +2206,24 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         'Site': site,
         'Notes': notes,
         'Status': 'OK',
+        '__syncState': 'never-sent',
         '__batchId': batchId,
         '__rowId': makeLedgerRowId(batchId, index)
       };
     });
-    saveSignins(rows.concat(newRows));
 
-    // Save locally and open the Undo window before any network send.
+    const autoSync = localStorage.getItem(SYNC_AUTO_KEY) !== 'false';
+    const deviceLabel = (localStorage.getItem(DEVICE_LABEL_KEY) || cfg.location || '').trim();
+    const queuedRows = newRows.map(row => makeSyncRowFromLedgerRow(row, deviceLabel));
+    if (!commitSigninTransaction(rows, newRows, queuedRows)) {
+      alert('This sign-in could not be stored safely. The form was left unchanged; free device storage and try again.');
+      return;
+    }
+
+    upsertName(name);
+    refreshNameDatalist();
+
+    // The ledger and waiting list are both durable before the Undo window opens.
     openSignInModal({
       name,
       classes,
@@ -2168,10 +2231,6 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       formSnapshot: { name, notes, classes }
     });
 
-    const autoSync = localStorage.getItem(SYNC_AUTO_KEY) !== 'false';
-    const deviceLabel = (localStorage.getItem(DEVICE_LABEL_KEY) || cfg.location || '').trim();
-    const queuedRows = newRows.map(row => makeSyncRowFromLedgerRow(row, deviceLabel));
-    queuedRows.forEach(r => enqueueRow(r));
     reconcileSyncQueue();
     if (autoSync) {
       // Send after DONE or after the 15-second Undo window closes.
@@ -2189,13 +2248,20 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     let idx = -1;
     for (let i = rows.length - 1; i >= 0; i -= 1) {
       const status = rows[i].Status || 'OK';
-      if (status !== 'VOID') {
+      if (status !== 'VOID' && status !== 'VOIDED') {
         idx = i;
         break;
       }
     }
     if (idx === -1) {
       alert('All sign-ins are already voided.');
+      return;
+    }
+    if (
+      rows[idx].__syncState !== 'never-sent'
+      || !window.GibM1Safety.queueContainsLedgerRow(loadSyncQueue(), rows[idx])
+    ) {
+      alert('The last sign-in was already confirmed by Google, or its send state is unknown. Local Void is blocked so the payroll Sheet and export cannot disagree; use the payroll correction process instead.');
       return;
     }
     const reason = prompt('Optional void reason (leave blank if none):') || '';
@@ -2264,6 +2330,13 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     syncInProgress = true;
     $('#btnSyncNow').disabled = true;
     try {
+      // Persist "attempted" before the request. A lost response can never make
+      // a possibly-written Google row eligible for local Void or Clear All.
+      saveSignins(window.GibM1Safety.markAttemptedLedgerRows(
+        loadSignins(),
+        queue,
+        new Date().toISOString()
+      ));
       const response = await fetch('/.netlify/functions/m1-kiosk-sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2281,6 +2354,10 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       if (!applied.readable) {
         throw new Error('The send result was unclear. Rows are still waiting.');
       }
+      saveSignins(window.GibM1Safety.markCompletedLedgerRows(
+        loadSignins(),
+        applied.completed
+      ));
       saveSyncQueue(applied.remaining);
       if (applied.completed.length) {
         localStorage.setItem('gib_m1_sync_last', new Date().toISOString());
@@ -2653,6 +2730,18 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   $('#btnCopy').addEventListener('click', copyCSV);
   $('#btnVoidLast').addEventListener('click', voidLastSignin);
   $('#btnClearSignins').addEventListener('click', () => {
+    const rows = loadSignins();
+    const queue = loadSyncQueue();
+    const hasConfirmedOrUnknown = rows
+      .filter(window.GibM1Safety.isActiveLedgerRow)
+      .some(row =>
+        row.__syncState !== 'never-sent'
+        || !window.GibM1Safety.queueContainsLedgerRow(queue, row)
+      );
+    if (hasConfirmedOrUnknown) {
+      alert('Clear All is blocked because one or more active rows were already confirmed by Google, or their send state is unknown. This prevents the local export from disagreeing with the payroll Sheet.');
+      return;
+    }
     if (!confirm('Clear ALL locally stored sign-ins on this device?')) return;
     saveSignins([]);
     reconcileSyncQueue();
@@ -2677,6 +2766,11 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
   // Init only after the shared Rev schedule is readable.
   async function initializeCandidate() {
+    const transactionRecovered = recoverPendingSigninTransaction();
+    if (!transactionRecovered) {
+      alert('A pending sign-in could not be recovered safely. New sign-ins are paused; existing records remain available for review.');
+      $('#btnSignIn').disabled = true;
+    }
     try {
       await loadSharedSchedule();
     } catch (error) {

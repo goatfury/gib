@@ -108,6 +108,78 @@
     });
   }
 
+  function containsRow(rows, candidate) {
+    const values = Array.isArray(rows) ? rows : [];
+    const id = rowId(candidate);
+    if (id && values.some(row => rowId(row) === id)) return true;
+    const key = eventKey(candidate);
+    return values.some(row => eventKey(row) === key);
+  }
+
+  function mergeSigninTransaction(ledger, queue, transaction) {
+    const mergedLedger = Array.isArray(ledger) ? ledger.slice() : [];
+    const mergedQueue = Array.isArray(queue) ? queue.slice() : [];
+    const newRows = transaction && Array.isArray(transaction.newRows)
+      ? transaction.newRows
+      : [];
+    const queuedRows = transaction && Array.isArray(transaction.queuedRows)
+      ? transaction.queuedRows
+      : [];
+
+    newRows.forEach(row => {
+      if (rowId(row) && !containsRow(mergedLedger, row)) mergedLedger.push(row);
+    });
+    queuedRows.forEach(row => {
+      if (
+        rowId(row)
+        && containsRow(mergedLedger.filter(isActiveLedgerRow), row)
+        && !containsRow(mergedQueue, row)
+      ) {
+        mergedQueue.push(row);
+      }
+    });
+    return { ledger: mergedLedger, queue: mergedQueue };
+  }
+
+  function queueContainsLedgerRow(queue, ledgerRow) {
+    const id = rowId(ledgerRow);
+    return Boolean(
+      isActiveLedgerRow(ledgerRow)
+      && id
+      && (Array.isArray(queue) ? queue : []).some(row => rowId(row) === id)
+    );
+  }
+
+  function markCompletedLedgerRows(ledger, completed) {
+    const results = Array.isArray(completed) ? completed : [];
+    const byId = new Map();
+    results.forEach(item => {
+      const id = rowId(item && item.row);
+      if (id && !byId.has(id)) byId.set(id, item.result || {});
+    });
+    return (Array.isArray(ledger) ? ledger : []).map(row => {
+      const result = byId.get(rowId(row));
+      if (!result) return row;
+      return {
+        ...row,
+        __syncState: 'confirmed',
+        __linkedRecordId: clean(result.linkedRecordId)
+      };
+    });
+  }
+
+  function markAttemptedLedgerRows(ledger, queue, attemptedAt) {
+    const waiting = Array.isArray(queue) ? queue : [];
+    return (Array.isArray(ledger) ? ledger : []).map(row => {
+      if (!queueContainsLedgerRow(waiting, row)) return row;
+      return {
+        ...row,
+        __syncState: 'attempted',
+        __lastAttemptAt: clean(attemptedAt)
+      };
+    });
+  }
+
   root.GibM1Safety = Object.freeze({
     clean,
     normalize,
@@ -117,6 +189,10 @@
     reconcileQueue,
     isSafeCompletion,
     applyReadableResults,
-    duplicateClasses
+    duplicateClasses,
+    mergeSigninTransaction,
+    queueContainsLedgerRow,
+    markCompletedLedgerRows,
+    markAttemptedLedgerRows
   });
 })(typeof globalThis !== 'undefined' ? globalThis : window);

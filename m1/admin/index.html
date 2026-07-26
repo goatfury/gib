@@ -712,7 +712,7 @@
             reason
           });
           toast(data.result === 'added'
-            ? 'Instructor added to the TEST Sheet'
+            ? (testMode ? 'Instructor added to the TEST Sheet' : 'Instructor added to the payroll Sheet')
             : 'Already recorded — no duplicate row created');
           await loadReview(currentDate);
         } catch (error) {
