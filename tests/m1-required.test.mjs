@@ -6,11 +6,15 @@ import test from 'node:test';
 
 import {
   ADMIN_COOKIE,
+  ADMIN_REQUEST_HEADER,
+  KIOSK_DEVICE_HEADER,
   createAdminSession,
   isDeployPreview,
   postGoogle,
+  readAdminSession,
   runtimeConfig,
   sanitizeKioskRows,
+  validAdminPassphrase,
   validNonFutureDate
 } from '../netlify/functions/_lib/m1-common.mjs';
 import { handleAdminAdd } from '../netlify/functions/m1-admin-add.mjs';
@@ -48,25 +52,37 @@ const productionEnv = Object.freeze({
   CONTEXT: 'production',
   GIB_M1_WEBHOOK_URL: 'https://script.google.com/macros/s/PROD_ID/exec',
   GIB_M1_WEBHOOK_TOKEN: 'production-token-long-enough',
-  GIB_M1_ADMIN_PASSPHRASE: 'four memorable words here'
+  GIB_M1_ADMIN_PASSPHRASE: 'four memorable words here',
+  GIB_M1_KIOSK_DEVICE_TOKEN: 'correct-production-device-token'
 });
 const fixedNow = Date.parse('2026-07-26T15:00:00Z');
 const fixedDateNow = new Date('2026-07-26T15:00:00Z');
+const fixedAdminRequestToken = Buffer.alloc(32, 9).toString('base64url');
 
-function jsonRequest(url, body, cookie = '') {
+function jsonRequest(url, body, cookie = '', extraHeaders = {}) {
   return new Request(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(cookie ? { Cookie: cookie } : {})
+      ...(cookie ? { Cookie: cookie } : {}),
+      ...extraHeaders
     },
     body: JSON.stringify(body)
   });
 }
 
 function previewCookie(adminName = 'Stuart Turner') {
-  const config = runtimeConfig(previewEnv, { admin: true });
-  return `${ADMIN_COOKIE}=${encodeURIComponent(createAdminSession(adminName, config.sessionSecret, fixedNow))}`;
+  const config = runtimeConfig(previewEnv, {
+    admin: true,
+    requestUrl: 'https://deploy-preview-44--gib-live.netlify.app/m1/admin/'
+  });
+  return `${ADMIN_COOKIE}=${encodeURIComponent(
+    createAdminSession(adminName, config.sessionSecret, fixedNow, fixedAdminRequestToken)
+  )}`;
+}
+
+function adminHeaders(token = fixedAdminRequestToken) {
+  return { [ADMIN_REQUEST_HEADER]: token };
 }
 
 function googleResponse(value, status = 200) {
@@ -219,6 +235,7 @@ test('14 Reset preserves sign-ins and the waiting list while Factory Reset names
     kioskHtml.indexOf('function factoryReset()')
   );
   assert.doesNotMatch(resetBody, /removeItem\(SIGNINS_KEY\)|removeItem\(SYNC_QUEUE_KEY\)/);
+  assert.match(resetBody, /removeItem\(KIOSK_DEVICE_TOKEN_KEY\)/);
   assert.match(kioskHtml, /Factory reset will DELETE all device info, schedule data, sign-ins, and waiting payroll rows/);
 });
 
@@ -254,6 +271,8 @@ test('16 TEST login shortcut works only in a Deploy Preview', async () => {
     }
   );
   assert.equal(preview.status, 200);
+  const previewBody = await preview.json();
+  assert.match(previewBody.requestToken, /^[A-Za-z0-9_-]{43}$/);
   const production = await handleAdminLogin(
     jsonRequest('https://bjjsite.com/.netlify/functions/m1-admin-login', {
       adminName: 'Stuart Turner',
@@ -265,7 +284,15 @@ test('16 TEST login shortcut works only in a Deploy Preview', async () => {
 });
 
 test('17 logout clears the secure HTTP-only cookie and protected responses are no-store', async () => {
-  const response = await handleAdminLogout(jsonRequest('https://example.test/logout', {}));
+  const response = await handleAdminLogout(
+    jsonRequest(
+      'https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-admin-logout',
+      {},
+      previewCookie(),
+      adminHeaders()
+    ),
+    { env: previewEnv, now: fixedNow }
+  );
   const cookie = response.headers.get('set-cookie');
   assert.match(cookie, /Max-Age=0/);
   assert.match(cookie, /Secure/);
@@ -299,7 +326,8 @@ test('21 Instructor search returns the selected date and recent records', async 
     jsonRequest(
       'https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-admin-search',
       { instructor: 'QA Test Instructor', date: '2026-07-25' },
-      previewCookie()
+      previewCookie(),
+      adminHeaders()
     ),
     {
       env: previewEnv,
@@ -336,7 +364,8 @@ test('23 One blank can be filled with a confirmed Admin addition', async () => {
         notes: '',
         reason: 'Missed tablet sign-in'
       },
-      previewCookie()
+      previewCookie(),
+      adminHeaders()
     ),
     {
       env: previewEnv,
@@ -399,7 +428,12 @@ test('25 Rapid double-click produces one added result and one already-exists res
     reason: 'Missed tablet sign-in'
   };
   const make = () => handleAdminAdd(
-    jsonRequest('https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-admin-add', payload, previewCookie()),
+    jsonRequest(
+      'https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-admin-add',
+      payload,
+      previewCookie(),
+      adminHeaders()
+    ),
     { env: previewEnv, now: fixedNow, dateNow: fixedDateNow, fetch: fetchMock }
   );
   const responses = await Promise.all([make(), make()]);
@@ -705,4 +739,674 @@ test('43 Netlify pins every authenticated request to the current TEST or product
 
 test('44 Admin success copy names TEST only in TEST mode', () => {
   assert.match(adminHtml, /testMode \? 'Instructor added to the TEST Sheet' : 'Instructor added to the payroll Sheet'/);
+});
+
+test('45 production kiosk requests without device authentication never reach Google', async () => {
+  let googleCalls = 0;
+  const response = await handleKioskSync(
+    jsonRequest('https://bjjsite.com/.netlify/functions/m1-kiosk-sync', {
+      rows: [kioskRow()]
+    }),
+    {
+      env: productionEnv,
+      fetch: async () => {
+        googleCalls += 1;
+        return googleResponse({ ok: true, results: [] });
+      }
+    }
+  );
+  assert.equal(response.status, 403);
+  assert.equal(googleCalls, 0);
+});
+
+test('45b wrong production kiosk device authentication never reaches Google', async () => {
+  let googleCalls = 0;
+  const response = await handleKioskSync(
+    jsonRequest(
+      'https://bjjsite.com/.netlify/functions/m1-kiosk-sync',
+      { rows: [kioskRow()] },
+      '',
+      { [KIOSK_DEVICE_HEADER]: 'wrong-production-device-token' }
+    ),
+    {
+      env: productionEnv,
+      fetch: async () => {
+        googleCalls += 1;
+        return googleResponse({ ok: true, results: [] });
+      }
+    }
+  );
+  assert.equal(response.status, 403);
+  assert.equal(googleCalls, 0);
+  assert.equal(
+    (await response.json()).message,
+    'Device sync code is not configured or was rejected.'
+  );
+});
+
+test('45c correct production kiosk device authentication can reach Google', async () => {
+  let googleCalls = 0;
+  const row = kioskRow({ RowID: 'authenticated-production-row' });
+  const response = await handleKioskSync(
+    jsonRequest(
+      'https://bjjsite.com/.netlify/functions/m1-kiosk-sync',
+      { rows: [row] },
+      '',
+      { [KIOSK_DEVICE_HEADER]: productionEnv.GIB_M1_KIOSK_DEVICE_TOKEN }
+    ),
+    {
+      env: productionEnv,
+      fetch: async () => {
+        googleCalls += 1;
+        return googleResponse({
+          ok: true,
+          results: [{
+            rowId: row.RowID,
+            result: 'added',
+            linkedRecordId: 'production-test-double'
+          }]
+        });
+      }
+    }
+  );
+  assert.equal(response.status, 200);
+  assert.equal(googleCalls, 1);
+});
+
+test('45d exact Deploy Preview permits fake TEST data without a device secret', async () => {
+  let googleCalls = 0;
+  const row = kioskRow({ RowID: 'preview-fake-row' });
+  const response = await handleKioskSync(
+    jsonRequest(
+      'https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-kiosk-sync',
+      { rows: [row] }
+    ),
+    {
+      env: previewEnv,
+      fetch: async () => {
+        googleCalls += 1;
+        return googleResponse({
+          ok: true,
+          results: [{ rowId: row.RowID, result: 'added', linkedRecordId: 'test-only-row' }]
+        });
+      }
+    }
+  );
+  assert.equal(response.status, 200);
+  assert.equal(googleCalls, 1);
+  assert.equal((await response.json()).test, true);
+});
+
+test('45e Deploy Preview rejects non-TEST instructor data before Google', async () => {
+  let googleCalls = 0;
+  const response = await handleKioskSync(
+    jsonRequest(
+      'https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-kiosk-sync',
+      { rows: [kioskRow({ Instructor: 'Stuart Turner' })] }
+    ),
+    {
+      env: previewEnv,
+      fetch: async () => {
+        googleCalls += 1;
+        return googleResponse({ ok: true, results: [] });
+      }
+    }
+  );
+  assert.equal(response.status, 400);
+  assert.equal(googleCalls, 0);
+});
+
+test('45f preview context cannot bypass device authentication on a production host', async () => {
+  let googleCalls = 0;
+  const response = await handleKioskSync(
+    jsonRequest('https://bjjsite.com/.netlify/functions/m1-kiosk-sync', {
+      rows: [kioskRow()]
+    }),
+    {
+      env: {
+        ...productionEnv,
+        CONTEXT: 'deploy-preview',
+        GIB_TEST_WEBHOOK_URL: previewEnv.GIB_TEST_WEBHOOK_URL,
+        GIB_TEST_WEBHOOK_TOKEN: previewEnv.GIB_TEST_WEBHOOK_TOKEN
+      },
+      fetch: async () => {
+        googleCalls += 1;
+        return googleResponse({ ok: true, results: [] });
+      }
+    }
+  );
+  assert.equal(response.status, 403);
+  assert.equal(googleCalls, 0);
+});
+
+test('45g the masked device sync code control is inside PIN-protected local Admin', () => {
+  const adminSection = kioskHtml.slice(
+    kioskHtml.indexOf('<section id="admin"'),
+    kioskHtml.indexOf('<div id="adminPinModal"')
+  );
+  assert.match(
+    adminSection,
+    /id="cfgDeviceSyncCode" type="password" autocomplete="off"/
+  );
+  assert.match(adminSection, /id="btnSaveDeviceSyncCode"/);
+  assert.match(kioskHtml, /const KIOSK_DEVICE_TOKEN_KEY = 'gib_m1_kiosk_device_token_v1'/);
+  assert.ok(
+    kioskHtml.indexOf('function requestAdminAccess()')
+      < kioskHtml.indexOf("$('#btnAdmin').addEventListener")
+  );
+  assert.match(
+    kioskHtml.slice(
+      kioskHtml.indexOf("$('#btnAdmin').addEventListener"),
+      kioskHtml.indexOf("$('#btnAdminLogout').addEventListener")
+    ),
+    /requestAdminAccess\(\)/
+  );
+});
+
+test('46 kiosk startup has a last-known-good schedule fallback and no no-store fetch', () => {
+  assert.match(kioskHtml, /gib_m1_shared_schedule_cache_v1/);
+  assert.doesNotMatch(kioskHtml, /fetch\('\/m1\/shared-schedule\.json', \{ cache: 'no-store' \}\)/);
+});
+
+test('46b successful schedule fetch validates all seven days and updates local cache', async () => {
+  let cached = null;
+  const result = await safety.loadScheduleStartup({
+    fetchSchedule: async () => JSON.parse(JSON.stringify(schedule)),
+    readCache: () => null,
+    writeCache: value => { cached = JSON.parse(JSON.stringify(value)); },
+    readSaved: () => null
+  });
+  assert.equal(result.source, 'network');
+  assert.equal(cached.version, schedule.version);
+  assert.deepEqual(Object.keys(cached.days).sort(), [
+    'Friday',
+    'Monday',
+    'Saturday',
+    'Sunday',
+    'Thursday',
+    'Tuesday',
+    'Wednesday'
+  ]);
+});
+
+test('46bb malformed shared schedules and versions are never accepted for caching', () => {
+  const missingDay = JSON.parse(JSON.stringify(schedule));
+  delete missingDay.days.Sunday;
+  const nonArrayDay = JSON.parse(JSON.stringify(schedule));
+  nonArrayDay.days.Monday = '6:00 AM BJJ';
+  const nonStringClass = JSON.parse(JSON.stringify(schedule));
+  nonStringClass.days.Monday = [42];
+  const missingVersion = JSON.parse(JSON.stringify(schedule));
+  delete missingVersion.version;
+  const nonStringVersion = JSON.parse(JSON.stringify(schedule));
+  nonStringVersion.version = 42;
+  [missingDay, nonArrayDay, nonStringClass, missingVersion, nonStringVersion]
+    .forEach(candidate => {
+      assert.equal(
+        safety.validateSchedulePayload(candidate, { requireVersion: true }),
+        null
+      );
+    });
+});
+
+test('46c failed schedule fetch uses a valid cached shared schedule first', async () => {
+  const cached = JSON.parse(JSON.stringify(schedule));
+  cached.version = 'cached-test-version';
+  const result = await safety.loadScheduleStartup({
+    fetchSchedule: async () => { throw new Error('offline'); },
+    readCache: () => cached,
+    readSaved: () => ({
+      days: schedule.days,
+      source: 'manual',
+      updatedAt: '2026-07-25T10:00:00.000Z'
+    })
+  });
+  assert.equal(result.source, 'cache');
+  assert.equal(result.schedule.version, 'cached-test-version');
+});
+
+test('46d failed schedule fetch still uses a valid saved local schedule', async () => {
+  const result = await safety.loadScheduleStartup({
+    fetchSchedule: async () => { throw new Error('offline'); },
+    readCache: () => ({ version: 'invalid-cache', days: { Monday: [] } }),
+    readSaved: () => ({
+      days: JSON.parse(JSON.stringify(schedule.days)),
+      source: 'manual',
+      updatedAt: '2026-07-25T10:00:00.000Z'
+    })
+  });
+  assert.equal(result.source, 'saved');
+  assert.equal(result.schedule.version, null);
+  assert.equal(Object.keys(result.schedule.days).length, 7);
+});
+
+test('46e failed schedule fetch with no valid fallback blocks startup', async () => {
+  await assert.rejects(
+    safety.loadScheduleStartup({
+      fetchSchedule: async () => { throw new Error('offline'); },
+      readCache: () => null,
+      readSaved: () => ({ days: { Monday: ['6:00 AM BJJ'] } })
+    }),
+    /offline/
+  );
+  assert.match(kioskHtml, /No valid network, cached, or saved schedule is available\. Sign-in is paused\./);
+  const initializeBody = kioskHtml.slice(
+    kioskHtml.indexOf('async function initializeCandidate()'),
+    kioskHtml.indexOf('initializeCandidate();')
+  );
+  const noScheduleCatch = initializeBody.slice(
+    initializeBody.indexOf('catch (error)'),
+    initializeBody.indexOf('initScheduleEditor()')
+  );
+  assert.doesNotMatch(noScheduleCatch, /\breturn\s*;/);
+  assert.match(initializeBody, /Existing records and sync tools remain available\./);
+});
+
+test('46f offline schedule startup does not alter the payroll ledger or waiting queue', async () => {
+  const ledger = [{ ...kioskRow({ RowID: 'offline-ledger' }), Status: 'OK' }];
+  const queue = [{ ...kioskRow({ RowID: 'offline-ledger' }) }];
+  const beforeLedger = JSON.stringify(ledger);
+  const beforeQueue = JSON.stringify(queue);
+  const storage = new Map([
+    ['gib_m1_signins_v1', beforeLedger],
+    ['gib_m1_sync_queue_v1', beforeQueue],
+    ['gib_m1_schedule_v1', JSON.stringify({
+      days: schedule.days,
+      source: 'manual',
+      updatedAt: '2026-07-25T10:00:00.000Z'
+    })],
+    ['gib_m1_shared_schedule_cache_v1', JSON.stringify(schedule)]
+  ]);
+  const beforeLocalSchedule = storage.get('gib_m1_schedule_v1');
+  const result = await safety.loadScheduleStartup({
+    fetchSchedule: async () => { throw new Error('offline'); },
+    readCache: () => JSON.parse(storage.get('gib_m1_shared_schedule_cache_v1')),
+    writeCache: value => storage.set('gib_m1_shared_schedule_cache_v1', JSON.stringify(value)),
+    readSaved: () => null
+  });
+  assert.equal(result.source, 'cache');
+  assert.equal(storage.get('gib_m1_signins_v1'), beforeLedger);
+  assert.equal(storage.get('gib_m1_sync_queue_v1'), beforeQueue);
+  assert.equal(storage.get('gib_m1_schedule_v1'), beforeLocalSchedule);
+});
+
+test('46g the validated startup selection controls the page before an older saved local schedule', () => {
+  const loadScheduleBody = kioskHtml.slice(
+    kioskHtml.indexOf('function loadSchedule()'),
+    kioskHtml.indexOf('function saveSchedule')
+  );
+  assert.ok(
+    loadScheduleBody.indexOf('STARTUP_SCHEDULE_SELECTION_ACTIVE')
+      < loadScheduleBody.indexOf('safeParse(SCHEDULE_KEY')
+  );
+  assert.match(kioskHtml, /STARTUP_SCHEDULE_SELECTION = \{/);
+  assert.match(kioskHtml, /STARTUP_SCHEDULE_SELECTION_ACTIVE = true/);
+});
+
+test('46h an empty offline day still discloses the last-known schedule source', () => {
+  assert.match(kioskHtml, /Offline — the last known shared schedule is active\./);
+  assert.match(kioskHtml, /Offline — the last known saved local schedule is active\./);
+});
+
+test('47 browser-rendered stored values never flow through innerHTML', () => {
+  assert.doesNotMatch(kioskHtml, /\.innerHTML\s*=/);
+  assert.doesNotMatch(adminHtml, /\.innerHTML\s*=/);
+  assert.doesNotMatch(`${kioskHtml}\n${adminHtml}`, /insertAdjacentHTML|document\.write/);
+});
+
+test('47b malicious stored HTML is rendered literally without an image or handler', () => {
+  const payload = '<img src=x onerror="throw new Error(\'executed\')">';
+  function fakeElement(tagName) {
+    let ownText = '';
+    return {
+      tagName: String(tagName).toUpperCase(),
+      className: '',
+      childNodes: [],
+      append(...children) {
+        this.childNodes.push(...children);
+      },
+      get textContent() {
+        return ownText + this.childNodes.map(child => child.textContent || '').join('');
+      },
+      set textContent(value) {
+        ownText = String(value);
+        this.childNodes = [];
+      }
+    };
+  }
+  const fakeDocument = {
+    createElement: fakeElement,
+    createTextNode: value => ({ nodeType: 3, textContent: String(value), childNodes: [] })
+  };
+  const rendererSource = adminHtml.slice(
+    adminHtml.indexOf('function makeElement'),
+    adminHtml.indexOf('function refreshInstructorOptions')
+  );
+  const rendererContext = vm.createContext({ document: fakeDocument });
+  vm.runInContext(
+    `${rendererSource}\nglobalThis.recordElementForTest = recordElement;`,
+    rendererContext
+  );
+  const rendered = rendererContext.recordElementForTest({
+    instructor: payload,
+    date: '2026-07-25',
+    classLabel: payload,
+    site: payload,
+    source: 'Admin-added'
+  });
+  const elementTags = [];
+  (function walk(node) {
+    if (node.tagName) elementTags.push(node.tagName);
+    (node.childNodes || []).forEach(walk);
+  })(rendered);
+  assert.ok(rendered.textContent.includes(payload));
+  assert.equal(elementTags.includes('IMG'), false);
+  assert.equal(Object.hasOwn(rendered, 'onerror'), false);
+});
+
+test('48 weak production Admin passphrases fail closed', () => {
+  const config = runtimeConfig({
+    CONTEXT: 'production',
+    GIB_M1_WEBHOOK_URL: productionEnv.GIB_M1_WEBHOOK_URL,
+    GIB_M1_WEBHOOK_TOKEN: productionEnv.GIB_M1_WEBHOOK_TOKEN,
+    GIB_M1_ADMIN_PASSPHRASE: 'three weak words'
+  }, { admin: true });
+  assert.equal(config, null);
+});
+
+test('48b production Admin passphrase policy enforces every boundary', () => {
+  assert.equal(validAdminPassphrase('alpha beta gamma delta'), true);
+  assert.equal(validAdminPassphrase('alpha-bravo-charlie-delta'), true);
+  assert.equal(validAdminPassphrase('aa bb ccc ddddddddd'), false);
+  assert.equal(validAdminPassphrase('aa bb ccc dddddddddd'), true);
+  assert.equal(validAdminPassphrase('one two three four'), false);
+  assert.equal(validAdminPassphrase('repeated repeated repeated repeated words'), false);
+  assert.equal(validAdminPassphrase('alpha beta gamma delta\n'), false);
+  assert.equal(validAdminPassphrase(`alpha bravo charlie ${'d'.repeat(236)}`), true);
+  assert.equal(validAdminPassphrase(`alpha bravo charlie ${'d'.repeat(237)}`), false);
+});
+
+test('48c a strong four-word production Admin passphrase can log in', async () => {
+  const response = await handleAdminLogin(
+    jsonRequest('https://bjjsite.com/.netlify/functions/m1-admin-login', {
+      adminName: 'Andrew Smith',
+      passphrase: productionEnv.GIB_M1_ADMIN_PASSPHRASE,
+      testShortcut: false
+    }),
+    {
+      env: productionEnv,
+      now: fixedNow,
+      randomBytes: size => Buffer.alloc(size, 7)
+    }
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.requestToken, Buffer.alloc(32, 7).toString('base64url'));
+  assert.match(response.headers.get('set-cookie'), /HttpOnly/);
+});
+
+test('48d a weak production Admin configuration returns 503 without a cookie', async () => {
+  const response = await handleAdminLogin(
+    jsonRequest('https://bjjsite.com/.netlify/functions/m1-admin-login', {
+      adminName: 'Andrew Smith',
+      passphrase: 'three weak words',
+      testShortcut: false
+    }),
+    {
+      env: {
+        ...productionEnv,
+        GIB_M1_ADMIN_PASSPHRASE: 'three weak words'
+      },
+      now: fixedNow
+    }
+  );
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('set-cookie'), null);
+});
+
+test('48e login tokens are unique, signed into the cookie, and returned only by login', async () => {
+  let fill = 1;
+  const loginOnce = () => handleAdminLogin(
+    jsonRequest('https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-admin-login', {
+      adminName: 'Stuart Turner',
+      testShortcut: true
+    }),
+    {
+      env: previewEnv,
+      now: fixedNow,
+      randomBytes: size => Buffer.alloc(size, fill++)
+    }
+  );
+  const firstLogin = await loginOnce();
+  const secondLogin = await loginOnce();
+  const firstBody = await firstLogin.json();
+  const secondBody = await secondLogin.json();
+  assert.notEqual(firstBody.requestToken, secondBody.requestToken);
+
+  const cookieHeader = firstLogin.headers.get('set-cookie') || '';
+  const encodedSession = cookieHeader
+    .split(';')[0]
+    .slice(`${ADMIN_COOKIE}=`.length);
+  const config = runtimeConfig(previewEnv, {
+    admin: true,
+    requestUrl: 'https://deploy-preview-44--gib-live.netlify.app/m1/admin/'
+  });
+  const session = readAdminSession(
+    decodeURIComponent(encodedSession),
+    config.sessionSecret,
+    fixedNow
+  );
+  assert.equal(session.requestToken, firstBody.requestToken);
+
+  const review = await handleAdminReview(
+    jsonRequest(
+      'https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-admin-review',
+      { date: '2026-07-25' },
+      cookieHeader.split(';')[0],
+      adminHeaders(firstBody.requestToken)
+    ),
+    {
+      env: previewEnv,
+      now: fixedNow,
+      dateNow: fixedDateNow,
+      fetch: async () => googleResponse({ ok: true, records: [] })
+    }
+  );
+  assert.equal(review.status, 200);
+  assert.equal(Object.hasOwn(await review.json(), 'requestToken'), false);
+});
+
+test('49 protected Admin requests require a session-specific request header', async () => {
+  let googleCalls = 0;
+  const response = await handleAdminReview(
+    jsonRequest(
+      'https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-admin-review',
+      { date: '2026-07-25' },
+      previewCookie()
+    ),
+    {
+      env: previewEnv,
+      now: fixedNow,
+      dateNow: fixedDateNow,
+      fetch: async () => {
+        googleCalls += 1;
+        return googleResponse({ ok: true, records: [] });
+      }
+    }
+  );
+  assert.equal(response.status, 403);
+  assert.equal(googleCalls, 0);
+});
+
+test('49b an incorrect Admin request token is rejected before Google', async () => {
+  let googleCalls = 0;
+  const response = await handleAdminReview(
+    jsonRequest(
+      'https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-admin-review',
+      { date: '2026-07-25' },
+      previewCookie(),
+      adminHeaders(Buffer.alloc(32, 3).toString('base64url'))
+    ),
+    {
+      env: previewEnv,
+      now: fixedNow,
+      dateNow: fixedDateNow,
+      fetch: async () => {
+        googleCalls += 1;
+        return googleResponse({ ok: true, records: [] });
+      }
+    }
+  );
+  assert.equal(response.status, 403);
+  assert.equal(googleCalls, 0);
+});
+
+test('49c a valid Admin cookie and matching request token can reach Google', async () => {
+  let googleCalls = 0;
+  const response = await handleAdminReview(
+    jsonRequest(
+      'https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-admin-review',
+      { date: '2026-07-25' },
+      previewCookie(),
+      adminHeaders()
+    ),
+    {
+      env: previewEnv,
+      now: fixedNow,
+      dateNow: fixedDateNow,
+      fetch: async () => {
+        googleCalls += 1;
+        return googleResponse({ ok: true, records: [] });
+      }
+    }
+  );
+  assert.equal(response.status, 200);
+  assert.equal(googleCalls, 1);
+});
+
+test('49d logout also rejects a missing request token without clearing the cookie', async () => {
+  const response = await handleAdminLogout(
+    jsonRequest(
+      'https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-admin-logout',
+      {},
+      previewCookie()
+    ),
+    { env: previewEnv, now: fixedNow }
+  );
+  assert.equal(response.status, 403);
+  assert.equal(response.headers.get('set-cookie'), null);
+});
+
+test('49dd search and add reject missing or wrong request tokens before Google', async () => {
+  const cases = [
+    {
+      name: 'search',
+      handler: handleAdminSearch,
+      body: { instructor: 'QA Test Instructor', date: '2026-07-25' }
+    },
+    {
+      name: 'add',
+      handler: handleAdminAdd,
+      body: {
+        requestId: 'qa-auth-negative',
+        date: '2026-07-25',
+        classLabel: '10:00 AM Kids’ BJJ',
+        duration: 0.5,
+        instructor: 'QA Test Instructor',
+        site: 'Rev',
+        notes: '',
+        reason: 'QA TEST missed sign-in'
+      }
+    }
+  ];
+  for (const item of cases) {
+    for (const suppliedToken of ['', Buffer.alloc(32, 4).toString('base64url')]) {
+      let googleCalls = 0;
+      const response = await item.handler(
+        jsonRequest(
+          `https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-admin-${item.name}`,
+          item.body,
+          previewCookie(),
+          suppliedToken ? adminHeaders(suppliedToken) : {}
+        ),
+        {
+          env: previewEnv,
+          now: fixedNow,
+          dateNow: fixedDateNow,
+          fetch: async () => {
+            googleCalls += 1;
+            return googleResponse({ ok: true });
+          }
+        }
+      );
+      assert.equal(response.status, 403, `${item.name} must reject the token`);
+      assert.equal(googleCalls, 0, `${item.name} must not reach Google`);
+    }
+  }
+});
+
+test('49de logout rejects an incorrect request token without clearing the cookie', async () => {
+  const response = await handleAdminLogout(
+    jsonRequest(
+      'https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-admin-logout',
+      {},
+      previewCookie(),
+      adminHeaders(Buffer.alloc(32, 5).toString('base64url'))
+    ),
+    { env: previewEnv, now: fixedNow }
+  );
+  assert.equal(response.status, 403);
+  assert.equal(response.headers.get('set-cookie'), null);
+});
+
+test('49e browser secrets remain out of source, URLs, storage, exports, snapshots, and logs', () => {
+  assert.doesNotMatch(adminHtml, /localStorage|sessionStorage|URLSearchParams/);
+  assert.match(adminHtml, /let adminRequestToken = ''/);
+  assert.match(adminHtml, /headers\[ADMIN_REQUEST_HEADER\] = adminRequestToken/);
+
+  const debugBody = kioskHtml.slice(
+    kioskHtml.indexOf('function debugSnapshot()'),
+    kioskHtml.indexOf('async function copyDebug()')
+  );
+  assert.match(
+    debugBody,
+    /deviceSyncCodeConfigured: Boolean\(localStorage\.getItem\(KIOSK_DEVICE_TOKEN_KEY\)\)/
+  );
+  assert.match(debugBody, /k !== KIOSK_DEVICE_TOKEN_KEY/);
+
+  const exportBody = kioskHtml.slice(
+    kioskHtml.indexOf('function buildCSV()'),
+    kioskHtml.indexOf('async function exportCSV()')
+  );
+  assert.doesNotMatch(exportBody, /KIOSK_DEVICE_TOKEN_KEY|Device sync code|Admin-Request-Token/);
+  assert.doesNotMatch(
+    [
+      kioskHtml,
+      adminHtml,
+      read('netlify/functions/m1-kiosk-sync.mjs'),
+      read('netlify/functions/_lib/m1-common.mjs')
+    ].join('\n'),
+    /console\.[A-Za-z_$][\w$]*\s*\(/
+  );
+});
+
+test('49f the schedule cutover limitation is exact and explicit', () => {
+  assert.match(
+    adminHtml,
+    /Daily Review uses the shared Rev schedule\. Local schedule edits and Series classes must also be added to the shared schedule or they will not appear as blanks\./
+  );
+});
+
+test('50 every inline kiosk and Admin browser script compiles', () => {
+  for (const [name, html] of [['kiosk', kioskHtml], ['Admin', adminHtml]]) {
+    const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/giu)]
+      .map(match => match[1])
+      .filter(source => source.trim());
+    assert.ok(scripts.length > 0, `${name} must have inline browser code`);
+    scripts.forEach((source, index) => {
+      assert.doesNotThrow(
+        () => new vm.Script(source, { filename: `${name}-inline-${index}.js` })
+      );
+    });
+  }
 });

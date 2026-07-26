@@ -1,5 +1,8 @@
 import {
+  constantTimeSecretEqual,
   jsonResponse,
+  KIOSK_DEVICE_HEADER,
+  obviousTestValue,
   postGoogle,
   readJson,
   runtimeConfig,
@@ -11,13 +14,14 @@ export async function handleKioskSync(request, dependencies = {}) {
   if (parsed.response) return parsed.response;
 
   const config = runtimeConfig(dependencies.env || process.env, {
+    kiosk: true,
     requestUrl: request.url
   });
   if (!config) {
     return jsonResponse(503, {
       ok: false,
       code: 'NOT_CONFIGURED',
-      message: 'Sign-in sync is not configured for this environment.'
+      message: 'Payroll sync is not configured for this environment.'
     });
   }
 
@@ -28,6 +32,25 @@ export async function handleKioskSync(request, dependencies = {}) {
       code: 'REJECTED',
       message: 'The waiting sign-ins were rejected because their format was not safe.'
     });
+  }
+
+  if (config.preview) {
+    if (!rows.every(row => obviousTestValue(row.Instructor))) {
+      return jsonResponse(400, {
+        ok: false,
+        code: 'TEST_DATA_REQUIRED',
+        message: 'Deploy Preview accepts only obviously fake TEST instructor data.'
+      });
+    }
+  } else {
+    const suppliedDeviceToken = request.headers.get(KIOSK_DEVICE_HEADER) || '';
+    if (!constantTimeSecretEqual(suppliedDeviceToken, config.kioskDeviceToken)) {
+      return jsonResponse(403, {
+        ok: false,
+        code: 'DEVICE_SYNC_CODE_REJECTED',
+        message: 'Device sync code is not configured or was rejected.'
+      });
+    }
   }
 
   const google = await postGoogle(

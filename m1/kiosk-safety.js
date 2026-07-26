@@ -1,6 +1,16 @@
 (function attachKioskSafety(root) {
   'use strict';
 
+  const SCHEDULE_DAYS = Object.freeze([
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday'
+  ]);
+
   function clean(value) {
     return String(value == null ? '' : value)
       .normalize('NFKC')
@@ -180,6 +190,70 @@
     });
   }
 
+  function validateSchedulePayload(value, options = {}) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const sourceDays = value.days;
+    if (!sourceDays || typeof sourceDays !== 'object' || Array.isArray(sourceDays)) return null;
+    const days = {};
+    let classCount = 0;
+    for (const day of SCHEDULE_DAYS) {
+      if (!Array.isArray(sourceDays[day])) return null;
+      const labels = [];
+      for (const rawLabel of sourceDays[day]) {
+        if (typeof rawLabel !== 'string') return null;
+        const label = clean(rawLabel);
+        if (!label || label.length > 240) return null;
+        labels.push(label);
+      }
+      days[day] = labels;
+      classCount += labels.length;
+    }
+    if (!classCount) return null;
+    if (value.version != null && typeof value.version !== 'string') return null;
+    const version = clean(value.version) || null;
+    if (version && version.length > 120) return null;
+    if (options.requireVersion === true && !version) return null;
+    return {
+      version,
+      site: clean(value.site) || 'Rev',
+      timezone: clean(value.timezone) || 'America/New_York',
+      days
+    };
+  }
+
+  async function loadScheduleStartup(options = {}) {
+    const fetchSchedule = options.fetchSchedule;
+    const readCache = options.readCache || (() => null);
+    const writeCache = options.writeCache || (() => {});
+    const readSaved = options.readSaved || (() => null);
+    if (typeof fetchSchedule !== 'function') {
+      throw new Error('Schedule fetch is not configured.');
+    }
+
+    try {
+      const networkSchedule = validateSchedulePayload(
+        await fetchSchedule(),
+        { requireVersion: true }
+      );
+      if (!networkSchedule) throw new Error('Shared schedule was not readable.');
+      await writeCache(networkSchedule);
+      return { schedule: networkSchedule, source: 'network' };
+    } catch (networkError) {
+      const cachedSchedule = validateSchedulePayload(
+        await readCache(),
+        { requireVersion: true }
+      );
+      if (cachedSchedule) {
+        return { schedule: cachedSchedule, source: 'cache' };
+      }
+      const savedSchedule = validateSchedulePayload(await readSaved());
+      if (savedSchedule) {
+        return { schedule: savedSchedule, source: 'saved' };
+      }
+      throw networkError;
+    }
+  }
+
   root.GibM1Safety = Object.freeze({
     clean,
     normalize,
@@ -193,6 +267,8 @@
     mergeSigninTransaction,
     queueContainsLedgerRow,
     markCompletedLedgerRows,
-    markAttemptedLedgerRows
+    markAttemptedLedgerRows,
+    validateSchedulePayload,
+    loadScheduleStartup
   });
 })(typeof globalThis !== 'undefined' ? globalThis : window);

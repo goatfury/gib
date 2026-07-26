@@ -383,7 +383,7 @@
             <div id="recentResults" class="result-list"></div>
           </div>
           <div class="limitation">
-            Daily Admin uses the shared Rev schedule. If this tablet uses a locally edited schedule, the class lists can differ; unmatched records remain visible here.
+            Daily Review uses the shared Rev schedule. Local schedule edits and Series classes must also be added to the shared schedule or they will not appear as blanks.
           </div>
         </aside>
       </div>
@@ -403,6 +403,7 @@
         search: '/.netlify/functions/m1-admin-search',
         add: '/.netlify/functions/m1-admin-add'
       });
+      const ADMIN_REQUEST_HEADER = 'X-GIB-M1-Admin-Request-Token';
       const TIME_ZONE = 'America/New_York';
       const SITE = 'Rev';
       const inFlightAdditions = new Set();
@@ -411,6 +412,7 @@
       let currentRecords = [];
       let currentAdminName = '';
       let testMode = false;
+      let adminRequestToken = '';
 
       const $ = selector => document.querySelector(selector);
 
@@ -423,16 +425,6 @@
           .toLocaleLowerCase('en-US')
           .replace(/[’‘`´]/g, "'")
           .replace(/[‐‑‒–—―−]/g, '-');
-      }
-
-      function escapeHtml(value) {
-        return String(value == null ? '' : value).replace(/[&<>"']/g, character => ({
-          '&': '&amp;',
-          '<': '&lt;',
-          '>': '&gt;',
-          '"': '&quot;',
-          "'": '&#39;'
-        })[character]);
       }
 
       function nyDate(now = new Date()) {
@@ -478,9 +470,11 @@
       }
 
       async function requestJson(url, body) {
+        const headers = { 'Content-Type': 'application/json' };
+        if (adminRequestToken) headers[ADMIN_REQUEST_HEADER] = adminRequestToken;
         const response = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           credentials: 'same-origin',
           cache: 'no-store',
           body: JSON.stringify(body)
@@ -499,6 +493,7 @@
       function setLoggedOut(message = '') {
         currentRecords = [];
         currentAdminName = '';
+        adminRequestToken = '';
         $('#appPanel').hidden = true;
         $('#loginPanel').hidden = false;
         $('#classList').replaceChildren();
@@ -530,6 +525,10 @@
             passphrase: testShortcut ? '' : $('#loginPassphrase').value,
             testShortcut
           });
+          if (!/^[A-Za-z0-9_-]{32,256}$/.test(String(data.requestToken || ''))) {
+            throw new Error('Admin login must be renewed for this page.');
+          }
+          adminRequestToken = data.requestToken;
           $('#loginPassphrase').value = '';
           setLoggedIn(data);
           await loadReview(defaultYesterday());
@@ -563,20 +562,127 @@
         }).format(new Date(Date.UTC(year, month - 1, day, 12)));
       }
 
-      function recordHtml(record) {
-        return `<div class="record">
-          <strong>${escapeHtml(record.instructor || 'Unknown instructor')}</strong><br>
-          ${escapeHtml(record.date)} · ${escapeHtml(record.classLabel)} · ${escapeHtml(record.site)}
-          ${record.source === 'Admin-added' ? '<span class="badge">Admin-added</span>' : ''}
-        </div>`;
+      function makeElement(tagName, className = '', text = '') {
+        const element = document.createElement(tagName);
+        if (className) element.className = className;
+        if (text) element.textContent = text;
+        return element;
+      }
+
+      function recordElement(record) {
+        const wrapper = makeElement('div', 'record');
+        wrapper.append(
+          makeElement('strong', '', record.instructor || 'Unknown instructor'),
+          document.createElement('br'),
+          document.createTextNode(`${record.date} · ${record.classLabel} · ${record.site}`)
+        );
+        if (record.source === 'Admin-added') {
+          wrapper.append(makeElement('span', 'badge', 'Admin-added'));
+        }
+        return wrapper;
       }
 
       function refreshInstructorOptions(records) {
         const names = [...new Set(records.map(record => clean(record.instructor)).filter(Boolean))]
           .sort((a, b) => a.localeCompare(b));
-        $('#instructorOptions').innerHTML = names
-          .map(name => `<option value="${escapeHtml(name)}"></option>`)
-          .join('');
+        const options = names.map(name => {
+          const option = document.createElement('option');
+          option.value = name;
+          return option;
+        });
+        $('#instructorOptions').replaceChildren(...options);
+      }
+
+      function fixedValue(label, value, title = '') {
+        const wrapper = document.createElement('div');
+        const content = makeElement('span', '', value);
+        if (title) content.title = title;
+        wrapper.append(makeElement('b', '', label), content);
+        return wrapper;
+      }
+
+      function inputField(labelText, input) {
+        const wrapper = makeElement('div', 'field');
+        wrapper.append(makeElement('label', '', labelText), input);
+        return wrapper;
+      }
+
+      function buildAddForm(label, index) {
+        const form = makeElement('form', 'add-form');
+        form.dataset.addForm = String(index);
+
+        const fixed = makeElement('div', 'fixed');
+        fixed.append(
+          fixedValue('Date', currentDate),
+          fixedValue('Class', label, label),
+          fixedValue('Site', SITE),
+          fixedValue('Duration', `${durationForClass(label)} hr`)
+        );
+
+        const instructorInput = document.createElement('input');
+        instructorInput.name = 'instructor';
+        instructorInput.maxLength = 100;
+        instructorInput.required = true;
+        instructorInput.placeholder = testMode ? 'QA Test Instructor' : 'Instructor name';
+
+        const reasonInput = document.createElement('input');
+        reasonInput.name = 'reason';
+        reasonInput.maxLength = 240;
+        reasonInput.required = true;
+        reasonInput.placeholder = 'Missed tablet sign-in';
+
+        const miniGrid = makeElement('div', 'mini-grid');
+        miniGrid.append(
+          inputField(`Instructor${testMode ? ' (fake TEST name)' : ''}`, instructorInput),
+          inputField('Required reason', reasonInput)
+        );
+
+        const notes = document.createElement('textarea');
+        notes.name = 'notes';
+        notes.maxLength = 400;
+        notes.placeholder = 'Optional context';
+        const notesField = inputField('Notes (optional)', notes);
+        notesField.style.marginTop = '10px';
+
+        const confirm = makeElement('button', 'btn primary confirm-add', 'Review and add');
+        confirm.type = 'submit';
+        confirm.dataset.classIndex = String(index);
+        const cancel = makeElement('button', 'btn ghost cancel-add', 'Cancel');
+        cancel.type = 'button';
+        cancel.dataset.classIndex = String(index);
+        const actions = makeElement('div', 'form-actions');
+        actions.append(confirm, cancel);
+
+        form.append(fixed, miniGrid, notesField, actions);
+        return form;
+      }
+
+      function classRow(label, index, matches) {
+        const instructors = [...new Set(matches.map(record => clean(record.instructor)).filter(Boolean))];
+        const row = makeElement('article', 'class-row');
+        row.dataset.classIndex = String(index);
+        const main = makeElement('div', 'class-main');
+        const summary = document.createElement('div');
+        summary.append(makeElement('div', 'class-label', label));
+
+        if (instructors.length) {
+          const status = makeElement('div', 'recorded', instructors.join(' + '));
+          if (matches.some(record => record.source === 'Admin-added')) {
+            status.append(makeElement('span', 'badge', 'Admin-added'));
+          }
+          summary.append(status);
+          main.append(summary);
+          row.append(main);
+          return row;
+        }
+
+        summary.append(makeElement('div', 'blank', 'No sign-in recorded'));
+        const toggle = makeElement('button', 'btn small add-toggle', 'Add instructor');
+        toggle.type = 'button';
+        toggle.dataset.classIndex = String(index);
+        main.append(summary, toggle);
+        row.append(main, buildAddForm(label, index));
+        return row;
       }
 
       function renderReview() {
@@ -588,58 +694,14 @@
             && normalize(record.site) === normalize(SITE)
           );
           matches.forEach(record => matchedRecordIds.add(record.recordId));
-          const instructors = [...new Set(matches.map(record => clean(record.instructor)).filter(Boolean))];
-          const sources = matches.some(record => record.source === 'Admin-added')
-            ? '<span class="badge">Admin-added</span>'
-            : '';
-          const status = instructors.length
-            ? `<div class="recorded">${escapeHtml(instructors.join(' + '))}${sources}</div>`
-            : '<div class="blank">No sign-in recorded</div>';
-          const duration = durationForClass(label);
-          return `<article class="class-row" data-class-index="${index}">
-            <div class="class-main">
-              <div>
-                <div class="class-label">${escapeHtml(label)}</div>
-                ${status}
-              </div>
-              ${instructors.length ? '' : `<button class="btn small add-toggle" data-class-index="${index}" type="button">Add instructor</button>`}
-            </div>
-            ${instructors.length ? '' : `<form class="add-form" data-add-form="${index}">
-              <div class="fixed">
-                <div><b>Date</b><span>${escapeHtml(currentDate)}</span></div>
-                <div><b>Class</b><span title="${escapeHtml(label)}">${escapeHtml(label)}</span></div>
-                <div><b>Site</b><span>${SITE}</span></div>
-                <div><b>Duration</b><span>${duration} hr</span></div>
-              </div>
-              <div class="mini-grid">
-                <div class="field">
-                  <label>Instructor${testMode ? ' (fake TEST name)' : ''}</label>
-                  <input name="instructor" maxlength="100" required placeholder="${testMode ? 'QA Test Instructor' : 'Instructor name'}">
-                </div>
-                <div class="field">
-                  <label>Required reason</label>
-                  <input name="reason" maxlength="240" required placeholder="Missed tablet sign-in">
-                </div>
-              </div>
-              <div class="field" style="margin-top:10px">
-                <label>Notes (optional)</label>
-                <textarea name="notes" maxlength="400" placeholder="Optional context"></textarea>
-              </div>
-              <div class="form-actions">
-                <button class="btn primary confirm-add" data-class-index="${index}" type="submit">Review and add</button>
-                <button class="btn ghost cancel-add" data-class-index="${index}" type="button">Cancel</button>
-              </div>
-            </form>`}
-          </article>`;
+          return classRow(label, index, matches);
         });
-        $('#classList').innerHTML = rows.join('');
+        $('#classList').replaceChildren(...rows);
         $('#classCount').textContent = `${labels.length} scheduled class${labels.length === 1 ? '' : 'es'}`;
 
         const unmatched = currentRecords.filter(record => !matchedRecordIds.has(record.recordId));
         $('#unmatchedSection').hidden = unmatched.length === 0;
-        $('#unmatchedList').innerHTML = unmatched.length
-          ? unmatched.map(recordHtml).join('')
-          : '';
+        $('#unmatchedList').replaceChildren(...unmatched.map(recordElement));
         refreshInstructorOptions(currentRecords);
       }
 
@@ -662,7 +724,7 @@
           currentRecords = data.records;
           renderReview();
         } catch (error) {
-          if (error.status === 401) {
+          if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
             return;
           }
@@ -716,11 +778,23 @@
             : 'Already recorded — no duplicate row created');
           await loadReview(currentDate);
         } catch (error) {
-          showMessage($('#reviewMessage'), error.message);
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Admin login required.');
+          } else {
+            showMessage($('#reviewMessage'), error.message);
+          }
         } finally {
           inFlightAdditions.delete(key);
           submit.disabled = false;
         }
+      }
+
+      function renderRecordList(element, records, emptyMessage) {
+        if (records.length) {
+          element.replaceChildren(...records.map(recordElement));
+          return;
+        }
+        element.replaceChildren(makeElement('div', 'empty', emptyMessage));
       }
 
       async function searchInstructor() {
@@ -734,15 +808,19 @@
         $('#searchButton').disabled = true;
         try {
           const data = await requestJson(API.search, { instructor, date });
-          $('#selectedDateResults').innerHTML = data.selectedDateRecords.length
-            ? data.selectedDateRecords.map(recordHtml).join('')
-            : '<div class="empty">No active sign-ins for this instructor on the selected date.</div>';
-          $('#recentResults').innerHTML = data.recentRecords.length
-            ? data.recentRecords.map(recordHtml).join('')
-            : '<div class="empty">No recent active sign-ins found.</div>';
+          renderRecordList(
+            $('#selectedDateResults'),
+            data.selectedDateRecords,
+            'No active sign-ins for this instructor on the selected date.'
+          );
+          renderRecordList(
+            $('#recentResults'),
+            data.recentRecords,
+            'No recent active sign-ins found.'
+          );
           $('#searchResults').hidden = false;
         } catch (error) {
-          if (error.status === 401) {
+          if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
           } else {
             showMessage($('#searchMessage'), error.message);

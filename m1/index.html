@@ -192,6 +192,19 @@
     flex-wrap:wrap;
     align-items:center;
   }
+  .sync-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    width: auto;
+    margin: 0;
+    white-space: nowrap;
+  }
+  .sync-toggle input[type="checkbox"] {
+    width: auto;
+    padding: 0;
+    flex: 0 0 auto;
+  }
   .duration-rule-list {
     display: grid;
     gap: 8px;
@@ -544,7 +557,7 @@ input, textarea, select {
             <button id="btnResetDevice" class="btn danger" type="button">Reset device location</button>
             <button id="btnFactoryReset" class="btn danger" type="button">Factory reset</button>
           </div>
-          <div class="hint warn">Reset device clears: gym name, location label, site code, schedule data, series classes, and duration rules (sign‑ins and unsent payroll rows preserved). Factory reset clears <em>all</em> local data (device, schedule, series classes, duration rules, sign‑ins, and the waiting list).</div>
+          <div class="hint warn">Reset device clears: gym name, location label, site code, device sync code, schedule data, series classes, and duration rules (sign‑ins and unsent payroll rows preserved). Factory reset clears <em>all</em> local data (device, schedule, series classes, duration rules, sign‑ins, and the waiting list).</div>
         </div>
       </div>
 
@@ -688,8 +701,16 @@ input, textarea, select {
         <label for="cfgDeviceLabel" style="display:block; margin-bottom:4px;">Device label</label>
         <input id="cfgDeviceLabel" type="text" placeholder="Front Desk iPad" style="width:100%;">
       </div>
+      <div style="margin-top:12px;">
+        <label for="cfgDeviceSyncCode" style="display:block; margin-bottom:4px;">Device sync code</label>
+        <div class="inline">
+          <input id="cfgDeviceSyncCode" type="password" autocomplete="off" maxlength="512" placeholder="Enter the front-desk sync code" style="flex:1; min-width:220px;">
+          <button id="btnSaveDeviceSyncCode" class="btn" type="button">Save sync code</button>
+        </div>
+        <div id="deviceSyncCodeStatus" class="hint">Not configured on this device.</div>
+      </div>
       <div style="margin-top:12px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-        <label style="display:flex; align-items:center; gap:6px;"><input id="cfgAutoSync" type="checkbox">Auto‑sync after sign‑in</label>
+        <label class="sync-toggle"><input id="cfgAutoSync" type="checkbox">Auto‑sync after sign‑in</label>
         <button id="btnSyncNow" class="btn" type="button">Sync now</button>
       </div>
       <div id="syncStatus" class="statusRow" style="margin-top:8px;"></div>
@@ -806,7 +827,7 @@ function refreshNameDatalist() {
   if (!dl) return;
   seedRosterFromExistingSignins();
   const roster = loadNameRoster();
-  dl.innerHTML = '';
+  dl.replaceChildren();
   roster.forEach(n => {
     const opt = document.createElement('option');
     opt.value = n;
@@ -825,12 +846,14 @@ function refreshNameDatalist() {
 // SCHEDULE_KEY so that a remote schedule can be recalled after reset or refresh.
 const SCHEDULE_URL_KEY  = 'gib_m1_schedule_url_v1';
 const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
+const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
 
   // Sync keys
   const SYNC_QUEUE_KEY   = 'gib_m1_sync_queue_v1';
   const SIGNIN_TXN_KEY   = 'gib_m1_signin_txn_v1';
   const SYNC_AUTO_KEY    = 'gib_m1_sync_auto_v1';
   const DEVICE_LABEL_KEY = 'gib_m1_device_label_v1';
+  const KIOSK_DEVICE_TOKEN_KEY = 'gib_m1_kiosk_device_token_v1';
 
 
   // Back-compat keys (older builds we created)
@@ -841,19 +864,38 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   // The Rev schedule is loaded from the same versioned source used by Daily Review.
   let DEFAULT_SCHEDULE = {};
   let SHARED_SCHEDULE_META = null;
+  let SHARED_SCHEDULE_STARTUP_SOURCE = '';
+  let STARTUP_SCHEDULE_SELECTION = null;
+  let STARTUP_SCHEDULE_SELECTION_ACTIVE = false;
   async function loadSharedSchedule() {
-    const response = await fetch('/m1/shared-schedule.json', { cache: 'no-store' });
-    if (!response.ok) throw new Error(`Shared schedule HTTP ${response.status}`);
-    const value = await response.json();
-    if (!value || !value.days || !DAYS.every(day => Array.isArray(value.days[day]))) {
-      throw new Error('Shared schedule was not readable.');
-    }
+    const result = await window.GibM1Safety.loadScheduleStartup({
+      fetchSchedule: async () => {
+        const response = await fetch('/m1/shared-schedule.json');
+        if (!response.ok) throw new Error(`Shared schedule HTTP ${response.status}`);
+        return response.json();
+      },
+      readCache: () => safeParse(SHARED_SCHEDULE_CACHE_KEY, null),
+      writeCache: value => safeSet(SHARED_SCHEDULE_CACHE_KEY, value),
+      readSaved: () => safeParse(SCHEDULE_KEY, null)
+    });
+    const value = result.schedule;
     DEFAULT_SCHEDULE = JSON.parse(JSON.stringify(value.days));
     SHARED_SCHEDULE_META = {
       version: value.version || null,
       site: value.site || 'Rev',
-      timezone: value.timezone || TZ
+      timezone: value.timezone || TZ,
+      startupSource: result.source
     };
+    SHARED_SCHEDULE_STARTUP_SOURCE = result.source;
+    STARTUP_SCHEDULE_SELECTION = {
+      days: JSON.parse(JSON.stringify(value.days)),
+      source: result.source === 'network'
+        ? 'shared'
+        : (result.source === 'cache' ? 'shared-cache' : 'saved-local'),
+      updatedAt: null
+    };
+    STARTUP_SCHEDULE_SELECTION_ACTIVE = true;
+    return result.source;
   }
 
   // Additional default schedule for Richmond BJJ.  This snapshot was copied from
@@ -977,6 +1019,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     localStorage.removeItem(SCHEDULE_MODE_KEY);
     localStorage.removeItem(DURATION_RULES_KEY);
     localStorage.removeItem(SERIES_KEY);
+    localStorage.removeItem(KIOSK_DEVICE_TOKEN_KEY);
     // Also clear a few older keys if present (safe no-ops)
     localStorage.removeItem('gib_device');
     localStorage.removeItem('rbjj_device');
@@ -986,9 +1029,13 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const g = document.getElementById('cfgGymName');
     const l = document.getElementById('cfgLocation');
     const s = document.getElementById('cfgSiteCode');
+    const syncCode = document.getElementById('cfgDeviceSyncCode');
     if (g) g.value = '';
     if (l) l.value = '';
     if (s) s.value = '';
+    if (syncCode) syncCode.value = '';
+    const syncCodeStatus = document.getElementById('deviceSyncCodeStatus');
+    if (syncCodeStatus) syncCodeStatus.textContent = 'Not configured on this device.';
     applyDeviceToUI();
     loadScheduleIntoAdmin(); // resets admin editor to default schedule state
     renderDurationRules();
@@ -1026,9 +1073,13 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const g = document.getElementById('cfgGymName');
     const l = document.getElementById('cfgLocation');
     const s = document.getElementById('cfgSiteCode');
+    const syncCode = document.getElementById('cfgDeviceSyncCode');
     if (g) g.value = '';
     if (l) l.value = '';
     if (s) s.value = '';
+    if (syncCode) syncCode.value = '';
+    const syncCodeStatus = document.getElementById('deviceSyncCodeStatus');
+    if (syncCodeStatus) syncCodeStatus.textContent = 'Not configured on this device.';
     // Refresh UI state
     applyDeviceToUI();
     loadScheduleIntoAdmin();
@@ -1074,6 +1125,13 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
   // Schedule
   function loadSchedule() {
+    if (STARTUP_SCHEDULE_SELECTION_ACTIVE && STARTUP_SCHEDULE_SELECTION) {
+      return {
+        days: JSON.parse(JSON.stringify(STARTUP_SCHEDULE_SELECTION.days)),
+        source: STARTUP_SCHEDULE_SELECTION.source,
+        updatedAt: STARTUP_SCHEDULE_SELECTION.updatedAt
+      };
+    }
     const saved = safeParse(SCHEDULE_KEY, null);
     if (saved && saved.days && typeof saved.days === 'object') {
       // Canonicalize keys if needed
@@ -1114,6 +1172,9 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       source,
       updatedAt: new Date().toISOString()
     });
+    // A deliberate, successfully saved local edit becomes active while the
+    // original validated startup selection remains available in memory.
+    STARTUP_SCHEDULE_SELECTION_ACTIVE = false;
   }
 
   const DAY_ABBREV = {
@@ -1314,9 +1375,12 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const wrap = $('#seriesList');
     if (!wrap) return;
     const series = loadSeries();
-    wrap.innerHTML = '';
+    wrap.replaceChildren();
     if (!series.length) {
-      wrap.innerHTML = '<div class="subtle">No series yet. Add one above.</div>';
+      const empty = document.createElement('div');
+      empty.className = 'subtle';
+      empty.textContent = 'No series yet. Add one above.';
+      wrap.appendChild(empty);
       return;
     }
 
@@ -1456,7 +1520,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
   function initScheduleEditor() {
     const sel = $('#schedDay');
-    sel.innerHTML = '';
+    sel.replaceChildren();
     for (const d of DAYS) {
       const opt = document.createElement('option');
       opt.value = d;
@@ -1489,8 +1553,24 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     renderWeekAtGlance();
 
     const upd = sch.updatedAt ? new Date(sch.updatedAt).toLocaleString() : '(default schedule)';
-    $('#scheduleStatus').innerHTML = `Source: <span class="kbd">${sch.source}</span> · Updated: <span class="kbd">${upd}</span>`;
+    renderScheduleStatus(sch.source, upd);
     $('#scheduleHint').textContent = '';
+  }
+
+  function renderScheduleStatus(source, updated) {
+    const status = $('#scheduleStatus');
+    const sourceValue = document.createElement('span');
+    sourceValue.className = 'kbd';
+    sourceValue.textContent = String(source || '');
+    const updatedValue = document.createElement('span');
+    updatedValue.className = 'kbd';
+    updatedValue.textContent = String(updated || '');
+    status.replaceChildren(
+      document.createTextNode('Source: '),
+      sourceValue,
+      document.createTextNode(' · Updated: '),
+      updatedValue
+    );
   }
 
   function renderScheduleDay() {
@@ -1518,14 +1598,14 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   function updateDurationRulesStatus(message) {
     const status = $('#durationRulesStatus');
     if (!status) return;
-    status.innerHTML = message ? message : '';
+    status.textContent = message || '';
   }
 
   function persistDurationRulesFromUI() {
     const rules = readDurationRulesFromUI();
     saveDurationRules(rules);
     const count = rules.length;
-    updateDurationRulesStatus(`Saved <span class="kbd">${count}</span> rule(s).`);
+    updateDurationRulesStatus(`Saved ${count} rule(s).`);
   }
 
   function parseStartMinutes(classItem) {
@@ -1554,9 +1634,12 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const wrap = $('#durationRulesWrap');
     if (!wrap) return;
     const rules = loadDurationRules().map(normalizeDurationRule);
-    wrap.innerHTML = '';
+    wrap.replaceChildren();
     if (!rules.length) {
-      wrap.innerHTML = '<div class="subtle">No rules yet. Add one to auto-fill durations.</div>';
+      const empty = document.createElement('div');
+      empty.className = 'subtle';
+      empty.textContent = 'No rules yet. Add one to auto-fill durations.';
+      wrap.appendChild(empty);
       updateDurationRulesStatus('');
       return;
     }
@@ -1602,14 +1685,14 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       row.appendChild(remove);
       wrap.appendChild(row);
     });
-    updateDurationRulesStatus(`Saved <span class="kbd">${rules.length}</span> rule(s).`);
+    updateDurationRulesStatus(`Saved ${rules.length} rule(s).`);
   }
 
   function renderWeekAtGlance() {
     const wrap = $('#weekAtGlance');
     if (!wrap) return;
     const sch = loadSchedule();
-    wrap.innerHTML = '';
+    wrap.replaceChildren();
     DAYS.forEach(day => {
       const weekDate = weekDateForDay(day);
       const seriesClasses = seriesClassesForDate(day, weekDate).map(label => `${label} (Series)`);
@@ -1666,7 +1749,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       saveDurationRules(rules);
       renderDurationRules();
     }
-    updateDurationRulesStatus(`Generated <span class="kbd">${added}</span> rule${added === 1 ? '' : 's'}.`);
+    updateDurationRulesStatus(`Generated ${added} rule${added === 1 ? '' : 's'}.`);
     showToast(`Generated ${added} rule${added === 1 ? '' : 's'}`);
   }
 
@@ -1682,13 +1765,26 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   function populateClassesForToday() {
     const { day, classes, meta } = classesForToday();
     const wrap = $('#classListWrap');
-    wrap.innerHTML = '';
+    wrap.replaceChildren();
     if (!classes.length) {
-      $('#classesHint').textContent = `No classes found for ${day}. Add a schedule or series classes in Admin.`;
+      const offlineNotice = SHARED_SCHEDULE_STARTUP_SOURCE === 'cache'
+        ? ' Offline — the last known shared schedule is active.'
+        : (SHARED_SCHEDULE_STARTUP_SOURCE === 'saved'
+          ? ' Offline — the last known saved local schedule is active.'
+          : '');
+      $('#classesHint').textContent = `No classes found for ${day}. Add a schedule or series classes in Admin.${offlineNotice}`;
       $('#classesHint').classList.add('warn');
     } else {
-      $('#classesHint').textContent = 'Select one or more classes.';
-      $('#classesHint').classList.remove('warn');
+      if (SHARED_SCHEDULE_STARTUP_SOURCE === 'cache') {
+        $('#classesHint').textContent = 'Offline — using the last known shared schedule.';
+        $('#classesHint').classList.add('warn');
+      } else if (SHARED_SCHEDULE_STARTUP_SOURCE === 'saved') {
+        $('#classesHint').textContent = 'Offline — using the last known saved local schedule.';
+        $('#classesHint').classList.add('warn');
+      } else {
+        $('#classesHint').textContent = 'Select one or more classes.';
+        $('#classesHint').classList.remove('warn');
+      }
       classes.forEach(c => {
         const label = document.createElement('label');
         const cb = document.createElement('input');
@@ -1893,7 +1989,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     lastSigninFormSnapshot = formSnapshot;
     $('#signInModalName').textContent = name;
     const classesWrap = $('#signInModalClasses');
-    classesWrap.innerHTML = '';
+    classesWrap.replaceChildren();
     const list = document.createElement('ul');
     (classes || []).forEach(cls => {
       const item = document.createElement('li');
@@ -2053,35 +2149,66 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   function renderAdminTable() {
+    const host = $('#adminTableWrap');
     const rows = loadSignins();
     if (!rows.length) {
-      $('#adminTableWrap').innerHTML = '<div class="subtle">No sign-ins yet.</div>';
+      const empty = document.createElement('div');
+      empty.className = 'subtle';
+      empty.textContent = 'No sign-ins yet.';
+      host.replaceChildren(empty);
       return;
     }
-    let html = '<div style="overflow:auto; max-height:420px;"><table><thead><tr>' +
-      '<th>#</th><th>Status</th><th>Timestamp</th><th>Date</th><th>Class</th><th>Duration (hr)</th><th>Instructor</th><th>Site</th><th>Notes</th>' +
-      '</tr></thead><tbody>';
+
+    const scroller = document.createElement('div');
+    scroller.style.overflow = 'auto';
+    scroller.style.maxHeight = '420px';
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    ['#', 'Status', 'Timestamp', 'Date', 'Class', 'Duration (hr)', 'Instructor', 'Site', 'Notes']
+      .forEach(label => {
+        const th = document.createElement('th');
+        th.textContent = label;
+        headerRow.appendChild(th);
+      });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+
     rows.forEach((r,i) => {
-      const status = r.Status || 'OK';
+      const status = String(r.Status || 'OK');
       const isVoid = status === 'VOID';
       const voidDetails = [
         r.voided_at ? `Voided: ${r.voided_at}` : '',
         r.void_reason ? `Reason: ${r.void_reason}` : ''
       ].filter(Boolean).join(' · ');
-      html += `<tr class="${isVoid ? 'void-row' : ''}">` +
-        `<td>${i+1}</td>` +
-        `<td title="${isVoid ? voidDetails : ''}">${status}</td>` +
-        `<td style="font-family:ui-monospace,monospace;">${r.Timestamp || ''}</td>` +
-        `<td style="font-family:ui-monospace,monospace;">${r.Date || ''}</td>` +
-        `<td>${(r['Class Label'] || '')}</td>` +
-        `<td>${(r['Duration (hr)'] ?? '')}</td>` +
-        `<td>${r.Instructor || ''}</td>` +
-        `<td>${r.Site || ''}</td>` +
-        `<td>${r.Notes || ''}</td>` +
-      '</tr>';
+      const tr = document.createElement('tr');
+      if (isVoid) tr.className = 'void-row';
+      const values = [
+        i + 1,
+        status,
+        r.Timestamp || '',
+        r.Date || '',
+        r['Class Label'] || '',
+        r['Duration (hr)'] ?? '',
+        r.Instructor || '',
+        r.Site || '',
+        r.Notes || ''
+      ];
+      values.forEach((value, columnIndex) => {
+        const td = document.createElement('td');
+        td.textContent = String(value);
+        if (columnIndex === 1 && isVoid) td.title = voidDetails;
+        if (columnIndex === 2 || columnIndex === 3) {
+          td.style.fontFamily = 'ui-monospace, monospace';
+        }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
     });
-    html += '</tbody></table></div>';
-    $('#adminTableWrap').innerHTML = html;
+    table.appendChild(tbody);
+    scroller.appendChild(table);
+    host.replaceChildren(scroller);
   }
 
   function buildCSV() {
@@ -2293,6 +2420,10 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     $('#cfgDeviceLabel').value = localStorage.getItem(DEVICE_LABEL_KEY)
       || (cfg && cfg.location)
       || '';
+    $('#cfgDeviceSyncCode').value = '';
+    $('#deviceSyncCodeStatus').textContent = localStorage.getItem(KIOSK_DEVICE_TOKEN_KEY)
+      ? 'Configured on this device.'
+      : 'Not configured on this device.';
     const storedAutoSync = localStorage.getItem(SYNC_AUTO_KEY);
     $('#cfgAutoSync').checked = storedAutoSync === null ? true : storedAutoSync === 'true';
   }
@@ -2301,18 +2432,32 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     localStorage.setItem(SYNC_AUTO_KEY, $('#cfgAutoSync').checked ? 'true' : 'false');
     updateSyncStatus();
   }
+  function saveDeviceSyncCode() {
+    const input = $('#cfgDeviceSyncCode');
+    const value = String(input.value || '').trim();
+    if (value) {
+      localStorage.setItem(KIOSK_DEVICE_TOKEN_KEY, value);
+    } else {
+      localStorage.removeItem(KIOSK_DEVICE_TOKEN_KEY);
+    }
+    input.value = '';
+    $('#deviceSyncCodeStatus').textContent = value
+      ? 'Configured on this device.'
+      : 'Not configured on this device.';
+    showToast(value ? 'Device sync code saved' : 'Device sync code cleared');
+  }
   function updateSyncStatus() {
     const before = syncQueueConsistency();
     const q = reconcileSyncQueue();
     const last = localStorage.getItem('gib_m1_sync_last') || '';
     const err = localStorage.getItem('gib_m1_sync_error') || '';
     const parts = [];
-    parts.push(`Waiting: <span class="kbd">${q.length}</span>`);
-    parts.push(`Payroll rows: <span class="kbd">${before.exportableLedgerCount}</span>`);
-    if (before.invalidQueueCount) parts.push(`<span style="color:#fbbf24;">Queue repaired: ${before.invalidQueueCount}</span>`);
-    if (last) parts.push(`Last confirmed: <span class="kbd">${new Date(last).toLocaleString()}</span>`);
-    if (err) parts.push(`<span style="color:#f87171;">Error: ${err}</span>`);
-    $('#syncStatus').innerHTML = parts.join(' · ');
+    parts.push(`Waiting: ${q.length}`);
+    parts.push(`Payroll rows: ${before.exportableLedgerCount}`);
+    if (before.invalidQueueCount) parts.push(`Queue repaired: ${before.invalidQueueCount}`);
+    if (last) parts.push(`Last confirmed: ${new Date(last).toLocaleString()}`);
+    if (err) parts.push(`Error: ${err}`);
+    $('#syncStatus').textContent = parts.join(' · ');
   }
   let syncInProgress = false;
   async function syncNow() {
@@ -2330,6 +2475,11 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     syncInProgress = true;
     $('#btnSyncNow').disabled = true;
     try {
+      const deployPreview = /^deploy-preview-\d+--gib-live\.netlify\.app$/i.test(location.hostname);
+      const deviceSyncCode = localStorage.getItem(KIOSK_DEVICE_TOKEN_KEY) || '';
+      if (!deployPreview && !deviceSyncCode) {
+        throw new Error('Device sync code is not configured or was rejected.');
+      }
       // Persist "attempted" before the request. A lost response can never make
       // a possibly-written Google row eligible for local Void or Clear All.
       saveSignins(window.GibM1Safety.markAttemptedLedgerRows(
@@ -2337,9 +2487,13 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         queue,
         new Date().toISOString()
       ));
+      const headers = { 'Content-Type': 'application/json' };
+      if (!deployPreview) {
+        headers['X-GIB-M1-Kiosk-Device-Token'] = deviceSyncCode;
+      }
       const response = await fetch('/.netlify/functions/m1-kiosk-sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         cache: 'no-store',
         body: JSON.stringify({ rows: queue })
       });
@@ -2407,7 +2561,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       deviceSetup: {
         configured: missingSetup.length === 0,
         missing: missingSetup,
-        siteCode: cfg && cfg.siteCode ? String(cfg.siteCode).trim() : null
+        siteCode: cfg && cfg.siteCode ? String(cfg.siteCode).trim() : null,
+        deviceSyncCodeConfigured: Boolean(localStorage.getItem(KIOSK_DEVICE_TOKEN_KEY))
       },
       schedule: {
         source: sch.source,
@@ -2429,7 +2584,12 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       invalidSyncQueueCount: queueInfo.invalidQueueCount,
       lastSyncSuccess: localStorage.getItem('gib_m1_sync_last') || null,
       lastSyncError: localStorage.getItem('gib_m1_sync_error') || null,
-      storageKeys: Object.keys(localStorage).filter(k => k.includes('gib_') || k.includes('rbjj_')).sort()
+      storageKeys: Object.keys(localStorage)
+        .filter(k =>
+          k !== KIOSK_DEVICE_TOKEN_KEY
+          && (k.includes('gib_') || k.includes('rbjj_'))
+        )
+        .sort()
     };
   }
 
@@ -2533,14 +2693,14 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     }
     saveDevice(cfg);
     applyDeviceToUI();
-    $('#deviceStatus').innerHTML = `Saved: <span class="kbd">${cfg.gymName}</span> · <span class="kbd">${cfg.location}</span> · Site <span class="kbd">${cfg.siteCode}</span>`;
+    $('#deviceStatus').textContent = `Saved: ${cfg.gymName} · ${cfg.location} · Site ${cfg.siteCode}`;
     showToast('Device saved');
   });
 
   $('#btnResetDevice').addEventListener('click', () => {
-    if (!confirm('Reset this device location + schedule data + duration rules? (Sign-ins and unsent payroll rows are NOT deleted)')) return;
+    if (!confirm('Reset this device location + sync code + schedule data + duration rules? (Sign-ins and unsent payroll rows are NOT deleted)')) return;
     resetDevice();
-    $('#deviceStatus').innerHTML = 'Device reset. Configure again above.';
+    $('#deviceStatus').textContent = 'Device reset. Configure again above.';
   });
 
   $('#btnFactoryReset').addEventListener('click', () => {
@@ -2551,7 +2711,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       return;
     }
     factoryReset();
-    $('#deviceStatus').innerHTML = 'Factory reset complete. Configure again above.';
+    $('#deviceStatus').textContent = 'Factory reset complete. Configure again above.';
   });
 
   // Admin PIN actions
@@ -2597,7 +2757,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     saveSchedule(scheduleDraft, 'manual');
     const sch = loadSchedule();
     const upd = sch.updatedAt ? new Date(sch.updatedAt).toLocaleString() : '';
-    $('#scheduleStatus').innerHTML = `Source: <span class="kbd">${sch.source}</span> · Updated: <span class="kbd">${upd}</span>`;
+    renderScheduleStatus(sch.source, upd);
     $('#scheduleHint').textContent = 'Saved.';
     showToast('Schedule saved');
     renderWeekAtGlance();
@@ -2698,7 +2858,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       alert('Please enter a URL to load the schedule.');
       return;
     }
-    $('#scheduleStatus').innerHTML = 'Loading schedule from URL…';
+    $('#scheduleStatus').textContent = 'Loading schedule from URL…';
     try {
       const resp = await fetch(url);
       if (!resp.ok) {
@@ -2716,11 +2876,10 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       // Reload admin editor and kiosk
       loadScheduleIntoAdmin();
       populateClassesForToday();
-      $('#scheduleStatus').innerHTML = 'Schedule loaded from URL';
+      $('#scheduleStatus').textContent = 'Schedule loaded from URL';
       showToast('Schedule loaded');
     } catch (err) {
-      console.error(err);
-      $('#scheduleStatus').innerHTML = 'Failed to load schedule';
+      $('#scheduleStatus').textContent = 'Failed to load schedule';
       alert('Failed to load schedule: ' + (err?.message || err));
     }
   });
@@ -2753,6 +2912,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   // Sync field & button listeners
   $('#cfgDeviceLabel').addEventListener('change', saveSyncSettings);
   $('#cfgAutoSync').addEventListener('change', saveSyncSettings);
+  $('#btnSaveDeviceSyncCode').addEventListener('click', saveDeviceSyncCode);
   $('#btnSyncNow').addEventListener('click', syncNow);
 
   // Debug action
@@ -2764,8 +2924,9 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     area.select();
   });
 
-  // Init only after the shared Rev schedule is readable.
+  // Start with the network schedule, then last-known shared cache, then saved local schedule.
   async function initializeCandidate() {
+    let scheduleAvailable = true;
     const transactionRecovered = recoverPendingSigninTransaction();
     if (!transactionRecovered) {
       alert('A pending sign-in could not be recovered safely. New sign-ins are paused; existing records remain available for review.');
@@ -2774,10 +2935,10 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     try {
       await loadSharedSchedule();
     } catch (error) {
-      alert('The shared Rev schedule could not be loaded. Sign-in is paused so no class can be recorded against an unknown schedule.');
+      scheduleAvailable = false;
+      alert('No valid network, cached, or saved schedule is available. Sign-in is paused.');
       $('#btnSignIn').disabled = true;
-      $('#classesHint').textContent = 'Shared schedule unavailable.';
-      return;
+      $('#classesHint').textContent = 'No valid schedule is available.';
     }
     initScheduleEditor();
     document.body.classList.add('kiosk-mode');
@@ -2788,6 +2949,11 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     loadSyncSettings();
     updateSyncStatus();
     refreshNameDatalist();
+    if (!scheduleAvailable) {
+      $('#btnSignIn').disabled = true;
+      $('#classesHint').textContent = 'No valid schedule is available. Existing records and sync tools remain available.';
+      $('#classesHint').classList.add('warn');
+    }
     if (localStorage.getItem(SYNC_AUTO_KEY) !== 'false' && loadSyncQueue().length) {
       syncNow();
     }

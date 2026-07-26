@@ -2,6 +2,7 @@ import {
   ADMIN_NAMES,
   adminCookieHeader,
   constantTimeEqual,
+  createAdminRequestToken,
   createAdminSession,
   jsonResponse,
   readJson,
@@ -32,11 +33,18 @@ export async function handleAdminLogin(request, dependencies = {}) {
     return jsonResponse(401, { ok: false, message: 'Admin login was not accepted.' });
   }
 
-  const session = createAdminSession(adminName, config.sessionSecret, dependencies.now || Date.now());
+  const requestToken = createAdminRequestToken(dependencies.randomBytes);
+  const session = createAdminSession(
+    adminName,
+    config.sessionSecret,
+    dependencies.now || Date.now(),
+    requestToken
+  );
   return jsonResponse(200, {
     ok: true,
     adminName,
     test: config.preview,
+    requestToken,
     expiresInSeconds: 1_800
   }, {
     'Set-Cookie': adminCookieHeader(session)

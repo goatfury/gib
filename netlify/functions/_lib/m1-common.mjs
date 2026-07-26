@@ -1,11 +1,14 @@
 import {
   createHash,
   createHmac,
+  randomBytes,
   timingSafeEqual
 } from 'node:crypto';
 
 export const ADMIN_NAMES = Object.freeze(['Andrew Smith', 'Stuart Turner']);
 export const ADMIN_COOKIE = 'gib_m1_admin_session';
+export const ADMIN_REQUEST_HEADER = 'X-GIB-M1-Admin-Request-Token';
+export const KIOSK_DEVICE_HEADER = 'X-GIB-M1-Kiosk-Device-Token';
 export const ADMIN_SESSION_SECONDS = 30 * 60;
 export const TIME_ZONE = 'America/New_York';
 
@@ -23,8 +26,7 @@ export function normalize(value) {
     .replace(/[‐‑‒–—―−]/g, '-');
 }
 
-export function isDeployPreview(env = process.env, requestUrl = '') {
-  if (clean(env.CONTEXT) === 'deploy-preview') return true;
+export function isDeployPreview(_env = process.env, requestUrl = '') {
   try {
     const url = new URL(requestUrl);
     return url.protocol === 'https:'
@@ -32,6 +34,20 @@ export function isDeployPreview(env = process.env, requestUrl = '') {
   } catch {
     return false;
   }
+}
+
+export function validAdminPassphrase(value) {
+  const raw = String(value == null ? '' : value);
+  if (
+    raw.length > 256
+    || /[\u0000-\u001f\u007f-\u009f]/u.test(raw)
+  ) {
+    return false;
+  }
+  const text = raw.normalize('NFKC').trim();
+  if (text.length < 20 || text.length > 256) return false;
+  const words = text.split(/[ -]+/u).filter(Boolean);
+  return new Set(words.map(word => word.toLocaleLowerCase('en-US'))).size >= 4;
 }
 
 function validGoogleWebhook(value) {
@@ -64,11 +80,19 @@ export function runtimeConfig(env = process.env, options = {}) {
     preview ? env.GIB_TEST_WEBHOOK_TOKEN : env.GIB_M1_WEBHOOK_TOKEN
   );
   const adminPassphrase = clean(env.GIB_M1_ADMIN_PASSPHRASE);
+  const kioskDeviceToken = String(env.GIB_M1_KIOSK_DEVICE_TOKEN || '');
 
   if (!webhookUrl || webhookToken.length < 12 || webhookToken.length > 512) {
     return null;
   }
-  if (!preview && options.admin === true && !adminPassphrase) {
+  if (!preview && options.admin === true && !validAdminPassphrase(env.GIB_M1_ADMIN_PASSPHRASE)) {
+    return null;
+  }
+  if (
+    !preview
+    && options.kiosk === true
+    && (kioskDeviceToken.length < 16 || kioskDeviceToken.length > 512)
+  ) {
     return null;
   }
 
@@ -77,6 +101,7 @@ export function runtimeConfig(env = process.env, options = {}) {
     webhookUrl,
     webhookToken,
     adminPassphrase,
+    kioskDeviceToken,
     sessionSecret: preview ? webhookToken : adminPassphrase
   });
 }
@@ -199,13 +224,29 @@ function signPayload(encodedPayload, secret) {
     .digest('base64url');
 }
 
-export function createAdminSession(adminName, secret, now = Date.now()) {
-  if (!ADMIN_NAMES.includes(adminName) || !clean(secret)) {
+export function createAdminRequestToken(randomBytesImpl = randomBytes) {
+  return Buffer.from(randomBytesImpl(32)).toString('base64url');
+}
+
+function validRequestToken(value) {
+  const token = String(value == null ? '' : value);
+  return token.length >= 32
+    && token.length <= 256
+    && /^[A-Za-z0-9_-]+$/u.test(token);
+}
+
+export function createAdminSession(adminName, secret, now = Date.now(), requestToken = '') {
+  if (
+    !ADMIN_NAMES.includes(adminName)
+    || !clean(secret)
+    || !validRequestToken(requestToken)
+  ) {
     throw new Error('Invalid admin session input.');
   }
   const payload = base64UrlJson({
-    v: 1,
+    v: 2,
     n: adminName,
+    r: requestToken,
     iat: Math.floor(now / 1000),
     exp: Math.floor(now / 1000) + ADMIN_SESSION_SECONDS
   });
@@ -227,14 +268,19 @@ export function readAdminSession(value, secret, now = Date.now()) {
   }
   if (
     !payload
-    || payload.v !== 1
+    || payload.v !== 2
     || !ADMIN_NAMES.includes(payload.n)
+    || !validRequestToken(payload.r)
     || !Number.isInteger(payload.exp)
     || payload.exp <= Math.floor(now / 1000)
   ) {
     return null;
   }
-  return Object.freeze({ adminName: payload.n, expiresAt: payload.exp });
+  return Object.freeze({
+    adminName: payload.n,
+    expiresAt: payload.exp,
+    requestToken: payload.r
+  });
 }
 
 export function cookieValue(request, name) {
@@ -284,12 +330,27 @@ export function requireAdmin(request, config, now = Date.now()) {
   if (!session) {
     return { response: jsonResponse(401, { ok: false, message: 'Admin login required.' }) };
   }
+  const suppliedRequestToken = request.headers.get(ADMIN_REQUEST_HEADER) || '';
+  if (!constantTimeSecretEqual(suppliedRequestToken, session.requestToken)) {
+    return {
+      response: jsonResponse(403, {
+        ok: false,
+        message: 'Admin login must be renewed for this page.'
+      })
+    };
+  }
   return { session };
 }
 
 export function constantTimeEqual(left, right) {
   const leftHash = createHash('sha256').update(clean(left), 'utf8').digest();
   const rightHash = createHash('sha256').update(clean(right), 'utf8').digest();
+  return timingSafeEqual(leftHash, rightHash);
+}
+
+export function constantTimeSecretEqual(left, right) {
+  const leftHash = createHash('sha256').update(String(left == null ? '' : left), 'utf8').digest();
+  const rightHash = createHash('sha256').update(String(right == null ? '' : right), 'utf8').digest();
   return timingSafeEqual(leftHash, rightHash);
 }
 
