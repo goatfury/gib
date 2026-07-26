@@ -8,8 +8,8 @@ const TIME_ZONE = 'America/New_York';
 const SITE = 'Rev';
 const DEVICE = 'TEST Admin Daily Review';
 const BUILD = 'm1-daily-review-write-test';
-const NETLIFY_SITE_ID = 'f748e737-11e3-4fab-8e8c-bf185eab29ff';
 const MAX_BODY_BYTES = 4096;
+const PREVIEW_HOST = /^deploy-preview-\d+--gib-live\.netlify\.app$/i;
 const EXPECTED_HEADINGS = [
   'f',
   'Timestamp',
@@ -351,14 +351,19 @@ function validateWebhookConfiguration(env) {
   return { webhookUrl: url.toString(), token };
 }
 
-function isAllowedDeployContext(runtimeContext) {
-  return Boolean(runtimeContext && runtimeContext.deploy && runtimeContext.site)
-    && runtimeContext.deploy.context === 'deploy-preview'
-    && runtimeContext.site.id === NETLIFY_SITE_ID;
+function isPreviewUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && PREVIEW_HOST.test(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
-function isAllowedPreviewRequest(_event, runtimeContext) {
-  return isAllowedDeployContext(runtimeContext);
+function isAllowedPreviewRequest(event) {
+  if (isPreviewUrl(event && (event.rawUrl || event.url))) return true;
+  const host = clean(event && event.headers && (event.headers.host || event.headers.Host));
+  return PREVIEW_HOST.test(host);
 }
 
 function parseGoogleAcknowledgement(text) {
@@ -497,12 +502,11 @@ function response(statusCode, body) {
 async function handler(event, _context, dependencies = {}) {
   const env = dependencies.env || process.env;
   const fetchImpl = dependencies.fetch || fetch;
-  const runtimeContext = dependencies.context || _context;
 
   if (event.httpMethod !== 'POST') {
     return response(405, { ok: false, message: 'Method not allowed.' });
   }
-  if (!isAllowedPreviewRequest(event, runtimeContext)) {
+  if (!isAllowedPreviewRequest(event)) {
     return response(403, { ok: false, message: 'This TEST function works only in its isolated Deploy Preview.' });
   }
   if (!event.body || Buffer.byteLength(event.body, 'utf8') > MAX_BODY_BYTES) {
@@ -606,7 +610,7 @@ async function handler(event, _context, dependencies = {}) {
 }
 
 async function netlifyHandler(request, context) {
-  if (!isAllowedDeployContext(context)) {
+  if (!isPreviewUrl(request.url)) {
     const denied = response(403, {
       ok: false,
       message: 'This TEST function works only in its isolated Deploy Preview.'
@@ -622,6 +626,7 @@ async function netlifyHandler(request, context) {
   });
   const result = await handler({
     httpMethod: request.method,
+    rawUrl: request.url,
     headers,
     body: await request.text()
   }, context);
@@ -647,7 +652,7 @@ const testExports = Object.freeze({
   sameEvent,
   sameClassSlot,
   validateWebhookConfiguration,
-  isAllowedDeployContext,
+  isPreviewUrl,
   isAllowedPreviewRequest,
   parseGoogleAcknowledgement,
   response,
