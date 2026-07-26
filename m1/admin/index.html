@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Admin — Daily Sign-in Review</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07111f;
+      --panel: #0d1a2c;
+      --panel-2: #12233a;
+      --line: #29415f;
+      --text: #f5f7fb;
+      --muted: #a9b8cc;
+      --green: #29d391;
+      --green-dark: #0f5f48;
+      --amber: #ffca5c;
+      --amber-dark: #664b15;
+      --blue: #73b5ff;
+      --danger: #ff827c;
+      --shadow: 0 18px 48px rgba(0, 0, 0, .28);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 20% 0%, rgba(43, 110, 170, .22), transparent 34rem),
+        linear-gradient(160deg, #07111f 0%, #091625 55%, #07101b 100%);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: wait; opacity: .55; }
+    .shell { width: min(1120px, calc(100% - 28px)); margin: 0 auto; padding: 26px 0 56px; }
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 22px;
+    }
+    .eyebrow {
+      color: var(--green);
+      font-size: .78rem;
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 5px 0;
+      font-size: clamp(1.65rem, 4vw, 2.45rem);
+      letter-spacing: -.035em;
+      overflow-wrap: anywhere;
+    }
+    h2 { margin: 0; font-size: 1.16rem; }
+    h3 { margin: 0; font-size: 1rem; }
+    p { margin: 0; }
+    .muted { color: var(--muted); }
+    .panel {
+      background: linear-gradient(145deg, rgba(18, 35, 58, .96), rgba(11, 25, 42, .96));
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+    .login {
+      width: min(520px, 100%);
+      margin: 8vh auto 0;
+      padding: 24px;
+    }
+    .field { display: grid; gap: 7px; }
+    .field + .field { margin-top: 15px; }
+    label { color: #d8e2ef; font-size: .85rem; font-weight: 700; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid #385170;
+      border-radius: 11px;
+      background: #081523;
+      color: var(--text);
+      padding: 12px 13px;
+      outline: none;
+    }
+    textarea { min-height: 78px; resize: vertical; }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(115, 181, 255, .14);
+    }
+    .btn {
+      border: 1px solid #426180;
+      border-radius: 11px;
+      background: #172c46;
+      color: var(--text);
+      padding: 10px 14px;
+      font-weight: 800;
+    }
+    .btn:hover:not(:disabled) { background: #1d3859; }
+    .btn.primary {
+      border-color: #40d7a0;
+      background: #16825f;
+      color: #fff;
+    }
+    .btn.primary:hover:not(:disabled) { background: #1b9670; }
+    .btn.ghost { background: transparent; }
+    .btn.warn { border-color: #8a6730; background: #453515; color: #ffdc92; }
+    .btn.small { padding: 7px 10px; font-size: .82rem; }
+    .login-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+    .test-entry {
+      display: none;
+      margin-top: 18px;
+      border: 1px dashed #9b792f;
+      border-radius: 12px;
+      background: rgba(102, 75, 21, .34);
+      padding: 13px;
+    }
+    .test-entry strong { color: var(--amber); }
+    .message {
+      display: none;
+      margin-top: 14px;
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: rgba(255, 130, 124, .12);
+      border: 1px solid rgba(255, 130, 124, .45);
+      color: #ffd0cd;
+    }
+    .toolbar {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 14px;
+      align-items: center;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .date-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .date-summary { text-align: center; }
+    .date-summary strong { display: block; font-size: 1.17rem; }
+    .date-summary span { color: var(--muted); font-size: .83rem; }
+    .calendar { width: auto; min-width: 145px; }
+    .content-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(290px, .8fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .section { padding: 18px; }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .count {
+      color: var(--muted);
+      font-size: .82rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .class-list { display: grid; gap: 10px; }
+    .class-row {
+      border: 1px solid #2c4563;
+      border-radius: 13px;
+      background: rgba(7, 17, 31, .58);
+      padding: 12px;
+    }
+    .class-main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+    }
+    .class-label { font-weight: 800; line-height: 1.3; }
+    .recorded {
+      margin-top: 6px;
+      color: #b9f6df;
+      font-size: .88rem;
+    }
+    .blank {
+      margin-top: 6px;
+      color: var(--amber);
+      font-weight: 800;
+      font-size: .88rem;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid #376b5a;
+      border-radius: 999px;
+      color: #bbf5de;
+      background: rgba(15, 95, 72, .28);
+      padding: 3px 8px;
+      font-size: .72rem;
+      font-weight: 800;
+      margin-left: 6px;
+    }
+    .add-form {
+      display: none;
+      margin-top: 12px;
+      border-top: 1px solid #2a415e;
+      padding-top: 12px;
+    }
+    .add-form.open { display: block; }
+    .mini-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .fixed {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 11px;
+    }
+    .fixed div {
+      border-radius: 9px;
+      background: #0a1828;
+      padding: 8px;
+      min-width: 0;
+    }
+    .fixed b { display: block; color: var(--muted); font-size: .69rem; text-transform: uppercase; }
+    .fixed span { display: block; overflow: hidden; text-overflow: ellipsis; font-size: .82rem; margin-top: 2px; }
+    .form-actions { display: flex; gap: 8px; margin-top: 11px; }
+    .unmatched {
+      margin-top: 15px;
+      border-top: 1px solid var(--line);
+      padding-top: 15px;
+    }
+    .unmatched-list, .result-list { display: grid; gap: 8px; margin-top: 10px; }
+    .record {
+      border: 1px solid #2b425e;
+      border-radius: 10px;
+      background: rgba(8, 21, 35, .72);
+      padding: 10px;
+      font-size: .84rem;
+      line-height: 1.42;
+    }
+    .record strong { color: #eaf2fb; }
+    .empty {
+      border: 1px dashed #3a526f;
+      border-radius: 10px;
+      color: var(--muted);
+      padding: 12px;
+      font-size: .84rem;
+    }
+    .search-form { display: grid; gap: 10px; }
+    .search-results { margin-top: 16px; }
+    .search-results h3 + .result-list { margin-bottom: 15px; }
+    .limitation {
+      margin-top: 16px;
+      border: 1px solid #3c4f66;
+      border-radius: 12px;
+      padding: 12px;
+      color: var(--muted);
+      font-size: .78rem;
+      line-height: 1.45;
+    }
+    .loading { opacity: .62; pointer-events: none; }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      z-index: 10;
+      transform: translate(-50%, 140%);
+      border: 1px solid #4bd4a2;
+      border-radius: 999px;
+      background: #0b3f31;
+      color: #d8fff0;
+      box-shadow: var(--shadow);
+      padding: 11px 16px;
+      font-weight: 800;
+      transition: transform .2s ease;
+    }
+    .toast.show { transform: translate(-50%, 0); }
+    [hidden] { display: none !important; }
+    @media (max-width: 820px) {
+      .topbar { align-items: center; }
+      .toolbar { grid-template-columns: 1fr; }
+      .date-summary { text-align: left; order: -1; }
+      .calendar { width: 100%; }
+      .content-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 560px) {
+      .shell { width: min(100% - 18px, 1120px); padding-top: 16px; }
+      h1 { font-size: 1.9rem; }
+      .topbar { align-items: flex-start; }
+      .toolbar, .section { padding: 13px; border-radius: 14px; }
+      .date-actions { display: grid; grid-template-columns: 1fr 1fr; }
+      .class-main { grid-template-columns: 1fr; }
+      .class-main .btn { width: 100%; }
+      .mini-grid, .fixed { grid-template-columns: 1fr 1fr; }
+      .fixed div:nth-child(2) { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section id="loginPanel" class="panel login">
+      <div class="eyebrow">Gym in a Box · M1</div>
+      <h1>Admin — Daily Sign-in Review</h1>
+      <p class="muted">Choose who is reviewing, then sign in. Sessions close after 30 minutes.</p>
+
+      <div class="field" style="margin-top:20px">
+        <label for="loginAdminName">Admin name</label>
+        <select id="loginAdminName" required>
+          <option value="">Choose Admin</option>
+          <option>Andrew Smith</option>
+          <option>Stuart Turner</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="loginPassphrase">Admin passphrase</label>
+        <input id="loginPassphrase" type="password" autocomplete="current-password" placeholder="Four-word passphrase">
+      </div>
+      <div class="login-actions">
+        <button id="loginButton" class="btn primary" type="button">Open Daily Review</button>
+        <a class="btn ghost" href="/m1/" style="text-decoration:none">Back to instructor sign-in</a>
+      </div>
+      <div id="testEntry" class="test-entry">
+        <strong>TEST ADMIN — Deploy Preview only</strong>
+        <p class="muted" style="margin:5px 0 10px">Uses the copied TEST Sheet and fake information. This path is rejected outside a Deploy Preview.</p>
+        <button id="testLoginButton" class="btn warn" type="button">Enter TEST Admin</button>
+      </div>
+      <div id="loginMessage" class="message" role="alert"></div>
+    </section>
+
+    <section id="appPanel" hidden>
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">Gym in a Box · M1</div>
+          <h1>Daily Sign-in Review</h1>
+          <p id="sessionLabel" class="muted"></p>
+        </div>
+        <button id="logoutButton" class="btn ghost" type="button">Log Out</button>
+      </header>
+
+      <section class="panel toolbar" aria-label="Date controls">
+        <div class="date-actions">
+          <button id="previousDay" class="btn small" type="button">Previous day</button>
+          <button id="yesterday" class="btn small" type="button">Yesterday</button>
+          <button id="today" class="btn small" type="button">Today</button>
+          <button id="nextDay" class="btn small" type="button">Next day</button>
+        </div>
+        <div class="date-summary">
+          <strong id="dateHeading">—</strong>
+          <span id="dateMeta">Loading…</span>
+        </div>
+        <input id="calendarDate" class="calendar" type="date" aria-label="Choose review date">
+      </section>
+
+      <div class="content-grid">
+        <section id="reviewSection" class="panel section">
+          <div class="section-head">
+            <h2>Scheduled Rev classes</h2>
+            <span id="classCount" class="count"></span>
+          </div>
+          <div id="reviewMessage" class="message" role="alert"></div>
+          <div id="classList" class="class-list"></div>
+          <div id="unmatchedSection" class="unmatched" hidden>
+            <h3>Recorded sign-ins not matched to this schedule</h3>
+            <p class="muted" style="font-size:.8rem;margin-top:4px">Shown separately so nothing recorded is hidden.</p>
+            <div id="unmatchedList" class="unmatched-list"></div>
+          </div>
+        </section>
+
+        <aside class="panel section">
+          <div class="section-head">
+            <h2>Find an Instructor</h2>
+          </div>
+          <div class="search-form">
+            <div class="field">
+              <label for="searchInstructor">Choose or type instructor</label>
+              <input id="searchInstructor" list="instructorOptions" autocomplete="off" placeholder="Instructor name">
+              <datalist id="instructorOptions"></datalist>
+            </div>
+            <div class="field">
+              <label for="searchDate">Selected date</label>
+              <input id="searchDate" type="date">
+            </div>
+            <button id="searchButton" class="btn primary" type="button">Find sign-ins</button>
+          </div>
+          <div id="searchMessage" class="message" role="alert"></div>
+          <div id="searchResults" class="search-results" hidden>
+            <h3>Selected-date records</h3>
+            <div id="selectedDateResults" class="result-list"></div>
+            <h3>Five recent active sign-ins</h3>
+            <div id="recentResults" class="result-list"></div>
+          </div>
+          <div class="limitation">
+            Admin review uses the shared candidate Rev schedule. A tablet with a locally edited kiosk schedule can differ until schedule management is unified in a later project; unmatched records remain visible here.
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status">Saved</div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      const API = Object.freeze({
+        login: '/.netlify/functions/m1-admin-login',
+        logout: '/.netlify/functions/m1-admin-logout',
+        review: '/.netlify/functions/m1-admin-review',
+        search: '/.netlify/functions/m1-admin-search',
+        add: '/.netlify/functions/m1-admin-add'
+      });
+      const TIME_ZONE = 'America/New_York';
+      const SITE = 'Rev';
+      const inFlightAdditions = new Set();
+      let schedule = null;
+      let currentDate = '';
+      let currentRecords = [];
+      let currentAdminName = '';
+      let testMode = false;
+
+      const $ = selector => document.querySelector(selector);
+
+      function clean(value) {
+        return String(value == null ? '' : value).normalize('NFKC').trim().replace(/\s+/g, ' ');
+      }
+
+      function normalize(value) {
+        return clean(value)
+          .toLocaleLowerCase('en-US')
+          .replace(/[’‘`´]/g, "'")
+          .replace(/[‐‑‒–—―−]/g, '-');
+      }
+
+      function escapeHtml(value) {
+        return String(value == null ? '' : value).replace(/[&<>"']/g, character => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;'
+        })[character]);
+      }
+
+      function nyDate(now = new Date()) {
+        const parts = {};
+        new Intl.DateTimeFormat('en-CA', {
+          timeZone: TIME_ZONE,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).formatToParts(now).forEach(part => {
+          if (part.type !== 'literal') parts[part.type] = part.value;
+        });
+        return `${parts.year}-${parts.month}-${parts.day}`;
+      }
+
+      function shiftDate(dateString, days) {
+        const [year, month, day] = dateString.split('-').map(Number);
+        const date = new Date(Date.UTC(year, month - 1, day + days, 12));
+        return date.toISOString().slice(0, 10);
+      }
+
+      function dayName(dateString) {
+        const [year, month, day] = dateString.split('-').map(Number);
+        return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][
+          new Date(Date.UTC(year, month - 1, day)).getUTCDay()
+        ];
+      }
+
+      function durationForClass(label) {
+        return /\bkids[’']?\b/i.test(normalize(label)) ? 0.5 : 1;
+      }
+
+      function showMessage(element, message) {
+        element.textContent = message || '';
+        element.style.display = message ? 'block' : 'none';
+      }
+
+      function toast(message) {
+        const element = $('#toast');
+        element.textContent = message;
+        element.classList.add('show');
+        window.setTimeout(() => element.classList.remove('show'), 2600);
+      }
+
+      async function requestJson(url, body) {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          cache: 'no-store',
+          body: JSON.stringify(body)
+        });
+        let data = null;
+        try { data = await response.json(); } catch {}
+        if (!response.ok || !data || data.ok !== true) {
+          const error = new Error(data && data.message ? data.message : 'The request did not complete.');
+          error.status = response.status;
+          error.data = data;
+          throw error;
+        }
+        return data;
+      }
+
+      function setLoggedOut(message = '') {
+        currentRecords = [];
+        currentAdminName = '';
+        $('#appPanel').hidden = true;
+        $('#loginPanel').hidden = false;
+        $('#classList').replaceChildren();
+        $('#unmatchedList').replaceChildren();
+        $('#searchResults').hidden = true;
+        showMessage($('#loginMessage'), message);
+      }
+
+      function setLoggedIn(data) {
+        currentAdminName = data.adminName;
+        testMode = data.test === true;
+        $('#loginPanel').hidden = true;
+        $('#appPanel').hidden = false;
+        $('#sessionLabel').textContent = `${currentAdminName} · ${testMode ? 'TEST copied Sheet' : 'Production-ready session'}`;
+      }
+
+      async function login(testShortcut) {
+        showMessage($('#loginMessage'), '');
+        const adminName = $('#loginAdminName').value;
+        if (!adminName) {
+          showMessage($('#loginMessage'), 'Choose Andrew Smith or Stuart Turner.');
+          return;
+        }
+        const button = testShortcut ? $('#testLoginButton') : $('#loginButton');
+        button.disabled = true;
+        try {
+          const data = await requestJson(API.login, {
+            adminName,
+            passphrase: testShortcut ? '' : $('#loginPassphrase').value,
+            testShortcut
+          });
+          $('#loginPassphrase').value = '';
+          setLoggedIn(data);
+          await loadReview(defaultYesterday());
+        } catch (error) {
+          showMessage($('#loginMessage'), error.message);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      async function logout() {
+        $('#logoutButton').disabled = true;
+        try { await requestJson(API.logout, {}); } catch {}
+        $('#logoutButton').disabled = false;
+        setLoggedOut('You are logged out.');
+        history.replaceState(null, '', location.pathname);
+      }
+
+      function defaultYesterday() {
+        return shiftDate(nyDate(), -1);
+      }
+
+      function formatDateHeading(dateString) {
+        const [year, month, day] = dateString.split('-').map(Number);
+        return new Intl.DateTimeFormat('en-US', {
+          timeZone: 'UTC',
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric'
+        }).format(new Date(Date.UTC(year, month - 1, day, 12)));
+      }
+
+      function recordHtml(record) {
+        return `<div class="record">
+          <strong>${escapeHtml(record.instructor || 'Unknown instructor')}</strong><br>
+          ${escapeHtml(record.date)} · ${escapeHtml(record.classLabel)} · ${escapeHtml(record.site)}
+          ${record.source === 'Admin-added' ? '<span class="badge">Admin-added</span>' : ''}
+        </div>`;
+      }
+
+      function refreshInstructorOptions(records) {
+        const names = [...new Set(records.map(record => clean(record.instructor)).filter(Boolean))]
+          .sort((a, b) => a.localeCompare(b));
+        $('#instructorOptions').innerHTML = names
+          .map(name => `<option value="${escapeHtml(name)}"></option>`)
+          .join('');
+      }
+
+      function renderReview() {
+        const labels = schedule.days[dayName(currentDate)] || [];
+        const matchedRecordIds = new Set();
+        const rows = labels.map((label, index) => {
+          const matches = currentRecords.filter(record =>
+            normalize(record.classLabel) === normalize(label)
+            && normalize(record.site) === normalize(SITE)
+          );
+          matches.forEach(record => matchedRecordIds.add(record.recordId));
+          const instructors = [...new Set(matches.map(record => clean(record.instructor)).filter(Boolean))];
+          const sources = matches.some(record => record.source === 'Admin-added')
+            ? '<span class="badge">Admin-added</span>'
+            : '';
+          const status = instructors.length
+            ? `<div class="recorded">${escapeHtml(instructors.join(' + '))}${sources}</div>`
+            : '<div class="blank">No sign-in recorded</div>';
+          const duration = durationForClass(label);
+          return `<article class="class-row" data-class-index="${index}">
+            <div class="class-main">
+              <div>
+                <div class="class-label">${escapeHtml(label)}</div>
+                ${status}
+              </div>
+              ${instructors.length ? '' : `<button class="btn small add-toggle" data-class-index="${index}" type="button">Add instructor</button>`}
+            </div>
+            ${instructors.length ? '' : `<form class="add-form" data-add-form="${index}">
+              <div class="fixed">
+                <div><b>Date</b><span>${escapeHtml(currentDate)}</span></div>
+                <div><b>Class</b><span title="${escapeHtml(label)}">${escapeHtml(label)}</span></div>
+                <div><b>Site</b><span>${SITE}</span></div>
+                <div><b>Duration</b><span>${duration} hr</span></div>
+              </div>
+              <div class="mini-grid">
+                <div class="field">
+                  <label>Instructor${testMode ? ' (fake TEST name)' : ''}</label>
+                  <input name="instructor" maxlength="100" required placeholder="${testMode ? 'QA Test Instructor' : 'Instructor name'}">
+                </div>
+                <div class="field">
+                  <label>Required reason</label>
+                  <input name="reason" maxlength="240" required placeholder="Missed tablet sign-in">
+                </div>
+              </div>
+              <div class="field" style="margin-top:10px">
+                <label>Notes (optional)</label>
+                <textarea name="notes" maxlength="400" placeholder="Optional context"></textarea>
+              </div>
+              <div class="form-actions">
+                <button class="btn primary confirm-add" data-class-index="${index}" type="submit">Review and add</button>
+                <button class="btn ghost cancel-add" data-class-index="${index}" type="button">Cancel</button>
+              </div>
+            </form>`}
+          </article>`;
+        });
+        $('#classList').innerHTML = rows.join('');
+        $('#classCount').textContent = `${labels.length} scheduled class${labels.length === 1 ? '' : 'es'}`;
+
+        const unmatched = currentRecords.filter(record => !matchedRecordIds.has(record.recordId));
+        $('#unmatchedSection').hidden = unmatched.length === 0;
+        $('#unmatchedList').innerHTML = unmatched.length
+          ? unmatched.map(recordHtml).join('')
+          : '';
+        refreshInstructorOptions(currentRecords);
+      }
+
+      async function loadReview(dateString) {
+        if (!schedule) return;
+        currentDate = dateString;
+        const today = nyDate();
+        $('#calendarDate').value = dateString;
+        $('#searchDate').value = dateString;
+        $('#dateHeading').textContent = formatDateHeading(dateString);
+        $('#dateMeta').textContent = dateString === defaultYesterday()
+          ? 'Yesterday · America/New_York'
+          : (dateString === today ? 'Today · America/New_York' : 'America/New_York');
+        $('#nextDay').disabled = dateString >= today;
+        showMessage($('#reviewMessage'), '');
+        $('#reviewSection').classList.add('loading');
+        try {
+          const data = await requestJson(API.review, { date: dateString });
+          setLoggedIn(data);
+          currentRecords = data.records;
+          renderReview();
+        } catch (error) {
+          if (error.status === 401) {
+            setLoggedOut('Admin login required.');
+            return;
+          }
+          currentRecords = [];
+          $('#classList').replaceChildren();
+          showMessage($('#reviewMessage'), error.message);
+        } finally {
+          $('#reviewSection').classList.remove('loading');
+        }
+      }
+
+      function uniqueRequestId(date, label, instructor) {
+        const random = crypto.getRandomValues(new Uint32Array(3));
+        return `${date}-${normalize(label)}-${normalize(instructor)}-${[...random].join('-')}`.slice(0, 160);
+      }
+
+      async function addInstructor(form, index) {
+        const labels = schedule.days[dayName(currentDate)] || [];
+        const classLabel = labels[index];
+        const instructor = clean(form.elements.instructor.value);
+        const reason = clean(form.elements.reason.value);
+        const notes = clean(form.elements.notes.value);
+        if (!instructor || reason.length < 3) {
+          showMessage($('#reviewMessage'), 'Enter the instructor and a clear reason.');
+          return;
+        }
+        const key = `${currentDate}|${normalize(classLabel)}|${normalize(SITE)}`;
+        if (inFlightAdditions.has(key)) return;
+        const confirmed = window.confirm(
+          `Add ${instructor} to:\n\n${currentDate}\n${classLabel}\n${SITE}\n${durationForClass(classLabel)} hr\n\nReason: ${reason}`
+        );
+        if (!confirmed) return;
+
+        inFlightAdditions.add(key);
+        const submit = form.querySelector('.confirm-add');
+        submit.disabled = true;
+        showMessage($('#reviewMessage'), '');
+        try {
+          const data = await requestJson(API.add, {
+            requestId: uniqueRequestId(currentDate, classLabel, instructor),
+            date: currentDate,
+            classLabel,
+            site: SITE,
+            duration: durationForClass(classLabel),
+            instructor,
+            notes,
+            reason
+          });
+          toast(data.result === 'added'
+            ? 'Instructor added to the TEST Sheet'
+            : 'Already recorded — no duplicate row created');
+          await loadReview(currentDate);
+        } catch (error) {
+          showMessage($('#reviewMessage'), error.message);
+        } finally {
+          inFlightAdditions.delete(key);
+          submit.disabled = false;
+        }
+      }
+
+      async function searchInstructor() {
+        const instructor = clean($('#searchInstructor').value);
+        const date = $('#searchDate').value;
+        showMessage($('#searchMessage'), '');
+        if (!instructor || !date) {
+          showMessage($('#searchMessage'), 'Enter an instructor and choose a date.');
+          return;
+        }
+        $('#searchButton').disabled = true;
+        try {
+          const data = await requestJson(API.search, { instructor, date });
+          $('#selectedDateResults').innerHTML = data.selectedDateRecords.length
+            ? data.selectedDateRecords.map(recordHtml).join('')
+            : '<div class="empty">No active sign-ins for this instructor on the selected date.</div>';
+          $('#recentResults').innerHTML = data.recentRecords.length
+            ? data.recentRecords.map(recordHtml).join('')
+            : '<div class="empty">No recent active sign-ins found.</div>';
+          $('#searchResults').hidden = false;
+        } catch (error) {
+          if (error.status === 401) {
+            setLoggedOut('Admin login required.');
+          } else {
+            showMessage($('#searchMessage'), error.message);
+          }
+        } finally {
+          $('#searchButton').disabled = false;
+        }
+      }
+
+      async function initialize() {
+        $('#calendarDate').max = nyDate();
+        $('#searchDate').max = nyDate();
+        const deployPreviewHost = location.hostname.endsWith('.netlify.app')
+          && location.hostname.includes('--');
+        $('#testEntry').style.display = deployPreviewHost ? 'block' : 'none';
+        try {
+          const response = await fetch('/m1/shared-schedule.json', { cache: 'no-store' });
+          if (!response.ok) throw new Error('Shared schedule unavailable.');
+          schedule = await response.json();
+          if (!schedule || !schedule.days) throw new Error('Shared schedule unreadable.');
+          await loadReview(defaultYesterday());
+        } catch {
+          setLoggedOut('The shared Rev schedule could not be loaded.');
+        }
+      }
+
+      $('#loginButton').addEventListener('click', () => login(false));
+      $('#testLoginButton').addEventListener('click', () => login(true));
+      $('#loginPassphrase').addEventListener('keydown', event => {
+        if (event.key === 'Enter') login(false);
+      });
+      $('#logoutButton').addEventListener('click', logout);
+      $('#previousDay').addEventListener('click', () => loadReview(shiftDate(currentDate, -1)));
+      $('#yesterday').addEventListener('click', () => loadReview(defaultYesterday()));
+      $('#today').addEventListener('click', () => loadReview(nyDate()));
+      $('#nextDay').addEventListener('click', () => {
+        const next = shiftDate(currentDate, 1);
+        if (next <= nyDate()) loadReview(next);
+      });
+      $('#calendarDate').addEventListener('change', event => {
+        if (event.target.value && event.target.value <= nyDate()) loadReview(event.target.value);
+      });
+      $('#searchButton').addEventListener('click', searchInstructor);
+      $('#reviewSection').addEventListener('click', event => {
+        const toggle = event.target.closest('.add-toggle');
+        if (toggle) {
+          const form = document.querySelector(`[data-add-form="${toggle.dataset.classIndex}"]`);
+          form.classList.add('open');
+          toggle.hidden = true;
+          form.elements.instructor.focus();
+          return;
+        }
+        const cancel = event.target.closest('.cancel-add');
+        if (cancel) {
+          const form = document.querySelector(`[data-add-form="${cancel.dataset.classIndex}"]`);
+          form.reset();
+          form.classList.remove('open');
+          document.querySelector(`.add-toggle[data-class-index="${cancel.dataset.classIndex}"]`).hidden = false;
+        }
+      });
+      $('#reviewSection').addEventListener('submit', event => {
+        if (!event.target.matches('.add-form')) return;
+        event.preventDefault();
+        addInstructor(event.target, Number(event.target.dataset.addForm));
+      });
+      window.addEventListener('pageshow', event => {
+        if (event.persisted && !$('#appPanel').hidden && schedule) loadReview(currentDate || defaultYesterday());
+      });
+
+      initialize();
+    })();
+  </script>
+</body>
+</html>

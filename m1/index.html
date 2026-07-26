@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-07 13:45)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (M1 final production candidate)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -433,7 +433,7 @@ input, textarea, select {
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-01-07 13:45</span>
+        Build <span class="kbd" id="buildId">M1 final production candidate</span>
       </div>
     </div>
 
@@ -445,7 +445,7 @@ input, textarea, select {
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-01-07 13:45
+      Build M1 final production candidate
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -455,6 +455,7 @@ input, textarea, select {
     <nav>
       <button id="btnKiosk" class="btn brand" type="button">Instructor Sign‑In</button>
       <button id="btnAdmin" class="btn" type="button">Admin View</button>
+      <a class="btn" href="/m1/admin/" style="text-decoration:none;">Admin — Daily Sign-in Review</a>
     </nav>
   </header>
 
@@ -543,7 +544,7 @@ input, textarea, select {
             <button id="btnResetDevice" class="btn danger" type="button">Reset device location</button>
             <button id="btnFactoryReset" class="btn danger" type="button">Factory reset</button>
           </div>
-          <div class="hint warn">Reset device clears: gym name, location label, site code, schedule data, series classes, and duration rules (sign‑ins preserved).  Factory reset clears <em>all</em> local data (device, schedule, series classes, duration rules, sign‑ins).</div>
+          <div class="hint warn">Reset device clears: gym name, location label, site code, schedule data, series classes, and duration rules (sign‑ins and unsent payroll rows preserved). Factory reset clears <em>all</em> local data (device, schedule, series classes, duration rules, sign‑ins, and the waiting list).</div>
         </div>
       </div>
 
@@ -679,18 +680,10 @@ input, textarea, select {
       </div>
     </div>
 
-    <!-- Google Sheets sync configuration -->
+    <!-- Server-managed Google Sheets sync -->
     <div class="card" style="background: var(--panel);">
       <h3>Google Sheets Sync</h3>
-      <div class="subtle">Configure a webhook URL and token to push sign‑ins to your intake sheet.</div>
-      <div style="margin-top:12px;">
-        <label for="cfgSyncUrl" style="display:block; margin-bottom:4px;">Webhook URL</label>
-        <input id="cfgSyncUrl" type="text" placeholder="https://script.google.com/macros/s/.../exec" style="width:100%;">
-      </div>
-      <div style="margin-top:12px;">
-        <label for="cfgSyncToken" style="display:block; margin-bottom:4px;">Sync token</label>
-        <input id="cfgSyncToken" type="text" placeholder="Secret token" style="width:100%;">
-      </div>
+      <div class="subtle">The secure connection is managed by this site. A waiting row leaves this device only after Google clearly confirms <b>added</b> or <b>already exists</b>.</div>
       <div style="margin-top:12px;">
         <label for="cfgDeviceLabel" style="display:block; margin-bottom:4px;">Device label</label>
         <input id="cfgDeviceLabel" type="text" placeholder="Front Desk iPad" style="width:100%;">
@@ -748,11 +741,12 @@ input, textarea, select {
   </div>
 </div>
 
+<script src="/m1/kiosk-safety.js"></script>
 <script>
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2026-01-07 13:45';
+  const BUILD = 'm1-final-production-candidate-2026-07-26';
   const TZ = 'America/New_York';
 // --- Instructor name suggestions (local roster) ---
 const NAME_ROSTER_KEY = 'gib_m1_instructor_names_v1';
@@ -834,8 +828,6 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
   // Sync keys
   const SYNC_QUEUE_KEY   = 'gib_m1_sync_queue_v1';
-  const SYNC_URL_KEY     = 'gib_m1_sync_url_v1';
-  const SYNC_TOKEN_KEY   = 'gib_m1_sync_token_v1';
   const SYNC_AUTO_KEY    = 'gib_m1_sync_auto_v1';
   const DEVICE_LABEL_KEY = 'gib_m1_device_label_v1';
 
@@ -845,46 +837,23 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
   const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 
-  // Default schedule snapshot (Rev)
-  const DEFAULT_SCHEDULE = {
-    'Monday': [
-      '6:00 AM BJJ (Level 2)', '12:00 PM BJJ (Level 2)', '4:30 PM Yoga (Core)', '4:30 PM Kids’ BJJ',
-      '4:30 PM BJJ (Level 1)', '5:30 PM BJJ (Level 2)', '5:30 PM Lapel Guard Class (Level 4)',
-      '6:30 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)',
-      '6:30 PM Muay Thai (Fundamentals/Intermediate, and intros when scheduled)',
-      '6:30 PM Leglock Fundamentals (No-Gi, Level 3)', '7:00 PM BJJ (Level 2)',
-      '7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ'
-    ],
-    'Tuesday': [
-      '6:00 AM BJJ (Level 4) / Gi BJJ Intro Class', '6:00 AM No-Gi BJJ (Level 2)', '7:15 AM Conditioning',
-      '12:00 PM BJJ (Level 2)', '4:30 PM Yoga (Flow)', '4:30 PM Kids’ BJJ', '5:30 PM BJJ (Level 2)',
-      '5:30 PM Gi BJJ Intro Class / Level 1', '5:30 PM BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)',
-      '6:30 PM Guard Passing Class (Level 3)', '6:30 PM Judo', '7:00 PM BJJ Competition Class (Level 2, gi)'
-    ],
-    'Wednesday': [
-      '6:00 AM BJJ (Level 2)', '12:00 PM No-Gi BJJ (Level 2)', '4:30 PM Kids’ BJJ', '4:30 PM BJJ (Level 1)',
-      '5:30 PM BJJ (Level 2)', '5:30 PM BJJ (Level 4)',
-      '6:30 PM Muay Thai (Fundamentals/Intermediate, and intros when scheduled)',
-      '6:30 PM BJJ Drills (Level 3)', '7:00 PM BJJ (Level 4)', '7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ'
-    ],
-    'Thursday': [
-      '6:00 AM No-Gi BJJ (Level 4)', '6:00 AM No-Gi BJJ (Level 2) / Gi BJJ Intro Class', '7:15 AM Conditioning',
-      '12:00 PM BJJ (Level 2)', '4:30 PM Kids’ BJJ', '5:00 PM Get Warm', '5:30 PM BJJ (Level 2)',
-      '5:30 PM Gi BJJ Intro Class / Level 1', '5:30 PM No-Gi BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)',
-      '6:30 PM Advanced Leglocks (No-Gi, Level 3)', '6:30 PM Judo', '7:00 PM BJJ Competition Class (Level 2, no-gi)'
-    ],
-    'Friday': [
-      '6:00 AM Drill/Roll Class – BJJ', '12:00 PM Drill/Roll Class – BJJ', '4:30 PM Yoga (Flow)',
-      '5:00 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)', '5:30 PM BJJ (Level 2)',
-      '6:00 PM Muay Thai (Fundamentals/Intermediate)'
-    ],
-    'Saturday': [
-      '10:00 AM Kids’ BJJ', '10:00 AM Wrestling', '11:00 AM BJJ (Level 2)', '12:00 PM Conditioning'
-    ],
-    'Sunday': [
-      '12:00 PM BJJ Competition Class (Level 4, gi and no-gi)', '12:30 PM Get Warm', '1:00 PM BJJ Open Mat'
-    ]
-  };
+  // The Rev schedule is loaded from the same versioned source used by Daily Review.
+  let DEFAULT_SCHEDULE = {};
+  let SHARED_SCHEDULE_META = null;
+  async function loadSharedSchedule() {
+    const response = await fetch('/m1/shared-schedule.json', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Shared schedule HTTP ${response.status}`);
+    const value = await response.json();
+    if (!value || !value.days || !DAYS.every(day => Array.isArray(value.days[day]))) {
+      throw new Error('Shared schedule was not readable.');
+    }
+    DEFAULT_SCHEDULE = JSON.parse(JSON.stringify(value.days));
+    SHARED_SCHEDULE_META = {
+      version: value.version || null,
+      site: value.site || 'Rev',
+      timezone: value.timezone || TZ
+    };
+  }
 
   // Additional default schedule for Richmond BJJ.  This snapshot was copied from
   // the Richmond BJJ Academy schedule page as of late‑2025.  Each line
@@ -989,10 +958,22 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   function saveDevice(cfg) {
     safeSet(DEVICE_KEY, cfg);
   }
+  function missingDeviceSetupFields(cfg=loadDevice()) {
+    const missing = [];
+    if (!cfg || !String(cfg.gymName || '').trim()) missing.push('gym name');
+    if (!cfg || !String(cfg.location || '').trim()) missing.push('location/device label');
+    if (!cfg || !String(cfg.siteCode || '').trim()) missing.push('site code');
+    return missing;
+  }
+  function isDeviceSetupComplete(cfg=loadDevice()) {
+    return missingDeviceSetupFields(cfg).length === 0;
+  }
   function resetDevice() {
-    // Clear device + schedule data + duration rules (for clean setup tests)
+    // Clear setup data while preserving the payroll ledger and waiting list.
     localStorage.removeItem(DEVICE_KEY);
     localStorage.removeItem(SCHEDULE_KEY);
+    localStorage.removeItem(SCHEDULE_URL_KEY);
+    localStorage.removeItem(SCHEDULE_MODE_KEY);
     localStorage.removeItem(DURATION_RULES_KEY);
     localStorage.removeItem(SERIES_KEY);
     // Also clear a few older keys if present (safe no-ops)
@@ -1000,15 +981,6 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     localStorage.removeItem('rbjj_device');
     localStorage.removeItem('rbjj_schedule');
     localStorage.removeItem('rbjj_schedule_v1');
-    // Wipe legacy gib_* and rbjj_* keys (except current sign-ins) that could confuse installs
-    try {
-      Object.keys(localStorage).forEach(k => {
-        if ((k.startsWith('gib_') || k.startsWith('rbjj_')) && k !== SIGNINS_KEY) {
-          localStorage.removeItem(k);
-        }
-      });
-    } catch (e) {}
-
     // Clear any values in the admin form fields so they appear empty after reset
     const g = document.getElementById('cfgGymName');
     const l = document.getElementById('cfgLocation');
@@ -1020,6 +992,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     loadScheduleIntoAdmin(); // resets admin editor to default schedule state
     renderDurationRules();
     populateClassesForToday(); // ensures kiosk is not empty if defaults exist
+    reconcileSyncQueue();
+    updateSyncStatus();
     showToast('Device reset');
   }
 
@@ -1060,18 +1034,20 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     renderDurationRules();
     populateClassesForToday();
     renderAdminTable();
+    updateSyncStatus();
     showToast('Factory reset complete');
   }
 
   function getSiteCode() {
     const cfg = loadDevice();
     const siteCode = cfg && cfg.siteCode ? String(cfg.siteCode).trim() : '';
-    return siteCode || 'Rev';
+    return siteCode;
   }
 
   function applyDeviceToUI() {
     const cfg = loadDevice();
-    const configured = !!(cfg && (cfg.gymName || cfg.location || cfg.siteCode));
+    const configured = isDeviceSetupComplete(cfg);
+    const hasPartialSetup = !!(cfg && (cfg.gymName || cfg.location || cfg.siteCode));
     const pill = $('#devicePill');
     const pillText = $('#pillText');
     const hdrGym = $('#hdrGym');
@@ -1086,9 +1062,9 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     } else {
       pill.classList.add('gray');
       pill.querySelector('.dot').style.background = 'rgba(148,163,184,.85)';
-      pillText.textContent = 'Unconfigured device';
-      hdrGym.textContent = 'Gym in a Box — Module 1';
-      hdrLoc.textContent = 'Set device location in Admin.';
+      pillText.textContent = hasPartialSetup ? 'Incomplete device setup' : 'Unconfigured device';
+      hdrGym.textContent = cfg && cfg.gymName ? cfg.gymName : 'Gym in a Box — Module 1';
+      hdrLoc.textContent = 'Complete device setup in Admin before sign-ins.';
     }
 
     const dn = todayName();
@@ -1763,11 +1739,53 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     safeSet(SIGNINS_KEY, rows);
   }
 
+  const PAYROLL_HEADERS = ['Timestamp','Date','Class Label','Duration (hr)','Instructor','Site','Notes'];
+  function isExportableSignin(row) {
+    return window.GibM1Safety.isActiveLedgerRow(row);
+  }
+  function exportableSignins() {
+    return loadSignins().filter(isExportableSignin);
+  }
+  function reconcileSyncQueue() {
+    const queue = loadSyncQueue();
+    const next = window.GibM1Safety.reconcileQueue(queue, loadSignins());
+    if (JSON.stringify(next) !== JSON.stringify(queue)) saveSyncQueue(next);
+    return next;
+  }
+  function syncQueueConsistency() {
+    const queue = loadSyncQueue();
+    const next = window.GibM1Safety.reconcileQueue(queue, loadSignins());
+    return {
+      exportableLedgerCount: exportableSignins().length,
+      syncQueueCount: queue.length,
+      invalidQueueCount: queue.length - next.length,
+      isConsistent: queue.length === next.length
+    };
+  }
+  function makeLedgerRowId(batchId, index) {
+    return `${batchId}-${index + 1}`;
+  }
+  function makeSyncRowFromLedgerRow(row, deviceLabel) {
+    return {
+      'RowID': row.__rowId || `${row.Timestamp}|${row.Instructor}|${row['Class Label']}|${row.Site}`,
+      'Timestamp': row.Timestamp,
+      'Date': row.Date,
+      'Class Label': row['Class Label'],
+      'Duration (hr)': row['Duration (hr)'],
+      'Instructor': row.Instructor,
+      'Site': row.Site,
+      'Device': deviceLabel,
+      'Build': BUILD,
+      'Notes': row.Notes
+    };
+  }
+
   // Sign-in confirmation modal state (kiosk sign-ins)
   let lastSigninBatchId = null;
   let signInCountdownId = null;
   let signInSecondsRemaining = 0;
   let lastSigninFormSnapshot = null;
+  let pendingAutoSyncBatchId = null;
 
   function clearSignInCountdown() {
     if (signInCountdownId) {
@@ -1842,6 +1860,10 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         updateSignInUndoLabel();
         undoBtn.disabled = true;
         clearSignInCountdown();
+        if (pendingAutoSyncBatchId === lastSigninBatchId) {
+          pendingAutoSyncBatchId = null;
+          syncNow();
+        }
         lastSigninBatchId = null;
         return;
       }
@@ -1863,6 +1885,9 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     if (nextRows.length !== rows.length) {
       saveSignins(nextRows);
     }
+    pendingAutoSyncBatchId = null;
+    reconcileSyncQueue();
+    updateSyncStatus();
     renderAdminTable();
     closeSignInModal();
     restoreKioskForm(lastSigninFormSnapshot);
@@ -1870,10 +1895,13 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   function confirmSigninDone() {
+    const shouldSync = pendingAutoSyncBatchId && pendingAutoSyncBatchId === lastSigninBatchId;
     closeSignInModal();
     resetKioskForm();
+    pendingAutoSyncBatchId = null;
     lastSigninBatchId = null;
     lastSigninFormSnapshot = null;
+    if (shouldSync) syncNow();
   }
 
   // Admin PIN
@@ -2003,8 +2031,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   function buildCSV() {
-    const rows = loadSignins().filter(r => (r.Status || 'OK') !== 'VOID');
-    const headers = ['Timestamp','Date','Class Label','Duration (hr)','Instructor','Site','Notes'];
+    const rows = exportableSignins();
+    const headers = PAYROLL_HEADERS;
     const lines = [headers.join(',')];
     rows.forEach(r => {
       const vals = headers.map(h => {
@@ -2018,7 +2046,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   async function exportCSV() {
-    const rows = loadSignins().filter(r => (r.Status || 'OK') !== 'VOID');
+    const rows = exportableSignins();
     if (!rows.length) { alert('No sign-ins to export.'); return; }
     const csv = buildCSV();
     const blob = new Blob([csv], { type:'text/csv;charset=utf-8' });
@@ -2057,7 +2085,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   async function copyCSV() {
-    const rows = loadSignins().filter(r => (r.Status || 'OK') !== 'VOID');
+    const rows = exportableSignins();
     if (!rows.length) { alert('No sign-ins to copy.'); return; }
     const csv = buildCSV();
     try {
@@ -2089,35 +2117,50 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   function signIn() {
     const name = ($('#nameInput').value || '').trim();
     const classes = selectedClasses();
-    const site = getSiteCode();
     const notes = ($('#notesInput').value || '').trim();
     if (!name || !classes.length) {
       alert('Please enter a name and select one or more classes.');
       return;
     }
-upsertName(name);
-refreshNameDatalist();
-
+    const cfg = loadDevice();
+    const missingSetup = missingDeviceSetupFields(cfg);
+    if (missingSetup.length) {
+      alert(`Device setup required before sign-in. Missing: ${missingSetup.join(', ')}. Open Admin View and save the device setup first.`);
+      return;
+    }
+    const site = getSiteCode();
     const rows = loadSignins();
     const now = new Date();
+    const date = fmtDate(now);
+    const duplicateClasses = window.GibM1Safety.duplicateClasses(rows, date, name, site, classes);
+    if (duplicateClasses.length) {
+      const list = duplicateClasses.map(cls => `- ${cls}`).join('\n');
+      const accepted = confirm(`Possible duplicate payroll sign-in for ${name} on ${date} at ${site}:\n\n${list}\n\nChoose OK only if this duplicate is intentional.`);
+      if (!accepted) return;
+    }
+
+    upsertName(name);
+    refreshNameDatalist();
+
     const batchId = `${now.getTime()}-${Math.random().toString(16).slice(2, 8)}`;
-    classes.forEach(cls => {
+    const newRows = classes.map((cls, index) => {
       const duration = getDurationForClass(cls);
-      rows.push({
+      return {
         'Timestamp': fmtTS(now),
-        'Date': fmtDate(now),
+        'Date': date,
         'Class Label': cls,
         'Duration (hr)': duration,
         'Instructor': name,
         'Site': site,
         'Notes': notes,
         'Status': 'OK',
-        '__batchId': batchId
-      });
+        '__batchId': batchId,
+        '__rowId': makeLedgerRowId(batchId, index)
+      };
     });
-    saveSignins(rows);
+    saveSignins(rows.concat(newRows));
 
-    // Confirmation
+    // Save locally and open the Undo window before any network send.
     openSignInModal({
       name,
       classes,
@@ -2125,39 +2168,16 @@ refreshNameDatalist();
       formSnapshot: { name, notes, classes }
     });
 
-    // Build sync rows and queue them for upload.  Each class selected produces
-    // its own row in the sync queue so that multi‑class sign‑ins are treated as
-    // separate events.  A unique RowID is constructed from the timestamp,
-    // instructor name, class label and site to allow de‑duplication server‑side.
-    const autoSync = (localStorage.getItem(SYNC_AUTO_KEY) === 'true');
-    const deviceLabel = (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim();
-    const queuedRows = [];
-    classes.forEach(cls => {
-      const duration = getDurationForClass(cls);
-      const rowId = `${fmtTS(now)}|${name}|${cls}|${site}`;
-      const row = {
-        'RowID': rowId,
-        'Timestamp': fmtTS(now),
-        'Date': fmtDate(now),
-        'Class Label': cls,
-        'Duration (hr)': duration,
-        'Instructor': name,
-        'Site': site,
-        'Device': deviceLabel,
-        'Build': BUILD,
-        'Notes': notes,
-
-      };
-      queuedRows.push(row);
-    });
-    // Enqueue rows in one batch to minimize queue writes
+    const autoSync = localStorage.getItem(SYNC_AUTO_KEY) !== 'false';
+    const deviceLabel = (localStorage.getItem(DEVICE_LABEL_KEY) || cfg.location || '').trim();
+    const queuedRows = newRows.map(row => makeSyncRowFromLedgerRow(row, deviceLabel));
     queuedRows.forEach(r => enqueueRow(r));
-    // Attempt auto‑sync if configured
+    reconcileSyncQueue();
     if (autoSync) {
-      syncNow();
-    } else {
-      updateSyncStatus();
+      // Send after DONE or after the 15-second Undo window closes.
+      pendingAutoSyncBatchId = batchId;
     }
+    updateSyncStatus();
   }
 
   function voidLastSignin() {
@@ -2183,6 +2203,8 @@ refreshNameDatalist();
     rows[idx].void_reason = reason.trim();
     rows[idx].voided_at = fmtTS(new Date());
     saveSignins(rows);
+    reconcileSyncQueue();
+    updateSyncStatus();
     renderAdminTable();
     showToast('Last sign-in voided');
   }
@@ -2201,68 +2223,90 @@ refreshNameDatalist();
     saveSyncQueue(q);
   }
   function loadSyncSettings() {
-    $('#cfgSyncUrl').value = localStorage.getItem(SYNC_URL_KEY) || '';
-    $('#cfgSyncToken').value = localStorage.getItem(SYNC_TOKEN_KEY) || '';
-    $('#cfgDeviceLabel').value = localStorage.getItem(DEVICE_LABEL_KEY) || '';
-    $('#cfgAutoSync').checked = (localStorage.getItem(SYNC_AUTO_KEY) === 'true');
+    const cfg = loadDevice();
+    $('#cfgDeviceLabel').value = localStorage.getItem(DEVICE_LABEL_KEY)
+      || (cfg && cfg.location)
+      || '';
+    const storedAutoSync = localStorage.getItem(SYNC_AUTO_KEY);
+    $('#cfgAutoSync').checked = storedAutoSync === null ? true : storedAutoSync === 'true';
   }
   function saveSyncSettings() {
-    localStorage.setItem(SYNC_URL_KEY, ($('#cfgSyncUrl').value || '').trim());
-    localStorage.setItem(SYNC_TOKEN_KEY, ($('#cfgSyncToken').value || '').trim());
     localStorage.setItem(DEVICE_LABEL_KEY, ($('#cfgDeviceLabel').value || '').trim());
     localStorage.setItem(SYNC_AUTO_KEY, $('#cfgAutoSync').checked ? 'true' : 'false');
     updateSyncStatus();
   }
   function updateSyncStatus() {
-    const q = loadSyncQueue();
+    const before = syncQueueConsistency();
+    const q = reconcileSyncQueue();
     const last = localStorage.getItem('gib_m1_sync_last') || '';
     const err = localStorage.getItem('gib_m1_sync_error') || '';
     const parts = [];
-    parts.push(`Queued: <span class="kbd">${q.length}</span>`);
-    if (last) parts.push(`Last sync: <span class="kbd">${new Date(last).toLocaleString()}</span>`);
+    parts.push(`Waiting: <span class="kbd">${q.length}</span>`);
+    parts.push(`Payroll rows: <span class="kbd">${before.exportableLedgerCount}</span>`);
+    if (before.invalidQueueCount) parts.push(`<span style="color:#fbbf24;">Queue repaired: ${before.invalidQueueCount}</span>`);
+    if (last) parts.push(`Last confirmed: <span class="kbd">${new Date(last).toLocaleString()}</span>`);
     if (err) parts.push(`<span style="color:#f87171;">Error: ${err}</span>`);
     $('#syncStatus').innerHTML = parts.join(' · ');
   }
+  let syncInProgress = false;
   async function syncNow() {
-    const url = (localStorage.getItem(SYNC_URL_KEY) || '').trim();
-    const token = (localStorage.getItem(SYNC_TOKEN_KEY) || '').trim();
-    if (!url || !token) {
-      alert('Please configure the webhook URL and token first.');
+    if (syncInProgress) return;
+    if (lastSigninBatchId && signInSecondsRemaining > 0) {
+      showToast('Waiting for the Undo window');
       return;
     }
-    const queue = loadSyncQueue();
+    const queue = reconcileSyncQueue();
     if (!queue.length) {
       showToast('No rows to sync');
       updateSyncStatus();
       return;
     }
+    syncInProgress = true;
+    $('#btnSyncNow').disabled = true;
     try {
-      const body = JSON.stringify({ token, rows: queue });
-
-      // IMPORTANT: Google Apps Script web apps do not reliably return CORS headers.
-      // If we use Content-Type: application/json, browsers will preflight and fail.
-      // To keep this MVP reliable, we send a SIMPLE request:
-      // - Content-Type: text/plain (no preflight)
-      // - mode: no-cors (browser doesn't require allow-origin response)
-      // This means we cannot read the JSON response, but the request will be delivered
-      // as long as the network is available.
-      await fetch(url, {
+      const response = await fetch('/.netlify/functions/m1-kiosk-sync', {
         method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({ rows: queue })
       });
-
-      // Clear queue on successful network send (response is opaque in no-cors)
-      saveSyncQueue([]);
-      localStorage.setItem('gib_m1_sync_last', new Date().toISOString());
-      localStorage.removeItem('gib_m1_sync_error');
+      let data = null;
+      try { data = await response.json(); } catch {}
+      if (!response.ok || !data || data.ok !== true) {
+        throw new Error(data && data.message
+          ? data.message
+          : 'The send result was unclear. Rows are still waiting.');
+      }
+      const applied = window.GibM1Safety.applyReadableResults(loadSyncQueue(), data);
+      if (!applied.readable) {
+        throw new Error('The send result was unclear. Rows are still waiting.');
+      }
+      saveSyncQueue(applied.remaining);
+      if (applied.completed.length) {
+        localStorage.setItem('gib_m1_sync_last', new Date().toISOString());
+      }
+      if (applied.remaining.length) {
+        localStorage.setItem(
+          'gib_m1_sync_error',
+          `${applied.remaining.length} row(s) are still waiting for a safe Google result.`
+        );
+      } else {
+        localStorage.removeItem('gib_m1_sync_error');
+      }
       updateSyncStatus();
-      showToast(`Sync sent (${queue.length})`);
+      showToast(applied.remaining.length
+        ? `Confirmed ${applied.completed.length}; ${applied.remaining.length} waiting`
+        : `Google confirmed ${applied.completed.length}`);
     } catch (err) {
-      localStorage.setItem('gib_m1_sync_error', (err && err.message) ? err.message : String(err));
+      localStorage.setItem(
+        'gib_m1_sync_error',
+        (err && err.message) ? err.message : 'The send failed. Rows are still waiting.'
+      );
       updateSyncStatus();
-      showToast('Sync failed');
+      showToast('Send not confirmed — still waiting');
+    } finally {
+      syncInProgress = false;
+      $('#btnSyncNow').disabled = false;
     }
   }
 
@@ -2274,13 +2318,24 @@ refreshNameDatalist();
     const series = loadSeries();
     const activeSeriesToday = seriesClassesForToday();
     const signins = loadSignins();
+    const exportableRows = signins.filter(isExportableSignin);
+    const voidedRows = signins.filter(row => !isExportableSignin(row));
+    const queueInfo = syncQueueConsistency();
+    const missingSetup = missingDeviceSetupFields(cfg);
     return {
       build: BUILD,
       url: location.href,
       time: new Date().toISOString(),
       device: cfg,
+      deviceSetup: {
+        configured: missingSetup.length === 0,
+        missing: missingSetup,
+        siteCode: cfg && cfg.siteCode ? String(cfg.siteCode).trim() : null
+      },
       schedule: {
         source: sch.source,
+        sharedVersion: SHARED_SCHEDULE_META && SHARED_SCHEDULE_META.version,
+        enabled: sch.source !== 'disabled',
         updatedAt: sch.updatedAt,
         today,
         todayCount: cls.length,
@@ -2289,7 +2344,14 @@ refreshNameDatalist();
         seriesActiveToday: activeSeriesToday.slice(0, 5)
       },
       scheduleUrl: localStorage.getItem(SCHEDULE_URL_KEY) || null,
-      signinsCount: signins.length,
+      visibleLedgerCount: signins.length,
+      exportableLedgerCount: exportableRows.length,
+      voidedLedgerCount: voidedRows.length,
+      syncQueueCount: queueInfo.syncQueueCount,
+      syncQueueConsistent: queueInfo.isConsistent,
+      invalidSyncQueueCount: queueInfo.invalidQueueCount,
+      lastSyncSuccess: localStorage.getItem('gib_m1_sync_last') || null,
+      lastSyncError: localStorage.getItem('gib_m1_sync_error') || null,
       storageKeys: Object.keys(localStorage).filter(k => k.includes('gib_') || k.includes('rbjj_')).sort()
     };
   }
@@ -2387,6 +2449,11 @@ refreshNameDatalist();
       location: ($('#cfgLocation').value || '').trim(),
       siteCode: ($('#cfgSiteCode').value || '').trim()
     };
+    const missing = missingDeviceSetupFields(cfg);
+    if (missing.length) {
+      alert(`Complete device setup before saving. Missing: ${missing.join(', ')}.`);
+      return;
+    }
     saveDevice(cfg);
     applyDeviceToUI();
     $('#deviceStatus').innerHTML = `Saved: <span class="kbd">${cfg.gymName}</span> · <span class="kbd">${cfg.location}</span> · Site <span class="kbd">${cfg.siteCode}</span>`;
@@ -2394,14 +2461,14 @@ refreshNameDatalist();
   });
 
   $('#btnResetDevice').addEventListener('click', () => {
-    if (!confirm('Reset this device location + schedule data + duration rules? (Sign-ins are NOT deleted)')) return;
+    if (!confirm('Reset this device location + schedule data + duration rules? (Sign-ins and unsent payroll rows are NOT deleted)')) return;
     resetDevice();
     $('#deviceStatus').innerHTML = 'Device reset. Configure again above.';
   });
 
   $('#btnFactoryReset').addEventListener('click', () => {
     // Use a prompt to ask the user to type RESET as a safeguard against accidental clicks.
-    const answer = prompt('Factory reset will DELETE all device info, schedule data and sign‑ins on this device.\n\nType “RESET” (all caps) to proceed.');
+    const answer = prompt('Factory reset will DELETE all device info, schedule data, sign-ins, and waiting payroll rows on this device.\n\nType “RESET” (all caps) to proceed.');
     if (!answer || answer.trim().toUpperCase() !== 'RESET') {
       alert('Factory reset cancelled');
       return;
@@ -2588,13 +2655,13 @@ refreshNameDatalist();
   $('#btnClearSignins').addEventListener('click', () => {
     if (!confirm('Clear ALL locally stored sign-ins on this device?')) return;
     saveSignins([]);
+    reconcileSyncQueue();
+    updateSyncStatus();
     renderAdminTable();
     showToast('Sign-ins cleared');
   });
 
   // Sync field & button listeners
-  $('#cfgSyncUrl').addEventListener('change', saveSyncSettings);
-  $('#cfgSyncToken').addEventListener('change', saveSyncSettings);
   $('#cfgDeviceLabel').addEventListener('change', saveSyncSettings);
   $('#cfgAutoSync').addEventListener('change', saveSyncSettings);
   $('#btnSyncNow').addEventListener('click', syncNow);
@@ -2608,17 +2675,30 @@ refreshNameDatalist();
     area.select();
   });
 
-  // Init
-  initScheduleEditor();
-  document.body.classList.add('kiosk-mode');
-  loadScheduleIntoAdmin();
-  renderDurationRules();
-  applyDeviceToUI();
-  populateClassesForToday();
-  // Load sync settings and refresh status on first load
-  loadSyncSettings();
-  updateSyncStatus();
-  refreshNameDatalist();
+  // Init only after the shared Rev schedule is readable.
+  async function initializeCandidate() {
+    try {
+      await loadSharedSchedule();
+    } catch (error) {
+      alert('The shared Rev schedule could not be loaded. Sign-in is paused so no class can be recorded against an unknown schedule.');
+      $('#btnSignIn').disabled = true;
+      $('#classesHint').textContent = 'Shared schedule unavailable.';
+      return;
+    }
+    initScheduleEditor();
+    document.body.classList.add('kiosk-mode');
+    loadScheduleIntoAdmin();
+    renderDurationRules();
+    applyDeviceToUI();
+    populateClassesForToday();
+    loadSyncSettings();
+    updateSyncStatus();
+    refreshNameDatalist();
+    if (localStorage.getItem(SYNC_AUTO_KEY) !== 'false' && loadSyncQueue().length) {
+      syncNow();
+    }
+  }
+  initializeCandidate();
 
 })();
 </script>

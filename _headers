@@ -1,0 +1,18 @@
+/m1/admin
+  Cache-Control: no-store, max-age=0
+  Pragma: no-cache
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+
+/m1/admin/*
+  Cache-Control: no-store, max-age=0
+  Pragma: no-cache
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+
+/.netlify/functions/m1-*
+  Cache-Control: no-store, max-age=0
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
