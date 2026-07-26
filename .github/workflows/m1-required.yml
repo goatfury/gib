@@ -1,0 +1,45 @@
+name: M1 Required
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  m1-required:
+    name: M1 Required
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+
+      - name: Check diff whitespace
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          base_sha="$PR_BASE_SHA"
+          if [ -z "$base_sha" ]; then
+            base_sha="$(git merge-base HEAD "origin/$DEFAULT_BRANCH")"
+          fi
+          git diff --check "$base_sha"...HEAD
+
+      - name: Run M1 required tests
+        run: node --test tests/m1-required.test.mjs
