@@ -14,7 +14,7 @@ export async function handleAdminLogin(request, dependencies = {}) {
   if (parsed.response) return parsed.response;
 
   const env = dependencies.env || process.env;
-  const config = runtimeConfig(env, { admin: true });
+  const config = runtimeConfig(env, { admin: true, requestUrl: request.url });
   if (!config) {
     return jsonResponse(503, { ok: false, message: 'Admin service is not configured for this environment.' });
   }

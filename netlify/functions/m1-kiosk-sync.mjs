@@ -10,7 +10,9 @@ export async function handleKioskSync(request, dependencies = {}) {
   const parsed = await readJson(request, 96_000);
   if (parsed.response) return parsed.response;
 
-  const config = runtimeConfig(dependencies.env || process.env);
+  const config = runtimeConfig(dependencies.env || process.env, {
+    requestUrl: request.url
+  });
   if (!config) {
     return jsonResponse(503, {
       ok: false,

@@ -23,8 +23,15 @@ export function normalize(value) {
     .replace(/[‐‑‒–—―−]/g, '-');
 }
 
-export function isDeployPreview(env = process.env) {
-  return clean(env.CONTEXT) === 'deploy-preview';
+export function isDeployPreview(env = process.env, requestUrl = '') {
+  if (clean(env.CONTEXT) === 'deploy-preview') return true;
+  try {
+    const url = new URL(requestUrl);
+    return url.protocol === 'https:'
+      && /^deploy-preview-\d+--gib-live\.netlify\.app$/i.test(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function validGoogleWebhook(value) {
@@ -49,7 +56,7 @@ function validGoogleWebhook(value) {
 }
 
 export function runtimeConfig(env = process.env, options = {}) {
-  const preview = isDeployPreview(env);
+  const preview = isDeployPreview(env, options.requestUrl);
   const webhookUrl = validGoogleWebhook(
     preview ? env.GIB_TEST_WEBHOOK_URL : env.GIB_M1_WEBHOOK_URL
   );

@@ -11,7 +11,10 @@ export async function handleAdminReview(request, dependencies = {}) {
   const parsed = await readJson(request, 4_096);
   if (parsed.response) return parsed.response;
 
-  const config = runtimeConfig(dependencies.env || process.env, { admin: true });
+  const config = runtimeConfig(dependencies.env || process.env, {
+    admin: true,
+    requestUrl: request.url
+  });
   const auth = requireAdmin(request, config, dependencies.now || Date.now());
   if (auth.response) return auth.response;
 

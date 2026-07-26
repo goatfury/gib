@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   ADMIN_COOKIE,
   createAdminSession,
+  isDeployPreview,
   runtimeConfig,
   sanitizeKioskRows,
   validNonFutureDate
@@ -200,12 +201,27 @@ test('15 Admin endpoints require a signed session', async () => {
 });
 
 test('16 TEST login shortcut works only in a Deploy Preview', async () => {
+  assert.equal(
+    isDeployPreview({}, 'https://deploy-preview-44--gib-live.netlify.app/m1/admin/'),
+    true
+  );
+  assert.equal(isDeployPreview({}, 'https://bjjsite.com/m1/admin/'), false);
+  assert.equal(
+    isDeployPreview({}, 'https://deploy-preview-44--different-site.netlify.app/m1/admin/'),
+    false
+  );
   const preview = await handleAdminLogin(
     jsonRequest('https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-admin-login', {
       adminName: 'Stuart Turner',
       testShortcut: true
     }),
-    { env: previewEnv, now: fixedNow }
+    {
+      env: {
+        GIB_TEST_WEBHOOK_URL: previewEnv.GIB_TEST_WEBHOOK_URL,
+        GIB_TEST_WEBHOOK_TOKEN: previewEnv.GIB_TEST_WEBHOOK_TOKEN
+      },
+      now: fixedNow
+    }
   );
   assert.equal(preview.status, 200);
   const production = await handleAdminLogin(
