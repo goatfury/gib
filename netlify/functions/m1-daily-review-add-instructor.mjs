@@ -369,23 +369,25 @@ function isAllowedPreviewRequest(event) {
 function parseGoogleAcknowledgement(text) {
   const source = clean(text);
   if (!source || source.length > 8192 || /<(?:!doctype|html|body)\b/i.test(source)) {
-    return { readable: false };
+    return { readable: false, reason: 'EMPTY_OR_HTML' };
   }
 
   let data;
   try {
     data = JSON.parse(source);
   } catch {
-    if (/^[{[]/.test(source)) return { readable: false };
+    if (/^[{[]/.test(source)) return { readable: false, reason: 'MALFORMED_JSON' };
     if (/\b(error|failed|failure|exception|unauthorized|forbidden)\b/i.test(source)) {
-      return { readable: true, success: false };
+      return { readable: true, success: false, reason: 'EXPLICIT_FAILURE' };
     }
     if (/^(ok|success|added)(?:\b|[.: -])/i.test(source)) {
       return { readable: true, success: true };
     }
     return { readable: true };
   }
-  if (!data || typeof data !== 'object' || Array.isArray(data)) return { readable: false };
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { readable: false, reason: 'UNSUPPORTED_JSON' };
+  }
 
   const candidates = [data, data.result, data.data].filter(
     item => item && typeof item === 'object' && !Array.isArray(item)
@@ -396,7 +398,7 @@ function parseGoogleAcknowledgement(text) {
     || ['error', 'failed', 'failure'].includes(normalize(item.status))
     || clean(item.error)
   ));
-  if (explicitFailure) return { readable: true, success: false };
+  if (explicitFailure) return { readable: true, success: false, reason: 'EXPLICIT_FAILURE' };
 
   const explicitSuccess = candidates.some(item => (
     item.ok === true
@@ -414,7 +416,9 @@ function parseGoogleAcknowledgement(text) {
       }
     });
   });
-  if (counts.some(count => count !== 1)) return { readable: true, success: false };
+  if (counts.some(count => count !== 1)) {
+    return { readable: true, success: false, reason: 'NON_SINGLE_SUCCESS_COUNT' };
+  }
   return { readable: true, success: true };
 }
 
@@ -430,7 +434,7 @@ async function postOneRow(configuration, row, fetchImpl = fetch) {
     signal: AbortSignal.timeout(6000)
   });
   const text = await response.text();
-  if (!response.ok) return { readable: false };
+  if (!response.ok) return { readable: false, reason: 'HTTP_FAILURE' };
   return parseGoogleAcknowledgement(text);
 }
 
@@ -581,6 +585,7 @@ async function handler(event, _context, dependencies = {}) {
     return response(502, {
       ok: false,
       code: 'UNCLEAR_GOOGLE_RESPONSE',
+      googleResult: acknowledgement.reason || 'UNCLASSIFIED',
       message: 'Google did not return a clear successful result. Success is not being reported.'
     });
   }
