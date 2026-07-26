@@ -28,7 +28,7 @@
 
     * { box-sizing: border-box; }
     body { margin: 0; background: var(--page); color: var(--ink); }
-    button, input { font: inherit; }
+    button, input, textarea { font: inherit; }
     button { touch-action: manipulation; }
     [hidden] { display: none !important; }
 
@@ -110,16 +110,22 @@
     .quiet { border: 1px solid #b8c6dd; background: #fff; color: var(--blue-dark); }
 
     label { display: block; margin: 14px 0 7px; font-weight: 800; }
-    input {
+    input, textarea {
       width: 100%;
-      min-height: 50px;
       padding: 12px 13px;
       border: 1px solid #8c99ae;
       border-radius: 10px;
       background: #fff;
       color: var(--ink);
     }
-    input:focus, button:focus-visible, summary:focus-visible {
+    input { min-height: 50px; }
+    textarea { min-height: 88px; resize: vertical; }
+    input[readonly] {
+      border-color: #c4ccda;
+      background: #f1f4f8;
+      color: #354156;
+    }
+    input:focus, textarea:focus, button:focus-visible, summary:focus-visible {
       outline: 3px solid rgba(23, 89, 210, .24);
       outline-offset: 2px;
     }
@@ -168,8 +174,58 @@
       text-transform: uppercase;
     }
     .missing-label { color: var(--amber); font-weight: 900; }
+    .missing-action { display: grid; justify-items: start; gap: 10px; }
     .coach-list { display: grid; gap: 6px; }
-    .coach-entry { font-weight: 850; overflow-wrap: anywhere; }
+    .coach-entry {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 9px;
+      align-items: center;
+      font-weight: 850;
+      overflow-wrap: anywhere;
+    }
+    .test-added-label {
+      display: inline-flex;
+      padding: 3px 8px;
+      border: 1px solid #63a17f;
+      border-radius: 999px;
+      background: var(--green-bg);
+      color: var(--green);
+      font-size: .76rem;
+      font-weight: 900;
+      letter-spacing: .02em;
+    }
+
+    .add-instructor-panel {
+      grid-column: 1 / -1;
+      padding: 16px;
+      border: 2px solid #8ba8db;
+      border-radius: 12px;
+      background: #fff;
+    }
+    .add-instructor-panel h3 { margin: 0; font-size: 1.08rem; }
+    .readonly-grid, .entry-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0 14px;
+    }
+    .full-field { grid-column: 1 / -1; }
+    .confirmation {
+      margin-top: 16px;
+      padding: 14px;
+      border: 1px solid #8ba8db;
+      border-radius: 11px;
+      background: #f4f7fc;
+    }
+    .confirmation h4 { margin: 0 0 9px; font-size: 1rem; }
+    .confirmation-list {
+      display: grid;
+      grid-template-columns: minmax(7rem, .45fr) minmax(0, 1fr);
+      gap: 6px 12px;
+      margin: 0;
+    }
+    .confirmation-list dt { font-weight: 850; }
+    .confirmation-list dd { margin: 0; overflow-wrap: anywhere; }
 
     .unmatched {
       margin-top: 22px;
@@ -228,6 +284,8 @@
     @media (max-width: 700px) {
       .class-row, .record-item { grid-template-columns: 1fr; gap: 7px; }
       .grid-two { grid-template-columns: 1fr; }
+      .readonly-grid, .entry-grid { grid-template-columns: 1fr; }
+      .full-field { grid-column: auto; }
     }
 
     @media (max-width: 560px) {
@@ -243,13 +301,13 @@
 </head>
 <body>
 <main>
-  <div class="test-banner">TEST ONLY — FAKE DATA — READ ONLY</div>
+  <div class="test-banner">TEST ONLY — FAKE DATA — ADMIN WRITE TEST</div>
 
   <header>
     <h1>Admin — Daily Sign-in Review</h1>
     <p class="subtitle">Open yesterday, scan the class list, and spot missing sign-ins.</p>
     <div class="notice">
-      <p><strong>This page reads the copied TEST Sheet. Nothing can be added or changed here.</strong></p>
+      <p><strong>This page can add one missing fake instructor to the copied TEST Sheet only.</strong></p>
     </div>
   </header>
 
@@ -286,6 +344,7 @@
     <div class="notice">
       <p>This shows the sign-ins that have reached the TEST Sheet. A blank does not confirm whether the class occurred.</p>
     </div>
+    <div id="writeStatus" role="status" aria-live="polite" tabindex="-1" hidden></div>
 
     <div id="dailyLoadState" class="success" role="status">
       <p>Reading the TEST Sheet before showing the schedule…</p>
@@ -327,7 +386,7 @@
 
   <div class="summary-bar">
     <span><strong>TEST ONLY:</strong> copied fake sign-in data.</span>
-    <span class="muted small">Read-only page. No live M1 changes.</span>
+    <span class="muted small">One-blank fake instructor test. No live M1 changes.</span>
   </div>
 </main>
 
@@ -338,6 +397,7 @@
   const SHEET_ID = '1tC5W8unEHTXKeaUQ3CCYv3ZDhpLulb8_ee-ANOpwDLI';
   const SHEET_TAB = 'Signins';
   const SHEET_QUERY_BASE = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`;
+  const ADD_INSTRUCTOR_ENDPOINT = '/.netlify/functions/m1-daily-review-add-instructor';
   const TIME_ZONE = 'America/New_York';
   const SITE = 'Rev';
   const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -391,7 +451,10 @@
     selectedDate: '',
     lastSuccessfulRead: null,
     hasSuccessfulRead: false,
-    requestNumber: 0
+    requestNumber: 0,
+    editingClassKey: '',
+    writeInFlight: false,
+    writeResult: null
   };
 
   function clean(value) {
@@ -474,6 +537,26 @@
       .map(item => item.label);
   }
 
+  function durationForClass(classLabel) {
+    return normalizeLabel(classLabel).includes('kids') ? 0.5 : 1;
+  }
+
+  function editorKey(date, classLabel) {
+    return `${date}|${normalizeLabel(classLabel)}|${normalizeSimple(SITE)}`;
+  }
+
+  function buildAddPayload(date, classLabel, fields) {
+    return {
+      date,
+      classLabel,
+      site: SITE,
+      duration: durationForClass(classLabel),
+      instructor: clean(fields.instructor),
+      notes: clean(fields.notes),
+      reason: clean(fields.reason)
+    };
+  }
+
   function googleDateString(value) {
     const text = clean(value);
     const match = text.match(/^Date\((\d{4}),(\d{1,2}),(\d{1,2})(?:,(\d{1,2}),(\d{1,2}),(\d{1,2}))?\)$/);
@@ -546,6 +629,24 @@
     return status !== 'VOID' && status !== 'VOIDED';
   }
 
+  function isAdminAdded(row) {
+    return clean(row.notes).includes('TEST Admin-added')
+      || clean(row.device) === 'TEST Admin Daily Review'
+      || clean(row.build) === 'm1-daily-review-write-test';
+  }
+
+  function sameActiveEvent(row, payload, recordId) {
+    return isActive(row) && (
+      (recordId && clean(row.rowId) === clean(recordId))
+      || (
+        row.date === payload.date
+        && normalizeLabel(row.classLabel) === normalizeLabel(payload.classLabel)
+        && normalizeSimple(row.site) === normalizeSimple(payload.site)
+        && normalizeLabel(row.instructor) === normalizeLabel(payload.instructor)
+      )
+    );
+  }
+
   function timestampSortKey(row) {
     return `${clean(row.date)}T${clean(row.timestamp).replace(' ', 'T')}`;
   }
@@ -558,13 +659,35 @@
   }
 
   function setControlAvailability(enabled) {
+    const available = enabled && !state.writeInFlight;
     ['previousButton', 'yesterdayButton', 'todayButton', 'datePicker'].forEach(id => {
-      byId(id).disabled = !enabled;
+      byId(id).disabled = !available;
     });
-    byId('nextButton').disabled = !enabled || state.selectedDate >= nyToday();
-    byId('searchInstructor').disabled = !enabled;
-    byId('searchDate').disabled = !enabled;
-    byId('instructorSearchForm').querySelector('button').disabled = !enabled;
+    byId('nextButton').disabled = !available || state.selectedDate >= nyToday();
+    byId('searchInstructor').disabled = !available;
+    byId('searchDate').disabled = !available;
+    byId('instructorSearchForm').querySelector('button').disabled = !available;
+    byId('refreshButton').disabled = !available || Boolean(state.editingClassKey);
+    document.querySelectorAll('[data-testid="add-instructor"]').forEach(button => {
+      button.disabled = !available || button.getAttribute('aria-expanded') === 'true';
+    });
+  }
+
+  function showWriteStatus(type, message, focus = true) {
+    const box = byId('writeStatus');
+    state.writeResult = { type, message };
+    box.className = type;
+    box.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    box.replaceChildren(element('p', '', message));
+    box.hidden = false;
+    if (focus) window.requestAnimationFrame(() => box.focus());
+  }
+
+  function clearWriteStatus() {
+    state.writeResult = null;
+    const box = byId('writeStatus');
+    box.hidden = true;
+    box.replaceChildren();
   }
 
   function updateDataStatus() {
@@ -627,6 +750,297 @@
     parent.append(item);
   }
 
+  function appendFormField(parent, labelText, control) {
+    const wrap = element('div');
+    const label = element('label', '', labelText);
+    label.htmlFor = control.id;
+    wrap.append(label, control);
+    parent.append(wrap);
+    return wrap;
+  }
+
+  function readonlyInput(id, value) {
+    const input = document.createElement('input');
+    input.id = id;
+    input.value = value;
+    input.readOnly = true;
+    input.tabIndex = -1;
+    return input;
+  }
+
+  function closeAddInstructor(returnFocusKey = '') {
+    if (state.writeInFlight) return;
+    state.editingClassKey = '';
+    renderDailyReview();
+    if (returnFocusKey) {
+      const button = document.querySelector(`[data-editor-key="${CSS.escape(returnFocusKey)}"]`);
+      if (button) button.focus();
+    }
+  }
+
+  function openAddInstructor(date, classLabel) {
+    if (!state.hasSuccessfulRead || state.writeInFlight) return;
+    clearWriteStatus();
+    state.editingClassKey = editorKey(date, classLabel);
+    renderDailyReview();
+    const input = byId('addInstructorName');
+    if (input) input.focus();
+  }
+
+  function appendConfirmationValue(list, label, value) {
+    list.append(element('dt', '', label), element('dd', '', value || 'None'));
+  }
+
+  function renderAddConfirmation(panel, form, payload) {
+    form.querySelectorAll('input:not([readonly]), textarea, button').forEach(control => {
+      control.disabled = true;
+    });
+
+    const confirmation = element('section', 'confirmation');
+    confirmation.id = 'addInstructorConfirmation';
+    confirmation.setAttribute('aria-labelledby', 'addInstructorConfirmationTitle');
+    const title = element('h4', '', 'Confirm this TEST Sheet addition');
+    title.id = 'addInstructorConfirmationTitle';
+    const list = element('dl', 'confirmation-list');
+    appendConfirmationValue(list, 'Date', payload.date);
+    appendConfirmationValue(list, 'Class', payload.classLabel);
+    appendConfirmationValue(list, 'Site', payload.site);
+    appendConfirmationValue(list, 'Duration', `${payload.duration} hour${payload.duration === 1 ? '' : 's'}`);
+    appendConfirmationValue(list, 'Fake instructor', payload.instructor);
+    appendConfirmationValue(list, 'Notes', payload.notes);
+    appendConfirmationValue(list, 'Reason', payload.reason);
+
+    const buttons = element('div', 'button-row');
+    const confirmButton = element('button', 'primary', 'Confirm and add to TEST Sheet');
+    confirmButton.id = 'confirmAddButton';
+    confirmButton.type = 'button';
+    const backButton = element('button', 'secondary', 'Back');
+    backButton.id = 'backAddButton';
+    backButton.type = 'button';
+    const cancelButton = element('button', 'quiet', 'Cancel');
+    cancelButton.type = 'button';
+
+    backButton.addEventListener('click', () => {
+      confirmation.remove();
+      form.querySelectorAll('input:not([readonly]), textarea, button').forEach(control => {
+        control.disabled = false;
+      });
+      byId('addInstructorName').focus();
+    });
+    cancelButton.addEventListener('click', () => closeAddInstructor(editorKey(payload.date, payload.classLabel)));
+    confirmButton.addEventListener('click', () => submitAddInstructor(payload, panel, confirmButton));
+
+    buttons.append(confirmButton, backButton, cancelButton);
+    confirmation.append(title, list, buttons);
+    panel.append(confirmation);
+    confirmButton.focus();
+  }
+
+  function buildAddInstructorPanel(date, classLabel) {
+    const panel = element('section', 'add-instructor-panel');
+    panel.id = 'addInstructorPanel';
+    panel.setAttribute('role', 'region');
+    panel.setAttribute('aria-labelledby', 'addInstructorTitle');
+
+    const title = element('h3', '', 'Add one missing fake instructor');
+    title.id = 'addInstructorTitle';
+    const instructions = element(
+      'p',
+      'muted small',
+      'Use fake information only. A required confirmation appears before anything is sent.'
+    );
+    const form = document.createElement('form');
+    form.id = 'addInstructorForm';
+    form.noValidate = false;
+
+    const readonly = element('div', 'readonly-grid');
+    appendFormField(readonly, 'Date', readonlyInput('addInstructorDate', date));
+    appendFormField(readonly, 'Site', readonlyInput('addInstructorSite', SITE));
+    const classWrap = appendFormField(readonly, 'Class', readonlyInput('addInstructorClass', classLabel));
+    classWrap.className = 'full-field';
+    appendFormField(
+      readonly,
+      'Duration',
+      readonlyInput(
+        'addInstructorDuration',
+        `${durationForClass(classLabel)} hour${durationForClass(classLabel) === 1 ? '' : 's'}`
+      )
+    );
+
+    const entry = element('div', 'entry-grid');
+    const instructor = document.createElement('input');
+    instructor.id = 'addInstructorName';
+    instructor.name = 'instructor';
+    instructor.required = true;
+    instructor.maxLength = 80;
+    instructor.autocomplete = 'off';
+    instructor.placeholder = 'TEST COACH - DO NOT PAY';
+    instructor.addEventListener('input', () => instructor.setCustomValidity(''));
+    appendFormField(entry, 'Fake instructor name', instructor);
+
+    const reason = document.createElement('textarea');
+    reason.id = 'addInstructorReason';
+    reason.name = 'reason';
+    reason.required = true;
+    reason.minLength = 3;
+    reason.maxLength = 200;
+    reason.placeholder = 'Required: why this fake sign-in is being added';
+    reason.addEventListener('input', () => reason.setCustomValidity(''));
+    appendFormField(entry, 'Required reason', reason);
+
+    const notes = document.createElement('textarea');
+    notes.id = 'addInstructorNotes';
+    notes.name = 'notes';
+    notes.maxLength = 300;
+    notes.placeholder = 'Optional fake notes';
+    const notesWrap = appendFormField(entry, 'Optional notes', notes);
+    notesWrap.className = 'full-field';
+
+    const buttons = element('div', 'button-row');
+    const reviewButton = element('button', 'primary', 'Review addition');
+    reviewButton.id = 'reviewAddButton';
+    reviewButton.type = 'submit';
+    const cancelButton = element('button', 'quiet', 'Cancel');
+    cancelButton.id = 'cancelAddButton';
+    cancelButton.type = 'button';
+    cancelButton.addEventListener('click', () => closeAddInstructor(editorKey(date, classLabel)));
+    buttons.append(reviewButton, cancelButton);
+
+    form.append(readonly, entry, buttons);
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      instructor.setCustomValidity('');
+      const payload = buildAddPayload(date, classLabel, {
+        instructor: instructor.value,
+        notes: notes.value,
+        reason: reason.value
+      });
+      if (!form.reportValidity()) return;
+      if (!payload.instructor || !obviousTestValue(payload.instructor)) {
+        instructor.setCustomValidity('Use a clearly fake name containing TEST, FAKE, DEMO, QA, or DO NOT PAY.');
+        instructor.reportValidity();
+        return;
+      }
+      if (payload.reason.length < 3) {
+        reason.setCustomValidity('Enter a reason of at least 3 characters.');
+        reason.reportValidity();
+        return;
+      }
+      renderAddConfirmation(panel, form, payload);
+    });
+
+    panel.append(title, instructions, form);
+    return panel;
+  }
+
+  async function refreshUntilRecorded(payload, recordId) {
+    const waits = [0, 600, 1200];
+    for (const wait of waits) {
+      if (wait) await new Promise(resolve => window.setTimeout(resolve, wait));
+      const loaded = await loadSheet();
+      if (loaded && state.rows.some(row => sameActiveEvent(row, payload, recordId))) return true;
+    }
+    return false;
+  }
+
+  async function submitAddInstructor(payload, panel, confirmButton) {
+    if (state.writeInFlight) return false;
+    state.writeInFlight = true;
+    panel.setAttribute('aria-busy', 'true');
+    panel.querySelectorAll('button').forEach(button => {
+      button.disabled = true;
+    });
+    confirmButton.textContent = 'Adding…';
+    setControlAvailability(false);
+    byId('refreshButton').disabled = true;
+
+    let controller = null;
+    let timeout = null;
+    try {
+      state.editingClassKey = '';
+      showWriteStatus('notice', 'Refreshing the TEST Sheet to confirm this class is still blank…', false);
+      const preflightLoaded = await loadSheet();
+      if (!preflightLoaded) {
+        showWriteStatus('error', 'The TEST Sheet could not be refreshed. Nothing was submitted.');
+        return false;
+      }
+      if (state.rows.some(row => classMatches(row, payload.date, payload.classLabel))) {
+        showWriteStatus('error', 'A sign-in already exists. Nothing was submitted.');
+        return false;
+      }
+
+      showWriteStatus('notice', 'Blank confirmed. Sending exactly one fake row to the TEST write path…', false);
+      controller = new AbortController();
+      timeout = window.setTimeout(() => controller.abort(), 50000);
+      const httpResponse = await fetch(ADD_INSTRUCTOR_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      const responseText = await httpResponse.text();
+      let result;
+      try {
+        result = JSON.parse(responseText);
+      } catch {
+        result = null;
+      }
+
+      if (!httpResponse.ok || !result || result.ok !== true || !clean(result.recordId)) {
+        const duplicate = result && result.code === 'DUPLICATE';
+        const unclear = !result
+          || httpResponse.status >= 500
+          || (result && result.code === 'UNCLEAR_GOOGLE_RESPONSE')
+          || (httpResponse.ok && result.ok !== true);
+        if (duplicate || unclear) {
+          await loadSheet();
+        }
+        if (duplicate) {
+          showWriteStatus('error', 'A sign-in already exists. The TEST Sheet was refreshed.');
+        } else {
+          const message = result && clean(result.message)
+            ? clean(result.message)
+            : 'The result was unclear. Success is not being reported.';
+          showWriteStatus(
+            'error',
+            unclear ? `${message} The TEST Sheet was refreshed; success is not being reported.` : message
+          );
+        }
+        return false;
+      }
+
+      showWriteStatus('notice', 'Google responded. Confirming the exact row in the TEST Sheet…', false);
+      const visible = await refreshUntilRecorded(payload, result.recordId);
+      if (!visible) {
+        showWriteStatus(
+          'error',
+          'The TEST Sheet did not show the new row after refresh. Success is not being reported; refresh before retrying.'
+        );
+        return false;
+      }
+
+      showWriteStatus('success', `${payload.instructor} now fills the selected TEST class. Exactly one fake row was confirmed.`);
+      return true;
+    } catch {
+      await loadSheet();
+      showWriteStatus(
+        'error',
+        'The TEST request failed or timed out. The Sheet was refreshed; success is not being reported.'
+      );
+      return false;
+    } finally {
+      if (timeout) window.clearTimeout(timeout);
+      state.writeInFlight = false;
+      panel.removeAttribute('aria-busy');
+      setControlAvailability(state.hasSuccessfulRead);
+    }
+  }
+
   function renderDailyReview() {
     if (!state.hasSuccessfulRead) return;
 
@@ -661,13 +1075,37 @@
 
       const status = element('div');
       if (!rows.length) {
+        status.className = 'missing-action';
         status.append(element('span', 'missing-label', 'No sign-in recorded'));
+        const addButton = element('button', 'primary', 'Add instructor');
+        const key = editorKey(date, classLabel);
+        addButton.type = 'button';
+        addButton.dataset.testid = 'add-instructor';
+        addButton.dataset.editorKey = key;
+        addButton.setAttribute('aria-label', `Add instructor for ${classLabel}`);
+        addButton.setAttribute('aria-controls', 'addInstructorPanel');
+        addButton.setAttribute('aria-expanded', state.editingClassKey === key ? 'true' : 'false');
+        addButton.addEventListener('click', () => openAddInstructor(date, classLabel));
+        status.append(addButton);
       } else {
+        if (state.editingClassKey === editorKey(date, classLabel)) state.editingClassKey = '';
         const coaches = element('div', 'coach-list');
-        rows.forEach(row => coaches.append(element('div', 'coach-entry', row.instructor || 'Instructor not recorded')));
+        rows.forEach(row => {
+          const coach = element('div', 'coach-entry');
+          coach.append(element('span', '', row.instructor || 'Instructor not recorded'));
+          if (isAdminAdded(row)) {
+            const badge = element('span', 'test-added-label', 'TEST Admin-added');
+            badge.dataset.testid = 'admin-added-label';
+            coach.append(badge);
+          }
+          coaches.append(coach);
+        });
         status.append(coaches);
       }
       item.append(classInfo, status);
+      if (!rows.length && state.editingClassKey === editorKey(date, classLabel)) {
+        item.append(buildAddInstructorPanel(date, classLabel));
+      }
       classList.append(item);
     });
 
@@ -692,6 +1130,7 @@
 
     const loadState = byId('dailyLoadState');
     loadState.hidden = true;
+    setControlAvailability(true);
   }
 
   function setSelectedDate(dateString) {
@@ -703,6 +1142,8 @@
       return false;
     }
     box.hidden = true;
+    state.editingClassKey = '';
+    clearWriteStatus();
     state.selectedDate = dateString;
     renderDailyReview();
     return true;
@@ -760,50 +1201,63 @@
   }
 
   function loadSheet() {
-    state.requestNumber += 1;
-    const requestId = state.requestNumber;
-    const callbackName = `__gibM1ReadOnlyResponse${requestId}`;
-    const script = document.createElement('script');
-    let settled = false;
-    let timer = null;
+    return new Promise(resolve => {
+      state.requestNumber += 1;
+      const requestId = state.requestNumber;
+      const callbackName = `__gibM1ReadOnlyResponse${requestId}`;
+      const script = document.createElement('script');
+      let settled = false;
+      let timer = null;
 
-    byId('refreshButton').disabled = true;
-    byId('dataStatus').textContent = state.hasSuccessfulRead
-      ? 'Refreshing the TEST Sheet…'
-      : 'Reading the TEST Sheet…';
-    byId('refreshError').hidden = true;
+      byId('refreshButton').disabled = true;
+      byId('dataStatus').textContent = state.hasSuccessfulRead
+        ? 'Refreshing the TEST Sheet…'
+        : 'Reading the TEST Sheet…';
+      byId('refreshError').hidden = true;
 
-    const finish = () => {
-      window.clearTimeout(timer);
-      delete window[callbackName];
-      script.remove();
-      byId('refreshButton').disabled = false;
-    };
+      const finish = result => {
+        window.clearTimeout(timer);
+        delete window[callbackName];
+        script.remove();
+        if (requestId === state.requestNumber && !state.writeInFlight && !state.editingClassKey) {
+          byId('refreshButton').disabled = false;
+        }
+        resolve(result);
+      };
 
-    const fail = message => {
-      if (settled) return;
-      settled = true;
-      finish();
-      showRefreshFailure(message);
-    };
+      const fail = message => {
+        if (settled) return;
+        settled = true;
+        if (requestId !== state.requestNumber) {
+          finish(false);
+          return;
+        }
+        showRefreshFailure(message);
+        finish(false);
+      };
 
-    window[callbackName] = payload => {
-      if (settled) return;
-      settled = true;
-      try {
-        acceptPayload(payload);
-        finish();
-      } catch (error) {
-        finish();
-        showRefreshFailure(error && error.message ? error.message : 'The TEST Sheet could not be read.');
-      }
-    };
+      window[callbackName] = payload => {
+        if (settled) return;
+        settled = true;
+        if (requestId !== state.requestNumber) {
+          finish(false);
+          return;
+        }
+        try {
+          acceptPayload(payload);
+          finish(true);
+        } catch (error) {
+          showRefreshFailure(error && error.message ? error.message : 'The TEST Sheet could not be read.');
+          finish(false);
+        }
+      };
 
-    script.async = true;
-    script.src = `${SHEET_QUERY_BASE}?sheet=${encodeURIComponent(SHEET_TAB)}&tqx=${encodeURIComponent(`out:json;responseHandler:${callbackName}`)}&_=${Date.now()}`;
-    script.onerror = () => fail('The TEST Sheet request failed.');
-    timer = window.setTimeout(() => fail('The TEST Sheet request timed out.'), 12000);
-    document.head.append(script);
+      script.async = true;
+      script.src = `${SHEET_QUERY_BASE}?sheet=${encodeURIComponent(SHEET_TAB)}&tqx=${encodeURIComponent(`out:json;responseHandler:${callbackName}`)}&_=${Date.now()}`;
+      script.onerror = () => fail('The TEST Sheet request failed.');
+      timer = window.setTimeout(() => fail('The TEST Sheet request timed out.'), 12000);
+      document.head.append(script);
+    });
   }
 
   byId('previousButton').addEventListener('click', () => setSelectedDate(shiftDate(state.selectedDate, -1)));
@@ -851,6 +1305,16 @@
     setSelectedDate,
     renderSearchResults,
     simulateRefreshFailure: () => showRefreshFailure('Simulated refresh failure.')
+  });
+
+  window.__M1_WRITE_TEST__ = Object.freeze({
+    durationForClass,
+    isAdminAdded,
+    buildAddPayload,
+    openAddInstructor,
+    submitAddInstructor,
+    loadSheet,
+    state
   });
 
   loadSheet();
