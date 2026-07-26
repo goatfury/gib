@@ -354,7 +354,6 @@ function validateWebhookConfiguration(env) {
 function isAllowedDeployContext(runtimeContext) {
   return Boolean(runtimeContext && runtimeContext.deploy && runtimeContext.site)
     && runtimeContext.deploy.context === 'deploy-preview'
-    && runtimeContext.deploy.published === false
     && runtimeContext.site.id === NETLIFY_SITE_ID;
 }
 
