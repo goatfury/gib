@@ -46,7 +46,10 @@ const safety = kioskContext.GibM1Safety;
 const appsContext = vm.createContext({
   module: { exports: {} },
   exports: {},
-  console
+  console,
+  Utilities: {
+    formatDate: () => '2026-07-26'
+  }
 });
 vm.runInContext(appsScriptSource, appsContext);
 const apps = appsContext.module.exports;
@@ -113,6 +116,115 @@ function kioskRow(overrides = {}) {
     Build: 'qa',
     Notes: 'QA fake row',
     ...overrides
+  };
+}
+
+function parityTabletRows(overrides = {}) {
+  const queueRow = kioskRow(overrides);
+  const ledgerRow = {
+    Timestamp: queueRow.Timestamp,
+    Date: queueRow.Date,
+    'Class Label': queueRow['Class Label'],
+    'Duration (hr)': queueRow['Duration (hr)'],
+    Instructor: queueRow.Instructor,
+    Site: queueRow.Site,
+    Notes: queueRow.Notes,
+    Status: 'OK',
+    __syncState: 'never-sent',
+    __rowId: queueRow.RowID
+  };
+  return { ledgerRow, queueRow };
+}
+
+function settleTabletSync(ledger, queue, response) {
+  const applied = safety.applyReadableResults(queue, response);
+  return {
+    readable: applied.readable,
+    completed: applied.completed,
+    ledger: safety.markCompletedLedgerRows(ledger, applied.completed),
+    queue: applied.remaining
+  };
+}
+
+function activeTabletEventRows(rows, event) {
+  const key = safety.eventKey(event);
+  return rows.filter(row =>
+    safety.isActiveLedgerRow(row) && safety.eventKey(row) === key
+  );
+}
+
+function activeGoogleEventRows(rows, event) {
+  return rows.filter(row => apps.activeRecord_(row) && apps.sameEvent_(row, event));
+}
+
+function generatedPayrollCsv(rows) {
+  const buildCsvSource = kioskHtml.slice(
+    kioskHtml.indexOf('function buildCSV()'),
+    kioskHtml.indexOf('async function exportCSV()')
+  );
+  const context = vm.createContext({
+    PAYROLL_HEADERS: [
+      'Timestamp',
+      'Date',
+      'Class Label',
+      'Duration (hr)',
+      'Instructor',
+      'Site',
+      'Notes'
+    ],
+    exportableSignins: () => rows.filter(safety.isActiveLedgerRow)
+  });
+  vm.runInContext(`${buildCsvSource}\nglobalThis.csv = buildCSV();`, context);
+  return context.csv;
+}
+
+function csvEventCount(csv, event) {
+  return String(csv).split('\n').slice(1).filter(line => {
+    const columns = line.split(',');
+    return columns[1] === String(event.Date || event.date).slice(0, 10)
+      && safety.normalize(columns[2]) === safety.normalize(event['Class Label'] || event.classLabel)
+      && safety.normalize(columns[4]) === safety.normalize(event.Instructor || event.instructor)
+      && safety.normalize(columns[5]) === safety.normalize(event.Site || event.site);
+  }).length;
+}
+
+async function syncTabletAgainstGoogle(ledger, queue, googleRows) {
+  const response = await handleKioskSync(
+    jsonRequest(
+      'https://deploy-preview-44--gib-live.netlify.app/.netlify/functions/m1-kiosk-sync',
+      { rows: queue }
+    ),
+    {
+      env: previewEnv,
+      fetch: async (_url, options) => {
+        const posted = JSON.parse(options.body);
+        const results = posted.rows.map(row => {
+          const candidate = apps.validateKioskRow_(row);
+          const existing = apps.findExistingEvent_(googleRows, candidate);
+          if (existing) {
+            return {
+              rowId: candidate.rowId,
+              result: 'already exists',
+              linkedRecordId: existing.rowId
+            };
+          }
+          googleRows.push({ ...candidate, status: 'OK' });
+          return {
+            rowId: candidate.rowId,
+            result: 'added',
+            linkedRecordId: candidate.rowId
+          };
+        });
+        return googleResponse({ ok: true, results });
+      }
+    }
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.ok, true);
+  return {
+    body,
+    ...settleTabletSync(ledger, queue, body)
   };
 }
 
@@ -1803,5 +1915,283 @@ test('50 every shipped inline production browser script compiles', () => {
         () => new vm.Script(source, { filename: `${name}-inline-${index}.js` })
       );
     });
+  }
+});
+
+test('51 already-exists with a different linked record keeps one exportable tablet backup', () => {
+  const { ledgerRow, queueRow } = parityTabletRows({
+    RowID: 'tablet-parity-different-link',
+    Date: '2026-07-25',
+    'Class Label': '6:15 AM TEST Payroll Parity',
+    'Duration (hr)': 0.75,
+    Instructor: 'QA TEST Parity Different Link',
+    Site: 'Rev'
+  });
+  const settled = settleTabletSync([ledgerRow], [queueRow], {
+    ok: true,
+    results: [{
+      rowId: queueRow.RowID,
+      result: 'already exists',
+      linkedRecordId: 'gib-admin-parity-different-link'
+    }]
+  });
+
+  assert.equal(settled.readable, true);
+  assert.equal(settled.completed.length, 1);
+  assert.equal(settled.queue.length, 0);
+  assert.equal(activeTabletEventRows(settled.ledger, ledgerRow).length, 1);
+  assert.equal(settled.ledger.filter(safety.isActiveLedgerRow).length, 1);
+  assert.equal(settled.ledger[0].__syncState, 'confirmed');
+  assert.equal(settled.ledger[0].__linkedRecordId, 'gib-admin-parity-different-link');
+  assert.equal(csvEventCount(generatedPayrollCsv(settled.ledger), ledgerRow), 1);
+  assert.match(
+    kioskHtml,
+    /function isExportableSignin\(row\) \{\s+return window\.GibM1Safety\.isActiveLedgerRow\(row\)/
+  );
+  assert.match(
+    kioskHtml.slice(kioskHtml.indexOf('function buildCSV()'), kioskHtml.indexOf('async function exportCSV()')),
+    /const rows = exportableSignins\(\)/
+  );
+});
+
+test('52 already-exists exact retry clears waiting and stays exportable exactly once', () => {
+  const { ledgerRow, queueRow } = parityTabletRows({
+    RowID: 'tablet-parity-exact-retry',
+    Date: '2026-07-25',
+    'Class Label': '7:15 AM TEST Payroll Parity',
+    'Duration (hr)': 1,
+    Instructor: 'QA TEST Parity Exact Retry',
+    Site: 'Rev'
+  });
+  const settled = settleTabletSync([ledgerRow], [queueRow], {
+    ok: true,
+    results: [{
+      rowId: queueRow.RowID,
+      result: 'already exists',
+      linkedRecordId: queueRow.RowID
+    }]
+  });
+
+  assert.equal(settled.queue.length, 0);
+  assert.equal(activeTabletEventRows(settled.ledger, ledgerRow).length, 1);
+  assert.equal(settled.ledger.filter(safety.isActiveLedgerRow).length, 1);
+  assert.equal(settled.ledger[0].__linkedRecordId, queueRow.RowID);
+  assert.equal(csvEventCount(generatedPayrollCsv(settled.ledger), ledgerRow), 1);
+});
+
+test('53 ordinary added result remains one exportable tablet and Google event', async () => {
+  const { ledgerRow, queueRow } = parityTabletRows({
+    RowID: 'tablet-parity-added',
+    Date: '2026-07-25',
+    'Class Label': '8:15 AM TEST Payroll Parity',
+    'Duration (hr)': 0.5,
+    Instructor: 'QA TEST Parity Added',
+    Site: 'Rev'
+  });
+  const googleRows = [];
+  const settled = await syncTabletAgainstGoogle([ledgerRow], [queueRow], googleRows);
+
+  assert.equal(settled.body.results[0].result, 'added');
+  assert.equal(settled.queue.length, 0);
+  assert.equal(activeTabletEventRows(settled.ledger, ledgerRow).length, 1);
+  assert.equal(activeGoogleEventRows(googleRows, googleRows[0]).length, 1);
+  assert.equal(settled.ledger[0].__linkedRecordId, queueRow.RowID);
+  assert.equal(csvEventCount(generatedPayrollCsv(settled.ledger), ledgerRow), 1);
+});
+
+test('54 second local attempt is blocked before another tablet row is created', () => {
+  const { ledgerRow, queueRow } = parityTabletRows({
+    RowID: 'tablet-parity-local-first',
+    Date: '2026-07-25',
+    'Class Label': '9:15 AM TEST Payroll Parity',
+    'Duration (hr)': 1,
+    Instructor: 'QA TEST Parity Local Duplicate',
+    Site: 'Rev'
+  });
+  const first = settleTabletSync([ledgerRow], [queueRow], {
+    ok: true,
+    results: [{
+      rowId: queueRow.RowID,
+      result: 'already exists',
+      linkedRecordId: 'gib-admin-parity-local-first'
+    }]
+  });
+  const duplicateClasses = safety.duplicateClasses(
+    first.ledger,
+    ledgerRow.Date,
+    '  qa test  parity local duplicate ',
+    ' rev ',
+    [ledgerRow['Class Label']]
+  );
+  const duplicateGuard = kioskHtml.slice(
+    kioskHtml.indexOf('if (duplicateClasses.length)'),
+    kioskHtml.indexOf('const batchId')
+  );
+
+  assert.equal(duplicateClasses.length, 1);
+  assert.match(duplicateGuard, /Possible duplicate payroll sign-in/);
+  assert.match(duplicateGuard, /return;/);
+  assert.doesNotMatch(duplicateGuard, /commitSigninTransaction|saveSignins/);
+  assert.equal(first.ledger.length, 1);
+  assert.equal(first.queue.length, 0);
+  assert.equal(csvEventCount(generatedPayrollCsv(first.ledger), ledgerRow), 1);
+});
+
+test('55 Admin-first tablet-later preserves one normalized event in both ledgers', async () => {
+  const googleEvent = {
+    rowId: 'gib-admin-parity-admin-first',
+    timestamp: '2026-07-25 08:00:00',
+    date: '2026-07-25',
+    classLabel: '10:15 AM TEST Payroll Parity',
+    duration: 0.75,
+    instructor: 'QA TEST Parity Admin First',
+    site: 'Rev',
+    device: 'Admin Daily Review',
+    notes: 'Admin-added TEST row',
+    status: 'OK'
+  };
+  const googleRows = [googleEvent];
+  const { ledgerRow, queueRow } = parityTabletRows({
+    RowID: 'tablet-parity-admin-later',
+    Timestamp: '2026-07-25 10:14:00',
+    Date: googleEvent.date,
+    'Class Label': googleEvent.classLabel,
+    'Duration (hr)': googleEvent.duration,
+    Instructor: googleEvent.instructor,
+    Site: googleEvent.site
+  });
+  const settled = await syncTabletAgainstGoogle([ledgerRow], [queueRow], googleRows);
+  const tabletEvents = activeTabletEventRows(settled.ledger, ledgerRow);
+  const googleEvents = activeGoogleEventRows(googleRows, googleEvent);
+
+  assert.equal(settled.body.results[0].result, 'already exists');
+  assert.equal(googleEvents.length, 1);
+  assert.equal(tabletEvents.length, 1);
+  assert.equal(settled.queue.length, 0);
+  assert.equal(settled.ledger[0].__linkedRecordId, googleEvent.rowId);
+  assert.equal(csvEventCount(generatedPayrollCsv(settled.ledger), ledgerRow), 1);
+  assert.equal(googleEvents[0].instructor, ledgerRow.Instructor);
+  assert.equal(googleEvents[0].date, ledgerRow.Date);
+  assert.equal(googleEvents[0].classLabel, ledgerRow['Class Label']);
+  assert.equal(googleEvents[0].site, ledgerRow.Site);
+  assert.equal(googleEvents[0].duration, ledgerRow['Duration (hr)']);
+});
+
+test('56 every parity path stays within one tablet export and one active Google event', async () => {
+  const scenarios = [];
+
+  const adminFirstGoogle = [{
+    rowId: 'gib-admin-parity-bounds',
+    timestamp: '2026-07-25 08:00:00',
+    date: '2026-07-25',
+    classLabel: '11:15 AM TEST Payroll Parity',
+    duration: 0.5,
+    instructor: 'QA TEST Parity Bounds Admin First',
+    site: 'Rev',
+    status: 'OK'
+  }];
+  const adminFirstTablet = parityTabletRows({
+    RowID: 'tablet-parity-bounds-admin-first',
+    Date: '2026-07-25',
+    'Class Label': '11:15 AM TEST Payroll Parity',
+    'Duration (hr)': 0.5,
+    Instructor: 'QA TEST Parity Bounds Admin First',
+    Site: 'Rev'
+  });
+  const adminFirstSettled = await syncTabletAgainstGoogle(
+    [adminFirstTablet.ledgerRow],
+    [adminFirstTablet.queueRow],
+    adminFirstGoogle
+  );
+  scenarios.push({
+    name: 'Admin first, tablet later',
+    googleRows: adminFirstGoogle,
+    googleEvent: adminFirstGoogle[0],
+    tabletRows: adminFirstSettled.ledger,
+    tabletEvent: adminFirstTablet.ledgerRow,
+    queue: adminFirstSettled.queue
+  });
+
+  const exactRetryTablet = parityTabletRows({
+    RowID: 'tablet-parity-bounds-exact',
+    Date: '2026-07-25',
+    'Class Label': '12:15 PM TEST Payroll Parity',
+    'Duration (hr)': 1,
+    Instructor: 'QA TEST Parity Bounds Exact',
+    Site: 'Rev'
+  });
+  const exactRetryGoogle = [{
+    rowId: exactRetryTablet.queueRow.RowID,
+    timestamp: exactRetryTablet.queueRow.Timestamp,
+    date: exactRetryTablet.queueRow.Date,
+    classLabel: exactRetryTablet.queueRow['Class Label'],
+    duration: exactRetryTablet.queueRow['Duration (hr)'],
+    instructor: exactRetryTablet.queueRow.Instructor,
+    site: exactRetryTablet.queueRow.Site,
+    status: 'OK'
+  }];
+  const exactRetrySettled = await syncTabletAgainstGoogle(
+    [exactRetryTablet.ledgerRow],
+    [exactRetryTablet.queueRow],
+    exactRetryGoogle
+  );
+  scenarios.push({
+    name: 'Exact retry',
+    googleRows: exactRetryGoogle,
+    googleEvent: exactRetryGoogle[0],
+    tabletRows: exactRetrySettled.ledger,
+    tabletEvent: exactRetryTablet.ledgerRow,
+    queue: exactRetrySettled.queue
+  });
+
+  const kioskFirstTablet = parityTabletRows({
+    RowID: 'tablet-parity-bounds-kiosk-first',
+    Date: '2026-07-25',
+    'Class Label': '1:15 PM TEST Payroll Parity',
+    'Duration (hr)': 0.75,
+    Instructor: 'QA TEST Parity Bounds Kiosk First',
+    Site: 'Rev'
+  });
+  const kioskFirstGoogle = [];
+  const kioskFirstSettled = await syncTabletAgainstGoogle(
+    [kioskFirstTablet.ledgerRow],
+    [kioskFirstTablet.queueRow],
+    kioskFirstGoogle
+  );
+  const adminLater = {
+    ...kioskFirstGoogle[0],
+    rowId: 'gib-admin-parity-bounds-admin-later'
+  };
+  const existingForAdmin = apps.findExistingEvent_(kioskFirstGoogle, adminLater);
+  if (!existingForAdmin) kioskFirstGoogle.push(adminLater);
+  assert.equal(existingForAdmin.rowId, kioskFirstTablet.queueRow.RowID);
+  scenarios.push({
+    name: 'Kiosk first, Admin later',
+    googleRows: kioskFirstGoogle,
+    googleEvent: kioskFirstGoogle[0],
+    tabletRows: kioskFirstSettled.ledger,
+    tabletEvent: kioskFirstTablet.ledgerRow,
+    queue: kioskFirstSettled.queue
+  });
+
+  for (const scenario of scenarios) {
+    const tabletCount = activeTabletEventRows(
+      scenario.tabletRows,
+      scenario.tabletEvent
+    ).length;
+    const googleCount = activeGoogleEventRows(
+      scenario.googleRows,
+      scenario.googleEvent
+    ).length;
+    assert.ok(tabletCount >= 1, `${scenario.name} must retain a tablet backup`);
+    assert.ok(tabletCount <= 1, `${scenario.name} must not double-export on tablet`);
+    assert.ok(googleCount >= 1, `${scenario.name} must retain an authoritative Google event`);
+    assert.ok(googleCount <= 1, `${scenario.name} must not duplicate the Google event`);
+    assert.equal(scenario.queue.length, 0, `${scenario.name} must clear confirmed waiting rows`);
+    assert.equal(
+      csvEventCount(generatedPayrollCsv(scenario.tabletRows), scenario.tabletEvent),
+      1,
+      `${scenario.name} must appear exactly once in tablet CSV`
+    );
   }
 });
