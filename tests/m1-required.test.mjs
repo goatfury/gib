@@ -26,8 +26,16 @@ import { handleKioskSync } from '../netlify/functions/m1-kiosk-sync.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 const read = relative => readFileSync(new URL(relative, ROOT), 'utf8');
+const rootHtml = read('index.html');
+const guestHtml = read('guests/index.html');
 const kioskHtml = read('m1/index.html');
 const adminHtml = read('m1/admin/index.html');
+const productionHtmlPages = Object.freeze([
+  ['/', rootHtml],
+  ['/guests', guestHtml],
+  ['/m1', kioskHtml],
+  ['/m1/admin', adminHtml]
+]);
 const schedule = JSON.parse(read('m1/shared-schedule.json'));
 const appsScriptSource = read('integrations/google-apps-script/GibM1Receiver.gs');
 
@@ -234,8 +242,18 @@ test('14 Reset preserves sign-ins and the waiting list while Factory Reset names
     kioskHtml.indexOf('function resetDevice()'),
     kioskHtml.indexOf('function factoryReset()')
   );
+  const factoryBody = kioskHtml.slice(
+    kioskHtml.indexOf('function factoryReset()'),
+    kioskHtml.indexOf('function getSiteCode()')
+  );
   assert.doesNotMatch(resetBody, /removeItem\(SIGNINS_KEY\)|removeItem\(SYNC_QUEUE_KEY\)/);
   assert.match(resetBody, /removeItem\(KIOSK_DEVICE_TOKEN_KEY\)/);
+  assert.match(resetBody, /removeItem\(LEGACY_SYNC_URL_KEY\)/);
+  assert.match(resetBody, /removeItem\(LEGACY_SYNC_TOKEN_KEY\)/);
+  assert.doesNotMatch(resetBody, /reconcileSyncQueue\(\)/);
+  assert.match(resetBody, /updateSyncStatus\(\{ reconcile: false \}\)/);
+  assert.match(factoryBody, /removeItem\(LEGACY_SYNC_URL_KEY\)/);
+  assert.match(factoryBody, /removeItem\(LEGACY_SYNC_TOKEN_KEY\)/);
   assert.match(kioskHtml, /Factory reset will DELETE all device info, schedule data, sign-ins, and waiting payroll rows/);
 });
 
@@ -929,6 +947,40 @@ test('46b successful schedule fetch validates all seven days and updates local c
   ]);
 });
 
+test('46bc a valid saved local schedule wins online while the shared schedule is still cached', async () => {
+  const saved = {
+    days: JSON.parse(JSON.stringify(schedule.days)),
+    source: 'manual',
+    updatedAt: '2026-07-25T10:00:00.000Z'
+  };
+  saved.days.Monday = ['5:55 AM LOCAL OVERRIDE'];
+  const network = JSON.parse(JSON.stringify(schedule));
+  network.version = 'network-newer-than-local';
+  network.days.Monday = ['6:05 AM SHARED NETWORK'];
+  let networkCalls = 0;
+  let cached = null;
+  const result = await safety.loadScheduleStartup({
+    fetchSchedule: async () => {
+      networkCalls += 1;
+      return network;
+    },
+    readCache: () => null,
+    writeCache: value => { cached = JSON.parse(JSON.stringify(value)); },
+    readSaved: () => saved
+  });
+  assert.equal(networkCalls, 1);
+  assert.equal(result.source, 'saved');
+  assert.equal(result.schedule.source, 'manual');
+  assert.equal(result.schedule.updatedAt, saved.updatedAt);
+  assert.deepEqual(result.schedule.days.Monday, ['5:55 AM LOCAL OVERRIDE']);
+  assert.equal(result.sharedSource, 'network');
+  assert.deepEqual(
+    Array.from(result.sharedSchedule.days.Monday),
+    ['6:05 AM SHARED NETWORK']
+  );
+  assert.equal(cached.version, 'network-newer-than-local');
+});
+
 test('46bb malformed shared schedules and versions are never accepted for caching', () => {
   const missingDay = JSON.parse(JSON.stringify(schedule));
   delete missingDay.days.Sunday;
@@ -949,20 +1001,26 @@ test('46bb malformed shared schedules and versions are never accepted for cachin
     });
 });
 
-test('46c failed schedule fetch uses a valid cached shared schedule first', async () => {
+test('46c a valid saved local schedule wins offline before a cached shared schedule', async () => {
   const cached = JSON.parse(JSON.stringify(schedule));
   cached.version = 'cached-test-version';
+  cached.days.Monday = ['6:05 AM CACHED SHARED'];
+  const saved = {
+    days: JSON.parse(JSON.stringify(schedule.days)),
+    source: 'url',
+    updatedAt: '2026-07-25T10:00:00.000Z'
+  };
+  saved.days.Monday = ['5:55 AM SAVED URL'];
   const result = await safety.loadScheduleStartup({
     fetchSchedule: async () => { throw new Error('offline'); },
     readCache: () => cached,
-    readSaved: () => ({
-      days: schedule.days,
-      source: 'manual',
-      updatedAt: '2026-07-25T10:00:00.000Z'
-    })
+    readSaved: () => saved
   });
-  assert.equal(result.source, 'cache');
-  assert.equal(result.schedule.version, 'cached-test-version');
+  assert.equal(result.source, 'saved');
+  assert.equal(result.schedule.source, 'url');
+  assert.deepEqual(result.schedule.days.Monday, ['5:55 AM SAVED URL']);
+  assert.equal(result.sharedSource, 'cache');
+  assert.equal(result.sharedSchedule.version, 'cached-test-version');
 });
 
 test('46d failed schedule fetch still uses a valid saved local schedule', async () => {
@@ -977,7 +1035,85 @@ test('46d failed schedule fetch still uses a valid saved local schedule', async 
   });
   assert.equal(result.source, 'saved');
   assert.equal(result.schedule.version, null);
+  assert.equal(result.schedule.source, 'manual');
+  assert.equal(result.schedule.updatedAt, '2026-07-25T10:00:00.000Z');
   assert.equal(Object.keys(result.schedule.days).length, 7);
+});
+
+test('46da every explicitly saved empty local schedule remains active after reload', async () => {
+  const disabledDays = Object.fromEntries(
+    ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+      .map(day => [day, []])
+  );
+  for (const source of ['manual', 'url', 'disabled']) {
+    const result = await safety.loadScheduleStartup({
+      fetchSchedule: async () => JSON.parse(JSON.stringify(schedule)),
+      readCache: () => null,
+      writeCache: () => {},
+      readSaved: () => ({
+        days: disabledDays,
+        source,
+        updatedAt: '2026-07-25T10:00:00.000Z'
+      })
+    });
+    assert.equal(result.source, 'saved', source);
+    assert.equal(result.schedule.source, source);
+    assert.equal(
+      Object.values(result.schedule.days).flat().length,
+      0
+    );
+    assert.equal(result.sharedSource, 'network');
+  }
+});
+
+test('46daa an existing live-tablet days-only schedule remains compatible', async () => {
+  const liveTabletSchedule = {
+    days: {
+      Monday: ['5:45 AM EXISTING TABLET CLASS'],
+      Tuesday: [],
+      Wednesday: [],
+      Thursday: [],
+      Friday: [],
+      Saturday: [],
+      Sunday: []
+    }
+  };
+  const result = await safety.loadScheduleStartup({
+    fetchSchedule: async () => JSON.parse(JSON.stringify(schedule)),
+    readCache: () => null,
+    writeCache: () => {},
+    readSaved: () => liveTabletSchedule
+  });
+  assert.equal(result.source, 'saved');
+  assert.equal(result.schedule.source, 'saved');
+  assert.deepEqual(
+    result.schedule.days.Monday,
+    ['5:45 AM EXISTING TABLET CLASS']
+  );
+});
+
+test('46db without a saved local schedule, failed network uses cached shared schedule', async () => {
+  const cached = JSON.parse(JSON.stringify(schedule));
+  cached.version = 'cached-test-version';
+  const result = await safety.loadScheduleStartup({
+    fetchSchedule: async () => { throw new Error('offline'); },
+    readCache: () => cached,
+    readSaved: () => null
+  });
+  assert.equal(result.source, 'cache');
+  assert.equal(result.schedule.version, 'cached-test-version');
+});
+
+test('46dc a cache-write failure cannot invalidate a good shared network schedule', async () => {
+  const result = await safety.loadScheduleStartup({
+    fetchSchedule: async () => JSON.parse(JSON.stringify(schedule)),
+    readCache: () => null,
+    writeCache: () => { throw new Error('quota'); },
+    readSaved: () => null
+  });
+  assert.equal(result.source, 'network');
+  assert.equal(result.schedule.version, schedule.version);
+  assert.equal(result.sharedSource, 'network');
 });
 
 test('46e failed schedule fetch with no valid fallback blocks startup', async () => {
@@ -985,7 +1121,7 @@ test('46e failed schedule fetch with no valid fallback blocks startup', async ()
     safety.loadScheduleStartup({
       fetchSchedule: async () => { throw new Error('offline'); },
       readCache: () => null,
-      readSaved: () => ({ days: { Monday: ['6:00 AM BJJ'] } })
+      readSaved: () => ({ days: { Funday: ['6:00 AM BJJ'] } })
     }),
     /offline/
   );
@@ -1030,17 +1166,99 @@ test('46f offline schedule startup does not alter the payroll ledger or waiting 
   assert.equal(storage.get('gib_m1_schedule_v1'), beforeLocalSchedule);
 });
 
-test('46g the validated startup selection controls the page before an older saved local schedule', () => {
-  const loadScheduleBody = kioskHtml.slice(
-    kioskHtml.indexOf('function loadSchedule()'),
-    kioskHtml.indexOf('function saveSchedule')
+test('46fa every schedule-selection path leaves ledger and waiting rows byte-for-byte unchanged', async () => {
+  const paths = [
+    {
+      name: 'saved over network',
+      fetchSchedule: async () => JSON.parse(JSON.stringify(schedule)),
+      readCache: () => null,
+      readSaved: () => ({
+        days: schedule.days,
+        source: 'manual',
+        updatedAt: '2026-07-25T10:00:00.000Z'
+      })
+    },
+    {
+      name: 'network without saved',
+      fetchSchedule: async () => JSON.parse(JSON.stringify(schedule)),
+      readCache: () => null,
+      readSaved: () => null
+    },
+    {
+      name: 'saved over offline cache',
+      fetchSchedule: async () => { throw new Error('offline'); },
+      readCache: () => JSON.parse(JSON.stringify(schedule)),
+      readSaved: () => ({
+        days: schedule.days,
+        source: 'url',
+        updatedAt: '2026-07-25T10:00:00.000Z'
+      })
+    },
+    {
+      name: 'offline cache without saved',
+      fetchSchedule: async () => { throw new Error('offline'); },
+      readCache: () => JSON.parse(JSON.stringify(schedule)),
+      readSaved: () => null
+    }
+  ];
+  for (const path of paths) {
+    const storage = new Map([
+      ['gib_m1_signins_v1', JSON.stringify([kioskRow({ RowID: path.name })])],
+      ['gib_m1_sync_queue_v1', JSON.stringify([kioskRow({ RowID: path.name })])]
+    ]);
+    const ledgerBefore = storage.get('gib_m1_signins_v1');
+    const queueBefore = storage.get('gib_m1_sync_queue_v1');
+    await safety.loadScheduleStartup({
+      ...path,
+      writeCache: value => storage.set(
+        'gib_m1_shared_schedule_cache_v1',
+        JSON.stringify(value)
+      )
+    });
+    assert.equal(storage.get('gib_m1_signins_v1'), ledgerBefore, path.name);
+    assert.equal(storage.get('gib_m1_sync_queue_v1'), queueBefore, path.name);
+  }
+});
+
+test('46g Revert to default deliberately clears every local override and activates shared', () => {
+  const revertBody = kioskHtml.slice(
+    kioskHtml.indexOf("$('#btnClearSchedule').addEventListener"),
+    kioskHtml.indexOf("$('#btnDisableSchedule').addEventListener")
   );
-  assert.ok(
-    loadScheduleBody.indexOf('STARTUP_SCHEDULE_SELECTION_ACTIVE')
-      < loadScheduleBody.indexOf('safeParse(SCHEDULE_KEY')
+  assert.match(revertBody, /localStorage\.removeItem\(SCHEDULE_KEY\)/);
+  assert.match(revertBody, /localStorage\.removeItem\(SCHEDULE_URL_KEY\)/);
+  assert.match(revertBody, /localStorage\.removeItem\(SCHEDULE_MODE_KEY\)/);
+  assert.match(revertBody, /activateSharedScheduleDefault\(\)/);
+  assert.doesNotMatch(revertBody, /SIGNINS_KEY|SYNC_QUEUE_KEY/);
+});
+
+test('46gb Device Reset blocks sign-in and clears stale source when no shared default exists', () => {
+  const resetBody = kioskHtml.slice(
+    kioskHtml.indexOf('function resetDevice()'),
+    kioskHtml.indexOf('function factoryReset()')
   );
-  assert.match(kioskHtml, /STARTUP_SCHEDULE_SELECTION = \{/);
-  assert.match(kioskHtml, /STARTUP_SCHEDULE_SELECTION_ACTIVE = true/);
+  assert.match(resetBody, /const sharedScheduleAvailable = activateSharedScheduleDefault\(\)/);
+  assert.match(resetBody, /SHARED_SCHEDULE_STARTUP_SOURCE = ''/);
+  assert.match(resetBody, /SIGN_IN_SCHEDULE_BLOCKED = true/);
+  assert.match(resetBody, /refreshSignInButtonState\(\)/);
+  assert.match(resetBody, /No valid schedule is available\. Existing records and sync tools remain available\./);
+});
+
+test('46gc saving a valid schedule re-enables sign-in without overriding transaction safety', () => {
+  const saveBody = kioskHtml.slice(
+    kioskHtml.indexOf('function saveSchedule('),
+    kioskHtml.indexOf('const DAY_ABBREV')
+  );
+  const refreshBody = kioskHtml.slice(
+    kioskHtml.indexOf('function refreshSignInButtonState()'),
+    kioskHtml.indexOf('function toggleSignInModal(')
+  );
+  assert.match(saveBody, /SIGN_IN_SCHEDULE_BLOCKED = false/);
+  assert.match(saveBody, /refreshSignInButtonState\(\)/);
+  assert.match(refreshBody, /SIGN_IN_SCHEDULE_BLOCKED/);
+  assert.match(refreshBody, /SIGN_IN_TRANSACTION_BLOCKED/);
+  assert.match(refreshBody, /SIGN_IN_MODAL_OPEN/);
+  assert.match(refreshBody, /\.disabled = Boolean\(/);
 });
 
 test('46h an empty offline day still discloses the last-known schedule source', () => {
@@ -1048,10 +1266,21 @@ test('46h an empty offline day still discloses the last-known schedule source', 
   assert.match(kioskHtml, /Offline — the last known saved local schedule is active\./);
 });
 
-test('47 browser-rendered stored values never flow through innerHTML', () => {
-  assert.doesNotMatch(kioskHtml, /\.innerHTML\s*=/);
-  assert.doesNotMatch(adminHtml, /\.innerHTML\s*=/);
-  assert.doesNotMatch(`${kioskHtml}\n${adminHtml}`, /insertAdjacentHTML|document\.write/);
+test('47 every shipped production HTML page has no executable-markup sink', () => {
+  const forbiddenSinks = [
+    /\.innerHTML\s*=/iu,
+    /\.outerHTML\s*=/iu,
+    /\.insertAdjacentHTML\s*\(/iu,
+    /\bdocument\.write(?:ln)?\s*\(/iu,
+    /\beval\s*\(/iu,
+    /(?:\bnew\s+)?\bFunction\s*\(/u,
+    /\son[a-z]+\s*=/iu
+  ];
+  for (const [route, html] of productionHtmlPages) {
+    forbiddenSinks.forEach(pattern => {
+      assert.doesNotMatch(html, pattern, `${route} contains ${pattern}`);
+    });
+  }
 });
 
 test('47b malicious stored HTML is rendered literally without an image or handler', () => {
@@ -1102,6 +1331,166 @@ test('47b malicious stored HTML is rendered literally without an image or handle
   assert.ok(rendered.textContent.includes(payload));
   assert.equal(elementTags.includes('IMG'), false);
   assert.equal(Object.hasOwn(rendered, 'onerror'), false);
+});
+
+test('47bb every guest field is rendered as exact text through DOM creation', () => {
+  const payload = '<img src=x onerror="window.__GIB_XSS_EXECUTED__=true">';
+  function fakeElement(tagName) {
+    let ownText = '';
+    return {
+      tagName: String(tagName).toUpperCase(),
+      className: '',
+      style: {},
+      childNodes: [],
+      appendChild(child) {
+        this.childNodes.push(child);
+        return child;
+      },
+      replaceChildren(...children) {
+        this.childNodes = children;
+      },
+      get textContent() {
+        return ownText + this.childNodes.map(child => child.textContent || '').join('');
+      },
+      set textContent(value) {
+        ownText = String(value);
+        this.childNodes = [];
+      }
+    };
+  }
+  const entriesWrap = fakeElement('div');
+  const jsonOutput = { value: '' };
+  const rendererSource = guestHtml.slice(
+    guestHtml.indexOf('const renderEntries = () =>'),
+    guestHtml.indexOf('const resetForm = () =>')
+  );
+  const rendererContext = vm.createContext({
+    document: { createElement: fakeElement },
+    entriesWrap,
+    jsonOutput,
+    entries: [{
+      name: payload,
+      organization: payload,
+      type: payload,
+      checkIn: payload,
+      notes: payload
+    }]
+  });
+  vm.runInContext(`${rendererSource}\nrenderEntries();`, rendererContext);
+  const tags = [];
+  const cells = [];
+  (function walk(node) {
+    if (node.tagName) {
+      tags.push(node.tagName);
+      if (node.tagName === 'TD') cells.push(node.textContent);
+    }
+    (node.childNodes || []).forEach(walk);
+  })(entriesWrap);
+  assert.deepEqual(cells, [payload, payload, payload, payload, payload]);
+  assert.equal(tags.includes('IMG'), false);
+  assert.equal(tags.includes('SCRIPT'), false);
+  assert.equal(JSON.parse(jsonOutput.value)[0].name, payload);
+});
+
+test('47c legacy browser Google keys remain before a confirmed production sync', () => {
+  const values = new Map([
+    ['gib_m1_sync_url_v1', 'https://legacy.example.invalid/secret-path'],
+    ['gib_m1_sync_token_v1', 'legacy-token-sentinel']
+  ]);
+  const storage = {
+    removeItem: key => values.delete(key)
+  };
+  const row = kioskRow({ RowID: 'legacy-migration-row' });
+  const unclear = safety.applyReadableResults([row], {
+    ok: true,
+    results: [{ rowId: row.RowID, result: 'unclear' }]
+  });
+  assert.equal(
+    safety.retireLegacySyncSecrets(storage, unclear.completed),
+    false
+  );
+  assert.equal(values.has('gib_m1_sync_url_v1'), true);
+  assert.equal(values.has('gib_m1_sync_token_v1'), true);
+
+  const unrelated = safety.applyReadableResults([row], {
+    ok: true,
+    results: [{ rowId: 'different-row', result: 'added' }]
+  });
+  assert.equal(
+    safety.retireLegacySyncSecrets(storage, unrelated.completed),
+    false
+  );
+  assert.equal(values.has('gib_m1_sync_url_v1'), true);
+  assert.equal(values.has('gib_m1_sync_token_v1'), true);
+});
+
+test('47d one matched added result removes both legacy browser Google keys', () => {
+  const values = new Map([
+    ['gib_m1_sync_url_v1', 'legacy-url-sentinel'],
+    ['gib_m1_sync_token_v1', 'legacy-token-sentinel']
+  ]);
+  const storage = {
+    removeItem: key => values.delete(key)
+  };
+  const row = kioskRow({ RowID: 'legacy-added-row' });
+  const applied = safety.applyReadableResults([row], {
+    ok: true,
+    results: [{ rowId: row.RowID, result: 'added' }]
+  });
+  assert.equal(
+    safety.retireLegacySyncSecrets(storage, applied.completed),
+    true
+  );
+  assert.equal(values.has('gib_m1_sync_url_v1'), false);
+  assert.equal(values.has('gib_m1_sync_token_v1'), false);
+});
+
+test('47e one matched already-exists result removes both legacy browser Google keys', () => {
+  const values = new Map([
+    ['gib_m1_sync_url_v1', 'legacy-url-sentinel'],
+    ['gib_m1_sync_token_v1', 'legacy-token-sentinel']
+  ]);
+  const storage = {
+    removeItem: key => values.delete(key)
+  };
+  const row = kioskRow({ RowID: 'legacy-existing-row' });
+  const applied = safety.applyReadableResults([row], {
+    ok: true,
+    results: [{ rowId: row.RowID, result: 'already exists' }]
+  });
+  assert.equal(
+    safety.retireLegacySyncSecrets(storage, applied.completed),
+    true
+  );
+  assert.equal(values.has('gib_m1_sync_url_v1'), false);
+  assert.equal(values.has('gib_m1_sync_token_v1'), false);
+});
+
+test('47f legacy values are never read and migration is driven only by matched safe results', () => {
+  assert.equal(safety.LEGACY_SYNC_URL_KEY, 'gib_m1_sync_url_v1');
+  assert.equal(safety.LEGACY_SYNC_TOKEN_KEY, 'gib_m1_sync_token_v1');
+  assert.doesNotMatch(
+    `${kioskHtml}\n${read('m1/kiosk-safety.js')}`,
+    /getItem\((?:window\.GibM1Safety\.)?LEGACY_SYNC_(?:URL|TOKEN)_KEY\)/
+  );
+  const syncBody = kioskHtml.slice(
+    kioskHtml.indexOf('async function syncNow()'),
+    kioskHtml.indexOf('function debugSnapshot()')
+  );
+  assert.match(syncBody, /retireLegacySyncSecrets\(localStorage, applied\.completed/);
+  assert.doesNotMatch(syncBody, /retireLegacySyncSecrets\([^;]*data\.results/);
+  assert.ok(
+    syncBody.indexOf('if (!applied.readable)')
+      < syncBody.indexOf('retireLegacySyncSecrets(localStorage, applied.completed')
+  );
+  assert.match(syncBody, /body: JSON\.stringify\(\{ rows: queue \}\)/);
+
+  const debugBody = kioskHtml.slice(
+    kioskHtml.indexOf('function debugSnapshot()'),
+    kioskHtml.indexOf('async function copyDebug()')
+  );
+  assert.match(debugBody, /k !== LEGACY_SYNC_URL_KEY/);
+  assert.match(debugBody, /k !== LEGACY_SYNC_TOKEN_KEY/);
 });
 
 test('48 weak production Admin passphrases fail closed', () => {
@@ -1381,6 +1770,8 @@ test('49e browser secrets remain out of source, URLs, storage, exports, snapshot
   assert.doesNotMatch(exportBody, /KIOSK_DEVICE_TOKEN_KEY|Device sync code|Admin-Request-Token/);
   assert.doesNotMatch(
     [
+      rootHtml,
+      guestHtml,
       kioskHtml,
       adminHtml,
       read('netlify/functions/m1-kiosk-sync.mjs'),
@@ -1397,8 +1788,12 @@ test('49f the schedule cutover limitation is exact and explicit', () => {
   );
 });
 
-test('50 every inline kiosk and Admin browser script compiles', () => {
-  for (const [name, html] of [['kiosk', kioskHtml], ['Admin', adminHtml]]) {
+test('50 every shipped inline production browser script compiles', () => {
+  for (const [name, html] of [
+    ['guests', guestHtml],
+    ['kiosk', kioskHtml],
+    ['Admin', adminHtml]
+  ]) {
     const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/giu)]
       .map(match => match[1])
       .filter(source => source.trim());

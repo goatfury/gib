@@ -854,6 +854,8 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
   const SYNC_AUTO_KEY    = 'gib_m1_sync_auto_v1';
   const DEVICE_LABEL_KEY = 'gib_m1_device_label_v1';
   const KIOSK_DEVICE_TOKEN_KEY = 'gib_m1_kiosk_device_token_v1';
+  const LEGACY_SYNC_URL_KEY = window.GibM1Safety.LEGACY_SYNC_URL_KEY;
+  const LEGACY_SYNC_TOKEN_KEY = window.GibM1Safety.LEGACY_SYNC_TOKEN_KEY;
 
 
   // Back-compat keys (older builds we created)
@@ -867,6 +869,9 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
   let SHARED_SCHEDULE_STARTUP_SOURCE = '';
   let STARTUP_SCHEDULE_SELECTION = null;
   let STARTUP_SCHEDULE_SELECTION_ACTIVE = false;
+  let SIGN_IN_SCHEDULE_BLOCKED = false;
+  let SIGN_IN_TRANSACTION_BLOCKED = false;
+  let SIGN_IN_MODAL_OPEN = false;
   async function loadSharedSchedule() {
     const result = await window.GibM1Safety.loadScheduleStartup({
       fetchSchedule: async () => {
@@ -879,23 +884,48 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
       readSaved: () => safeParse(SCHEDULE_KEY, null)
     });
     const value = result.schedule;
-    DEFAULT_SCHEDULE = JSON.parse(JSON.stringify(value.days));
-    SHARED_SCHEDULE_META = {
-      version: value.version || null,
-      site: value.site || 'Rev',
-      timezone: value.timezone || TZ,
-      startupSource: result.source
-    };
-    SHARED_SCHEDULE_STARTUP_SOURCE = result.source;
+    const shared = result.sharedSchedule;
+    DEFAULT_SCHEDULE = shared
+      ? JSON.parse(JSON.stringify(shared.days))
+      : {};
+    SHARED_SCHEDULE_META = shared
+      ? {
+          version: shared.version || null,
+          site: shared.site || 'Rev',
+          timezone: shared.timezone || TZ,
+          startupSource: result.sharedSource
+        }
+      : null;
+    SHARED_SCHEDULE_STARTUP_SOURCE = result.source === 'saved'
+      ? (result.sharedSource === 'network' ? 'saved-online' : 'saved-offline')
+      : result.source;
     STARTUP_SCHEDULE_SELECTION = {
       days: JSON.parse(JSON.stringify(value.days)),
-      source: result.source === 'network'
+      source: result.source === 'saved'
+        ? (value.source || 'saved')
+        : (result.source === 'network' ? 'shared' : 'shared-cache'),
+      updatedAt: value.updatedAt || null
+    };
+    STARTUP_SCHEDULE_SELECTION_ACTIVE = true;
+    SIGN_IN_SCHEDULE_BLOCKED = false;
+    refreshSignInButtonState();
+    return result.source;
+  }
+
+  function activateSharedScheduleDefault() {
+    if (!SHARED_SCHEDULE_META) return false;
+    STARTUP_SCHEDULE_SELECTION = {
+      days: JSON.parse(JSON.stringify(DEFAULT_SCHEDULE)),
+      source: SHARED_SCHEDULE_META.startupSource === 'network'
         ? 'shared'
-        : (result.source === 'cache' ? 'shared-cache' : 'saved-local'),
+        : 'shared-cache',
       updatedAt: null
     };
     STARTUP_SCHEDULE_SELECTION_ACTIVE = true;
-    return result.source;
+    SHARED_SCHEDULE_STARTUP_SOURCE = SHARED_SCHEDULE_META.startupSource;
+    SIGN_IN_SCHEDULE_BLOCKED = false;
+    refreshSignInButtonState();
+    return true;
   }
 
   // Additional default schedule for Richmond BJJ.  This snapshot was copied from
@@ -1020,6 +1050,14 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
     localStorage.removeItem(DURATION_RULES_KEY);
     localStorage.removeItem(SERIES_KEY);
     localStorage.removeItem(KIOSK_DEVICE_TOKEN_KEY);
+    localStorage.removeItem(LEGACY_SYNC_URL_KEY);
+    localStorage.removeItem(LEGACY_SYNC_TOKEN_KEY);
+    const sharedScheduleAvailable = activateSharedScheduleDefault();
+    if (!sharedScheduleAvailable) {
+      STARTUP_SCHEDULE_SELECTION = null;
+      STARTUP_SCHEDULE_SELECTION_ACTIVE = false;
+      SHARED_SCHEDULE_STARTUP_SOURCE = '';
+    }
     // Also clear a few older keys if present (safe no-ops)
     localStorage.removeItem('gib_device');
     localStorage.removeItem('rbjj_device');
@@ -1040,8 +1078,13 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
     loadScheduleIntoAdmin(); // resets admin editor to default schedule state
     renderDurationRules();
     populateClassesForToday(); // ensures kiosk is not empty if defaults exist
-    reconcileSyncQueue();
-    updateSyncStatus();
+    if (!sharedScheduleAvailable) {
+      SIGN_IN_SCHEDULE_BLOCKED = true;
+      refreshSignInButtonState();
+      $('#classesHint').textContent = 'No valid schedule is available. Existing records and sync tools remain available.';
+      $('#classesHint').classList.add('warn');
+    }
+    updateSyncStatus({ reconcile: false });
     showToast('Device reset');
   }
 
@@ -1062,6 +1105,8 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
     localStorage.removeItem(SCHEDULE_MODE_KEY);
     localStorage.removeItem(DURATION_RULES_KEY);
     localStorage.removeItem(SERIES_KEY);
+    localStorage.removeItem(LEGACY_SYNC_URL_KEY);
+    localStorage.removeItem(LEGACY_SYNC_TOKEN_KEY);
     // After all keys are removed, set the schedule to a disabled empty baseline so
     // that the app does not immediately fall back to the default schedule.  This
     // produces a true blank state for testing.
@@ -1175,6 +1220,8 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
     // A deliberate, successfully saved local edit becomes active while the
     // original validated startup selection remains available in memory.
     STARTUP_SCHEDULE_SELECTION_ACTIVE = false;
+    SIGN_IN_SCHEDULE_BLOCKED = false;
+    refreshSignInButtonState();
   }
 
   const DAY_ABBREV = {
@@ -1769,7 +1816,7 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
     if (!classes.length) {
       const offlineNotice = SHARED_SCHEDULE_STARTUP_SOURCE === 'cache'
         ? ' Offline — the last known shared schedule is active.'
-        : (SHARED_SCHEDULE_STARTUP_SOURCE === 'saved'
+        : (SHARED_SCHEDULE_STARTUP_SOURCE === 'saved-offline'
           ? ' Offline — the last known saved local schedule is active.'
           : '');
       $('#classesHint').textContent = `No classes found for ${day}. Add a schedule or series classes in Admin.${offlineNotice}`;
@@ -1778,7 +1825,7 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
       if (SHARED_SCHEDULE_STARTUP_SOURCE === 'cache') {
         $('#classesHint').textContent = 'Offline — using the last known shared schedule.';
         $('#classesHint').classList.add('warn');
-      } else if (SHARED_SCHEDULE_STARTUP_SOURCE === 'saved') {
+      } else if (SHARED_SCHEDULE_STARTUP_SOURCE === 'saved-offline') {
         $('#classesHint').textContent = 'Offline — using the last known saved local schedule.';
         $('#classesHint').classList.add('warn');
       } else {
@@ -1950,18 +1997,28 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
     btn.textContent = `UNDO (${signInSecondsRemaining}s)`;
   }
 
+  function refreshSignInButtonState() {
+    const button = $('#btnSignIn');
+    if (!button) return;
+    button.disabled = Boolean(
+      SIGN_IN_SCHEDULE_BLOCKED
+      || SIGN_IN_TRANSACTION_BLOCKED
+      || SIGN_IN_MODAL_OPEN
+    );
+  }
+
   function toggleSignInModal(show) {
     const modal = $('#signInModal');
     if (!modal) return;
+    SIGN_IN_MODAL_OPEN = Boolean(show);
     if (show) {
       modal.classList.add('show');
       modal.setAttribute('aria-hidden', 'false');
-      $('#btnSignIn').disabled = true;
     } else {
       modal.classList.remove('show');
       modal.setAttribute('aria-hidden', 'true');
-      $('#btnSignIn').disabled = false;
     }
+    refreshSignInButtonState();
   }
 
   function resetKioskForm() {
@@ -2446,9 +2503,10 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
       : 'Not configured on this device.';
     showToast(value ? 'Device sync code saved' : 'Device sync code cleared');
   }
-  function updateSyncStatus() {
+  function updateSyncStatus(options = {}) {
+    const shouldReconcile = options.reconcile !== false;
     const before = syncQueueConsistency();
-    const q = reconcileSyncQueue();
+    const q = shouldReconcile ? reconcileSyncQueue() : loadSyncQueue();
     const last = localStorage.getItem('gib_m1_sync_last') || '';
     const err = localStorage.getItem('gib_m1_sync_error') || '';
     const parts = [];
@@ -2513,6 +2571,9 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
         applied.completed
       ));
       saveSyncQueue(applied.remaining);
+      // localStorage is origin-scoped. On production, only a confirmed result
+      // from this same-site production path can retire the production legacy keys.
+      window.GibM1Safety.retireLegacySyncSecrets(localStorage, applied.completed);
       if (applied.completed.length) {
         localStorage.setItem('gib_m1_sync_last', new Date().toISOString());
       }
@@ -2587,6 +2648,8 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
       storageKeys: Object.keys(localStorage)
         .filter(k =>
           k !== KIOSK_DEVICE_TOKEN_KEY
+          && k !== LEGACY_SYNC_URL_KEY
+          && k !== LEGACY_SYNC_TOKEN_KEY
           && (k.includes('gib_') || k.includes('rbjj_'))
         )
         .sort()
@@ -2809,7 +2872,14 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
 
   $('#btnClearSchedule').addEventListener('click', () => {
     if (!confirm('Revert to the default schedule? This will remove all saved overrides.')) return;
+    if (!SHARED_SCHEDULE_META) {
+      alert('The shared schedule is unavailable. The saved local schedule was kept.');
+      return;
+    }
     localStorage.removeItem(SCHEDULE_KEY);
+    localStorage.removeItem(SCHEDULE_URL_KEY);
+    localStorage.removeItem(SCHEDULE_MODE_KEY);
+    activateSharedScheduleDefault();
     loadScheduleIntoAdmin();
     populateClassesForToday();
     showToast('Default schedule restored');
@@ -2924,20 +2994,22 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
     area.select();
   });
 
-  // Start with the network schedule, then last-known shared cache, then saved local schedule.
+  // Preserve a valid saved local schedule while refreshing the shared network/cache default.
   async function initializeCandidate() {
     let scheduleAvailable = true;
     const transactionRecovered = recoverPendingSigninTransaction();
     if (!transactionRecovered) {
       alert('A pending sign-in could not be recovered safely. New sign-ins are paused; existing records remain available for review.');
-      $('#btnSignIn').disabled = true;
+      SIGN_IN_TRANSACTION_BLOCKED = true;
+      refreshSignInButtonState();
     }
     try {
       await loadSharedSchedule();
     } catch (error) {
       scheduleAvailable = false;
       alert('No valid network, cached, or saved schedule is available. Sign-in is paused.');
-      $('#btnSignIn').disabled = true;
+      SIGN_IN_SCHEDULE_BLOCKED = true;
+      refreshSignInButtonState();
       $('#classesHint').textContent = 'No valid schedule is available.';
     }
     initScheduleEditor();
@@ -2950,7 +3022,8 @@ const SHARED_SCHEDULE_CACHE_KEY = 'gib_m1_shared_schedule_cache_v1';
     updateSyncStatus();
     refreshNameDatalist();
     if (!scheduleAvailable) {
-      $('#btnSignIn').disabled = true;
+      SIGN_IN_SCHEDULE_BLOCKED = true;
+      refreshSignInButtonState();
       $('#classesHint').textContent = 'No valid schedule is available. Existing records and sync tools remain available.';
       $('#classesHint').classList.add('warn');
     }

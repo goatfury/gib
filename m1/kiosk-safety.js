@@ -10,6 +10,8 @@
     'Saturday',
     'Sunday'
   ]);
+  const LEGACY_SYNC_URL_KEY = 'gib_m1_sync_url_v1';
+  const LEGACY_SYNC_TOKEN_KEY = 'gib_m1_sync_token_v1';
 
   function clean(value) {
     return String(value == null ? '' : value)
@@ -107,6 +109,17 @@
       return true;
     });
     return { remaining, completed, readable: true };
+  }
+
+  function retireLegacySyncSecrets(storage, completed) {
+    const confirmed = (Array.isArray(completed) ? completed : [])
+      .some(item => isSafeCompletion(item && (item.result || item)));
+    if (!confirmed || !storage || typeof storage.removeItem !== 'function') {
+      return false;
+    }
+    storage.removeItem(LEGACY_SYNC_URL_KEY);
+    storage.removeItem(LEGACY_SYNC_TOKEN_KEY);
+    return true;
   }
 
   function duplicateClasses(rows, date, instructor, site, classes) {
@@ -221,6 +234,47 @@
     };
   }
 
+  function canonicalSavedDay(value) {
+    const key = normalize(value);
+    if (!key) return null;
+    return SCHEDULE_DAYS.find(day => {
+      const normalizedDay = normalize(day);
+      return key === normalizedDay || key === normalizedDay.slice(0, 3);
+    }) || null;
+  }
+
+  function validateSavedSchedulePayload(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const sourceDays = value.days;
+    if (!sourceDays || typeof sourceDays !== 'object' || Array.isArray(sourceDays)) return null;
+    const days = Object.fromEntries(SCHEDULE_DAYS.map(day => [day, []]));
+    const recognizedDays = new Set();
+    let classCount = 0;
+    for (const [rawDay, rawLabels] of Object.entries(sourceDays)) {
+      const day = canonicalSavedDay(rawDay);
+      if (!day) continue;
+      if (!Array.isArray(rawLabels)) return null;
+      recognizedDays.add(day);
+      const labels = rawLabels
+        .map(rawLabel => clean(rawLabel))
+        .filter(Boolean);
+      if (labels.some(label => label.length > 240)) return null;
+      days[day] = labels;
+      classCount += labels.length;
+    }
+    if (!recognizedDays.size) return null;
+    if (!classCount && recognizedDays.size !== SCHEDULE_DAYS.length) return null;
+    const source = clean(value.source) || 'saved';
+    return {
+      version: null,
+      site: clean(value.site) || 'Rev',
+      timezone: clean(value.timezone) || 'America/New_York',
+      days,
+      source,
+      updatedAt: clean(value.updatedAt) || null
+    };
+  }
+
   async function loadScheduleStartup(options = {}) {
     const fetchSchedule = options.fetchSchedule;
     const readCache = options.readCache || (() => null);
@@ -230,31 +284,59 @@
       throw new Error('Schedule fetch is not configured.');
     }
 
+    let savedSchedule = null;
     try {
-      const networkSchedule = validateSchedulePayload(
+      savedSchedule = validateSavedSchedulePayload(await readSaved());
+    } catch {}
+
+    let networkError = null;
+    let sharedSchedule = null;
+    let sharedSource = null;
+    try {
+      sharedSchedule = validateSchedulePayload(
         await fetchSchedule(),
         { requireVersion: true }
       );
-      if (!networkSchedule) throw new Error('Shared schedule was not readable.');
-      await writeCache(networkSchedule);
-      return { schedule: networkSchedule, source: 'network' };
-    } catch (networkError) {
-      const cachedSchedule = validateSchedulePayload(
-        await readCache(),
-        { requireVersion: true }
-      );
-      if (cachedSchedule) {
-        return { schedule: cachedSchedule, source: 'cache' };
+      if (!sharedSchedule) throw new Error('Shared schedule was not readable.');
+      sharedSource = 'network';
+      try {
+        await writeCache(sharedSchedule);
+      } catch {}
+    } catch (error) {
+      networkError = error;
+      try {
+        sharedSchedule = validateSchedulePayload(
+          await readCache(),
+          { requireVersion: true }
+        );
+      } catch {
+        sharedSchedule = null;
       }
-      const savedSchedule = validateSchedulePayload(await readSaved());
-      if (savedSchedule) {
-        return { schedule: savedSchedule, source: 'saved' };
-      }
-      throw networkError;
+      if (sharedSchedule) sharedSource = 'cache';
     }
+
+    if (savedSchedule) {
+      return {
+        schedule: savedSchedule,
+        source: 'saved',
+        sharedSchedule,
+        sharedSource
+      };
+    }
+    if (sharedSchedule) {
+      return {
+        schedule: sharedSchedule,
+        source: sharedSource,
+        sharedSchedule,
+        sharedSource
+      };
+    }
+    throw networkError || new Error('No valid schedule is available.');
   }
 
   root.GibM1Safety = Object.freeze({
+    LEGACY_SYNC_URL_KEY,
+    LEGACY_SYNC_TOKEN_KEY,
     clean,
     normalize,
     isActiveLedgerRow,
@@ -263,12 +345,14 @@
     reconcileQueue,
     isSafeCompletion,
     applyReadableResults,
+    retireLegacySyncSecrets,
     duplicateClasses,
     mergeSigninTransaction,
     queueContainsLedgerRow,
     markCompletedLedgerRows,
     markAttemptedLedgerRows,
     validateSchedulePayload,
+    validateSavedSchedulePayload,
     loadScheduleStartup
   });
 })(typeof globalThis !== 'undefined' ? globalThis : window);
