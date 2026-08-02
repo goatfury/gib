@@ -614,6 +614,57 @@ test('rapid Admin retry creates one payroll event and readable results', () => {
   assert.ok(retry.auditActionNumber > first.auditActionNumber);
 });
 
+test('rapid double-click reaches one added result and one duplicate-safe result', async () => {
+  const events = new Set();
+  let auditNumber = 0;
+  const fetchMock = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    const key = [
+      body.date,
+      String(body.instructor).toLocaleLowerCase('en-US'),
+      String(body.classLabel).toLocaleLowerCase('en-US'),
+      String(body.site).toLocaleLowerCase('en-US')
+    ].join('|');
+    const result = events.has(key) ? 'already exists' : 'added';
+    events.add(key);
+    auditNumber += 1;
+    return googleResponse({
+      ok: true,
+      result,
+      linkedRecordId: 'one-google-payroll-event',
+      auditActionNumber: auditNumber
+    });
+  };
+  const request = () => handleAdminAdd(
+    jsonRequest(
+      `${previewUrl}/.netlify/functions/m1-admin-add`,
+      {
+        requestId: 'qa-double-click',
+        date: '2026-07-25',
+        classLabel: '10:00 AM Kids\u2019 BJJ',
+        duration: 0.5,
+        instructor: 'QA Test Double Click',
+        site: 'Rev',
+        notes: '',
+        reason: 'QA TEST missed sign-in'
+      },
+      previewCookie(),
+      adminHeaders()
+    ),
+    {
+      env: previewEnv,
+      now: fixedNow,
+      dateNow: fixedDateNow,
+      fetch: fetchMock
+    }
+  );
+  const responses = await Promise.all([request(), request()]);
+  const bodies = await Promise.all(responses.map(response => response.json()));
+  assert.deepEqual(bodies.map(body => body.result).sort(), ['added', 'already exists']);
+  assert.equal(events.size, 1);
+  assert.match(adminHtml, /if \(inFlightAdditions\.has\(key\)\) return/);
+});
+
 test('four-field identity normalizes harmless text and preserves legitimate distinct events', () => {
   const { apps } = receiverHarness();
   const first = {
