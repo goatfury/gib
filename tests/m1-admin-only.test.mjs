@@ -382,6 +382,29 @@ test('production Admin configuration fails closed without every private value', 
   }).adminActionToken, productionEnv.GIB_M1_ADMIN_ACTION_TOKEN);
 });
 
+test('production preserves a short non-empty legacy webhook credential', () => {
+  const legacyEnv = {
+    ...productionEnv,
+    GIB_M1_WEBHOOK_TOKEN: 'legacy'
+  };
+  assert.equal(runtimeConfig(legacyEnv, {
+    admin: true,
+    requestUrl: 'https://bjjsite.com/m1/admin/'
+  }).webhookToken, legacyEnv.GIB_M1_WEBHOOK_TOKEN);
+  assert.equal(runtimeConfig({
+    ...legacyEnv,
+    GIB_M1_WEBHOOK_TOKEN: ''
+  }, { admin: true, requestUrl: 'https://bjjsite.com/m1/admin/' }), null);
+  assert.equal(runtimeConfig({
+    ...previewEnv,
+    GIB_TEST_WEBHOOK_TOKEN: 'short'
+  }, { admin: true, requestUrl: `${previewUrl}/m1/admin/` }), null);
+  assert.equal(runtimeConfig({
+    ...legacyEnv,
+    GIB_M1_ADMIN_ACTION_TOKEN: 'short'
+  }, { admin: true, requestUrl: 'https://bjjsite.com/m1/admin/' }), null);
+});
+
 test('Admin passphrase policy and production login are enforced', async () => {
   assert.equal(validAdminPassphrase('alpha beta gamma delta'), true);
   assert.equal(validAdminPassphrase('alpha-bravo-charlie-delta'), true);

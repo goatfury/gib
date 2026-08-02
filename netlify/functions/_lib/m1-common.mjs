@@ -76,7 +76,14 @@ export function runtimeConfig(env = process.env, options = {}) {
   );
   const adminPassphrase = clean(env.GIB_M1_ADMIN_PASSPHRASE);
 
-  if (!webhookUrl || webhookToken.length < 12 || webhookToken.length > 512) {
+  // Production preserves the existing kiosk credential, whose historical
+  // contract requires exact equality but never imposed a length floor.
+  if (
+    !webhookUrl
+    || !webhookToken
+    || webhookToken.length > 512
+    || (preview && webhookToken.length < 12)
+  ) {
     return null;
   }
   if (!preview && options.admin === true && !validAdminPassphrase(env.GIB_M1_ADMIN_PASSPHRASE)) {
