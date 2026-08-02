@@ -1,0 +1,82 @@
+{
+  "timezone": "America/New_York",
+  "site": "Rev",
+  "version": "2026-07-26",
+  "days": {
+    "Monday": [
+      "6:00 AM BJJ (Level 2)",
+      "12:00 PM BJJ (Level 2)",
+      "4:30 PM Yoga (Core)",
+      "4:30 PM Kids’ BJJ",
+      "4:30 PM BJJ (Level 1)",
+      "5:30 PM BJJ (Level 2)",
+      "5:30 PM Lapel Guard Class (Level 4)",
+      "6:30 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)",
+      "6:30 PM Muay Thai (Fundamentals/Intermediate, and intros when scheduled)",
+      "6:30 PM Leglock Fundamentals (No-Gi, Level 3)",
+      "7:00 PM BJJ (Level 2)",
+      "7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ"
+    ],
+    "Tuesday": [
+      "6:00 AM BJJ (Level 4) / Gi BJJ Intro Class",
+      "6:00 AM No-Gi BJJ (Level 2)",
+      "7:15 AM Conditioning",
+      "12:00 PM BJJ (Level 2)",
+      "4:30 PM Yoga (Flow)",
+      "4:30 PM Kids’ BJJ",
+      "5:30 PM BJJ (Level 2)",
+      "5:30 PM Gi BJJ Intro Class / Level 1",
+      "5:30 PM BJJ (Level 4)",
+      "6:30 PM Muay Thai (Int/Adv)",
+      "6:30 PM Guard Passing Class (Level 3)",
+      "6:30 PM Judo",
+      "7:00 PM BJJ Competition Class (Level 2, gi)"
+    ],
+    "Wednesday": [
+      "6:00 AM BJJ (Level 2)",
+      "12:00 PM No-Gi BJJ (Level 2)",
+      "4:30 PM Kids’ BJJ",
+      "4:30 PM BJJ (Level 1)",
+      "5:30 PM BJJ (Level 2)",
+      "5:30 PM BJJ (Level 4)",
+      "6:30 PM Muay Thai (Fundamentals/Intermediate, and intros when scheduled)",
+      "6:30 PM BJJ Drills (Level 3)",
+      "7:00 PM BJJ (Level 4)",
+      "7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ"
+    ],
+    "Thursday": [
+      "6:00 AM No-Gi BJJ (Level 4)",
+      "6:00 AM No-Gi BJJ (Level 2) / Gi BJJ Intro Class",
+      "7:15 AM Conditioning",
+      "12:00 PM BJJ (Level 2)",
+      "4:30 PM Kids’ BJJ",
+      "5:00 PM Get Warm",
+      "5:30 PM BJJ (Level 2)",
+      "5:30 PM Gi BJJ Intro Class / Level 1",
+      "5:30 PM No-Gi BJJ (Level 4)",
+      "6:30 PM Muay Thai (Int/Adv)",
+      "6:30 PM Advanced Leglocks (No-Gi, Level 3)",
+      "6:30 PM Judo",
+      "7:00 PM BJJ Competition Class (Level 2, no-gi)"
+    ],
+    "Friday": [
+      "6:00 AM Drill/Roll Class – BJJ",
+      "12:00 PM Drill/Roll Class – BJJ",
+      "4:30 PM Yoga (Flow)",
+      "5:00 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)",
+      "5:30 PM BJJ (Level 2)",
+      "6:00 PM Muay Thai (Fundamentals/Intermediate)"
+    ],
+    "Saturday": [
+      "10:00 AM Kids’ BJJ",
+      "10:00 AM Wrestling",
+      "11:00 AM BJJ (Level 2)",
+      "12:00 PM Conditioning"
+    ],
+    "Sunday": [
+      "12:00 PM BJJ Competition Class (Level 4, gi and no-gi)",
+      "12:30 PM Get Warm",
+      "1:00 PM BJJ Open Mat"
+    ]
+  }
+}

@@ -349,40 +349,49 @@
     };
 
     const renderEntries = () => {
+      entriesWrap.replaceChildren();
       if (!entries.length) {
-        entriesWrap.innerHTML = '<div class="empty-state">No guest entries saved yet.</div>';
+        const emptyState = document.createElement('div');
+        emptyState.className = 'empty-state';
+        emptyState.textContent = 'No guest entries saved yet.';
+        entriesWrap.appendChild(emptyState);
         jsonOutput.value = '[]';
         return;
       }
 
-      const rows = entries
-        .map((entry) => `
-          <tr>
-            <td>${entry.name}</td>
-            <td>${entry.organization || '—'}</td>
-            <td>${entry.type}</td>
-            <td>${entry.checkIn}</td>
-            <td>${entry.notes || '—'}</td>
-          </tr>
-        `)
-        .join('');
+      const scrollWrap = document.createElement('div');
+      scrollWrap.style.overflowX = 'auto';
+      const table = document.createElement('table');
+      table.className = 'table';
+      const head = document.createElement('thead');
+      const headRow = document.createElement('tr');
+      ['Name', 'Organization', 'Visit type', 'Check-in', 'Notes'].forEach(label => {
+        const cell = document.createElement('th');
+        cell.textContent = label;
+        headRow.appendChild(cell);
+      });
+      head.appendChild(headRow);
+      table.appendChild(head);
 
-      entriesWrap.innerHTML = `
-        <div style="overflow-x: auto;">
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Organization</th>
-                <th>Visit type</th>
-                <th>Check-in</th>
-                <th>Notes</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
-      `;
+      const body = document.createElement('tbody');
+      entries.forEach(entry => {
+        const row = document.createElement('tr');
+        [
+          entry.name,
+          entry.organization || '—',
+          entry.type,
+          entry.checkIn,
+          entry.notes || '—'
+        ].forEach(value => {
+          const cell = document.createElement('td');
+          cell.textContent = String(value == null ? '' : value);
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+      table.appendChild(body);
+      scrollWrap.appendChild(table);
+      entriesWrap.appendChild(scrollWrap);
       jsonOutput.value = JSON.stringify(entries, null, 2);
     };
 
