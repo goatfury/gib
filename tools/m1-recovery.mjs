@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const EXPECTED_SOURCE_SHA256 = 'fb1ae2454974ded9377f714db307e2fdca25439e80fc5cf032917e3fa1637eb3';
+export const RECOVERY_INCIDENT_ID = 'M1-2026-08-03_04';
 export const FIELD_NAMES = Object.freeze([
   'Timestamp',
   'Date',
@@ -497,6 +498,7 @@ export class HttpSheetAdapter {
   async appendCandidates(candidates) {
     return this.post({
       action: 'recoverSignins',
+      incidentId: RECOVERY_INCIDENT_ID,
       expectedTargetProof: this.expectedTargetProof,
       expectedCandidateCount: candidates.length,
       expectedCandidateSetDigest: privateCandidateSetDigest(candidates, this.recoveryToken),
@@ -507,6 +509,7 @@ export class HttpSheetAdapter {
   async rollback(receipt) {
     return this.post({
       action: 'rollbackRecoveredSignins',
+      incidentId: RECOVERY_INCIDENT_ID,
       expectedTargetProof: this.expectedTargetProof,
       receipt,
     });

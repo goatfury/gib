@@ -579,6 +579,9 @@
         if (record.source === 'Admin-added') {
           wrapper.append(makeElement('span', 'badge', 'Admin-added'));
         }
+        if (record.reviewRequired) {
+          wrapper.append(makeElement('span', 'badge', 'Review possible duplicate'));
+        }
         return wrapper;
       }
 
@@ -670,6 +673,9 @@
           if (matches.some(record => record.source === 'Admin-added')) {
             status.append(makeElement('span', 'badge', 'Admin-added'));
           }
+          if (matches.some(record => record.reviewRequired)) {
+            status.append(makeElement('span', 'badge', 'Review possible duplicate'));
+          }
           summary.append(status);
           main.append(summary);
           row.append(main);
@@ -703,6 +709,11 @@
         $('#unmatchedSection').hidden = unmatched.length === 0;
         $('#unmatchedList').replaceChildren(...unmatched.map(recordElement));
         refreshInstructorOptions(currentRecords);
+        const reviewCount = currentRecords.filter(record => record.reviewRequired).length;
+        showMessage(
+          $('#reviewMessage'),
+          reviewCount ? `${reviewCount} possible Admin/kiosk duplicate${reviewCount === 1 ? '' : 's'} must be reviewed before payroll.` : ''
+        );
       }
 
       async function loadReview(dateString) {

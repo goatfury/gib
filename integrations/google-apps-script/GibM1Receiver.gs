@@ -2,14 +2,15 @@
  * Gym in a Box M1 receiver.
  *
  * The Apps Script project supplies these existing configuration constants:
- *   SECRET_TOKEN
  *   TEST_SPREADSHEET_ID (TEST) or SPREADSHEET_ID (production)
  *   EXPECTED_SPREADSHEET_NAME
  *   SHEET_NAME
  * Private Script Properties keep each capability separate:
+ *   GIB_M1_RECEIVER_TRANSPORT_TOKEN
  *   GIB_M1_LEGACY_KIOSK_TOKEN
  *   GIB_M1_ADMIN_ACTION_TOKEN
  *   GIB_M1_RECOVERY_TOKEN
+ *   GIB_M1_RECOVERY_WRITE_INCIDENT (present only during a bounded recovery)
  *
  * Code.gs keeps doPost(e) -> adReceiverV2_(e), which preserves the current
  * kiosk payload contract while routing all candidate operations here.
@@ -32,9 +33,14 @@ var GIB_M1_AUDIT_HEADERS_ = [
 var GIB_M1_ADMIN_NAMES_ = ['Andrew Smith', 'Stuart Turner'];
 var GIB_M1_MAX_KIOSK_ROWS_ = 50;
 var GIB_M1_MAX_RECOVERY_ROWS_ = 250;
+var GIB_M1_RECEIVER_PROPERTY_ = 'GIB_M1_RECEIVER_TRANSPORT_TOKEN';
 var GIB_M1_LEGACY_KIOSK_PROPERTY_ = 'GIB_M1_LEGACY_KIOSK_TOKEN';
 var GIB_M1_ADMIN_ACTION_PROPERTY_ = 'GIB_M1_ADMIN_ACTION_TOKEN';
 var GIB_M1_RECOVERY_PROPERTY_ = 'GIB_M1_RECOVERY_TOKEN';
+var GIB_M1_RECOVERY_WRITE_PROPERTY_ = 'GIB_M1_RECOVERY_WRITE_INCIDENT';
+var GIB_M1_RECOVERY_INCIDENT_ = 'M1-2026-08-03_04';
+var GIB_M1_COLLISION_DEVICE_ = 'Kiosk collision review';
+var GIB_M1_COLLISION_STATUS_ = 'REVIEW';
 
 function adReceiverV2_(e) {
   try {
@@ -172,7 +178,7 @@ function scriptProperty_(name) {
 }
 
 function configuredReceiverSecret_() {
-  return typeof SECRET_TOKEN === 'undefined' ? '' : exactText_(SECRET_TOKEN);
+  return scriptProperty_(GIB_M1_RECEIVER_PROPERTY_);
 }
 
 function configuredSecretsArePairwiseDistinct_(values) {
@@ -219,6 +225,11 @@ function recoveryAuthorized_(body) {
     && configuredSecretsArePairwiseDistinct_([receiver, recovery, legacy, admin])
     && constantTimeTextEqual_(body && body.token, receiver)
     && constantTimeTextEqual_(body && body.recoveryToken, recovery);
+}
+
+function recoveryWritesEnabled_(body) {
+  return constantTimeTextEqual_(body && body.incidentId, GIB_M1_RECOVERY_INCIDENT_)
+    && constantTimeTextEqual_(scriptProperty_(GIB_M1_RECOVERY_WRITE_PROPERTY_), GIB_M1_RECOVERY_INCIDENT_);
 }
 
 function requestTarget_(body) {
@@ -458,6 +469,28 @@ function findExistingEvent_(records, candidate) {
   return null;
 }
 
+function adminAddedRecord_(record) {
+  return /^admin/i.test(cleanText_(record && record.device))
+    || /admin-added/i.test(exactText_(record && record.notes));
+}
+
+function collisionReviewRecord_(record) {
+  return cleanText_(record && record.device) === GIB_M1_COLLISION_DEVICE_
+    || cleanText_(record && record.status).toUpperCase() === GIB_M1_COLLISION_STATUS_;
+}
+
+function findAdminCollision_(records, candidate) {
+  for (var i = 0; i < records.length; i += 1) {
+    if (
+      activeRecord_(records[i])
+      && adminAddedRecord_(records[i])
+      && sameEvent_(records[i], candidate)
+      && !sameExactSignin_(records[i], candidate)
+    ) return records[i];
+  }
+  return null;
+}
+
 function writeValue_(row, indexes, key, value) {
   if (indexes[key] >= 0) row[indexes[key]] = value;
 }
@@ -551,12 +584,17 @@ function kioskSignInAction_(body) {
           linkedRecordId: existing.rowId
         };
       }
+      var adminCollision = findAdminCollision_(state.records, candidate);
+      if (adminCollision) {
+        candidate.device = GIB_M1_COLLISION_DEVICE_;
+        candidate.status = GIB_M1_COLLISION_STATUS_;
+      }
       try {
         appendSignin_(sheet, state, candidate);
         return {
           rowId: candidate.rowId,
-          result: 'added',
-          linkedRecordId: candidate.rowId
+          result: adminCollision ? 'review required' : 'added',
+          linkedRecordId: adminCollision ? adminCollision.rowId : candidate.rowId
         };
       } catch (error) {
         return { rowId: candidate.rowId, result: 'failed', linkedRecordId: '' };
@@ -584,14 +622,22 @@ function privateRecoveryFingerprint_(record) {
   var secret = recoverySecret_();
   var key = canonicalSigninKey_(record);
   if (!secret || !key) return '';
-  return bytesToHex_(Utilities.computeHmacSha256Signature(key, secret));
+  return bytesToHex_(Utilities.computeHmacSha256Signature(
+    key,
+    secret,
+    Utilities.Charset.UTF_8
+  ));
 }
 
 function targetProof_(spreadsheet) {
   var secret = recoverySecret_();
   if (!secret || !spreadsheet || typeof spreadsheet.getId !== 'function') return '';
   var material = 'gib-m1-target\u001f' + spreadsheet.getId() + '\u001f' + spreadsheet.getName();
-  return bytesToHex_(Utilities.computeHmacSha256Signature(material, secret));
+  return bytesToHex_(Utilities.computeHmacSha256Signature(
+    material,
+    secret,
+    Utilities.Charset.UTF_8
+  ));
 }
 
 function validRecoveryId_(value) {
@@ -655,7 +701,11 @@ function candidateSetDigest_(candidates) {
   var material = candidates.map(function(candidate) {
     return candidate.recoveryId + '\u001f' + privateRecoveryFingerprint_(candidate);
   }).sort().join('\n');
-  return bytesToHex_(Utilities.computeHmacSha256Signature(material, secret));
+  return bytesToHex_(Utilities.computeHmacSha256Signature(
+    material,
+    secret,
+    Utilities.Charset.UTF_8
+  ));
 }
 
 function recoveryListAction_(body) {
@@ -679,6 +729,9 @@ function recoveryListAction_(body) {
 }
 
 function recoverSigninsAction_(body) {
+  if (!recoveryWritesEnabled_(body)) {
+    return jsonResult_({ ok: false, result: 'disabled', message: 'Recovery writes are disabled.' });
+  }
   if (
     !Array.isArray(body.rows)
     || body.rows.length < 1
@@ -762,6 +815,9 @@ function recoverSigninsAction_(body) {
 }
 
 function rollbackRecoveredSigninsAction_(body) {
+  if (!recoveryWritesEnabled_(body)) {
+    return jsonResult_({ ok: false, result: 'disabled', message: 'Recovery writes are disabled.' });
+  }
   if (!Array.isArray(body.receipt) || body.receipt.length < 1 || body.receipt.length > GIB_M1_MAX_RECOVERY_ROWS_) {
     return jsonResult_({ ok: false, result: 'rejected', message: 'Recovery receipt was rejected.' });
   }
@@ -814,6 +870,7 @@ function rollbackRecoveredSigninsAction_(body) {
 }
 
 function publicRecord_(record) {
+  var reviewRequired = collisionReviewRecord_(record);
   return {
     recordId: record.rowId,
     timestamp: record.timestamp,
@@ -823,9 +880,11 @@ function publicRecord_(record) {
     instructor: record.instructor,
     site: record.site,
     notes: record.notes,
-    source: /^admin/i.test(record.device) || /admin-added/i.test(record.notes)
-      ? 'Admin-added'
-      : 'Kiosk'
+    source: reviewRequired
+      ? 'Collision review'
+      : (adminAddedRecord_(record) ? 'Admin-added' : 'Kiosk'),
+    reviewRequired: reviewRequired,
+    reviewMessage: reviewRequired ? 'Possible Admin/kiosk duplicate — review before payroll.' : ''
   };
 }
 
@@ -1053,11 +1112,14 @@ if (typeof module !== 'undefined' && module.exports) {
     activeRecord_: activeRecord_,
     sameEvent_: sameEvent_,
     findExistingEvent_: findExistingEvent_,
+    findAdminCollision_: findAdminCollision_,
+    collisionReviewRecord_: collisionReviewRecord_,
     requestTarget_: requestTarget_,
     configuredSpreadsheetId_: configuredSpreadsheetId_,
     legacyKioskAuthorized_: legacyKioskAuthorized_,
     adminActionAuthorized_: adminActionAuthorized_,
     recoveryAuthorized_: recoveryAuthorized_,
+    recoveryWritesEnabled_: recoveryWritesEnabled_,
     validateKioskRow_: validateKioskRow_,
     validateRecoveryRow_: validateRecoveryRow_
   };
