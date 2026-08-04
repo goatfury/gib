@@ -72,7 +72,7 @@ export function runtimeConfig(env = process.env, options = {}) {
     preview ? env.GIB_TEST_WEBHOOK_TOKEN : env.GIB_M1_WEBHOOK_TOKEN
   );
   const adminActionToken = clean(
-    preview ? env.GIB_TEST_WEBHOOK_TOKEN : env.GIB_M1_ADMIN_ACTION_TOKEN
+    preview ? env.GIB_TEST_ADMIN_ACTION_TOKEN : env.GIB_M1_ADMIN_ACTION_TOKEN
   );
   const adminPassphrase = clean(env.GIB_M1_ADMIN_PASSPHRASE);
 
