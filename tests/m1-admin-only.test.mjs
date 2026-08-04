@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
@@ -22,19 +23,23 @@ import { handleAdminSearch } from '../netlify/functions/m1-admin-search.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 const read = relative => readFileSync(new URL(relative, ROOT), 'utf8');
+const kioskHtml = read('m1/index.html');
 const guestHtml = read('guests/index.html');
 const adminHtml = read('m1/admin/index.html');
+const tabletDiagnosticHtml = read('m1/tablet-diagnostic.html');
 const schedule = JSON.parse(read('m1/shared-schedule.json'));
 const commonSource = read('netlify/functions/_lib/m1-common.mjs');
 const receiverSource = read('integrations/google-apps-script/GibM1Receiver.gs');
 const fixedNow = Date.parse('2026-07-26T15:00:00Z');
 const fixedDateNow = new Date('2026-07-26T15:00:00Z');
 const fixedRequestToken = Buffer.alloc(32, 9).toString('base64url');
+const RECOVERY_INCIDENT_ID = 'M1-2026-08-03_04';
 
 const previewUrl = 'https://deploy-preview-99--gib-live.netlify.app';
 const previewEnv = Object.freeze({
   GIB_TEST_WEBHOOK_URL: 'https://script.google.com/macros/s/TEST_ID/exec',
-  GIB_TEST_WEBHOOK_TOKEN: 'test-receiver-token-long-enough'
+  GIB_TEST_WEBHOOK_TOKEN: 'test-receiver-token-long-enough',
+  GIB_TEST_ADMIN_ACTION_TOKEN: 'test-admin-action-token-long-enough'
 });
 const productionEnv = Object.freeze({
   GIB_M1_WEBHOOK_URL: 'https://script.google.com/macros/s/PROD_ID/exec',
@@ -97,6 +102,9 @@ function makeSheet(initialRows = []) {
     appendRow(row) {
       values.push([...row]);
     },
+    deleteRow(rowNumber) {
+      values.splice(rowNumber - 1, 1);
+    },
     getDataRange() {
       return { getValues: () => values.map(row => [...row]) };
     },
@@ -131,13 +139,29 @@ function makeSheet(initialRows = []) {
 function receiverHarness({
   testSpreadsheet = false,
   productionSpreadsheet = true,
+  receiverToken = 'receiver-token',
   adminActionToken = '',
+  legacyKioskToken = 'legacy-kiosk-token',
+  recoveryToken = 'recovery-token',
+  recoveryWriteIncident = '',
+  failAfterAppends = null,
   rows = []
 } = {}) {
   const signins = makeSheet([SIGNIN_HEADERS, ...rows]);
+  let appendFailureAfter = failAfterAppends;
+  let appendAttempts = 0;
+  const appendSigninRow = signins.appendRow.bind(signins);
+  signins.appendRow = row => {
+    if (Number.isInteger(appendFailureAfter) && appendAttempts >= appendFailureAfter) {
+      throw new Error('simulated append interruption');
+    }
+    appendAttempts += 1;
+    appendSigninRow(row);
+  };
   let audit = null;
   let spreadsheetOpens = 0;
   const spreadsheet = {
+    getId: () => testSpreadsheet ? 'test-spreadsheet' : 'production-spreadsheet',
     getName: () => 'Expected Signins',
     getSheetByName(name) {
       if (name === 'Signins') return signins;
@@ -154,7 +178,6 @@ function receiverHarness({
     module: { exports: {} },
     exports: {},
     console,
-    SECRET_TOKEN: 'receiver-token',
     EXPECTED_SPREADSHEET_NAME: 'Expected Signins',
     SHEET_NAME: 'Signins',
     ContentService: {
@@ -175,8 +198,12 @@ function receiverHarness({
     PropertiesService: {
       getScriptProperties: () => ({
         getProperty: name => {
-          assert.equal(name, 'GIB_M1_ADMIN_ACTION_TOKEN');
-          return adminActionToken;
+          if (name === 'GIB_M1_RECEIVER_TRANSPORT_TOKEN') return receiverToken;
+          if (name === 'GIB_M1_ADMIN_ACTION_TOKEN') return adminActionToken;
+          if (name === 'GIB_M1_LEGACY_KIOSK_TOKEN') return legacyKioskToken;
+          if (name === 'GIB_M1_RECOVERY_TOKEN') return recoveryToken;
+          if (name === 'GIB_M1_RECOVERY_WRITE_INCIDENT') return recoveryWriteIncident;
+          return '';
         }
       })
     },
@@ -188,6 +215,11 @@ function receiverHarness({
       flush() {}
     },
     Utilities: {
+      Charset: { UTF_8: 'UTF_8' },
+      computeHmacSha256Signature(value, secret, charset) {
+        assert.equal(charset, 'UTF_8');
+        return [...createHmac('sha256', String(secret)).update(String(value)).digest()];
+      },
       formatDate(_value, _zone, pattern) {
         return pattern === 'yyyy-MM-dd HH:mm:ss'
           ? '2026-07-26 11:00:00'
@@ -204,6 +236,7 @@ function receiverHarness({
     signins,
     get audit() { return audit; },
     get spreadsheetOpens() { return spreadsheetOpens; },
+    clearAppendFailure() { appendFailureAfter = null; },
     post(body) {
       const output = vmContext.adReceiverV2_({
         postData: { contents: JSON.stringify(body) }
@@ -248,12 +281,63 @@ function adminAddition(overrides = {}) {
   };
 }
 
+function recoveryRow(id, overrides = {}) {
+  return {
+    RecoveryID: id,
+    Timestamp: '2026-07-25 09:00:00',
+    Date: '2026-07-25',
+    'Class Label': 'TEST Recovery Class',
+    'Duration (hr)': 1,
+    Instructor: 'QA Recovery Instructor',
+    Site: 'TEST',
+    Notes: 'TEST ONLY',
+    ...overrides
+  };
+}
+
+function privateTestHmac(value, secret = 'recovery-token') {
+  return createHmac('sha256', secret).update(value).digest('hex');
+}
+
+function recoveryCanonicalKey(row) {
+  return JSON.stringify([
+    row.Timestamp,
+    row.Date,
+    row['Class Label'],
+    String(Number(row['Duration (hr)'])),
+    row.Instructor,
+    row.Site,
+    row.Notes || ''
+  ]);
+}
+
+function recoveryRequest(rows, overrides = {}) {
+  const target = overrides.target || 'test';
+  const spreadsheetId = target === 'test' ? 'test-spreadsheet' : 'production-spreadsheet';
+  const targetProof = privateTestHmac(`gib-m1-target\u001f${spreadsheetId}\u001fExpected Signins`);
+  const candidateMaterial = rows.map(row => {
+    return `${row.RecoveryID}\u001f${privateTestHmac(recoveryCanonicalKey(row))}`;
+  }).sort().join('\n');
+  return {
+    token: 'receiver-token',
+    recoveryToken: 'recovery-token',
+    incidentId: RECOVERY_INCIDENT_ID,
+    action: 'recoverSignins',
+    target,
+    expectedTargetProof: targetProof,
+    expectedCandidateCount: rows.length,
+    expectedCandidateSetDigest: privateTestHmac(candidateMaterial),
+    rows,
+    ...overrides
+  };
+}
+
 test('legacy {token, rows} payload remains readable and backward-compatible', () => {
   const harness = receiverHarness();
-  const first = harness.post({ token: 'receiver-token', rows: [kioskRow()] });
-  const retry = harness.post({ token: 'receiver-token', rows: [kioskRow()] });
+  const first = harness.post({ token: 'legacy-kiosk-token', rows: [kioskRow()] });
+  const retry = harness.post({ token: 'legacy-kiosk-token', rows: [kioskRow()] });
   const mixed = harness.post({
-    token: 'receiver-token',
+    token: 'legacy-kiosk-token',
     rows: [
       kioskRow({ RowID: 'second', Instructor: 'QA Second Test Instructor' }),
       { RowID: 'bad' }
@@ -266,6 +350,226 @@ test('legacy {token, rows} payload remains readable and backward-compatible', ()
   assert.equal(mixed.results[1].result, 'rejected');
   assert.equal(harness.signins.values.length, 3);
   assert.match(receiverSource, /if \(!action && Array\.isArray\(body\.rows\)\) action = 'kioskSignIn'/);
+});
+
+test('legacy append authentication is isolated and fails closed before writes', () => {
+  const harness = receiverHarness({ adminActionToken: 'admin-action-token' });
+  const before = harness.signins.values.length;
+  for (const body of [
+    { rows: [kioskRow()] },
+    { token: 'wrong-legacy-token', rows: [kioskRow()] },
+    { token: 'receiver-token', rows: [kioskRow()] },
+    { token: 'admin-action-token', rows: [kioskRow()] }
+  ]) {
+    assert.equal(harness.post(body).result, 'rejected');
+  }
+  const malformed = harness.post({ token: 'legacy-kiosk-token', rows: [{ RowID: 'bad' }] });
+  assert.equal(malformed.ok, true);
+  assert.equal(malformed.results[0].result, 'rejected');
+  assert.equal(harness.signins.values.length, before);
+  const opensBeforeAdminScopeCheck = harness.spreadsheetOpens;
+
+  const legacyCannotAdmin = harness.post({
+    token: 'legacy-kiosk-token',
+    adminActionToken: 'admin-action-token',
+    action: 'dailyReview',
+    target: 'production',
+    date: '2026-07-25'
+  });
+  assert.equal(legacyCannotAdmin.result, 'rejected');
+  assert.equal(harness.spreadsheetOpens, opensBeforeAdminScopeCheck);
+});
+
+test('legacy exact kiosk replay adds zero duplicate rows', () => {
+  const harness = receiverHarness();
+  const base = kioskRow();
+  const exact = harness.post({ token: 'legacy-kiosk-token', rows: [base] });
+  const replay = harness.post({ token: 'legacy-kiosk-token', rows: [base] });
+  assert.equal(exact.results[0].result, 'added');
+  assert.equal(replay.results[0].result, 'already exists');
+  assert.equal(harness.signins.values.length, 2);
+});
+
+test('legitimate repeated coarse business events remain distinct', () => {
+  const harness = receiverHarness();
+  const exact = harness.post({ token: 'legacy-kiosk-token', rows: [kioskRow()] });
+  const distinct = harness.post({
+    token: 'legacy-kiosk-token',
+    rows: [kioskRow({ RowID: 'same-business-new-time', Timestamp: '2026-07-25 09:00:01' })]
+  });
+  assert.equal(exact.results[0].result, 'added');
+  assert.equal(distinct.results[0].result, 'added');
+  assert.equal(harness.signins.values.length, 3);
+});
+
+test('recovery writes and rollback stay disabled until the incident gate is explicitly open', () => {
+  const closed = receiverHarness({
+    testSpreadsheet: true,
+    productionSpreadsheet: false,
+    adminActionToken: 'admin-action-token'
+  });
+  const request = recoveryRequest([recoveryRow('REC-001')]);
+  assert.equal(closed.post(request).result, 'disabled');
+  assert.equal(closed.post({
+    token: 'receiver-token',
+    recoveryToken: 'recovery-token',
+    incidentId: RECOVERY_INCIDENT_ID,
+    action: 'rollbackRecoveredSignins',
+    target: 'test',
+    expectedTargetProof: 'opaque-test-proof',
+    receipt: [{ candidateId: 'REC-001', rowId: 'gib-recovery-REC-001', fingerprint: '0'.repeat(64) }]
+  }).result, 'disabled');
+  assert.equal(closed.signins.values.length, 1);
+  assert.equal(closed.spreadsheetOpens, 0);
+
+  const readOnly = closed.post({
+    token: 'receiver-token',
+    recoveryToken: 'recovery-token',
+    action: 'recoveryList',
+    target: 'test',
+    fromDate: '2026-07-25'
+  });
+  assert.equal(readOnly.ok, true);
+  assert.equal(closed.spreadsheetOpens, 1);
+
+  const propertyOnly = receiverHarness({
+    testSpreadsheet: true,
+    productionSpreadsheet: false,
+    adminActionToken: 'admin-action-token',
+    recoveryWriteIncident: RECOVERY_INCIDENT_ID
+  });
+  assert.equal(propertyOnly.post({ ...request, incidentId: '' }).result, 'disabled');
+  assert.equal(propertyOnly.signins.values.length, 1);
+});
+
+test('recovery is target-bound, retry-safe, and rollback revalidates exact fingerprints', () => {
+  const harness = receiverHarness({
+    testSpreadsheet: true,
+    productionSpreadsheet: false,
+    adminActionToken: 'admin-action-token',
+    recoveryWriteIncident: RECOVERY_INCIDENT_ID
+  });
+  const rows = [
+    recoveryRow('REC-001'),
+    recoveryRow('REC-002', { Timestamp: '2026-07-25 10:00:00' })
+  ];
+  const request = recoveryRequest(rows);
+  const first = harness.post(request);
+  const retry = harness.post(request);
+  assert.equal(first.ok, true);
+  assert.deepEqual(first.results.map(item => item.result), ['added', 'added']);
+  assert.equal(retry.ok, true);
+  assert.deepEqual(retry.results.map(item => item.result), ['already exists', 'already exists']);
+  assert.equal(harness.signins.values.length, 3);
+
+  const receipt = first.results.map(item => ({
+    candidateId: item.candidateId,
+    rowId: item.rowId,
+    fingerprint: item.fingerprint
+  }));
+  const duplicateRollback = harness.post({
+    token: 'receiver-token',
+    recoveryToken: 'recovery-token',
+    incidentId: RECOVERY_INCIDENT_ID,
+    action: 'rollbackRecoveredSignins',
+    target: 'test',
+    expectedTargetProof: first.targetProof,
+    receipt: [receipt[0], receipt[0]]
+  });
+  assert.equal(duplicateRollback.result, 'rejected');
+  assert.equal(harness.signins.values.length, 3);
+  const badRollback = harness.post({
+    token: 'receiver-token',
+    recoveryToken: 'recovery-token',
+    incidentId: RECOVERY_INCIDENT_ID,
+    action: 'rollbackRecoveredSignins',
+    target: 'test',
+    expectedTargetProof: first.targetProof,
+    receipt: receipt.map((item, index) => index ? item : { ...item, fingerprint: '0'.repeat(64) })
+  });
+  assert.equal(badRollback.result, 'conflict');
+  assert.equal(harness.signins.values.length, 3);
+
+  const rollback = harness.post({
+    token: 'receiver-token',
+    recoveryToken: 'recovery-token',
+    incidentId: RECOVERY_INCIDENT_ID,
+    action: 'rollbackRecoveredSignins',
+    target: 'test',
+    expectedTargetProof: first.targetProof,
+    receipt
+  });
+  assert.equal(rollback.ok, true);
+  assert.equal(rollback.removed, 2);
+  assert.equal(harness.signins.values.length, 1);
+});
+
+test('recovery candidate proofs preserve Unicode with explicit UTF-8 HMACs', () => {
+  const harness = receiverHarness({
+    testSpreadsheet: true,
+    productionSpreadsheet: false,
+    adminActionToken: 'admin-action-token',
+    recoveryWriteIncident: RECOVERY_INCIDENT_ID
+  });
+  const row = recoveryRow('REC-015', {
+    'Class Label': 'TEST Kids\u2019 BJJ',
+    Instructor: 'TEST Jos\u00e9 Instructor'
+  });
+  const response = harness.post(recoveryRequest([row]));
+  assert.equal(response.ok, true);
+  assert.equal(response.results[0].result, 'added');
+  assert.equal((receiverSource.match(/Utilities\.Charset\.UTF_8/g) || []).length, 3);
+});
+
+test('partial recovery interruption is safe to retry to completion', () => {
+  const harness = receiverHarness({
+    testSpreadsheet: true,
+    productionSpreadsheet: false,
+    adminActionToken: 'admin-action-token',
+    recoveryWriteIncident: RECOVERY_INCIDENT_ID,
+    failAfterAppends: 1
+  });
+  const rows = [
+    recoveryRow('REC-001'),
+    recoveryRow('REC-002', { Timestamp: '2026-07-25 10:00:00' })
+  ];
+  const request = recoveryRequest(rows);
+  const interrupted = harness.post(request);
+  assert.equal(interrupted.ok, false);
+  assert.equal(interrupted.result, 'partial');
+  assert.equal(harness.signins.values.length, 2);
+  harness.clearAppendFailure();
+  const retry = harness.post(request);
+  assert.equal(retry.ok, true);
+  assert.deepEqual(retry.results.map(item => item.result), ['already exists', 'added']);
+  assert.equal(harness.signins.values.length, 3);
+});
+
+test('recovery and Admin credentials cannot cross scopes', () => {
+  const harness = receiverHarness({
+    testSpreadsheet: true,
+    productionSpreadsheet: false,
+    adminActionToken: 'admin-action-token',
+    recoveryWriteIncident: RECOVERY_INCIDENT_ID
+  });
+  const request = recoveryRequest([recoveryRow('REC-001')]);
+  assert.equal(harness.post({ ...request, recoveryToken: 'admin-action-token' }).result, 'rejected');
+  assert.equal(harness.post({ ...request, token: 'legacy-kiosk-token' }).result, 'rejected');
+  assert.equal(harness.post({
+    token: 'receiver-token',
+    adminActionToken: 'recovery-token',
+    action: 'dailyReview',
+    target: 'test',
+    date: '2026-07-25'
+  }).result, 'rejected');
+  assert.equal(harness.signins.values.length, 1);
+});
+
+test('legacy no-cors regression fixture clears only on network fulfillment and cannot read logical rejection', () => {
+  assert.match(kioskHtml, /mode:\s*'no-cors'/);
+  assert.match(kioskHtml, /await fetch\(url,[\s\S]*?saveSyncQueue\(\[\]\)/);
+  assert.match(kioskHtml, /response is opaque in no-cors/);
+  assert.doesNotMatch(kioskHtml, /await fetch\(url,[\s\S]*?response\.json\(\)/);
 });
 
 test('receiver requires two credentials and an explicit target before Sheet access', () => {
@@ -310,14 +614,15 @@ test('receiver requires two credentials and an explicit target before Sheet acce
   assert.equal(correct.spreadsheetOpens, 1);
 });
 
-test('TEST receiver reuses the existing TEST credential and requires fake instructor data', () => {
+test('TEST receiver keeps receiver and Admin credentials separate and requires fake instructor data', () => {
   const harness = receiverHarness({
     testSpreadsheet: true,
-    productionSpreadsheet: false
+    productionSpreadsheet: false,
+    adminActionToken: 'test-admin-action-token'
   });
   const review = harness.post({
     token: 'receiver-token',
-    adminActionToken: 'receiver-token',
+    adminActionToken: 'test-admin-action-token',
     action: 'dailyReview',
     target: 'test',
     date: '2026-07-25'
@@ -325,7 +630,7 @@ test('TEST receiver reuses the existing TEST credential and requires fake instru
   assert.equal(review.ok, true);
   assert.equal(harness.post({
     token: 'receiver-token',
-    adminActionToken: 'receiver-token',
+    adminActionToken: 'test-admin-action-token',
     action: 'instructorSearch',
     target: 'test',
     date: '2026-07-25',
@@ -339,7 +644,7 @@ test('Netlify pins both backend credentials, action, and target', async () => {
     admin: true,
     requestUrl: `${previewUrl}/m1/admin/`
   });
-  assert.equal(previewConfig.adminActionToken, previewEnv.GIB_TEST_WEBHOOK_TOKEN);
+  assert.equal(previewConfig.adminActionToken, previewEnv.GIB_TEST_ADMIN_ACTION_TOKEN);
   await postGoogle(previewConfig, 'dailyReview', {
     date: '2026-07-25',
     token: 'browser-override',
@@ -359,7 +664,7 @@ test('Netlify pins both backend credentials, action, and target', async () => {
     },
     {
       token: previewEnv.GIB_TEST_WEBHOOK_TOKEN,
-      adminActionToken: previewEnv.GIB_TEST_WEBHOOK_TOKEN,
+      adminActionToken: previewEnv.GIB_TEST_ADMIN_ACTION_TOKEN,
       action: 'dailyReview',
       target: 'test'
     }
@@ -604,25 +909,48 @@ test('Deploy Preview rejects real instructor input before Google', async () => {
   assert.equal(calls, 0);
 });
 
-test('duplicate identity prevents cross-channel payroll duplicates and records audit', () => {
+test('Admin-first delayed kiosk collisions are retained for audit and visibly held for review', () => {
   const adminFirst = receiverHarness({ adminActionToken: 'production-admin-token' });
   assert.equal(adminFirst.post(adminAddition()).result, 'added');
-  const delayed = adminFirst.post({
-    token: 'receiver-token',
+  const delayedRequest = {
+    token: 'legacy-kiosk-token',
     rows: [kioskRow({ RowID: 'delayed-kiosk' })]
-  });
-  assert.equal(delayed.results[0].result, 'already exists');
-  assert.equal(adminFirst.signins.values.length, 2);
+  };
+  const delayed = adminFirst.post(delayedRequest);
+  assert.equal(delayed.results[0].result, 'review required');
+  assert.equal(adminFirst.signins.values.length, 3);
+  assert.equal(adminFirst.signins.values[2][7], 'Kiosk collision review');
+  assert.equal(adminFirst.signins.values[2][10], 'REVIEW');
   assert.equal(adminFirst.audit.values.length, 2);
+  const review = adminFirst.post({
+    token: 'receiver-token',
+    adminActionToken: 'production-admin-token',
+    action: 'dailyReview',
+    target: 'production',
+    date: '2026-07-25'
+  });
+  assert.equal(review.ok, true);
+  assert.equal(review.records.length, 2);
+  assert.equal(review.records.filter(record => record.reviewRequired).length, 1);
+  assert.equal(review.records.find(record => record.reviewRequired).source, 'Collision review');
+  assert.match(review.records.find(record => record.reviewRequired).reviewMessage, /review before payroll/i);
+  assert.equal(adminFirst.post(delayedRequest).results[0].result, 'already exists');
+  assert.equal(adminFirst.signins.values.length, 3);
 
   const kioskFirst = receiverHarness({ adminActionToken: 'production-admin-token' });
   assert.equal(kioskFirst.post({
-    token: 'receiver-token',
+    token: 'legacy-kiosk-token',
     rows: [kioskRow()]
   }).results[0].result, 'added');
   assert.equal(kioskFirst.post(adminAddition()).result, 'already exists');
   assert.equal(kioskFirst.signins.values.length, 2);
   assert.equal(kioskFirst.audit.values.length, 2);
+});
+
+test('Daily Review browser visibly labels possible Admin and kiosk duplicates', () => {
+  assert.match(adminHtml, /Review possible duplicate/);
+  assert.match(adminHtml, /possible Admin\/kiosk duplicate/);
+  assert.match(adminHtml, /reviewRequired/);
 });
 
 test('rapid Admin retry creates one payroll event and readable results', () => {
@@ -827,13 +1155,13 @@ test('touched browser pages contain no executable-markup sink', () => {
     /(?:\bnew\s+)?\bFunction\s*\(/u,
     /\son[a-z]+\s*=/iu
   ];
-  for (const [name, html] of [['Admin', adminHtml], ['guests', guestHtml]]) {
+  for (const [name, html] of [['Admin', adminHtml], ['guests', guestHtml], ['tablet diagnostic', tabletDiagnosticHtml]]) {
     forbidden.forEach(pattern => assert.doesNotMatch(html, pattern, `${name} contains ${pattern}`));
   }
 });
 
 test('browser source has no backend credential, private Sheet, or deployment ID', () => {
-  const browserSource = [adminHtml, guestHtml, JSON.stringify(schedule)].join('\n');
+  const browserSource = [adminHtml, guestHtml, tabletDiagnosticHtml, JSON.stringify(schedule)].join('\n');
   assert.doesNotMatch(
     browserSource,
     /script\.google\.com|GIB_(?:TEST|M1)_(?:WEBHOOK|ADMIN_ACTION)|AKfy[A-Za-z0-9_-]{20,}|1[A-Za-z0-9_-]{30,}/
@@ -857,7 +1185,7 @@ test('candidate source and config contain no live-system mutation command', () =
 });
 
 test('all inline scripts on touched production pages compile', () => {
-  for (const [name, html] of [['Admin', adminHtml], ['guests', guestHtml]]) {
+  for (const [name, html] of [['Admin', adminHtml], ['guests', guestHtml], ['tablet diagnostic', tabletDiagnosticHtml]]) {
     const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/giu)]
       .map(match => match[1])
       .filter(source => source.trim());
@@ -865,4 +1193,13 @@ test('all inline scripts on touched production pages compile', () => {
       assert.doesNotThrow(() => new vm.Script(source, { filename: `${name}-inline-${index}.js` }));
     });
   }
+});
+
+test('tablet diagnostic is read-only and emits only bounded comparison labels and counts', () => {
+  assert.match(tabletDiagnosticHtml, /connect-src 'none'/);
+  assert.match(tabletDiagnosticHtml, /Receiver endpoint[\s\S]*Legacy credential[\s\S]*Auto-sync[\s\S]*Current queue count[\s\S]*Current local-history record count/);
+  assert.match(tabletDiagnosticHtml, /'EXPECTED'\s*:\s*'UNEXPECTED'/);
+  assert.match(tabletDiagnosticHtml, /'MATCH'\s*:\s*'MISMATCH'/);
+  assert.doesNotMatch(tabletDiagnosticHtml, /\bfetch\s*\(|XMLHttpRequest|sendBeacon|console\.|clipboard|localStorage\.setItem/);
+  assert.doesNotMatch(tabletDiagnosticHtml, /script\.google\.com|AKfy[A-Za-z0-9_-]{20,}/);
 });

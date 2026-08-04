@@ -2,12 +2,15 @@
  * Gym in a Box M1 receiver.
  *
  * The Apps Script project supplies these existing configuration constants:
- *   SECRET_TOKEN
  *   TEST_SPREADSHEET_ID (TEST) or SPREADSHEET_ID (production)
  *   EXPECTED_SPREADSHEET_NAME
  *   SHEET_NAME
- * Production Admin actions also require the private Script Property:
+ * Private Script Properties keep each capability separate:
+ *   GIB_M1_RECEIVER_TRANSPORT_TOKEN
+ *   GIB_M1_LEGACY_KIOSK_TOKEN
  *   GIB_M1_ADMIN_ACTION_TOKEN
+ *   GIB_M1_RECOVERY_TOKEN
+ *   GIB_M1_RECOVERY_WRITE_INCIDENT (present only during a bounded recovery)
  *
  * Code.gs keeps doPost(e) -> adReceiverV2_(e), which preserves the current
  * kiosk payload contract while routing all candidate operations here.
@@ -29,12 +32,20 @@ var GIB_M1_AUDIT_HEADERS_ = [
 ];
 var GIB_M1_ADMIN_NAMES_ = ['Andrew Smith', 'Stuart Turner'];
 var GIB_M1_MAX_KIOSK_ROWS_ = 50;
+var GIB_M1_MAX_RECOVERY_ROWS_ = 250;
+var GIB_M1_RECEIVER_PROPERTY_ = 'GIB_M1_RECEIVER_TRANSPORT_TOKEN';
+var GIB_M1_LEGACY_KIOSK_PROPERTY_ = 'GIB_M1_LEGACY_KIOSK_TOKEN';
 var GIB_M1_ADMIN_ACTION_PROPERTY_ = 'GIB_M1_ADMIN_ACTION_TOKEN';
+var GIB_M1_RECOVERY_PROPERTY_ = 'GIB_M1_RECOVERY_TOKEN';
+var GIB_M1_RECOVERY_WRITE_PROPERTY_ = 'GIB_M1_RECOVERY_WRITE_INCIDENT';
+var GIB_M1_RECOVERY_INCIDENT_ = 'M1-2026-08-03_04';
+var GIB_M1_COLLISION_DEVICE_ = 'Kiosk collision review';
+var GIB_M1_COLLISION_STATUS_ = 'REVIEW';
 
 function adReceiverV2_(e) {
   try {
     var body = parseRequestBody_(e);
-    if (!body || !constantTimeTextEqual_(body.token, SECRET_TOKEN)) {
+    if (!body) {
       return jsonResult_({
         ok: false,
         result: 'rejected',
@@ -45,23 +56,30 @@ function adReceiverV2_(e) {
     var action = cleanText_(body.action);
     if (!action && Array.isArray(body.rows)) action = 'kioskSignIn';
 
-    if (action === 'kioskSignIn') return kioskSignInAction_(body);
+    if (action === 'kioskSignIn') {
+      if (!legacyKioskAuthorized_(body)) return rejectedAuthResult_();
+      return kioskSignInAction_(body);
+    }
     if (
       action === 'dailyReview'
       || action === 'instructorSearch'
       || action === 'addMissedInstructor'
     ) {
-      if (!adminActionAuthorized_(body)) {
-        return jsonResult_({
-          ok: false,
-          result: 'rejected',
-          message: 'Admin action was not authorized.'
-        });
-      }
+      if (!adminActionAuthorized_(body)) return rejectedAuthResult_();
     }
     if (action === 'dailyReview') return dailyReviewAction_(body);
     if (action === 'instructorSearch') return instructorSearchAction_(body);
     if (action === 'addMissedInstructor') return addMissedInstructorAction_(body);
+    if (
+      action === 'recoveryList'
+      || action === 'recoverSignins'
+      || action === 'rollbackRecoveredSignins'
+    ) {
+      if (!recoveryAuthorized_(body)) return rejectedAuthResult_();
+    }
+    if (action === 'recoveryList') return recoveryListAction_(body);
+    if (action === 'recoverSignins') return recoverSigninsAction_(body);
+    if (action === 'rollbackRecoveredSignins') return rollbackRecoveredSigninsAction_(body);
 
     return jsonResult_({
       ok: false,
@@ -75,6 +93,14 @@ function adReceiverV2_(e) {
       message: 'The receiver could not complete the request.'
     });
   }
+}
+
+function rejectedAuthResult_() {
+  return jsonResult_({
+    ok: false,
+    result: 'rejected',
+    message: 'Request rejected.'
+  });
 }
 
 function parseRequestBody_(e) {
@@ -102,6 +128,14 @@ function cleanText_(value) {
   return text.trim().replace(/\s+/g, ' ');
 }
 
+function exactText_(value) {
+  var text = String(value == null ? '' : value);
+  try {
+    text = text.normalize('NFKC');
+  } catch (error) {}
+  return text.trim();
+}
+
 function normalizeEventText_(value) {
   return cleanText_(value)
     .toLowerCase()
@@ -111,6 +145,12 @@ function normalizeEventText_(value) {
 
 function safeText_(value, maxLength, allowBlank) {
   var text = cleanText_(value);
+  if ((!allowBlank && !text) || text.length > maxLength || /^[=+\-@]/.test(text)) return '';
+  return text;
+}
+
+function safeExactText_(value, maxLength, allowBlank) {
+  var text = exactText_(value);
   if ((!allowBlank && !text) || text.length > maxLength || /^[=+\-@]/.test(text)) return '';
   return text;
 }
@@ -127,24 +167,69 @@ function constantTimeTextEqual_(left, right) {
   return mismatch === 0;
 }
 
+function scriptProperty_(name) {
+  try {
+    return exactText_(PropertiesService
+      .getScriptProperties()
+      .getProperty(name));
+  } catch (error) {
+    return '';
+  }
+}
+
+function configuredReceiverSecret_() {
+  return scriptProperty_(GIB_M1_RECEIVER_PROPERTY_);
+}
+
+function configuredSecretsArePairwiseDistinct_(values) {
+  var nonempty = values.filter(Boolean);
+  for (var i = 0; i < nonempty.length; i += 1) {
+    for (var j = i + 1; j < nonempty.length; j += 1) {
+      if (constantTimeTextEqual_(nonempty[i], nonempty[j])) return false;
+    }
+  }
+  return true;
+}
+
+function legacyKioskAuthorized_(body) {
+  var legacy = scriptProperty_(GIB_M1_LEGACY_KIOSK_PROPERTY_);
+  var receiver = configuredReceiverSecret_();
+  var admin = scriptProperty_(GIB_M1_ADMIN_ACTION_PROPERTY_);
+  var recovery = scriptProperty_(GIB_M1_RECOVERY_PROPERTY_);
+  return Boolean(legacy)
+    && configuredSecretsArePairwiseDistinct_([legacy, receiver, admin, recovery])
+    && constantTimeTextEqual_(body && body.token, legacy);
+}
+
 function adminActionAuthorized_(body) {
   var target = cleanText_(body && body.target).toLowerCase();
   if (target !== 'test' && target !== 'production') return false;
+  var receiver = configuredReceiverSecret_();
+  var admin = scriptProperty_(GIB_M1_ADMIN_ACTION_PROPERTY_);
+  var legacy = scriptProperty_(GIB_M1_LEGACY_KIOSK_PROPERTY_);
+  var recovery = scriptProperty_(GIB_M1_RECOVERY_PROPERTY_);
+  return Boolean(receiver) && Boolean(admin)
+    && configuredSecretsArePairwiseDistinct_([receiver, admin, legacy, recovery])
+    && constantTimeTextEqual_(body && body.token, receiver)
+    && constantTimeTextEqual_(body && body.adminActionToken, admin);
+}
 
-  var expected = '';
-  if (target === 'test') {
-    expected = typeof SECRET_TOKEN === 'undefined' ? '' : String(SECRET_TOKEN);
-  } else {
-    try {
-      expected = cleanText_(PropertiesService
-        .getScriptProperties()
-        .getProperty(GIB_M1_ADMIN_ACTION_PROPERTY_));
-    } catch (error) {
-      return false;
-    }
-  }
-  return Boolean(expected)
-    && constantTimeTextEqual_(body && body.adminActionToken, expected);
+function recoveryAuthorized_(body) {
+  var target = cleanText_(body && body.target).toLowerCase();
+  if (target !== 'test' && target !== 'production') return false;
+  var receiver = configuredReceiverSecret_();
+  var recovery = scriptProperty_(GIB_M1_RECOVERY_PROPERTY_);
+  var legacy = scriptProperty_(GIB_M1_LEGACY_KIOSK_PROPERTY_);
+  var admin = scriptProperty_(GIB_M1_ADMIN_ACTION_PROPERTY_);
+  return Boolean(receiver) && Boolean(recovery)
+    && configuredSecretsArePairwiseDistinct_([receiver, recovery, legacy, admin])
+    && constantTimeTextEqual_(body && body.token, receiver)
+    && constantTimeTextEqual_(body && body.recoveryToken, recovery);
+}
+
+function recoveryWritesEnabled_(body) {
+  return constantTimeTextEqual_(body && body.incidentId, GIB_M1_RECOVERY_INCIDENT_)
+    && constantTimeTextEqual_(scriptProperty_(GIB_M1_RECOVERY_WRITE_PROPERTY_), GIB_M1_RECOVERY_INCIDENT_);
 }
 
 function requestTarget_(body) {
@@ -217,6 +302,68 @@ function displayDate_(value) {
   return match ? match[1] + '-' + match[2] + '-' + match[3] : text.slice(0, 10);
 }
 
+function canonicalTimestamp_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, 'America/New_York', 'yyyy-MM-dd HH:mm:ss');
+  }
+  var text = exactText_(value);
+  var match = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{1,2}):(\d{1,2})$/);
+  if (!match) return '';
+  var date = match[1] + '-' + match[2] + '-' + match[3];
+  var hour = Number(match[4]);
+  var minute = Number(match[5]);
+  var second = Number(match[6]);
+  if (!validCalendarDate_(date) || hour > 23 || minute > 59 || second > 59) return '';
+  return date + ' '
+    + ('0' + hour).slice(-2) + ':'
+    + ('0' + minute).slice(-2) + ':'
+    + ('0' + second).slice(-2);
+}
+
+function canonicalDuration_(value) {
+  var duration = Number(value);
+  return isFinite(duration) ? String(duration) : '';
+}
+
+function canonicalSigninFields_(record) {
+  return [
+    canonicalTimestamp_(record && record.timestamp),
+    displayDate_(record && record.date),
+    exactText_(record && record.classLabel),
+    canonicalDuration_(record && record.duration),
+    exactText_(record && record.instructor),
+    exactText_(record && record.site),
+    exactText_(record && record.notes)
+  ];
+}
+
+function canonicalSigninKey_(record) {
+  var fields = canonicalSigninFields_(record);
+  if (!fields[0] || !validCalendarDate_(fields[1]) || !fields[2] || !fields[3] || !fields[4] || !fields[5]) {
+    return '';
+  }
+  return JSON.stringify(fields);
+}
+
+function sameExactSignin_(record, candidate) {
+  var left = canonicalSigninKey_(record);
+  var right = canonicalSigninKey_(candidate);
+  return activeRecord_(record) && Boolean(left) && left === right;
+}
+
+function findExactSignin_(records, candidate) {
+  var id = exactText_(candidate && candidate.rowId);
+  for (var i = 0; i < records.length; i += 1) {
+    if (activeRecord_(records[i]) && id && exactText_(records[i].rowId) === id) {
+      return sameExactSignin_(records[i], candidate) ? records[i] : { conflict: true };
+    }
+  }
+  for (var j = 0; j < records.length; j += 1) {
+    if (sameExactSignin_(records[j], candidate)) return records[j];
+  }
+  return null;
+}
+
 function validCalendarDate_(value) {
   var text = cleanText_(value);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
@@ -257,7 +404,7 @@ function readSignins_(sheet) {
   var headers = values[0].map(cleanText_);
   var map = headerMap_(headers);
   var indexes = {
-    rowId: firstHeaderIndex_(map, ['RowID', 'f'], 0),
+    rowId: firstHeaderIndex_(map, ['RowID', 'f']),
     timestamp: firstHeaderIndex_(map, ['Timestamp']),
     date: firstHeaderIndex_(map, ['Date']),
     classLabel: firstHeaderIndex_(map, ['Class Label']),
@@ -269,23 +416,23 @@ function readSignins_(sheet) {
     notes: firstHeaderIndex_(map, ['Notes']),
     status: firstHeaderIndex_(map, ['Status'])
   };
-  ['timestamp', 'date', 'classLabel', 'duration', 'instructor', 'site'].forEach(function(key) {
+  ['rowId', 'timestamp', 'date', 'classLabel', 'duration', 'instructor', 'site', 'notes'].forEach(function(key) {
     if (indexes[key] < 0) throw new Error('Required Signins heading is missing.');
   });
 
   var records = values.slice(1).map(function(row, offset) {
     return {
       sheetRow: offset + 2,
-      rowId: cleanText_(row[indexes.rowId]),
-      timestamp: cleanText_(row[indexes.timestamp]),
+      rowId: exactText_(row[indexes.rowId]),
+      timestamp: canonicalTimestamp_(row[indexes.timestamp]),
       date: displayDate_(row[indexes.date]),
-      classLabel: cleanText_(row[indexes.classLabel]),
+      classLabel: exactText_(row[indexes.classLabel]),
       duration: Number(row[indexes.duration]),
-      instructor: cleanText_(row[indexes.instructor]),
-      site: cleanText_(row[indexes.site]),
+      instructor: exactText_(row[indexes.instructor]),
+      site: exactText_(row[indexes.site]),
       device: indexes.device >= 0 ? cleanText_(row[indexes.device]) : '',
       build: indexes.build >= 0 ? cleanText_(row[indexes.build]) : '',
-      notes: indexes.notes >= 0 ? cleanText_(row[indexes.notes]) : '',
+      notes: indexes.notes >= 0 ? exactText_(row[indexes.notes]) : '',
       status: indexes.status >= 0 ? cleanText_(row[indexes.status]) : ''
     };
   }).filter(function(record) {
@@ -322,6 +469,28 @@ function findExistingEvent_(records, candidate) {
   return null;
 }
 
+function adminAddedRecord_(record) {
+  return /^admin/i.test(cleanText_(record && record.device))
+    || /admin-added/i.test(exactText_(record && record.notes));
+}
+
+function collisionReviewRecord_(record) {
+  return cleanText_(record && record.device) === GIB_M1_COLLISION_DEVICE_
+    || cleanText_(record && record.status).toUpperCase() === GIB_M1_COLLISION_STATUS_;
+}
+
+function findAdminCollision_(records, candidate) {
+  for (var i = 0; i < records.length; i += 1) {
+    if (
+      activeRecord_(records[i])
+      && adminAddedRecord_(records[i])
+      && sameEvent_(records[i], candidate)
+      && !sameExactSignin_(records[i], candidate)
+    ) return records[i];
+  }
+  return null;
+}
+
 function writeValue_(row, indexes, key, value) {
   if (indexes[key] >= 0) row[indexes[key]] = value;
 }
@@ -347,20 +516,21 @@ function appendSignin_(sheet, state, record) {
 function validateKioskRow_(row) {
   if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
   var value = {
-    rowId: safeText_(row.RowID || row.rowId, 240, false),
-    timestamp: safeText_(row.Timestamp || row.timestamp, 80, false),
+    rowId: safeExactText_(row.RowID || row.rowId, 240, false),
+    timestamp: canonicalTimestamp_(row.Timestamp || row.timestamp),
     date: displayDate_(row.Date || row.date),
-    classLabel: safeText_(row['Class Label'] || row.classLabel, 200, false),
+    classLabel: safeExactText_(row['Class Label'] || row.classLabel, 200, false),
     duration: Number(row['Duration (hr)'] != null ? row['Duration (hr)'] : row.duration),
-    instructor: safeText_(row.Instructor || row.instructor, 100, false),
-    site: safeText_(row.Site || row.site, 80, false),
+    instructor: safeExactText_(row.Instructor || row.instructor, 100, false),
+    site: safeExactText_(row.Site || row.site, 80, false),
     device: safeText_(row.Device || row.device, 120, true),
     build: safeText_(row.Build || row.build, 120, true),
-    notes: safeText_(row.Notes || row.notes, 400, true),
+    notes: safeExactText_(row.Notes || row.notes, 400, true),
     status: 'OK'
   };
   if (
     !value.rowId
+    || !value.timestamp
     || !validCalendarDate_(value.date)
     || value.date > todayNewYork_()
     || !value.classLabel
@@ -403,7 +573,10 @@ function kioskSignInAction_(body) {
       if (!candidate) {
         return { rowId: requestedId, result: 'rejected', linkedRecordId: '' };
       }
-      var existing = findExistingEvent_(state.records, candidate);
+      var existing = findExactSignin_(state.records, candidate);
+      if (existing && existing.conflict) {
+        return { rowId: candidate.rowId, result: 'rejected', linkedRecordId: '' };
+      }
       if (existing) {
         return {
           rowId: candidate.rowId,
@@ -411,12 +584,17 @@ function kioskSignInAction_(body) {
           linkedRecordId: existing.rowId
         };
       }
+      var adminCollision = findAdminCollision_(state.records, candidate);
+      if (adminCollision) {
+        candidate.device = GIB_M1_COLLISION_DEVICE_;
+        candidate.status = GIB_M1_COLLISION_STATUS_;
+      }
       try {
         appendSignin_(sheet, state, candidate);
         return {
           rowId: candidate.rowId,
-          result: 'added',
-          linkedRecordId: candidate.rowId
+          result: adminCollision ? 'review required' : 'added',
+          linkedRecordId: adminCollision ? adminCollision.rowId : candidate.rowId
         };
       } catch (error) {
         return { rowId: candidate.rowId, result: 'failed', linkedRecordId: '' };
@@ -429,7 +607,270 @@ function kioskSignInAction_(body) {
   }
 }
 
+function bytesToHex_(bytes) {
+  return bytes.map(function(value) {
+    var byte = value < 0 ? value + 256 : value;
+    return ('0' + byte.toString(16)).slice(-2);
+  }).join('');
+}
+
+function recoverySecret_() {
+  return scriptProperty_(GIB_M1_RECOVERY_PROPERTY_);
+}
+
+function privateRecoveryFingerprint_(record) {
+  var secret = recoverySecret_();
+  var key = canonicalSigninKey_(record);
+  if (!secret || !key) return '';
+  return bytesToHex_(Utilities.computeHmacSha256Signature(
+    key,
+    secret,
+    Utilities.Charset.UTF_8
+  ));
+}
+
+function targetProof_(spreadsheet) {
+  var secret = recoverySecret_();
+  if (!secret || !spreadsheet || typeof spreadsheet.getId !== 'function') return '';
+  var material = 'gib-m1-target\u001f' + spreadsheet.getId() + '\u001f' + spreadsheet.getName();
+  return bytesToHex_(Utilities.computeHmacSha256Signature(
+    material,
+    secret,
+    Utilities.Charset.UTF_8
+  ));
+}
+
+function validRecoveryId_(value) {
+  return /^REC-\d{3,6}$/.test(exactText_(value));
+}
+
+function validateRecoveryRow_(row) {
+  var recoveryId = exactText_(row && (row.RecoveryID || row.recoveryId));
+  if (!validRecoveryId_(recoveryId)) return null;
+  var source = row || {};
+  var candidate = validateKioskRow_({
+    RowID: 'gib-recovery-' + recoveryId,
+    Timestamp: source.Timestamp != null ? source.Timestamp : source.timestamp,
+    Date: source.Date != null ? source.Date : source.date,
+    'Class Label': source['Class Label'] != null ? source['Class Label'] : source.classLabel,
+    'Duration (hr)': source['Duration (hr)'] != null ? source['Duration (hr)'] : source.duration,
+    Instructor: source.Instructor != null ? source.Instructor : source.instructor,
+    Site: source.Site != null ? source.Site : source.site,
+    Device: 'M1 incident recovery',
+    Build: 'm1-kiosk-sync-incident-repair',
+    Notes: source.Notes != null ? source.Notes : source.notes
+  });
+  if (!candidate) return null;
+  candidate.recoveryId = recoveryId;
+  return candidate;
+}
+
+function findSemanticRecoveryConflict_(records, candidate) {
+  var candidateKey = canonicalSigninKey_(candidate);
+  for (var i = 0; i < records.length; i += 1) {
+    var record = records[i];
+    if (!activeRecord_(record)) continue;
+    var sameId = exactText_(record.rowId) === exactText_(candidate.rowId);
+    var sameEventIdentity = canonicalTimestamp_(record.timestamp) === canonicalTimestamp_(candidate.timestamp)
+      && displayDate_(record.date) === displayDate_(candidate.date)
+      && exactText_(record.instructor) === exactText_(candidate.instructor)
+      && exactText_(record.classLabel) === exactText_(candidate.classLabel)
+      && exactText_(record.site) === exactText_(candidate.site);
+    if ((sameId || sameEventIdentity) && canonicalSigninKey_(record) !== candidateKey) return record;
+  }
+  return null;
+}
+
+function recoveryRecord_(record) {
+  return {
+    rowId: record.rowId,
+    timestamp: record.timestamp,
+    date: record.date,
+    classLabel: record.classLabel,
+    duration: record.duration,
+    instructor: record.instructor,
+    site: record.site,
+    notes: record.notes,
+    fingerprint: privateRecoveryFingerprint_(record)
+  };
+}
+
+function candidateSetDigest_(candidates) {
+  var secret = recoverySecret_();
+  if (!secret) return '';
+  var material = candidates.map(function(candidate) {
+    return candidate.recoveryId + '\u001f' + privateRecoveryFingerprint_(candidate);
+  }).sort().join('\n');
+  return bytesToHex_(Utilities.computeHmacSha256Signature(
+    material,
+    secret,
+    Utilities.Charset.UTF_8
+  ));
+}
+
+function recoveryListAction_(body) {
+  var fromDate = displayDate_(body && body.fromDate);
+  if (!validCalendarDate_(fromDate)) {
+    return jsonResult_({ ok: false, result: 'rejected', message: 'Recovery date was rejected.' });
+  }
+  var spreadsheet = openExpectedSpreadsheet_(body);
+  var proof = targetProof_(spreadsheet);
+  if (!proof) return rejectedAuthResult_();
+  var state = readSignins_(signinsSheet_(spreadsheet));
+  var records = state.records.filter(function(record) {
+    return activeRecord_(record) && displayDate_(record.date) >= fromDate;
+  }).map(recoveryRecord_);
+  return jsonResult_({
+    ok: true,
+    target: requestTarget_(body),
+    targetProof: proof,
+    records: records
+  });
+}
+
+function recoverSigninsAction_(body) {
+  if (!recoveryWritesEnabled_(body)) {
+    return jsonResult_({ ok: false, result: 'disabled', message: 'Recovery writes are disabled.' });
+  }
+  if (
+    !Array.isArray(body.rows)
+    || body.rows.length < 1
+    || body.rows.length > GIB_M1_MAX_RECOVERY_ROWS_
+    || Number(body.expectedCandidateCount) !== body.rows.length
+  ) {
+    return jsonResult_({ ok: false, result: 'rejected', message: 'Recovery rows were rejected.' });
+  }
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return jsonResult_({ ok: false, result: 'failed', message: 'The receiver was busy. Rows were not changed.' });
+  }
+  try {
+    var spreadsheet = openExpectedSpreadsheet_(body);
+    var proof = targetProof_(spreadsheet);
+    if (!proof || !constantTimeTextEqual_(body.expectedTargetProof, proof)) {
+      return jsonResult_({ ok: false, result: 'rejected', message: 'Recovery target verification failed.' });
+    }
+    var candidates = body.rows.map(validateRecoveryRow_);
+    if (candidates.some(function(candidate) { return !candidate; })) {
+      return jsonResult_({ ok: false, result: 'rejected', message: 'Recovery rows were malformed.' });
+    }
+    var candidateIds = {};
+    for (var i = 0; i < candidates.length; i += 1) {
+      if (candidateIds[candidates[i].recoveryId]) {
+        return jsonResult_({ ok: false, result: 'rejected', message: 'Recovery candidate IDs were duplicated.' });
+      }
+      candidateIds[candidates[i].recoveryId] = true;
+    }
+    var digest = candidateSetDigest_(candidates);
+    if (!digest || !constantTimeTextEqual_(body.expectedCandidateSetDigest, digest)) {
+      return jsonResult_({ ok: false, result: 'rejected', message: 'Recovery candidate verification failed.' });
+    }
+    var sheet = signinsSheet_(spreadsheet);
+    var state = readSignins_(sheet);
+    for (var j = 0; j < candidates.length; j += 1) {
+      if (findSemanticRecoveryConflict_(state.records, candidates[j])) {
+        return jsonResult_({ ok: false, result: 'conflict', message: 'Recovery conflict detected. Rows were not changed.' });
+      }
+    }
+    var results = [];
+    var failed = false;
+    candidates.forEach(function(candidate) {
+      if (failed) return;
+      var existing = findExactSignin_(state.records, candidate);
+      if (existing && !existing.conflict) {
+        results.push({
+          candidateId: candidate.recoveryId,
+          rowId: existing.rowId,
+          result: 'already exists',
+          fingerprint: privateRecoveryFingerprint_(existing)
+        });
+        return;
+      }
+      if (existing && existing.conflict) {
+        failed = true;
+        return;
+      }
+      try {
+        appendSignin_(sheet, state, candidate);
+        results.push({
+          candidateId: candidate.recoveryId,
+          rowId: candidate.rowId,
+          result: 'added',
+          fingerprint: privateRecoveryFingerprint_(candidate)
+        });
+      } catch (error) {
+        failed = true;
+      }
+    });
+    SpreadsheetApp.flush();
+    return jsonResult_({
+      ok: !failed,
+      result: failed ? 'partial' : 'complete',
+      targetProof: proof,
+      results: results
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function rollbackRecoveredSigninsAction_(body) {
+  if (!recoveryWritesEnabled_(body)) {
+    return jsonResult_({ ok: false, result: 'disabled', message: 'Recovery writes are disabled.' });
+  }
+  if (!Array.isArray(body.receipt) || body.receipt.length < 1 || body.receipt.length > GIB_M1_MAX_RECOVERY_ROWS_) {
+    return jsonResult_({ ok: false, result: 'rejected', message: 'Recovery receipt was rejected.' });
+  }
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return jsonResult_({ ok: false, result: 'failed', message: 'The receiver was busy. Rows were not changed.' });
+  }
+  try {
+    var spreadsheet = openExpectedSpreadsheet_(body);
+    var proof = targetProof_(spreadsheet);
+    if (!proof || !constantTimeTextEqual_(body.expectedTargetProof, proof)) {
+      return jsonResult_({ ok: false, result: 'rejected', message: 'Recovery target verification failed.' });
+    }
+    var sheet = signinsSheet_(spreadsheet);
+    var state = readSignins_(sheet);
+    var removals = [];
+    var seenRowIds = {};
+    for (var i = 0; i < body.receipt.length; i += 1) {
+      var item = body.receipt[i] || {};
+      var candidateId = exactText_(item.candidateId);
+      var rowId = exactText_(item.rowId);
+      var fingerprint = exactText_(item.fingerprint);
+      if (
+        !validRecoveryId_(candidateId)
+        || rowId !== 'gib-recovery-' + candidateId
+        || !/^[a-f0-9]{64}$/.test(fingerprint)
+        || seenRowIds[rowId]
+      ) {
+        return jsonResult_({ ok: false, result: 'rejected', message: 'Recovery receipt verification failed.' });
+      }
+      seenRowIds[rowId] = true;
+      var matches = state.records.filter(function(record) {
+        return activeRecord_(record) && exactText_(record.rowId) === rowId;
+      });
+      if (
+        matches.length !== 1
+        || !constantTimeTextEqual_(privateRecoveryFingerprint_(matches[0]), fingerprint)
+      ) {
+        return jsonResult_({ ok: false, result: 'conflict', message: 'Recovery rollback verification failed. Rows were not changed.' });
+      }
+      removals.push(matches[0]);
+    }
+    removals.sort(function(left, right) { return right.sheetRow - left.sheetRow; });
+    removals.forEach(function(record) { sheet.deleteRow(record.sheetRow); });
+    SpreadsheetApp.flush();
+    return jsonResult_({ ok: true, result: 'rolled back', removed: removals.length, targetProof: proof });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function publicRecord_(record) {
+  var reviewRequired = collisionReviewRecord_(record);
   return {
     recordId: record.rowId,
     timestamp: record.timestamp,
@@ -439,9 +880,11 @@ function publicRecord_(record) {
     instructor: record.instructor,
     site: record.site,
     notes: record.notes,
-    source: /^admin/i.test(record.device) || /admin-added/i.test(record.notes)
-      ? 'Admin-added'
-      : 'Kiosk'
+    source: reviewRequired
+      ? 'Collision review'
+      : (adminAddedRecord_(record) ? 'Admin-added' : 'Kiosk'),
+    reviewRequired: reviewRequired,
+    reviewMessage: reviewRequired ? 'Possible Admin/kiosk duplicate — review before payroll.' : ''
   };
 }
 
@@ -659,14 +1102,25 @@ function addMissedInstructorAction_(body) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     cleanText_: cleanText_,
+    exactText_: exactText_,
     normalizeEventText_: normalizeEventText_,
+    canonicalTimestamp_: canonicalTimestamp_,
+    canonicalSigninKey_: canonicalSigninKey_,
+    sameExactSignin_: sameExactSignin_,
+    findExactSignin_: findExactSignin_,
     validCalendarDate_: validCalendarDate_,
     activeRecord_: activeRecord_,
     sameEvent_: sameEvent_,
     findExistingEvent_: findExistingEvent_,
+    findAdminCollision_: findAdminCollision_,
+    collisionReviewRecord_: collisionReviewRecord_,
     requestTarget_: requestTarget_,
     configuredSpreadsheetId_: configuredSpreadsheetId_,
+    legacyKioskAuthorized_: legacyKioskAuthorized_,
     adminActionAuthorized_: adminActionAuthorized_,
-    validateKioskRow_: validateKioskRow_
+    recoveryAuthorized_: recoveryAuthorized_,
+    recoveryWritesEnabled_: recoveryWritesEnabled_,
+    validateKioskRow_: validateKioskRow_,
+    validateRecoveryRow_: validateRecoveryRow_
   };
 }
