@@ -15,6 +15,8 @@ import {
   CAPABILITY_SECONDS,
   CREDENTIAL_PROOF_DOMAIN,
   ENDPOINT_PROOF_DOMAIN,
+  PREVIEW_LEGACY_KIOSK_ENV,
+  PRODUCTION_LEGACY_KIOSK_ENV,
   config as verifierConfig,
   handleAdminTabletDiagnostic
 } from '../netlify/functions/m1-admin-tablet-diagnostic.mjs';
@@ -38,16 +40,22 @@ const ALT_ADMIN_TOKEN = Buffer.alloc(32, 8).toString('base64url');
 const NOW = Date.parse('2026-08-05T12:00:00Z');
 const RUN_A = 'a'.repeat(32);
 const RUN_B = 'b'.repeat(32);
+const PROD_TRANSPORT_TOKEN = Buffer.alloc(24, 11).toString('base64url');
+const PROD_LEGACY_TOKEN = Buffer.alloc(18, 12).toString('base64url');
+const PREVIEW_TRANSPORT_TOKEN = Buffer.alloc(24, 13).toString('base64url');
+const PREVIEW_LEGACY_TOKEN = Buffer.alloc(18, 14).toString('base64url');
 const PROD_ENV = Object.freeze({
   GIB_M1_WEBHOOK_URL: 'https://script.google.com/macros/s/SYNTHETIC_TEST_TARGET/exec',
-  GIB_M1_WEBHOOK_TOKEN: 'synthetic-legacy-credential',
+  GIB_M1_WEBHOOK_TOKEN: PROD_TRANSPORT_TOKEN,
+  [PRODUCTION_LEGACY_KIOSK_ENV]: PROD_LEGACY_TOKEN,
   GIB_M1_ADMIN_ACTION_TOKEN: 'synthetic-admin-action-token',
   GIB_M1_ADMIN_PASSPHRASE: 'synthetic private admin access phrase'
 });
 const PREVIEW_ENV = Object.freeze({
   ...PROD_ENV,
   GIB_TEST_WEBHOOK_URL: 'https://script.google.com/macros/s/SYNTHETIC_PREVIEW_TARGET/exec',
-  GIB_TEST_WEBHOOK_TOKEN: 'synthetic-preview-credential',
+  GIB_TEST_WEBHOOK_TOKEN: PREVIEW_TRANSPORT_TOKEN,
+  [PREVIEW_LEGACY_KIOSK_ENV]: PREVIEW_LEGACY_TOKEN,
   GIB_TEST_ADMIN_ACTION_TOKEN: 'synthetic-preview-admin-token'
 });
 
@@ -120,7 +128,7 @@ function proofBody(issued, runId = issued.body.runId, env = PROD_ENV) {
     endpointProof: hmacProof(issued.body.proofKey, runId, ENDPOINT_PROOF_DOMAIN,
       env.GIB_M1_WEBHOOK_URL || env.GIB_TEST_WEBHOOK_URL),
     credentialProof: hmacProof(issued.body.proofKey, runId, CREDENTIAL_PROOF_DOMAIN,
-      env.GIB_M1_WEBHOOK_TOKEN || env.GIB_TEST_WEBHOOK_TOKEN)
+      env[PRODUCTION_LEGACY_KIOSK_ENV])
   };
 }
 
@@ -223,6 +231,7 @@ test('issue requires Admin and sets a 60-second verifier-path capability cookie'
 });
 
 test('verify requires matching Admin and capability cookies, forbids the general header, and always clears capability', async () => {
+  assert.notEqual(PROD_TRANSPORT_TOKEN, PROD_LEGACY_TOKEN);
   const issued = await issue();
   const body = proofBody(issued);
   const valid = await handleAdminTabletDiagnostic(actionRequest({
@@ -245,6 +254,54 @@ test('verify requires matching Admin and capability cookies, forbids the general
     assertCapabilityCleared(response);
   }
   assert.doesNotMatch(verifierSource, /\bfetch\s*\(|postGoogle|Spreadsheet|console\./u);
+});
+
+test('credential comparison uses only the legacy kiosk credential and fails closed when it is absent', async () => {
+  assert.equal(PRODUCTION_LEGACY_KIOSK_ENV, 'GIB_M1_LEGACY_KIOSK_TOKEN');
+  assert.equal(PREVIEW_LEGACY_KIOSK_ENV, 'GIB_TEST_LEGACY_KIOSK_TOKEN');
+  const transportAttempt = await issue({ runId: 'c'.repeat(32), seed: 41 });
+  const transportBody = proofBody(transportAttempt);
+  transportBody.credentialProof = hmacProof(
+    transportAttempt.body.proofKey,
+    transportAttempt.body.runId,
+    CREDENTIAL_PROOF_DOMAIN,
+    PROD_TRANSPORT_TOKEN
+  );
+  const transportResponse = await handleAdminTabletDiagnostic(actionRequest({
+    body: transportBody,
+    capabilityCookie: transportAttempt.capabilityCookie
+  }), { env: PROD_ENV, now: NOW });
+  assert.equal(transportResponse.status, 200);
+  assert.deepEqual(await json(transportResponse), {
+    ok: true,
+    endpointExpected: true,
+    credentialMatch: false
+  });
+
+  const wrongAttempt = await issue({ runId: 'd'.repeat(32), seed: 42 });
+  const wrongBody = proofBody(wrongAttempt);
+  wrongBody.credentialProof = hmacProof(
+    wrongAttempt.body.proofKey,
+    wrongAttempt.body.runId,
+    CREDENTIAL_PROOF_DOMAIN,
+    Buffer.alloc(18, 99).toString('base64url')
+  );
+  const wrongResponse = await handleAdminTabletDiagnostic(actionRequest({
+    body: wrongBody,
+    capabilityCookie: wrongAttempt.capabilityCookie
+  }), { env: PROD_ENV, now: NOW });
+  assert.equal(wrongResponse.status, 200);
+  assert.deepEqual(await json(wrongResponse), {
+    ok: true,
+    endpointExpected: true,
+    credentialMatch: false
+  });
+
+  const { [PRODUCTION_LEGACY_KIOSK_ENV]: _removed, ...missingLegacyEnv } = PROD_ENV;
+  const missing = await issue({ env: missingLegacyEnv, runId: 'e'.repeat(32), seed: 43 });
+  assert.equal(missing.response.status, 503);
+  assert.deepEqual(missing.body.ok, false);
+  assertCapabilityCleared(missing.response);
 });
 
 test('capability is bound to session, run, and expiry; old proofs cannot validate a fresh run', async () => {
@@ -291,7 +348,7 @@ test('deploy-preview issue and verify use the same capability protocol', async (
     action: 'verify',
     runId: RUN_A,
     endpointProof: hmacProof(issued.body.proofKey, RUN_A, ENDPOINT_PROOF_DOMAIN, PREVIEW_ENV.GIB_TEST_WEBHOOK_URL),
-    credentialProof: hmacProof(issued.body.proofKey, RUN_A, CREDENTIAL_PROOF_DOMAIN, PREVIEW_ENV.GIB_TEST_WEBHOOK_TOKEN)
+    credentialProof: hmacProof(issued.body.proofKey, RUN_A, CREDENTIAL_PROOF_DOMAIN, PREVIEW_ENV[PREVIEW_LEGACY_KIOSK_ENV])
   };
   const response = await handleAdminTabletDiagnostic(actionRequest({
     origin: PREVIEW_ORIGIN,
@@ -310,7 +367,7 @@ test('seeded same-origin storage emits v2 run-bound proofs and the five safe out
     .map(id => [id, { textContent: 'NOT CHECKED' }]));
   const storage = new Map([
     ['gib_m1_sync_url_v1', PROD_ENV.GIB_M1_WEBHOOK_URL],
-    ['gib_m1_sync_token_v1', PROD_ENV.GIB_M1_WEBHOOK_TOKEN],
+    ['gib_m1_sync_token_v1', PROD_ENV[PRODUCTION_LEGACY_KIOSK_ENV]],
     ['gib_m1_sync_auto_v1', 'false'],
     ['gib_m1_sync_queue_v1', JSON.stringify([{}, {}])],
     ['gib_m1_signins_v1', JSON.stringify([{}, {}, {}])]
@@ -348,7 +405,7 @@ test('seeded same-origin storage emits v2 run-bound proofs and the five safe out
   assert.equal(proofMessage.message.endpointProof,
     hmacProof(proofKey, RUN_A, ENDPOINT_PROOF_DOMAIN, PROD_ENV.GIB_M1_WEBHOOK_URL));
   assert.equal(proofMessage.message.credentialProof,
-    hmacProof(proofKey, RUN_A, CREDENTIAL_PROOF_DOMAIN, PROD_ENV.GIB_M1_WEBHOOK_TOKEN));
+    hmacProof(proofKey, RUN_A, CREDENTIAL_PROOF_DOMAIN, PROD_ENV[PRODUCTION_LEGACY_KIOSK_ENV]));
   assert.equal('proofKey' in proofMessage.message, false);
   assert.equal('requestToken' in proofMessage.message, false);
 
@@ -364,4 +421,28 @@ test('seeded same-origin storage emits v2 run-bound proofs and the five safe out
     elements.get('queueResult').textContent,
     elements.get('historyResult').textContent
   ], ['EXPECTED', 'MATCH', 'OFF', '2', '3']);
+
+  const rawCredentials = [
+    PROD_TRANSPORT_TOKEN,
+    PROD_LEGACY_TOKEN,
+    PREVIEW_TRANSPORT_TOKEN,
+    PREVIEW_LEGACY_TOKEN
+  ];
+  const visibleOutput = [...elements.values()].map(element => element.textContent).join('\n');
+  const outboundMessages = JSON.stringify(posted);
+  const browserUrls = [PROD_ORIGIN, PREVIEW_ORIGIN, DIAGNOSTIC_PATH, VERIFIER_PATH].join('\n');
+  const committedFixtures = [
+    diagnosticHtml,
+    adminHtml,
+    runbook,
+    verifierSource,
+    read('tests/m1-tablet-diagnostic-secret-safe.test.mjs')
+  ].join('\n');
+  for (const rawCredential of rawCredentials) {
+    assert.equal(visibleOutput.includes(rawCredential), false);
+    assert.equal(outboundMessages.includes(rawCredential), false);
+    assert.equal(browserUrls.includes(rawCredential), false);
+    assert.equal(committedFixtures.includes(rawCredential), false);
+  }
+  assert.doesNotMatch(diagnosticHtml + verifierSource, /console\./u);
 });

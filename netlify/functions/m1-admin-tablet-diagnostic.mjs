@@ -23,6 +23,8 @@ export const CAPABILITY_PATH = '/api/m1-tablet-diagnostic-verifier';
 export const CAPABILITY_SECONDS = 60;
 export const ENDPOINT_PROOF_DOMAIN = 'gib-m1-tablet-diagnostic:endpoint:v2';
 export const CREDENTIAL_PROOF_DOMAIN = 'gib-m1-tablet-diagnostic:credential:v2';
+export const PRODUCTION_LEGACY_KIOSK_ENV = 'GIB_M1_LEGACY_KIOSK_TOKEN';
+export const PREVIEW_LEGACY_KIOSK_ENV = 'GIB_TEST_LEGACY_KIOSK_TOKEN';
 
 // Allow exactly one capability issue and one proof verification per minute.
 export const config = {
@@ -75,6 +77,12 @@ function validSameOriginRequest(request) {
 
 function validRunId(value) {
   return typeof value === 'string' && RUN_ID_PATTERN.test(value);
+}
+
+function legacyKioskCredential(env, preview) {
+  const name = preview ? PREVIEW_LEGACY_KIOSK_ENV : PRODUCTION_LEGACY_KIOSK_ENV;
+  const value = env[name];
+  return typeof value === 'string' && value.length > 0 ? value : '';
 }
 
 function validIssueBody(value) {
@@ -286,7 +294,7 @@ async function issueCapability(request, value, config, dependencies, now) {
   });
 }
 
-function verifyProofs(request, value, config, now) {
+function verifyProofs(request, value, config, expectedLegacyCredential, now) {
   const respond = (status, body) => jsonResponse(status, body, {
     'Set-Cookie': clearCapabilityCookieHeader()
   });
@@ -339,7 +347,7 @@ function verifyProofs(request, value, config, now) {
     capability.k,
     CREDENTIAL_PROOF_DOMAIN,
     value.runId,
-    config.webhookToken
+    expectedLegacyCredential
   );
 
   return respond(200, {
@@ -360,18 +368,23 @@ export async function handleAdminTabletDiagnostic(request, dependencies = {}) {
   const parsed = await readJson(request, 2_048);
   if (parsed.response) return withCapabilityCleared(parsed.response);
 
-  const config = runtimeConfig(dependencies.env || process.env, {
+  const env = dependencies.env || process.env;
+  const config = runtimeConfig(env, {
     admin: true,
     requestUrl: request.url
   });
   if (!config) return withCapabilityCleared(misconfiguredResponse());
+
+  // The tablet credential is distinct from the Netlify-to-receiver transport token.
+  const expectedLegacyCredential = legacyKioskCredential(env, config.preview);
+  if (!expectedLegacyCredential) return withCapabilityCleared(misconfiguredResponse());
 
   const now = dependencies.now || Date.now();
   if (parsed.value.action === 'issue') {
     return issueCapability(request, parsed.value, config, dependencies, now);
   }
   if (parsed.value.action === 'verify') {
-    return verifyProofs(request, parsed.value, config, now);
+    return verifyProofs(request, parsed.value, config, expectedLegacyCredential, now);
   }
   return withCapabilityCleared(invalidRequestResponse());
 }
