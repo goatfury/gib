@@ -1,8 +1,10 @@
 import {
   createCipheriv,
   createDecipheriv,
+  createECDH,
   createHash,
   createHmac,
+  hkdfSync,
   randomBytes
 } from 'node:crypto';
 
@@ -25,6 +27,8 @@ export const ENDPOINT_PROOF_DOMAIN = 'gib-m1-tablet-diagnostic:endpoint:v2';
 export const CREDENTIAL_PROOF_DOMAIN = 'gib-m1-tablet-diagnostic:credential:v2';
 export const PRODUCTION_LEGACY_KIOSK_ENV = 'GIB_M1_LEGACY_KIOSK_TOKEN';
 export const PREVIEW_LEGACY_KIOSK_ENV = 'GIB_TEST_LEGACY_KIOSK_TOKEN';
+export const DIAGNOSTIC_PURPOSE = 'diagnostic';
+export const INSTALL_PURPOSE = 'install';
 
 // Allow exactly one capability issue and one proof verification per minute.
 export const config = {
@@ -37,6 +41,11 @@ export const config = {
 };
 
 const CAPABILITY_AAD = Buffer.from('gib-m1-tablet-diagnostic:capability:v1', 'utf8');
+const INSTALL_ENVELOPE_KEY_DOMAIN = 'gib-m1-tablet-diagnostic:install-envelope:key:v1';
+const INSTALL_ENVELOPE_AAD_DOMAIN = 'gib-m1-tablet-diagnostic:install-envelope:aad:v1';
+const TABLET_DIAGNOSTIC_PATH = '/m1/tablet-diagnostic.html';
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
+const JWK_COORDINATE_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const PROOF_PATTERN = /^[0-9a-f]{64}$/u;
 const PROOF_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/u;
@@ -85,15 +94,50 @@ function legacyKioskCredential(env, preview) {
   return typeof value === 'string' && value.length > 0 ? value : '';
 }
 
-function validIssueBody(value) {
+function validClientPublicJwk(value) {
+  if (
+    !value
+    || typeof value !== 'object'
+    || Array.isArray(value)
+    || Object.keys(value).length !== 6
+    || value.kty !== 'EC'
+    || value.crv !== 'P-256'
+    || value.ext !== true
+    || !Array.isArray(value.key_ops)
+    || value.key_ops.length !== 0
+    || typeof value.x !== 'string'
+    || !JWK_COORDINATE_PATTERN.test(value.x)
+    || typeof value.y !== 'string'
+    || !JWK_COORDINATE_PATTERN.test(value.y)
+  ) {
+    return false;
+  }
+
+  try {
+    return Buffer.from(value.x, 'base64url').toString('base64url') === value.x
+      && Buffer.from(value.y, 'base64url').toString('base64url') === value.y;
+  } catch {
+    return false;
+  }
+}
+
+function validIssueBody(value, action) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (action === 'issue-install') {
+    return Object.keys(value).length === 3
+      && value.action === action
+      && validRunId(value.runId)
+      && validClientPublicJwk(value.clientPublicKey);
+  }
   return Object.keys(value).length === 2
-    && value.action === 'issue'
+    && value.action === action
     && validRunId(value.runId);
 }
 
 function validVerifyBody(value) {
-  return Object.keys(value).length === 4
+  return Object.keys(value).length === 5
     && value.action === 'verify'
+    && [DIAGNOSTIC_PURPOSE, INSTALL_PURPOSE].includes(value.purpose)
     && validRunId(value.runId)
     && typeof value.endpointProof === 'string'
     && PROOF_PATTERN.test(value.endpointProof)
@@ -231,6 +275,97 @@ function expectedProof(proofKey, domain, runId, expectedValue) {
     .digest('hex');
 }
 
+function validLegacyKioskCredential(value, config) {
+  return typeof value === 'string'
+    && value.length > 0
+    && value.trim() === value
+    && value.length <= 512
+    && !CONTROL_CHARACTER_PATTERN.test(value)
+    && !constantTimeSecretEqual(value, config.webhookToken)
+    && !constantTimeSecretEqual(value, config.adminActionToken)
+    && !constantTimeSecretEqual(value, config.adminPassphrase)
+    && !constantTimeSecretEqual(value, config.sessionSecret);
+}
+
+function createInstallEnvelope(
+  request,
+  runId,
+  proofKey,
+  clientPublicJwk,
+  config,
+  credential,
+  randomBytesImpl,
+  createECDHImpl
+) {
+  // Trust boundary: the authenticated same-origin tablet browser can ultimately
+  // read its own localStorage. The child-held key prevents passive Admin/network
+  // response capture from revealing the binding; it cannot attest hostile client code.
+  const initializationVector = Buffer.from(randomBytesImpl(12));
+  if (initializationVector.length !== 12) {
+    throw new Error('Invalid install-envelope randomness.');
+  }
+
+  const additionalData = Buffer.from(
+    `${INSTALL_ENVELOPE_AAD_DOMAIN}\0${new URL(request.url).origin}\0${TABLET_DIAGNOSTIC_PATH}\0${runId}`,
+    'utf8'
+  );
+  const keyInformation = Buffer.from(`${INSTALL_ENVELOPE_KEY_DOMAIN}\0${proofKey}`, 'utf8');
+  const plaintext = Buffer.from(JSON.stringify({
+    v: 1,
+    runId,
+    endpoint: config.webhookUrl,
+    credential,
+    autoSync: false
+  }), 'utf8');
+  let sharedSecret;
+  let key;
+
+  try {
+    const clientPublicPoint = Buffer.concat([
+      Buffer.from([0x04]),
+      Buffer.from(clientPublicJwk.x, 'base64url'),
+      Buffer.from(clientPublicJwk.y, 'base64url')
+    ]);
+    const serverEcdh = createECDHImpl('prime256v1');
+    serverEcdh.generateKeys();
+    const serverPublicPoint = serverEcdh.getPublicKey(null, 'uncompressed');
+    if (
+      clientPublicPoint.length !== 65
+      || serverPublicPoint.length !== 65
+      || clientPublicPoint[0] !== 0x04
+      || serverPublicPoint[0] !== 0x04
+    ) {
+      throw new Error('Invalid install-envelope public key.');
+    }
+
+    sharedSecret = Buffer.from(serverEcdh.computeSecret(clientPublicPoint));
+    if (sharedSecret.length !== 32) {
+      throw new Error('Invalid install-envelope shared secret.');
+    }
+    key = Buffer.from(hkdfSync('sha256', sharedSecret, additionalData, keyInformation, 32));
+    if (key.length !== 32) {
+      throw new Error('Invalid install-envelope key.');
+    }
+
+    const cipher = createCipheriv('aes-256-gcm', key, initializationVector);
+    cipher.setAAD(additionalData);
+    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    return [
+      serverPublicPoint.subarray(1, 33).toString('base64url'),
+      serverPublicPoint.subarray(33, 65).toString('base64url'),
+      initializationVector.toString('base64url'),
+      ciphertext.toString('base64url'),
+      cipher.getAuthTag().toString('base64url')
+    ].join('.');
+  } finally {
+    if (sharedSecret) sharedSecret.fill(0);
+    if (key) key.fill(0);
+    additionalData.fill(0);
+    keyInformation.fill(0);
+    plaintext.fill(0);
+  }
+}
+
 function misconfiguredResponse() {
   return jsonResponse(503, {
     ok: false,
@@ -242,8 +377,17 @@ function invalidRequestResponse() {
   return jsonResponse(400, { ok: false, message: 'Diagnostic request was invalid.' });
 }
 
-async function issueCapability(request, value, config, dependencies, now) {
-  if (!validIssueBody(value)) {
+async function issueCapability(
+  request,
+  value,
+  config,
+  expectedLegacyCredential,
+  dependencies,
+  now,
+  purpose
+) {
+  const action = purpose === INSTALL_PURPOSE ? 'issue-install' : 'issue';
+  if (!validIssueBody(value, action)) {
     return withCapabilityCleared(invalidRequestResponse());
   }
 
@@ -263,8 +407,10 @@ async function issueCapability(request, value, config, dependencies, now) {
   }
 
   const randomBytesImpl = dependencies.randomBytes || randomBytes;
+  const createECDHImpl = dependencies.createECDH || createECDH;
   let proofKey;
   let capability;
+  let installEnvelope;
   try {
     const proofKeyBytes = Buffer.from(randomBytesImpl(32));
     if (proofKeyBytes.length !== 32) throw new Error('Invalid proof-key randomness.');
@@ -275,8 +421,21 @@ async function issueCapability(request, value, config, dependencies, now) {
       iat: nowSeconds,
       exp: nowSeconds + expiresInSeconds,
       s: sessionBinding(config.sessionSecret, auth.session),
-      k: proofKey
+      k: proofKey,
+      p: purpose
     }, config.sessionSecret, randomBytesImpl);
+    if (purpose === INSTALL_PURPOSE) {
+      installEnvelope = createInstallEnvelope(
+        request,
+        value.runId,
+        proofKey,
+        value.clientPublicKey,
+        config,
+        expectedLegacyCredential,
+        randomBytesImpl,
+        createECDHImpl
+      );
+    }
   } catch {
     return withCapabilityCleared(jsonResponse(503, {
       ok: false,
@@ -284,12 +443,22 @@ async function issueCapability(request, value, config, dependencies, now) {
     }));
   }
 
-  return jsonResponse(200, {
-    ok: true,
-    runId: value.runId,
-    proofKey,
-    expiresInSeconds
-  }, {
+  const body = purpose === INSTALL_PURPOSE
+    ? {
+        ok: true,
+        runId: value.runId,
+        proofKey,
+        installEnvelope,
+        expiresInSeconds
+      }
+    : {
+        ok: true,
+        runId: value.runId,
+        proofKey,
+        expiresInSeconds
+      };
+
+  return jsonResponse(200, body, {
     'Set-Cookie': capabilityCookieHeader(capability, expiresInSeconds)
   });
 }
@@ -329,6 +498,7 @@ function verifyProofs(request, value, config, expectedLegacyCredential, now) {
     || capability.exp - capability.iat < 1
     || capability.exp - capability.iat > CAPABILITY_SECONDS
     || !PROOF_KEY_PATTERN.test(capability.k)
+    || capability.p !== value.purpose
     || !constantTimeSecretEqual(
       capability.s,
       sessionBinding(config.sessionSecret, session)
@@ -377,11 +547,32 @@ export async function handleAdminTabletDiagnostic(request, dependencies = {}) {
 
   // The tablet credential is distinct from the Netlify-to-receiver transport token.
   const expectedLegacyCredential = legacyKioskCredential(env, config.preview);
-  if (!expectedLegacyCredential) return withCapabilityCleared(misconfiguredResponse());
+  if (!validLegacyKioskCredential(expectedLegacyCredential, config)) {
+    return withCapabilityCleared(misconfiguredResponse());
+  }
 
   const now = dependencies.now || Date.now();
   if (parsed.value.action === 'issue') {
-    return issueCapability(request, parsed.value, config, dependencies, now);
+    return issueCapability(
+      request,
+      parsed.value,
+      config,
+      expectedLegacyCredential,
+      dependencies,
+      now,
+      DIAGNOSTIC_PURPOSE
+    );
+  }
+  if (parsed.value.action === 'issue-install') {
+    return issueCapability(
+      request,
+      parsed.value,
+      config,
+      expectedLegacyCredential,
+      dependencies,
+      now,
+      INSTALL_PURPOSE
+    );
   }
   if (parsed.value.action === 'verify') {
     return verifyProofs(request, parsed.value, config, expectedLegacyCredential, now);

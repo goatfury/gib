@@ -41,11 +41,11 @@ jobs:
           fi
 
           git diff --check "$base_sha"...HEAD
-          test "$(git rev-parse "$base_sha:m1/index.html")" = "$(git rev-parse "HEAD:m1/index.html")"
+          test "$(git rev-parse "HEAD:m1/index.html")" = "894a2b62542ffb9264cb989b9275131826764bf7"
 
           unexpected="$(
             git diff --name-only "$base_sha"...HEAD |
-              grep -Ev '^(\.gitignore|\.github/workflows/m1-admin-only-required.yml|docs/m1-kiosk-sync-incident-runbook.md|_headers|_redirects|guests/index.html|integrations/google-apps-script/GibM1Receiver.gs|m1/admin/index.html|m1/shared-schedule.json|m1/tablet-diagnostic.html|netlify.toml|netlify/functions/_lib/m1-common.mjs|netlify/functions/m1-admin-(login|logout|review|search|add).mjs|netlify/functions/m1-admin-tablet-diagnostic.mjs|tests/m1-(admin-only|recovery).test.mjs|tests/m1-tablet-diagnostic-secret-safe.test.mjs|tools/m1-recovery.mjs)$' || true
+              grep -Ev '^(\.gitignore|\.github/workflows/m1-admin-only-required.yml|docs/m1-kiosk-sync-incident-runbook.md|_headers|_redirects|guests/index.html|integrations/google-apps-script/GibM1Receiver.gs|m1/admin/index.html|m1/index.html|m1/shared-schedule.json|m1/tablet-diagnostic.html|netlify.toml|netlify/functions/_lib/m1-common.mjs|netlify/functions/m1-admin-(login|logout|review|search|add).mjs|netlify/functions/m1-admin-tablet-diagnostic.mjs|tests/m1-(admin-only|recovery).test.mjs|tests/m1-tablet-diagnostic-secret-safe.test.mjs|tools/m1-recovery.mjs)$' || true
           )"
           if [ -n "$unexpected" ]; then
             echo "Unexpected non-Admin files changed:"

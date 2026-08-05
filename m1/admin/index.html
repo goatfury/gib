@@ -330,6 +330,7 @@
           <p id="sessionLabel" class="muted"></p>
         </div>
         <div class="topbar-actions">
+          <button id="installSyncSettingsButton" class="btn warn" type="button" hidden>Install repaired sync settings</button>
           <button id="tabletDiagnosticButton" class="btn ghost" type="button" hidden>Open tablet diagnostic</button>
           <span id="tabletDiagnosticOriginMessage" class="muted" hidden>Tablet diagnostic must be opened from https://gib-live.netlify.app.</span>
           <button id="logoutButton" class="btn ghost" type="button">Log Out</button>
@@ -415,7 +416,12 @@
       const TABLET_DIAGNOSTIC_REQUEST = 'gib:m1:diagnostic-request:v1';
       const TABLET_DIAGNOSTIC_PROOFS = 'gib:m1:diagnostic-proofs:v1';
       const TABLET_DIAGNOSTIC_RESULT = 'gib:m1:diagnostic-result:v1';
+      const TABLET_INSTALL_INIT = 'gib:m1:diagnostic-install-init:v1';
+      const TABLET_INSTALL_READY = 'gib:m1:diagnostic-install-ready:v1';
+      const TABLET_INSTALL_REQUEST = 'gib:m1:diagnostic-install-request:v1';
+      const TABLET_INSTALL_RESULT = 'gib:m1:diagnostic-install-result:v1';
       const PROOF_PATTERN = /^[a-f0-9]{64}$/;
+      const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
       const DEPLOY_PREVIEW_ORIGIN_PATTERN = /^https:\/\/deploy-preview-\d+--gib-live\.netlify\.app$/;
       const TIME_ZONE = 'America/New_York';
       const SITE = 'Rev';
@@ -428,7 +434,11 @@
       let adminRequestToken = '';
       let diagnosticWindow = null;
       let diagnosticRunId = '';
+      let diagnosticPurpose = '';
       let diagnosticVerifying = false;
+      let diagnosticAwaitingInstallReady = false;
+      let diagnosticAwaitingInstallAck = false;
+      let diagnosticReadyTimer = 0;
       let diagnosticExpiryTimer = 0;
 
       const $ = selector => document.querySelector(selector);
@@ -508,13 +518,21 @@
 
       function clearDiagnosticRun(closeWindow = false) {
         const popup = diagnosticWindow;
+        if (diagnosticReadyTimer) window.clearTimeout(diagnosticReadyTimer);
         if (diagnosticExpiryTimer) window.clearTimeout(diagnosticExpiryTimer);
+        diagnosticReadyTimer = 0;
         diagnosticExpiryTimer = 0;
         diagnosticWindow = null;
         diagnosticRunId = '';
+        diagnosticPurpose = '';
         diagnosticVerifying = false;
+        diagnosticAwaitingInstallReady = false;
+        diagnosticAwaitingInstallAck = false;
+        $('#installSyncSettingsButton').disabled = false;
         $('#tabletDiagnosticButton').disabled = false;
-        if (closeWindow && popup && !popup.closed) popup.close();
+        if (closeWindow && popup && !popup.closed) {
+          try { popup.close(); } catch {}
+        }
       }
 
       function exactObjectKeys(value, expectedKeys) {
@@ -525,14 +543,50 @@
           && actual.every((key, index) => key === expected[index]);
       }
 
-      function validDiagnosticIssueResponse(value, runId) {
-        return exactObjectKeys(value, ['ok', 'runId', 'proofKey', 'expiresInSeconds'])
+      function validDiagnosticIssueResponse(value, runId, purpose) {
+        const expectedKeys = purpose === 'install'
+          ? ['ok', 'runId', 'proofKey', 'installEnvelope', 'expiresInSeconds']
+          : ['ok', 'runId', 'proofKey', 'expiresInSeconds'];
+        return (purpose === 'diagnostic' || purpose === 'install')
+          && exactObjectKeys(value, expectedKeys)
           && value.ok === true
           && value.runId === runId
           && /^[A-Za-z0-9_-]{43}$/.test(value.proofKey)
+          && (purpose !== 'install'
+            || validInstallEnvelope(value.installEnvelope))
           && Number.isSafeInteger(value.expiresInSeconds)
           && value.expiresInSeconds >= 1
           && value.expiresInSeconds <= 60;
+      }
+
+      function validInstallEnvelope(value) {
+        if (typeof value !== 'string' || value.length < 64 || value.length > 4_096) return false;
+        const segments = value.split('.');
+        return segments.length === 5
+          && segments.every(segment => BASE64URL_PATTERN.test(segment));
+      }
+
+      function validInstallPublicKey(value) {
+        return exactObjectKeys(value, ['kty', 'crv', 'x', 'y', 'ext', 'key_ops'])
+          && value.kty === 'EC'
+          && value.crv === 'P-256'
+          && value.ext === true
+          && Array.isArray(value.key_ops)
+          && value.key_ops.length === 0
+          && typeof value.x === 'string'
+          && value.x.length === 43
+          && BASE64URL_PATTERN.test(value.x)
+          && typeof value.y === 'string'
+          && value.y.length === 43
+          && BASE64URL_PATTERN.test(value.y);
+      }
+
+      function validInstallReadyMessage(value) {
+        return exactObjectKeys(value, ['type', 'runId', 'clientPublicKey'])
+          && value.type === TABLET_INSTALL_READY
+          && value.runId === diagnosticRunId
+          && /^[a-f0-9]{32}$/.test(value.runId)
+          && validInstallPublicKey(value.clientPublicKey);
       }
 
       function validDiagnosticVerifyResponse(value) {
@@ -564,34 +618,92 @@
           && value.historyCount >= 0;
       }
 
-      async function openTabletDiagnostic() {
+      function validInstallResultMessage(value) {
+        return exactObjectKeys(value, ['type', 'runId', 'installed'])
+          && value.type === TABLET_INSTALL_RESULT
+          && value.runId === diagnosticRunId
+          && /^[a-f0-9]{32}$/.test(value.runId)
+          && typeof value.installed === 'boolean';
+      }
+
+      function failSyncInstallation() {
+        clearDiagnosticRun(true);
+        toast('Installation failed safely');
+      }
+
+      async function openTabletDiagnostic(purpose = 'diagnostic') {
+        if (purpose !== 'diagnostic' && purpose !== 'install') return;
+        const installing = purpose === 'install';
         if (!validTabletDiagnosticOrigin()) {
-          toast('Tablet diagnostic must be opened from https://gib-live.netlify.app.');
+          if (installing) failSyncInstallation();
+          else toast('Tablet diagnostic must be opened from https://gib-live.netlify.app.');
           return;
         }
         if (!/^[A-Za-z0-9_-]{32,256}$/.test(adminRequestToken)) {
-          setLoggedOut('Admin login must be renewed before opening the tablet diagnostic.');
+          if (installing) setLoggedOut('Installation failed safely');
+          else setLoggedOut('Admin login must be renewed before opening the tablet diagnostic.');
           return;
         }
+        if (installing) {
+          try {
+            if (!window.confirm(
+              'Install the repaired receiver settings on this tablet? Auto-sync will remain OFF. This does not sync or change the queue or local history.'
+            )) return;
+          } catch {
+            failSyncInstallation();
+            return;
+          }
+        }
         clearDiagnosticRun(true);
-        const popup = window.open('about:blank', '_blank');
+        let popup = null;
+        try { popup = window.open('about:blank', '_blank'); } catch {}
         if (!popup) {
-          toast('Allow this site to open the tablet diagnostic.');
+          if (installing) failSyncInstallation();
+          else toast('Allow this site to open the tablet diagnostic.');
           return;
         }
         const runId = createDiagnosticRunId();
         diagnosticWindow = popup;
         diagnosticRunId = runId;
+        diagnosticPurpose = purpose;
+        $('#installSyncSettingsButton').disabled = true;
         $('#tabletDiagnosticButton').disabled = true;
-        popup.focus();
         let proofKey = '';
+        let installEnvelope = '';
         try {
-          const issue = await requestJson(API.tabletDiagnostic, { action: 'issue', runId });
-          if (!validDiagnosticIssueResponse(issue, runId)) {
+          popup.focus();
+
+          if (installing) {
+            diagnosticAwaitingInstallReady = true;
+            diagnosticReadyTimer = window.setTimeout(() => {
+              if (diagnosticWindow === popup
+                && diagnosticRunId === runId
+                && diagnosticAwaitingInstallReady) {
+                failSyncInstallation();
+              }
+            }, 10_000);
+            popup.addEventListener('load', () => {
+              if (diagnosticWindow !== popup || diagnosticRunId !== runId || popup.closed) return;
+              if (!validDiagnosticChild(popup)) {
+                failSyncInstallation();
+                return;
+              }
+              popup.postMessage({ type: TABLET_INSTALL_INIT, runId }, location.origin);
+            }, { once: true });
+            popup.location.replace(TABLET_DIAGNOSTIC_PATH);
+            return;
+          }
+
+          const issue = await requestJson(API.tabletDiagnostic, {
+            action: 'issue',
+            runId
+          });
+          if (!validDiagnosticIssueResponse(issue, runId, purpose)) {
             throw new Error('The tablet diagnostic verifier returned an invalid capability.');
           }
           if (diagnosticWindow !== popup || diagnosticRunId !== runId || popup.closed) {
-            clearDiagnosticRun(false);
+            if (installing) failSyncInstallation();
+            else clearDiagnosticRun(false);
             return;
           }
           proofKey = issue.proofKey;
@@ -599,6 +711,7 @@
           diagnosticExpiryTimer = window.setTimeout(() => {
             if (diagnosticWindow !== popup || diagnosticRunId !== runId) return;
             proofKey = '';
+            installEnvelope = '';
             clearDiagnosticRun(true);
             toast('The tablet diagnostic authorization expired.');
           }, issue.expiresInSeconds * 1_000);
@@ -611,8 +724,10 @@
                 proofKey
               }, location.origin);
               proofKey = '';
+              installEnvelope = '';
             } else {
               proofKey = '';
+              installEnvelope = '';
               clearDiagnosticRun(true);
               toast('The tablet diagnostic did not open on this site.');
             }
@@ -620,10 +735,19 @@
           popup.location.replace(TABLET_DIAGNOSTIC_PATH);
         } catch (error) {
           proofKey = '';
-          clearDiagnosticRun(true);
-          if (error.status === 401 || error.status === 403) {
+          installEnvelope = '';
+          if (installing) {
+            clearDiagnosticRun(true);
+            if (error.status === 401 || error.status === 403) {
+              setLoggedOut('Installation failed safely');
+            } else {
+              toast('Installation failed safely');
+            }
+          } else if (error.status === 401 || error.status === 403) {
+            clearDiagnosticRun(true);
             setLoggedOut('Admin login required.');
           } else {
+            clearDiagnosticRun(true);
             toast(error.message);
           }
         }
@@ -647,16 +771,86 @@
         return data;
       }
 
+      async function receiveSyncInstallationReady(event) {
+        if (event.origin !== location.origin || event.source !== diagnosticWindow) return;
+        if (!validDiagnosticChild(diagnosticWindow)) return;
+        if (diagnosticPurpose !== 'install' || !diagnosticAwaitingInstallReady) return;
+        if (!validInstallReadyMessage(event.data)) {
+          if (event.data && event.data.type === TABLET_INSTALL_READY) failSyncInstallation();
+          return;
+        }
+
+        diagnosticAwaitingInstallReady = false;
+        if (diagnosticReadyTimer) window.clearTimeout(diagnosticReadyTimer);
+        diagnosticReadyTimer = 0;
+        const popup = diagnosticWindow;
+        const runId = diagnosticRunId;
+        const clientPublicKey = event.data.clientPublicKey;
+        diagnosticReadyTimer = window.setTimeout(() => {
+          if (diagnosticWindow === popup && diagnosticRunId === runId) failSyncInstallation();
+        }, 10_000);
+
+        let proofKey = '';
+        let installEnvelope = '';
+        try {
+          const issue = await requestJson(API.tabletDiagnostic, {
+            action: 'issue-install',
+            runId,
+            clientPublicKey
+          });
+          if (!validDiagnosticIssueResponse(issue, runId, 'install')) {
+            throw new Error('Installation failed safely');
+          }
+          if (diagnosticWindow !== popup
+            || diagnosticRunId !== runId
+            || popup.closed
+            || !validDiagnosticChild(popup)) return;
+
+          if (diagnosticReadyTimer) window.clearTimeout(diagnosticReadyTimer);
+          diagnosticReadyTimer = 0;
+          proofKey = issue.proofKey;
+          installEnvelope = issue.installEnvelope;
+          issue.proofKey = '';
+          issue.installEnvelope = '';
+          diagnosticExpiryTimer = window.setTimeout(() => {
+            if (diagnosticWindow !== popup || diagnosticRunId !== runId) return;
+            if (diagnosticAwaitingInstallAck) clearDiagnosticRun(true);
+            else failSyncInstallation();
+          }, issue.expiresInSeconds * 1_000);
+          popup.postMessage({
+            type: TABLET_INSTALL_REQUEST,
+            runId,
+            proofKey,
+            installEnvelope
+          }, location.origin);
+          proofKey = '';
+          installEnvelope = '';
+        } catch (error) {
+          proofKey = '';
+          installEnvelope = '';
+          if (diagnosticWindow !== popup || diagnosticRunId !== runId) return;
+          clearDiagnosticRun(true);
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Installation failed safely');
+          } else {
+            toast('Installation failed safely');
+          }
+        }
+      }
+
       async function receiveTabletDiagnosticProofs(event) {
         if (event.origin !== location.origin || event.source !== diagnosticWindow) return;
         if (!validDiagnosticChild(diagnosticWindow)) return;
+        if (diagnosticPurpose !== 'diagnostic' && diagnosticPurpose !== 'install') return;
         if (diagnosticVerifying || !validDiagnosticProofMessage(event.data)) return;
         diagnosticVerifying = true;
         const popup = diagnosticWindow;
         const runId = diagnosticRunId;
+        const purpose = diagnosticPurpose;
         try {
           const data = await requestDiagnosticVerification({
             action: 'verify',
+            purpose,
             runId,
             endpointProof: event.data.endpointProof,
             credentialProof: event.data.credentialProof
@@ -668,26 +862,44 @@
             || diagnosticRunId !== runId
             || popup.closed
             || !validDiagnosticChild(popup)) {
-            clearDiagnosticRun(true);
+            if (purpose === 'install') failSyncInstallation();
+            else clearDiagnosticRun(true);
             return;
           }
+          diagnosticAwaitingInstallAck = purpose === 'install';
           popup.postMessage({
             type: TABLET_DIAGNOSTIC_RESULT,
             runId,
             endpointExpected: data.endpointExpected,
             credentialMatch: data.credentialMatch
           }, location.origin);
-          clearDiagnosticRun(false);
+          if (purpose === 'diagnostic') clearDiagnosticRun(false);
         } catch (error) {
-          clearDiagnosticRun(true);
-          if (error.status === 401) {
+          if (purpose === 'install') {
+            clearDiagnosticRun(true);
+            if (error.status === 401) setLoggedOut('Installation failed safely');
+            else toast('Installation failed safely');
+          } else if (error.status === 401) {
+            clearDiagnosticRun(true);
             setLoggedOut('Admin login required.');
           } else if (error.status === 403) {
+            clearDiagnosticRun(true);
             toast('The tablet diagnostic authorization expired. Try again.');
           } else {
+            clearDiagnosticRun(true);
             toast(error.message);
           }
         }
+      }
+
+      function receiveSyncInstallationResult(event) {
+        if (event.origin !== location.origin || event.source !== diagnosticWindow) return;
+        if (!validDiagnosticChild(diagnosticWindow)) return;
+        if (diagnosticPurpose !== 'install' || !diagnosticAwaitingInstallAck) return;
+        if (!validInstallResultMessage(event.data)) return;
+        const installed = event.data.installed;
+        clearDiagnosticRun(true);
+        toast(installed ? 'Repaired sync settings installed' : 'Installation failed safely');
       }
 
       async function requestJson(url, body) {
@@ -1070,6 +1282,7 @@
           && location.hostname.includes('--');
         $('#testEntry').style.display = deployPreviewHost ? 'block' : 'none';
         const diagnosticOriginAllowed = validTabletDiagnosticOrigin();
+        $('#installSyncSettingsButton').hidden = !diagnosticOriginAllowed;
         $('#tabletDiagnosticButton').hidden = !diagnosticOriginAllowed;
         $('#tabletDiagnosticOriginMessage').hidden = diagnosticOriginAllowed;
         try {
@@ -1089,7 +1302,8 @@
         if (event.key === 'Enter') login(false);
       });
       $('#logoutButton').addEventListener('click', logout);
-      $('#tabletDiagnosticButton').addEventListener('click', openTabletDiagnostic);
+      $('#installSyncSettingsButton').addEventListener('click', () => openTabletDiagnostic('install'));
+      $('#tabletDiagnosticButton').addEventListener('click', () => openTabletDiagnostic('diagnostic'));
       $('#previousDay').addEventListener('click', () => loadReview(shiftDate(currentDate, -1)));
       $('#yesterday').addEventListener('click', () => loadReview(defaultYesterday()));
       $('#today').addEventListener('click', () => loadReview(nyDate()));
@@ -1126,7 +1340,9 @@
       window.addEventListener('pageshow', event => {
         if (event.persisted && !$('#appPanel').hidden && schedule) loadReview(currentDate || defaultYesterday());
       });
+      window.addEventListener('message', receiveSyncInstallationReady);
       window.addEventListener('message', receiveTabletDiagnosticProofs);
+      window.addEventListener('message', receiveSyncInstallationResult);
 
       initialize();
     })();
