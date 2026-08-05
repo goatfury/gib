@@ -45,7 +45,7 @@ jobs:
 
           unexpected="$(
             git diff --name-only "$base_sha"...HEAD |
-              grep -Ev '^(\.gitignore|\.github/workflows/m1-admin-only-required.yml|docs/m1-kiosk-sync-incident-runbook.md|_headers|_redirects|guests/index.html|integrations/google-apps-script/GibM1Receiver.gs|m1/admin/index.html|m1/shared-schedule.json|m1/tablet-diagnostic.html|netlify.toml|netlify/functions/_lib/m1-common.mjs|netlify/functions/m1-admin-(login|logout|review|search|add).mjs|tests/m1-(admin-only|recovery).test.mjs|tools/m1-recovery.mjs)$' || true
+              grep -Ev '^(\.gitignore|\.github/workflows/m1-admin-only-required.yml|docs/m1-kiosk-sync-incident-runbook.md|_headers|_redirects|guests/index.html|integrations/google-apps-script/GibM1Receiver.gs|m1/admin/index.html|m1/shared-schedule.json|m1/tablet-diagnostic.html|netlify.toml|netlify/functions/_lib/m1-common.mjs|netlify/functions/m1-admin-(login|logout|review|search|add).mjs|netlify/functions/m1-admin-tablet-diagnostic.mjs|tests/m1-(admin-only|recovery).test.mjs|tests/m1-tablet-diagnostic-secret-safe.test.mjs|tools/m1-recovery.mjs)$' || true
           )"
           if [ -n "$unexpected" ]; then
             echo "Unexpected non-Admin files changed:"
@@ -54,4 +54,4 @@ jobs:
           fi
 
       - name: Run focused M1 tests
-        run: node --test tests/m1-admin-only.test.mjs tests/m1-recovery.test.mjs
+        run: node --test tests/m1-admin-only.test.mjs tests/m1-recovery.test.mjs tests/m1-tablet-diagnostic-secret-safe.test.mjs

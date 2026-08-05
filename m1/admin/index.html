@@ -43,6 +43,7 @@
       gap: 18px;
       margin-bottom: 22px;
     }
+    .topbar-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
     .eyebrow {
       color: var(--green);
       font-size: .78rem;
@@ -280,6 +281,7 @@
       .shell { width: min(100% - 18px, 1120px); padding-top: 16px; }
       h1 { font-size: 1.9rem; }
       .topbar { align-items: flex-start; }
+      .topbar-actions { width: 100%; justify-content: flex-start; }
       .toolbar, .section { padding: 13px; border-radius: 14px; }
       .date-actions { display: grid; grid-template-columns: 1fr 1fr; }
       .class-main { grid-template-columns: 1fr; }
@@ -327,7 +329,11 @@
           <h1>Daily Sign-in Review</h1>
           <p id="sessionLabel" class="muted"></p>
         </div>
-        <button id="logoutButton" class="btn ghost" type="button">Log Out</button>
+        <div class="topbar-actions">
+          <button id="tabletDiagnosticButton" class="btn ghost" type="button" hidden>Open tablet diagnostic</button>
+          <span id="tabletDiagnosticOriginMessage" class="muted" hidden>Tablet diagnostic must be opened from https://gib-live.netlify.app.</span>
+          <button id="logoutButton" class="btn ghost" type="button">Log Out</button>
+        </div>
       </header>
 
       <section class="panel toolbar" aria-label="Date controls">
@@ -401,9 +407,16 @@
         logout: '/.netlify/functions/m1-admin-logout',
         review: '/.netlify/functions/m1-admin-review',
         search: '/.netlify/functions/m1-admin-search',
-        add: '/.netlify/functions/m1-admin-add'
+        add: '/.netlify/functions/m1-admin-add',
+        tabletDiagnostic: '/api/m1-tablet-diagnostic-verifier'
       });
       const ADMIN_REQUEST_HEADER = 'X-GIB-M1-Admin-Request-Token';
+      const TABLET_DIAGNOSTIC_PATH = '/m1/tablet-diagnostic.html';
+      const TABLET_DIAGNOSTIC_REQUEST = 'gib:m1:diagnostic-request:v1';
+      const TABLET_DIAGNOSTIC_PROOFS = 'gib:m1:diagnostic-proofs:v1';
+      const TABLET_DIAGNOSTIC_RESULT = 'gib:m1:diagnostic-result:v1';
+      const PROOF_PATTERN = /^[a-f0-9]{64}$/;
+      const DEPLOY_PREVIEW_ORIGIN_PATTERN = /^https:\/\/deploy-preview-\d+--gib-live\.netlify\.app$/;
       const TIME_ZONE = 'America/New_York';
       const SITE = 'Rev';
       const inFlightAdditions = new Set();
@@ -413,6 +426,10 @@
       let currentAdminName = '';
       let testMode = false;
       let adminRequestToken = '';
+      let diagnosticWindow = null;
+      let diagnosticRunId = '';
+      let diagnosticVerifying = false;
+      let diagnosticExpiryTimer = 0;
 
       const $ = selector => document.querySelector(selector);
 
@@ -469,6 +486,210 @@
         window.setTimeout(() => element.classList.remove('show'), 2600);
       }
 
+      function createDiagnosticRunId() {
+        return Array.from(crypto.getRandomValues(new Uint32Array(4)), value => (
+          value.toString(16).padStart(8, '0')
+        )).join('');
+      }
+
+      function validTabletDiagnosticOrigin() {
+        return location.origin === 'https://gib-live.netlify.app'
+          || DEPLOY_PREVIEW_ORIGIN_PATTERN.test(location.origin);
+      }
+
+      function validDiagnosticChild(popup) {
+        try {
+          return popup.location.origin === location.origin
+            && popup.location.pathname === TABLET_DIAGNOSTIC_PATH;
+        } catch {
+          return false;
+        }
+      }
+
+      function clearDiagnosticRun(closeWindow = false) {
+        const popup = diagnosticWindow;
+        if (diagnosticExpiryTimer) window.clearTimeout(diagnosticExpiryTimer);
+        diagnosticExpiryTimer = 0;
+        diagnosticWindow = null;
+        diagnosticRunId = '';
+        diagnosticVerifying = false;
+        $('#tabletDiagnosticButton').disabled = false;
+        if (closeWindow && popup && !popup.closed) popup.close();
+      }
+
+      function exactObjectKeys(value, expectedKeys) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+        const actual = Object.keys(value).sort();
+        const expected = [...expectedKeys].sort();
+        return actual.length === expected.length
+          && actual.every((key, index) => key === expected[index]);
+      }
+
+      function validDiagnosticIssueResponse(value, runId) {
+        return exactObjectKeys(value, ['ok', 'runId', 'proofKey', 'expiresInSeconds'])
+          && value.ok === true
+          && value.runId === runId
+          && /^[A-Za-z0-9_-]{43}$/.test(value.proofKey)
+          && Number.isSafeInteger(value.expiresInSeconds)
+          && value.expiresInSeconds >= 1
+          && value.expiresInSeconds <= 60;
+      }
+
+      function validDiagnosticVerifyResponse(value) {
+        return exactObjectKeys(value, ['ok', 'endpointExpected', 'credentialMatch'])
+          && value.ok === true
+          && typeof value.endpointExpected === 'boolean'
+          && typeof value.credentialMatch === 'boolean';
+      }
+
+      function validDiagnosticProofMessage(value) {
+        return exactObjectKeys(value, [
+          'type',
+          'runId',
+          'endpointProof',
+          'credentialProof',
+          'autoSync',
+          'queueCount',
+          'historyCount'
+        ])
+          && value.type === TABLET_DIAGNOSTIC_PROOFS
+          && value.runId === diagnosticRunId
+          && /^[a-f0-9]{32}$/.test(value.runId)
+          && PROOF_PATTERN.test(value.endpointProof)
+          && PROOF_PATTERN.test(value.credentialProof)
+          && typeof value.autoSync === 'boolean'
+          && Number.isSafeInteger(value.queueCount)
+          && value.queueCount >= 0
+          && Number.isSafeInteger(value.historyCount)
+          && value.historyCount >= 0;
+      }
+
+      async function openTabletDiagnostic() {
+        if (!validTabletDiagnosticOrigin()) {
+          toast('Tablet diagnostic must be opened from https://gib-live.netlify.app.');
+          return;
+        }
+        if (!/^[A-Za-z0-9_-]{32,256}$/.test(adminRequestToken)) {
+          setLoggedOut('Admin login must be renewed before opening the tablet diagnostic.');
+          return;
+        }
+        clearDiagnosticRun(true);
+        const popup = window.open('about:blank', '_blank');
+        if (!popup) {
+          toast('Allow this site to open the tablet diagnostic.');
+          return;
+        }
+        const runId = createDiagnosticRunId();
+        diagnosticWindow = popup;
+        diagnosticRunId = runId;
+        $('#tabletDiagnosticButton').disabled = true;
+        popup.focus();
+        let proofKey = '';
+        try {
+          const issue = await requestJson(API.tabletDiagnostic, { action: 'issue', runId });
+          if (!validDiagnosticIssueResponse(issue, runId)) {
+            throw new Error('The tablet diagnostic verifier returned an invalid capability.');
+          }
+          if (diagnosticWindow !== popup || diagnosticRunId !== runId || popup.closed) {
+            clearDiagnosticRun(false);
+            return;
+          }
+          proofKey = issue.proofKey;
+          issue.proofKey = '';
+          diagnosticExpiryTimer = window.setTimeout(() => {
+            if (diagnosticWindow !== popup || diagnosticRunId !== runId) return;
+            proofKey = '';
+            clearDiagnosticRun(true);
+            toast('The tablet diagnostic authorization expired.');
+          }, issue.expiresInSeconds * 1_000);
+          popup.addEventListener('load', () => {
+            if (diagnosticWindow !== popup || popup.closed) return;
+            if (validDiagnosticChild(popup)) {
+              popup.postMessage({
+                type: TABLET_DIAGNOSTIC_REQUEST,
+                runId,
+                proofKey
+              }, location.origin);
+              proofKey = '';
+            } else {
+              proofKey = '';
+              clearDiagnosticRun(true);
+              toast('The tablet diagnostic did not open on this site.');
+            }
+          }, { once: true });
+          popup.location.replace(TABLET_DIAGNOSTIC_PATH);
+        } catch (error) {
+          proofKey = '';
+          clearDiagnosticRun(true);
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Admin login required.');
+          } else {
+            toast(error.message);
+          }
+        }
+      }
+
+      async function requestDiagnosticVerification(body) {
+        const response = await fetch(API.tabletDiagnostic, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          cache: 'no-store',
+          body: JSON.stringify(body)
+        });
+        let data = null;
+        try { data = await response.json(); } catch {}
+        if (!response.ok || !data || data.ok !== true) {
+          const error = new Error(data && data.message ? data.message : 'The request did not complete.');
+          error.status = response.status;
+          throw error;
+        }
+        return data;
+      }
+
+      async function receiveTabletDiagnosticProofs(event) {
+        if (event.origin !== location.origin || event.source !== diagnosticWindow) return;
+        if (!validDiagnosticChild(diagnosticWindow)) return;
+        if (diagnosticVerifying || !validDiagnosticProofMessage(event.data)) return;
+        diagnosticVerifying = true;
+        const popup = diagnosticWindow;
+        const runId = diagnosticRunId;
+        try {
+          const data = await requestDiagnosticVerification({
+            action: 'verify',
+            runId,
+            endpointProof: event.data.endpointProof,
+            credentialProof: event.data.credentialProof
+          });
+          if (!validDiagnosticVerifyResponse(data)) {
+            throw new Error('The tablet diagnostic verifier returned an invalid result.');
+          }
+          if (diagnosticWindow !== popup
+            || diagnosticRunId !== runId
+            || popup.closed
+            || !validDiagnosticChild(popup)) {
+            clearDiagnosticRun(true);
+            return;
+          }
+          popup.postMessage({
+            type: TABLET_DIAGNOSTIC_RESULT,
+            runId,
+            endpointExpected: data.endpointExpected,
+            credentialMatch: data.credentialMatch
+          }, location.origin);
+          clearDiagnosticRun(false);
+        } catch (error) {
+          clearDiagnosticRun(true);
+          if (error.status === 401) {
+            setLoggedOut('Admin login required.');
+          } else if (error.status === 403) {
+            toast('The tablet diagnostic authorization expired. Try again.');
+          } else {
+            toast(error.message);
+          }
+        }
+      }
+
       async function requestJson(url, body) {
         const headers = { 'Content-Type': 'application/json' };
         if (adminRequestToken) headers[ADMIN_REQUEST_HEADER] = adminRequestToken;
@@ -491,6 +712,7 @@
       }
 
       function setLoggedOut(message = '') {
+        clearDiagnosticRun(true);
         currentRecords = [];
         currentAdminName = '';
         adminRequestToken = '';
@@ -847,6 +1069,9 @@
         const deployPreviewHost = location.hostname.endsWith('.netlify.app')
           && location.hostname.includes('--');
         $('#testEntry').style.display = deployPreviewHost ? 'block' : 'none';
+        const diagnosticOriginAllowed = validTabletDiagnosticOrigin();
+        $('#tabletDiagnosticButton').hidden = !diagnosticOriginAllowed;
+        $('#tabletDiagnosticOriginMessage').hidden = diagnosticOriginAllowed;
         try {
           const response = await fetch('/m1/shared-schedule.json', { cache: 'no-store' });
           if (!response.ok) throw new Error('Shared schedule unavailable.');
@@ -864,6 +1089,7 @@
         if (event.key === 'Enter') login(false);
       });
       $('#logoutButton').addEventListener('click', logout);
+      $('#tabletDiagnosticButton').addEventListener('click', openTabletDiagnostic);
       $('#previousDay').addEventListener('click', () => loadReview(shiftDate(currentDate, -1)));
       $('#yesterday').addEventListener('click', () => loadReview(defaultYesterday()));
       $('#today').addEventListener('click', () => loadReview(nyDate()));
@@ -900,6 +1126,7 @@
       window.addEventListener('pageshow', event => {
         if (event.persisted && !$('#appPanel').hidden && schedule) loadReview(currentDate || defaultYesterday());
       });
+      window.addEventListener('message', receiveTabletDiagnosticProofs);
 
       initialize();
     })();
