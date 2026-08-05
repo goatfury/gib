@@ -24,7 +24,7 @@ This runbook keeps deployment, data recovery, and the real-kiosk canary as separ
 Requires explicit production authorization after review and merge.
 
 1. Snapshot the current receiver code, deployment version, and authentication configuration for rollback.
-2. Generate a new legacy append credential and retain it privately. In one supervised session, update the receiver property and tablet value together, then use the local tablet diagnostic to report only endpoint `EXPECTED`/`UNEXPECTED`, credential `MATCH`/`MISMATCH`, auto-sync state, queue count, and local-history count. Never display or transmit either raw value.
+2. Generate a new legacy append credential and retain it privately. In one supervised session, update the receiver property and tablet value together. An authenticated supervisor then signs in at `/m1/admin/`, selects **Open tablet diagnostic**, and allows Admin to open `https://gib-live.netlify.app/m1/tablet-diagnostic.html` with a 60-second, run-bound, verifier-only authorization; the general Admin token remains in Admin, and the verifier authorization is cleared after verification. The diagnostic reports only endpoint `EXPECTED`/`UNEXPECTED`, credential `MATCH`/`MISMATCH`, auto-sync state, queue count, and local-history count. Staff must never receive, read, enter, copy, or report either raw sync value.
 3. Configure separate secrets for the receiver transport, legacy kiosk append, Admin actions, and recovery. The values must be pairwise distinct. The legacy value is append-only and must never authenticate Admin or recovery actions.
 4. Deploy the approved receiver version to the independently verified endpoint used by the old kiosk. Do not guess the target.
 5. Run wrong-, missing-, and cross-scope authentication tests plus non-mutating Admin and recovery-list smoke tests.
@@ -63,10 +63,11 @@ Requires separate authorization and normal staff operation; auto-sync remains of
 
 ## Tablet verification procedure — prepare only
 
-1. Open the same-origin M1 tablet diagnostic during a supervised Phase-B session; it has no network permission.
-2. An authorized operator fills the two password fields through a private password-manager/autofill channel. Do not speak, message, screenshot, or manually display either value.
-3. Run the local check and record only: receiver endpoint status, legacy credential status, auto-sync status, queue count, and local-history count.
-4. Require `EXPECTED`, `MATCH`, and `OFF` before proceeding. Any other label stops the rollout.
+1. On the tablet, an authenticated supervisor signs in to Admin at `/m1/admin/` during a supervised Phase-B session and selects **Open tablet diagnostic**.
+2. Admin opens exactly `https://gib-live.netlify.app/m1/tablet-diagnostic.html` with a 60-second, run-bound, verifier-only authorization; the general Admin token remains in Admin, and the verifier authorization is cleared after verification. This is the tablet diagnostic because it shares the kiosk's origin and can inspect that origin's local storage. A copy on `bjjsite.com` is not the tablet diagnostic and must not be used or presented as one because browser storage is origin-scoped.
+3. Staff never receives, reads, enters, copies, or reports the receiver endpoint or legacy credential. The authorized diagnostic reads only the already-stored kiosk values and displays no raw value.
+4. Run the check and record only: receiver endpoint status, legacy credential status, auto-sync status, queue count, and local-history count.
+5. Require `EXPECTED`, `MATCH`, and `OFF` before proceeding. Any other label stops the rollout.
 
 ## Rollback
 

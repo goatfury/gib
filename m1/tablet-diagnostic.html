@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
   <title>M1 Tablet Configuration Check</title>
   <style>
@@ -11,9 +12,7 @@
     main { max-width: 620px; margin: 32px auto; padding: 24px; background: white; border-radius: 14px; box-shadow: 0 8px 28px #17202a1a; }
     h1 { margin-top: 0; font-size: 1.5rem; }
     .notice { padding: 12px; border: 1px solid #b8c4d0; border-radius: 8px; background: #f8fafc; }
-    label { display: block; margin-top: 16px; font-weight: 700; }
-    input { box-sizing: border-box; width: 100%; margin-top: 6px; padding: 11px; border: 1px solid #8b98a5; border-radius: 7px; }
-    button { margin-top: 20px; padding: 11px 16px; border: 0; border-radius: 7px; background: #174ea6; color: white; font-weight: 700; }
+    .status { margin-top: 16px; font-weight: 700; }
     dl { display: grid; grid-template-columns: 1fr auto; gap: 10px 18px; margin-top: 24px; }
     dt { font-weight: 700; }
     dd { margin: 0; font-family: ui-monospace, monospace; }
@@ -22,16 +21,8 @@
 <body>
   <main>
     <h1>M1 tablet configuration check</h1>
-    <p class="notice">Phase-B supervised use only. This page reads the current browser's M1 settings locally. It has no network permission and never displays, stores, copies, or transmits either entered value.</p>
-    <form id="checkForm" autocomplete="off">
-      <label>Expected receiver endpoint
-        <input id="expectedEndpoint" type="password" required autocomplete="new-password" spellcheck="false">
-      </label>
-      <label>Expected legacy credential
-        <input id="expectedCredential" type="password" required autocomplete="new-password" spellcheck="false">
-      </label>
-      <button type="submit">Run local check</button>
-    </form>
+    <p class="notice">Supervised M1 Admin use only. This page has no network permission. It accepts no receiver or credential values and never displays, copies, stores anew, or transmits them. Only per-run cryptographic proofs and the three non-secret status values return to the same-origin Admin window.</p>
+    <p id="statusMessage" class="status" role="status" aria-live="polite">Validating the supervised Admin session…</p>
     <dl aria-live="polite">
       <dt>Receiver endpoint</dt><dd id="endpointResult">NOT CHECKED</dd>
       <dt>Legacy credential</dt><dd id="credentialResult">NOT CHECKED</dd>
@@ -42,6 +33,16 @@
   </main>
   <script>
     'use strict';
+
+    const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
+    const DEPLOY_PREVIEW_ORIGIN_PATTERN = /^https:\/\/deploy-preview-\d+--gib-live\.netlify\.app$/;
+    const EXPECTED_PATH = '/m1/tablet-diagnostic.html';
+    const ADMIN_PATHS = Object.freeze(['/m1/admin', '/m1/admin/', '/m1/admin/index.html']);
+    const MESSAGE_TYPE = Object.freeze({
+      request: 'gib:m1:diagnostic-request:v1',
+      proofs: 'gib:m1:diagnostic-proofs:v1',
+      result: 'gib:m1:diagnostic-result:v1'
+    });
     const STORAGE = Object.freeze({
       endpoint: 'gib_m1_sync_url_v1',
       credential: 'gib_m1_sync_token_v1',
@@ -49,7 +50,24 @@
       queue: 'gib_m1_sync_queue_v1',
       history: 'gib_m1_signins_v1'
     });
+    const HMAC_DOMAIN = Object.freeze({
+      endpoint: 'gib-m1-tablet-diagnostic:endpoint:v2',
+      credential: 'gib-m1-tablet-diagnostic:credential:v2'
+    });
+    const RUN_ID_PATTERN = /^[a-f0-9]{32}$/;
+    const PROOF_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+    const allowedOrigin = window.location.origin === PRODUCTION_ORIGIN
+      || DEPLOY_PREVIEW_ORIGIN_PATTERN.test(window.location.origin)
+      ? window.location.origin
+      : '';
     const byId = id => document.getElementById(id);
+    const status = message => { byId('statusMessage').textContent = message; };
+    const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+    const hasExactKeys = (value, keys) => {
+      const actual = Object.keys(value).sort();
+      const expected = [...keys].sort();
+      return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+    };
     const arrayCount = key => {
       try {
         const value = JSON.parse(localStorage.getItem(key) || '[]');
@@ -58,20 +76,118 @@
         return 0;
       }
     };
-    byId('checkForm').addEventListener('submit', event => {
-      event.preventDefault();
-      const expectedEndpoint = byId('expectedEndpoint').value.trim();
-      const expectedCredential = byId('expectedCredential').value;
-      const storedEndpoint = (localStorage.getItem(STORAGE.endpoint) || '').trim();
-      const storedCredential = localStorage.getItem(STORAGE.credential) || '';
-      byId('endpointResult').textContent = storedEndpoint === expectedEndpoint ? 'EXPECTED' : 'UNEXPECTED';
-      byId('credentialResult').textContent = storedCredential === expectedCredential ? 'MATCH' : 'MISMATCH';
-      byId('autoResult').textContent = localStorage.getItem(STORAGE.autoSync) === 'true' ? 'NOT OFF' : 'OFF';
-      byId('queueResult').textContent = String(arrayCount(STORAGE.queue));
-      byId('historyResult').textContent = String(arrayCount(STORAGE.history));
-      byId('expectedEndpoint').value = '';
-      byId('expectedCredential').value = '';
-    });
+    const bytesToHex = buffer => Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, '0')).join('');
+    const hmacProof = async (key, domain, runId, value) => {
+      let message = `${domain}\0${runId}\0${value}`;
+      const messageBytes = new TextEncoder().encode(message);
+      message = '';
+      try {
+        return bytesToHex(await crypto.subtle.sign('HMAC', key, messageBytes));
+      } finally {
+        messageBytes.fill(0);
+      }
+    };
+
+    let started = false;
+    let pending = null;
+    let complete = false;
+
+    const trustedOpener = () => {
+      if (!window.opener || window.opener.closed) return false;
+      try {
+        return window.opener.location.origin === allowedOrigin && ADMIN_PATHS.includes(window.opener.location.pathname);
+      } catch {
+        return false;
+      }
+    };
+
+    const handleRequest = async message => {
+      if (complete || started || !hasExactKeys(message, ['type', 'runId', 'proofKey'])) return;
+      if (!RUN_ID_PATTERN.test(message.runId) || !PROOF_KEY_PATTERN.test(message.proofKey)) {
+        status('Authorization could not be validated. Close this page and return to M1 Admin.');
+        return;
+      }
+      started = true;
+
+      const runId = message.runId;
+      let proofKey = message.proofKey;
+      message.proofKey = '';
+      const keyBytes = new TextEncoder().encode(proofKey);
+      proofKey = '';
+
+      let key;
+      try {
+        key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+      } finally {
+        keyBytes.fill(0);
+      }
+
+      let storedEndpoint = (localStorage.getItem(STORAGE.endpoint) || '').trim();
+      let storedCredential = localStorage.getItem(STORAGE.credential) || '';
+      let endpointProof;
+      let credentialProof;
+      try {
+        endpointProof = await hmacProof(key, HMAC_DOMAIN.endpoint, runId, storedEndpoint);
+        storedEndpoint = '';
+        credentialProof = await hmacProof(key, HMAC_DOMAIN.credential, runId, storedCredential);
+      } finally {
+        storedEndpoint = '';
+        storedCredential = '';
+        key = null;
+      }
+
+      pending = Object.freeze({
+        runId,
+        autoSync: localStorage.getItem(STORAGE.autoSync) === 'true',
+        queueCount: arrayCount(STORAGE.queue),
+        historyCount: arrayCount(STORAGE.history)
+      });
+      status('Secure comparison in progress…');
+      window.opener.postMessage({
+        type: MESSAGE_TYPE.proofs,
+        runId,
+        endpointProof,
+        credentialProof,
+        autoSync: pending.autoSync,
+        queueCount: pending.queueCount,
+        historyCount: pending.historyCount
+      }, allowedOrigin);
+      endpointProof = '';
+      credentialProof = '';
+    };
+
+    const handleResult = message => {
+      if (complete || !pending || !hasExactKeys(message, ['type', 'runId', 'endpointExpected', 'credentialMatch'])) return;
+      if (message.runId !== pending.runId || typeof message.endpointExpected !== 'boolean' || typeof message.credentialMatch !== 'boolean') return;
+
+      byId('endpointResult').textContent = message.endpointExpected ? 'EXPECTED' : 'UNEXPECTED';
+      byId('credentialResult').textContent = message.credentialMatch ? 'MATCH' : 'MISMATCH';
+      byId('autoResult').textContent = pending.autoSync ? 'NOT OFF' : 'OFF';
+      byId('queueResult').textContent = String(pending.queueCount);
+      byId('historyResult').textContent = String(pending.historyCount);
+      pending = null;
+      complete = true;
+      status('Check complete. These five outputs are safe to report.');
+    };
+
+    if (!allowedOrigin || window.location.pathname !== EXPECTED_PATH) {
+      status('Wrong location. Production use is allowed only at https://gib-live.netlify.app/m1/tablet-diagnostic.html. Close this page and return to M1 Admin.');
+    } else if (!trustedOpener()) {
+      status('Direct access is disabled. Launch this check from the supervised M1 Admin page on this site.');
+    } else {
+      status('Waiting for supervised M1 Admin authorization…');
+      window.addEventListener('message', event => {
+        if (event.origin !== allowedOrigin || event.source !== window.opener || !isRecord(event.data)) return;
+        if (event.data.type === MESSAGE_TYPE.request) {
+          handleRequest(event.data).catch(() => {
+            pending = null;
+            status('The secure comparison could not be completed. Close this page and return to M1 Admin.');
+          });
+        } else if (event.data.type === MESSAGE_TYPE.result) {
+          handleResult(event.data);
+        }
+      });
+    }
   </script>
 </body>
 </html>
