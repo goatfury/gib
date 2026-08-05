@@ -26,7 +26,7 @@ export const CREDENTIAL_PROOF_DOMAIN = 'gib-m1-tablet-diagnostic:credential:v2';
 
 // Allow exactly one capability issue and one proof verification per minute.
 export const config = {
-  path: CAPABILITY_PATH,
+  path: '/api/m1-tablet-diagnostic-verifier',
   rateLimit: {
     windowLimit: 2,
     windowSize: 60,

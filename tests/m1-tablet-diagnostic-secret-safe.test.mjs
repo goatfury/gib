@@ -164,7 +164,7 @@ test('verifier has the exact two-request rate limit and only issue then verify a
   });
   assert.match(
     verifierSource,
-    /export const config\s*=\s*\{[\s\S]*?path:\s*CAPABILITY_PATH[\s\S]*?windowLimit:\s*2[\s\S]*?windowSize:\s*60[\s\S]*?aggregateBy:\s*\['ip',\s*'domain'\][\s\S]*?\};/u
+    /export const config\s*=\s*\{[\s\S]*?path:\s*'\/api\/m1-tablet-diagnostic-verifier'[\s\S]*?windowLimit:\s*2[\s\S]*?windowSize:\s*60[\s\S]*?aggregateBy:\s*\['ip',\s*'domain'\][\s\S]*?\};/u
   );
   assert.match(verifierSource, /Object\.keys\(value\)\.length\s*===\s*2[\s\S]*value\.action\s*===\s*'issue'/u);
   assert.match(verifierSource, /Object\.keys\(value\)\.length\s*===\s*4[\s\S]*value\.action\s*===\s*'verify'/u);
