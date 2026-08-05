@@ -29,7 +29,7 @@ const runbook = read('docs/m1-kiosk-sync-incident-runbook.md');
 const PROD_ORIGIN = 'https://gib-live.netlify.app';
 const PREVIEW_ORIGIN = 'https://deploy-preview-47--gib-live.netlify.app';
 const DIAGNOSTIC_PATH = '/m1/tablet-diagnostic.html';
-const VERIFIER_PATH = '/.netlify/functions/m1-admin-tablet-diagnostic';
+const VERIFIER_PATH = '/api/m1-tablet-diagnostic-verifier';
 const REQUEST_TYPE = 'gib:m1:diagnostic-request:v1';
 const PROOFS_TYPE = 'gib:m1:diagnostic-proofs:v1';
 const RESULT_TYPE = 'gib:m1:diagnostic-result:v1';
@@ -152,8 +152,10 @@ test('same-origin instructions, no raw entry, no child network, and preview alig
 });
 
 test('verifier has the exact two-request rate limit and only issue then verify actions', () => {
+  assert.match(adminHtml, /tabletDiagnostic:\s*'\/api\/m1-tablet-diagnostic-verifier'/u);
+  assert.match(verifierSource, /url\.pathname\s*!==\s*CAPABILITY_PATH/u);
   assert.deepEqual(verifierConfig, {
-    path: '/.netlify/functions/m1-admin-tablet-diagnostic',
+    path: VERIFIER_PATH,
     rateLimit: {
       windowLimit: 2,
       windowSize: 60,
@@ -162,7 +164,7 @@ test('verifier has the exact two-request rate limit and only issue then verify a
   });
   assert.match(
     verifierSource,
-    /export const config\s*=\s*\{[\s\S]*?path:\s*'\/\.netlify\/functions\/m1-admin-tablet-diagnostic'[\s\S]*?windowLimit:\s*2[\s\S]*?windowSize:\s*60[\s\S]*?aggregateBy:\s*\['ip',\s*'domain'\][\s\S]*?\};/u
+    /export const config\s*=\s*\{[\s\S]*?path:\s*CAPABILITY_PATH[\s\S]*?windowLimit:\s*2[\s\S]*?windowSize:\s*60[\s\S]*?aggregateBy:\s*\['ip',\s*'domain'\][\s\S]*?\};/u
   );
   assert.match(verifierSource, /Object\.keys\(value\)\.length\s*===\s*2[\s\S]*value\.action\s*===\s*'issue'/u);
   assert.match(verifierSource, /Object\.keys\(value\)\.length\s*===\s*4[\s\S]*value\.action\s*===\s*'verify'/u);

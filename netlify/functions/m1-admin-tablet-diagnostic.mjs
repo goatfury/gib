@@ -19,14 +19,14 @@ import {
 } from './_lib/m1-common.mjs';
 
 export const CAPABILITY_COOKIE = 'gib_m1_tablet_diag_cap';
-export const CAPABILITY_PATH = '/.netlify/functions/m1-admin-tablet-diagnostic';
+export const CAPABILITY_PATH = '/api/m1-tablet-diagnostic-verifier';
 export const CAPABILITY_SECONDS = 60;
 export const ENDPOINT_PROOF_DOMAIN = 'gib-m1-tablet-diagnostic:endpoint:v2';
 export const CREDENTIAL_PROOF_DOMAIN = 'gib-m1-tablet-diagnostic:credential:v2';
 
 // Allow exactly one capability issue and one proof verification per minute.
 export const config = {
-  path: '/.netlify/functions/m1-admin-tablet-diagnostic',
+  path: CAPABILITY_PATH,
   rateLimit: {
     windowLimit: 2,
     windowSize: 60,
@@ -55,6 +55,7 @@ function validSameOriginRequest(request) {
     || url.port
     || url.username
     || url.password
+    || url.pathname !== CAPABILITY_PATH
     || !allowedHost
   ) {
     return false;
