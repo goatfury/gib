@@ -1195,11 +1195,13 @@ test('all inline scripts on touched production pages compile', () => {
   }
 });
 
-test('tablet diagnostic is read-only and emits only bounded comparison labels and counts', () => {
+test('tablet diagnostic has no network permission and installs only bounded sync settings', () => {
   assert.match(tabletDiagnosticHtml, /connect-src 'none'/);
   assert.match(tabletDiagnosticHtml, /Receiver endpoint[\s\S]*Legacy credential[\s\S]*Auto-sync[\s\S]*Current queue count[\s\S]*Current local-history record count/);
   assert.match(tabletDiagnosticHtml, /'EXPECTED'\s*:\s*'UNEXPECTED'/);
   assert.match(tabletDiagnosticHtml, /'MATCH'\s*:\s*'MISMATCH'/);
-  assert.doesNotMatch(tabletDiagnosticHtml, /\bfetch\s*\(|XMLHttpRequest|sendBeacon|console\.|clipboard|localStorage\.setItem/);
-  assert.doesNotMatch(tabletDiagnosticHtml, /script\.google\.com|AKfy[A-Za-z0-9_-]{20,}/);
+  assert.doesNotMatch(tabletDiagnosticHtml, /\bfetch\s*\(|XMLHttpRequest|sendBeacon|console\.|clipboard/);
+  assert.match(tabletDiagnosticHtml, /localStorage\.setItem\(STORAGE\.autoSync,\s*'false'\)[\s\S]*localStorage\.setItem\(STORAGE\.endpoint,\s*endpoint\)[\s\S]*localStorage\.setItem\(STORAGE\.credential,\s*credential\)/u);
+  assert.doesNotMatch(tabletDiagnosticHtml, /localStorage\.(?:setItem|removeItem)\(STORAGE\.(?:queue|history)/u);
+  assert.doesNotMatch(tabletDiagnosticHtml, /AKfy[A-Za-z0-9_-]{20,}|GIB_(?:M1|TEST)_/u);
 });

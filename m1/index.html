@@ -682,15 +682,8 @@ input, textarea, select {
     <!-- Google Sheets sync configuration -->
     <div class="card" style="background: var(--panel);">
       <h3>Google Sheets Sync</h3>
-      <div class="subtle">Configure a webhook URL and token to push sign‑ins to your intake sheet.</div>
-      <div style="margin-top:12px;">
-        <label for="cfgSyncUrl" style="display:block; margin-bottom:4px;">Webhook URL</label>
-        <input id="cfgSyncUrl" type="text" placeholder="https://script.google.com/macros/s/.../exec" style="width:100%;">
-      </div>
-      <div style="margin-top:12px;">
-        <label for="cfgSyncToken" style="display:block; margin-bottom:4px;">Sync token</label>
-        <input id="cfgSyncToken" type="text" placeholder="Secret token" style="width:100%;">
-      </div>
+      <div class="subtle">Sync delivery remains available, but receiver values are managed only through authenticated M1 Admin.</div>
+      <div class="subtle" style="margin-top:12px;">Receiver settings are installed securely from M1 Admin and are not displayed here.</div>
       <div style="margin-top:12px;">
         <label for="cfgDeviceLabel" style="display:block; margin-bottom:4px;">Device label</label>
         <input id="cfgDeviceLabel" type="text" placeholder="Front Desk iPad" style="width:100%;">
@@ -2201,14 +2194,10 @@ refreshNameDatalist();
     saveSyncQueue(q);
   }
   function loadSyncSettings() {
-    $('#cfgSyncUrl').value = localStorage.getItem(SYNC_URL_KEY) || '';
-    $('#cfgSyncToken').value = localStorage.getItem(SYNC_TOKEN_KEY) || '';
     $('#cfgDeviceLabel').value = localStorage.getItem(DEVICE_LABEL_KEY) || '';
     $('#cfgAutoSync').checked = (localStorage.getItem(SYNC_AUTO_KEY) === 'true');
   }
   function saveSyncSettings() {
-    localStorage.setItem(SYNC_URL_KEY, ($('#cfgSyncUrl').value || '').trim());
-    localStorage.setItem(SYNC_TOKEN_KEY, ($('#cfgSyncToken').value || '').trim());
     localStorage.setItem(DEVICE_LABEL_KEY, ($('#cfgDeviceLabel').value || '').trim());
     localStorage.setItem(SYNC_AUTO_KEY, $('#cfgAutoSync').checked ? 'true' : 'false');
     updateSyncStatus();
@@ -2593,8 +2582,6 @@ refreshNameDatalist();
   });
 
   // Sync field & button listeners
-  $('#cfgSyncUrl').addEventListener('change', saveSyncSettings);
-  $('#cfgSyncToken').addEventListener('change', saveSyncSettings);
   $('#cfgDeviceLabel').addEventListener('change', saveSyncSettings);
   $('#cfgAutoSync').addEventListener('change', saveSyncSettings);
   $('#btnSyncNow').addEventListener('click', syncNow);
