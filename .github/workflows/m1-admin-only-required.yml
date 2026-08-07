@@ -41,7 +41,7 @@ jobs:
           fi
 
           git diff --check "$base_sha"...HEAD
-          test "$(git rev-parse "HEAD:m1/index.html")" = "c522ca681dc8ddd22407e9b7e13f2f46d9b937ad"
+          test "$(git rev-parse "HEAD:m1/index.html")" = "642981a1f6cacac1aea973818b3812242eb697ed"
           test "$(git rev-parse "HEAD:m1/sync-core.mjs")" = "c821963300d74ea2d17364d1595964c5b6bfadd1"
           test "$(git rev-parse "HEAD:netlify/functions/m1-kiosk-sync.mjs")" = "a1c8d9e0d61f962b5d151b82e7cdefe48db0fa20"
           test "$(git rev-parse "HEAD:integrations/google-apps-script/Code.gs")" = "89b2a49348fce2a30b81adcb7ca988ad70f26988"

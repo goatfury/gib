@@ -184,7 +184,7 @@ export async function postGoogle(config, action, data, fetchImpl = fetch) {
         target: config.preview ? 'test' : 'production'
       }),
       redirect: 'follow',
-      signal: AbortSignal.timeout(8_000)
+      signal: AbortSignal.timeout(25_000)
     });
   } catch {
     return { readable: false, status: 0 };

@@ -2315,7 +2315,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
     syncInFlight = true;
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 12_000);
+    const timeout = window.setTimeout(() => controller.abort(), 30_000);
     try {
       const payload = await requestAcknowledgements(submittedRows, {
         online: navigator.onLine !== false,
