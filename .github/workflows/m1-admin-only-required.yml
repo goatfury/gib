@@ -43,13 +43,13 @@ jobs:
           git diff --check "$base_sha"...HEAD
           test "$(git rev-parse "HEAD:m1/index.html")" = "642981a1f6cacac1aea973818b3812242eb697ed"
           test "$(git rev-parse "HEAD:m1/sync-core.mjs")" = "c821963300d74ea2d17364d1595964c5b6bfadd1"
-          test "$(git rev-parse "HEAD:netlify/functions/m1-kiosk-sync.mjs")" = "a1c8d9e0d61f962b5d151b82e7cdefe48db0fa20"
+          test "$(git rev-parse "HEAD:netlify/functions/m1-kiosk-sync.mjs")" = "1579eab6bf390bb4f9f068b78f471be2fa041319"
           test "$(git rev-parse "HEAD:integrations/google-apps-script/Code.gs")" = "89b2a49348fce2a30b81adcb7ca988ad70f26988"
           test "$(git rev-parse "HEAD:integrations/google-apps-script/GibM1Receiver.gs")" = "d20cbe5e02d8c4898765c793351c0860aff00e10"
           test "$(git rev-parse "HEAD:integrations/google-apps-script/appsscript.json")" = "d41f74bcbf95288dd59bbda303d477b57cf4bce4"
           test "$(git rev-parse "HEAD:m1/admin/index.html")" = "7e406f0056e2b1119ecf91a7c449381e13063981"
           test "$(git rev-parse "HEAD:m1/tablet-diagnostic.html")" = "b5de1709385315753d8983b6bbfa07b2bad55686"
-          test "$(git rev-parse "HEAD:netlify/functions/m1-admin-tablet-diagnostic.mjs")" = "6fe94bea77703d8fe8055bf05fd2215d600de647"
+          test "$(git rev-parse "HEAD:netlify/functions/m1-admin-tablet-diagnostic.mjs")" = "d11d723ef192be85f09dd58e112ade0dada63575"
 
           unexpected="$(
             git diff --name-only "$base_sha"...HEAD |

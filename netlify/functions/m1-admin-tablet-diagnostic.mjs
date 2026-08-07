@@ -28,7 +28,9 @@ export const CREDENTIAL_PROOF_VALUE = 'browser-credential-absent';
 export const DIAGNOSTIC_PURPOSE = 'diagnostic';
 
 export const config = {
-  path: CAPABILITY_PATH,
+  // Netlify extracts function routing metadata statically during the build.
+  // Keep this value literal so the Deploy Preview route is actually emitted.
+  path: '/api/m1-tablet-diagnostic-verifier',
   rateLimit: {
     windowLimit: 2,
     windowSize: 60,

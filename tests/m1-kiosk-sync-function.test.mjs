@@ -76,6 +76,7 @@ function acknowledged(input, result = 'added', linkedRecordId = input.RowID) {
 }
 
 test('function route and preview boundary are exact and production never reaches Google', async () => {
+  assert.match(source, /export const config = \{(?:\s*\/\/[^\r\n]*)*\s*path: '\/api\/m1-kiosk-sync'/u);
   assert.deepEqual(config, {
     path: KIOSK_SYNC_PATH,
     rateLimit: {

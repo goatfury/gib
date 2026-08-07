@@ -445,6 +445,7 @@ test('browser source and verifier contain no backend identifier or credential di
   assert.doesNotMatch(syncCore, /script\.google|GIB_TEST_WEBHOOK|token\s*:/u);
   assert.match(workflow, /m1\/tablet-diagnostic\.html/u);
   assert.match(workflow, /m1-admin-tablet-diagnostic\.mjs/u);
+  assert.match(verifierSource, /export const config = \{(?:\s*\/\/[^\r\n]*)*\s*path: '\/api\/m1-tablet-diagnostic-verifier'/u);
   assert.match(verifierConfig.path, /^\/api\/m1-tablet-diagnostic-verifier$/u);
   assert.match(runbook, /same-origin/u);
 });

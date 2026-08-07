@@ -11,7 +11,9 @@ export const KIOSK_SYNC_PATH = '/api/m1-kiosk-sync';
 export const MAX_KIOSK_SYNC_ROWS = 50;
 
 export const config = {
-  path: KIOSK_SYNC_PATH,
+  // Netlify extracts function routing metadata statically during the build.
+  // Keep this value literal so the Deploy Preview route is actually emitted.
+  path: '/api/m1-kiosk-sync',
   rateLimit: {
     windowLimit: 30,
     windowSize: 60,
