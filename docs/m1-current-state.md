@@ -22,7 +22,8 @@ The latest genuine end-to-end TEST canary was performed against that TEST commit
 ## Production-candidate state
 
 - Branch: `agent/m1-production-candidate-prep`.
-- Candidate commit: `pending until QA commit`.
+- QA-passed candidate implementation commit: `174ab631e3891e1025d8c94ca2355b1f714b09e4`.
+- The branch head may include a later documentation-only commit that records this stable implementation SHA.
 - Intended PR shape: stacked draft PR with `agent/m1-revbjjops-test-path` as its base.
 - The candidate prepares code, tests, the secure tablet-install method, provisioning commands, rollback, and cutover instructions only. It does not provision or activate production.
 
