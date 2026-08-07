@@ -54,10 +54,15 @@ function adReceiverV2_(e) {
     }
 
     var action = cleanText_(body.action);
+    var legacyKioskRequest = !action && Array.isArray(body.rows);
     if (!action && Array.isArray(body.rows)) action = 'kioskSignIn';
 
     if (action === 'kioskSignIn') {
-      if (!legacyKioskAuthorized_(body)) return rejectedAuthResult_();
+      if (
+        legacyKioskRequest
+          ? !legacyKioskAuthorized_(body)
+          : !receiverKioskAuthorized_(body)
+      ) return rejectedAuthResult_();
       return kioskSignInAction_(body);
     }
     if (
@@ -178,7 +183,12 @@ function scriptProperty_(name) {
 }
 
 function configuredReceiverSecret_() {
-  return scriptProperty_(GIB_M1_RECEIVER_PROPERTY_);
+  var stored = scriptProperty_(GIB_M1_RECEIVER_PROPERTY_);
+  if (stored) return stored;
+  if (typeof gibM1DerivedReceiverSecret_ === 'function') {
+    return exactText_(gibM1DerivedReceiverSecret_());
+  }
+  return '';
 }
 
 function configuredSecretsArePairwiseDistinct_(values) {
@@ -199,6 +209,36 @@ function legacyKioskAuthorized_(body) {
   return Boolean(legacy)
     && configuredSecretsArePairwiseDistinct_([legacy, receiver, admin, recovery])
     && constantTimeTextEqual_(body && body.token, legacy);
+}
+
+function configuredDeploymentTarget_() {
+  var target = typeof GIB_M1_ALLOWED_TARGET === 'undefined'
+    ? ''
+    : cleanText_(GIB_M1_ALLOWED_TARGET).toLowerCase();
+  return target;
+}
+
+function deploymentTargetAllowed_(target) {
+  var configured = configuredDeploymentTarget_();
+  return !configured || (
+    (configured === 'test' || configured === 'production')
+    && cleanText_(target).toLowerCase() === configured
+  );
+}
+
+function receiverKioskAuthorized_(body) {
+  var target = cleanText_(body && body.target).toLowerCase();
+  if (
+    (target !== 'test' && target !== 'production')
+    || !deploymentTargetAllowed_(target)
+  ) return false;
+  var receiver = configuredReceiverSecret_();
+  var legacy = scriptProperty_(GIB_M1_LEGACY_KIOSK_PROPERTY_);
+  var admin = scriptProperty_(GIB_M1_ADMIN_ACTION_PROPERTY_);
+  var recovery = scriptProperty_(GIB_M1_RECOVERY_PROPERTY_);
+  return Boolean(receiver)
+    && configuredSecretsArePairwiseDistinct_([receiver, legacy, admin, recovery])
+    && constantTimeTextEqual_(body && body.token, receiver);
 }
 
 function adminActionAuthorized_(body) {
@@ -237,6 +277,9 @@ function requestTarget_(body) {
   if (target && target !== 'test' && target !== 'production') {
     throw new Error('Spreadsheet target is not configured.');
   }
+  if (target && !deploymentTargetAllowed_(target)) {
+    throw new Error('Spreadsheet target is not allowed by this deployment.');
+  }
   return target;
 }
 
@@ -245,6 +288,9 @@ function configuredSpreadsheetId_(body) {
   var testId = typeof TEST_SPREADSHEET_ID === 'undefined'
     ? ''
     : cleanText_(TEST_SPREADSHEET_ID);
+  if (!testId && typeof gibM1ResolveTestSpreadsheetId_ === 'function') {
+    testId = cleanText_(gibM1ResolveTestSpreadsheetId_());
+  }
   var productionId = typeof SPREADSHEET_ID === 'undefined'
     ? ''
     : cleanText_(SPREADSHEET_ID);
@@ -353,10 +399,13 @@ function sameExactSignin_(record, candidate) {
 
 function findExactSignin_(records, candidate) {
   var id = exactText_(candidate && candidate.rowId);
+  var idMatches = [];
   for (var i = 0; i < records.length; i += 1) {
-    if (activeRecord_(records[i]) && id && exactText_(records[i].rowId) === id) {
-      return sameExactSignin_(records[i], candidate) ? records[i] : { conflict: true };
-    }
+    if (id && exactText_(records[i].rowId) === id) idMatches.push(records[i]);
+  }
+  if (idMatches.length) {
+    if (idMatches.length !== 1 || !activeRecord_(idMatches[0])) return { conflict: true };
+    return sameExactSignin_(idMatches[0], candidate) ? idMatches[0] : { conflict: true };
   }
   for (var j = 0; j < records.length; j += 1) {
     if (sameExactSignin_(records[j], candidate)) return records[j];
@@ -545,12 +594,48 @@ function validateKioskRow_(row) {
   return value;
 }
 
+function requestedKioskRowId_(row) {
+  return safeExactText_(row && (row.RowID || row.rowId), 240, true);
+}
+
+function kioskRowResult_(row, result, linkedRecordId) {
+  return {
+    rowId: requestedKioskRowId_(row),
+    result: result,
+    linkedRecordId: linkedRecordId || ''
+  };
+}
+
+function duplicateKioskRowIds_(rows) {
+  var seen = {};
+  for (var i = 0; i < rows.length; i += 1) {
+    var id = requestedKioskRowId_(rows[i]);
+    if (!id) continue;
+    if (seen[id]) return true;
+    seen[id] = true;
+  }
+  return false;
+}
+
 function kioskSignInAction_(body) {
+  var target = requestTarget_(body);
   if (!Array.isArray(body.rows) || body.rows.length < 1 || body.rows.length > GIB_M1_MAX_KIOSK_ROWS_) {
     return jsonResult_({
       ok: false,
+      target: target,
       result: 'rejected',
       message: 'Rows were rejected.'
+    });
+  }
+  if (duplicateKioskRowIds_(body.rows)) {
+    return jsonResult_({
+      ok: false,
+      target: target,
+      result: 'rejected',
+      message: 'Duplicate RowIDs were rejected.',
+      results: body.rows.map(function(row) {
+        return kioskRowResult_(row, 'rejected', '');
+      })
     });
   }
 
@@ -558,8 +643,12 @@ function kioskSignInAction_(body) {
   if (!lock.tryLock(10000)) {
     return jsonResult_({
       ok: false,
+      target: target,
       result: 'failed',
-      message: 'The receiver was busy. Rows were not changed.'
+      message: 'The receiver was busy. Rows were not changed.',
+      results: body.rows.map(function(row) {
+        return kioskRowResult_(row, 'failed', '');
+      })
     });
   }
 
@@ -568,8 +657,11 @@ function kioskSignInAction_(body) {
     var sheet = signinsSheet_(spreadsheet);
     var state = readSignins_(sheet);
     var results = body.rows.map(function(row) {
-      var requestedId = cleanText_(row && (row.RowID || row.rowId));
+      var requestedId = requestedKioskRowId_(row);
       var candidate = validateKioskRow_(row);
+      if (candidate && target === 'test' && !obviousTestValue_(candidate.instructor)) {
+        candidate = null;
+      }
       if (!candidate) {
         return { rowId: requestedId, result: 'rejected', linkedRecordId: '' };
       }
@@ -601,7 +693,7 @@ function kioskSignInAction_(body) {
       }
     });
     SpreadsheetApp.flush();
-    return jsonResult_({ ok: true, results: results });
+    return jsonResult_({ ok: true, target: target, results: results });
   } finally {
     lock.releaseLock();
   }
@@ -1117,10 +1209,12 @@ if (typeof module !== 'undefined' && module.exports) {
     requestTarget_: requestTarget_,
     configuredSpreadsheetId_: configuredSpreadsheetId_,
     legacyKioskAuthorized_: legacyKioskAuthorized_,
+    receiverKioskAuthorized_: receiverKioskAuthorized_,
     adminActionAuthorized_: adminActionAuthorized_,
     recoveryAuthorized_: recoveryAuthorized_,
     recoveryWritesEnabled_: recoveryWritesEnabled_,
     validateKioskRow_: validateKioskRow_,
+    duplicateKioskRowIds_: duplicateKioskRowIds_,
     validateRecoveryRow_: validateRecoveryRow_
   };
 }

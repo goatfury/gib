@@ -565,11 +565,13 @@ test('recovery and Admin credentials cannot cross scopes', () => {
   assert.equal(harness.signins.values.length, 1);
 });
 
-test('legacy no-cors regression fixture clears only on network fulfillment and cannot read logical rejection', () => {
-  assert.match(kioskHtml, /mode:\s*'no-cors'/);
-  assert.match(kioskHtml, /await fetch\(url,[\s\S]*?saveSyncQueue\(\[\]\)/);
-  assert.match(kioskHtml, /response is opaque in no-cors/);
-  assert.doesNotMatch(kioskHtml, /await fetch\(url,[\s\S]*?response\.json\(\)/);
+test('kiosk requires readable same-origin row acknowledgments and never clears the whole queue', () => {
+  assert.doesNotMatch(kioskHtml, /mode:\s*['"]no-cors['"]/u);
+  assert.doesNotMatch(kioskHtml, /SYNC_URL_KEY|SYNC_TOKEN_KEY/u);
+  assert.doesNotMatch(kioskHtml, /saveSyncQueue\(\[\]\)/u);
+  assert.match(kioskHtml, /requestAcknowledgements\(submittedRows/u);
+  assert.match(kioskHtml, /applyAcknowledgements\([\s\S]*submittedRows/u);
+  assert.match(kioskHtml, /if \(!applied\.readable\) throw/u);
 });
 
 test('receiver requires two credentials and an explicit target before Sheet access', () => {
@@ -1195,13 +1197,15 @@ test('all inline scripts on touched production pages compile', () => {
   }
 });
 
-test('tablet diagnostic has no network permission and installs only bounded sync settings', () => {
+test('tablet diagnostic has no network permission and removes the browser credential path', () => {
   assert.match(tabletDiagnosticHtml, /connect-src 'none'/);
-  assert.match(tabletDiagnosticHtml, /Receiver endpoint[\s\S]*Legacy credential[\s\S]*Auto-sync[\s\S]*Current queue count[\s\S]*Current local-history record count/);
-  assert.match(tabletDiagnosticHtml, /'EXPECTED'\s*:\s*'UNEXPECTED'/);
-  assert.match(tabletDiagnosticHtml, /'MATCH'\s*:\s*'MISMATCH'/);
+  assert.match(tabletDiagnosticHtml, /Kiosk transport[\s\S]*Browser credential[\s\S]*Auto-sync[\s\S]*Current queue count[\s\S]*Current local-history record count/);
+  assert.match(tabletDiagnosticHtml, /'SAME-ORIGIN'\s*:\s*'UNEXPECTED'/);
+  assert.match(tabletDiagnosticHtml, /'ABSENT'\s*:\s*'UNEXPECTED'/);
   assert.doesNotMatch(tabletDiagnosticHtml, /\bfetch\s*\(|XMLHttpRequest|sendBeacon|console\.|clipboard/);
-  assert.match(tabletDiagnosticHtml, /localStorage\.setItem\(STORAGE\.autoSync,\s*'false'\)[\s\S]*localStorage\.setItem\(STORAGE\.endpoint,\s*endpoint\)[\s\S]*localStorage\.setItem\(STORAGE\.credential,\s*credential\)/u);
-  assert.doesNotMatch(tabletDiagnosticHtml, /localStorage\.(?:setItem|removeItem)\(STORAGE\.(?:queue|history)/u);
+  assert.match(tabletDiagnosticHtml, /OBSOLETE_BROWSER_SYNC_KEYS\.forEach\(key => localStorage\.removeItem\(key\)\)/u);
+  assert.match(tabletDiagnosticHtml, /localStorage\.setItem\(AUTO_SYNC_KEY,\s*'false'\)/u);
+  assert.doesNotMatch(tabletDiagnosticHtml, /localStorage\.setItem\([^\n]*(?:sync_url|sync_token)/u);
+  assert.doesNotMatch(tabletDiagnosticHtml, /script\.google\.com|macros\/s\/|installEnvelope|decryptInstall/u);
   assert.doesNotMatch(tabletDiagnosticHtml, /AKfy[A-Za-z0-9_-]{20,}|GIB_(?:M1|TEST)_/u);
 });

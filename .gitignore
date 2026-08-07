@@ -1,1 +1,8 @@
 /private/
+/.netlify/
+/.env
+/.env.*
+/.clasp.json
+/.clasprc.json
+/client_secret*.json
+/credentials.json
