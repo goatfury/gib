@@ -18,7 +18,8 @@ export const REQUIRED_CLASP_VERSION = '3.3.0';
 export const PRODUCTION_SCRIPT_TITLE = 'RBJJ M1 Receiver — PRODUCTION';
 export const PRODUCTION_SHEET_TITLE = 'RBJJ M1 — PRODUCTION';
 export const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
-export const PROVISION_FUNCTION = 'provisionGibM1ProductionReceiver';
+export const PROVISION_ACTION = 'provisionProductionReceiver';
+export const PROVISION_TIMEOUT_MS = 25_000;
 export const PRIVATE_STATE_SCHEMA = 'gib-m1-production-private-state/v1';
 export const PRIVATE_CONFIG_SCHEMA = 'gib-m1-production-private-config/v1';
 export const INSTALL_LINK_PATH = '/m1/tablet-install.html';
@@ -30,6 +31,7 @@ export const PROVISIONING_SEQUENCE = Object.freeze([
   'version',
   'deploy',
   'provision',
+  'status',
 ]);
 export const STAGED_SOURCE_FILES = Object.freeze([
   'Code.gs',
@@ -55,7 +57,6 @@ const SOURCE_FILES = Object.freeze([
 ]);
 const CLASP_IGNORE = '**/*\n!Code.gs\n!GibM1Receiver.gs\n!appsscript.json\n';
 const ID_PATTERN = /^[A-Za-z0-9_-]{8,512}$/u;
-const PROJECT_ID_PATTERN = /^[a-z][a-z0-9-]{4,62}$/u;
 const INSTALL_TOKEN_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/u;
 
 export class ProductionProvisionError extends Error {
@@ -238,6 +239,12 @@ function derivedProductionReceiverToken(scriptId) {
     .digest('base64url');
 }
 
+function derivedProductionProvisioningSecret(scriptId) {
+  return createHash('sha256')
+    .update(`gib-m1-production-provisioning:${scriptId}`, 'utf8')
+    .digest('base64url');
+}
+
 function validateSource(paths, fs) {
   const missing = [paths.wrapperPath, paths.receiverPath, paths.manifestPath]
     .filter(filePath => !fs.existsSync(filePath));
@@ -248,10 +255,11 @@ function validateSource(paths, fs) {
   const manifest = parseJson(manifestText, 'PRODUCTION_MANIFEST_INVALID');
   if (
     !/GIB_M1_ALLOWED_TARGET\s*=\s*['"]production['"]/u.test(wrapper)
-    || !new RegExp(`function\\s+${PROVISION_FUNCTION}\\s*\\(`, 'u').test(wrapper)
+    || !wrapper.includes(PROVISION_ACTION)
+    || !/function\s+gibM1HandleProductionProvisioningPost_\s*\(/u.test(wrapper)
     || /RBJJ M1\s+—\s+TEST|GIB_M1_ALLOWED_TARGET\s*=\s*['"]test['"]/u.test(wrapper)
     || receiver.length < 1_000
-    || manifest?.executionApi?.access !== 'MYSELF'
+    || Object.prototype.hasOwnProperty.call(manifest, 'executionApi')
     || manifest?.webapp?.access !== 'ANYONE_ANONYMOUS'
     || manifest?.webapp?.executeAs !== 'USER_DEPLOYING'
   ) {
@@ -270,11 +278,19 @@ function validateSource(paths, fs) {
 }
 
 function readPrivateConfig(paths, fs) {
-  const config = readOptionalJson(paths.configPath, fs);
-  if (!config) return null;
+  if (!fs.existsSync(paths.configPath)) return null;
+  const config = parseJson(fs.readFileSync(paths.configPath, 'utf8'));
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    fail('PRIVATE_CONFIG_INVALID', 'The ignored production configuration is invalid.');
+  }
+  const keys = Object.keys(config).sort();
+  const expectedKeys = config.authPath == null
+    ? ['schema']
+    : ['authPath', 'schema'];
   if (
     config.schema !== PRIVATE_CONFIG_SCHEMA
-    || !PROJECT_ID_PATTERN.test(String(config.projectId || ''))
+    || JSON.stringify(keys) !== JSON.stringify(expectedKeys)
+    || (config.authPath != null && (typeof config.authPath !== 'string' || !config.authPath))
   ) fail('PRIVATE_CONFIG_INVALID', 'The ignored production configuration is invalid.');
   return config;
 }
@@ -305,21 +321,18 @@ function readProjectFile(paths, fs) {
   const filePath = projectFilePath(paths);
   if (!fs.existsSync(filePath)) return null;
   const project = parseJson(fs.readFileSync(filePath, 'utf8'), 'CLASP_PROJECT_STATE_INVALID');
-  if (
-    !ID_PATTERN.test(String(project.scriptId || ''))
-    || !PROJECT_ID_PATTERN.test(String(project.projectId || ''))
-  ) fail('CLASP_PROJECT_STATE_INVALID', 'The ignored clasp project state is unusable.');
+  if (!ID_PATTERN.test(String(project.scriptId || ''))) {
+    fail('CLASP_PROJECT_STATE_INVALID', 'The ignored clasp project state is unusable.');
+  }
   return project;
 }
 
 function writeProjectFile(paths, project, fs) {
-  if (
-    !ID_PATTERN.test(String(project.scriptId || ''))
-    || !PROJECT_ID_PATTERN.test(String(project.projectId || ''))
-  ) fail('CLASP_PROJECT_STATE_INVALID', 'The clasp project identity is unusable.');
+  if (!ID_PATTERN.test(String(project.scriptId || ''))) {
+    fail('CLASP_PROJECT_STATE_INVALID', 'The clasp project identity is unusable.');
+  }
   writePrivateJson(projectFilePath(paths), {
     scriptId: project.scriptId,
-    projectId: project.projectId,
     rootDir: '.',
     filePushOrder: ['Code.gs', 'GibM1Receiver.gs'],
   }, fs);
@@ -397,25 +410,20 @@ async function claspPreflight({ paths, runner, env, authPath = null }) {
 }
 
 function strictProvisionResult(output) {
-  const envelope = findJsonValue(output);
-  if (
-    !envelope
-    || typeof envelope !== 'object'
-    || Array.isArray(envelope)
-    || JSON.stringify(Object.keys(envelope).sort()) !== JSON.stringify(['response'])
-  ) fail('PROVISION_RESPONSE_INVALID', 'The production provision response was not complete and sanitized.');
-  const value = typeof envelope.response === 'string'
-    ? findJsonValue(envelope.response)
-    : envelope.response;
+  let value = output;
+  if (typeof output === 'string') {
+    try { value = JSON.parse(output.trim()); }
+    catch { fail('PROVISION_RESPONSE_AMBIGUOUS', 'The production provision response was not exact.'); }
+  }
   const expectedKeys = [
     'created',
     'dataRowCount',
     'headerCount',
     'ok',
-    'signinsSheet',
+    'provisioningClosed',
+    'sheetStored',
     'spreadsheetMatches',
-    'spreadsheetTitle',
-    'target',
+    'targetLocked',
   ];
   if (
     !value
@@ -423,16 +431,62 @@ function strictProvisionResult(output) {
     || Array.isArray(value)
     || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(expectedKeys)
     || value.ok !== true
-    || value.target !== 'production'
-    || value.spreadsheetTitle !== PRODUCTION_SHEET_TITLE
     || value.spreadsheetMatches !== 1
     || typeof value.created !== 'boolean'
-    || value.signinsSheet !== 'Signins'
     || value.headerCount !== 11
-    || !Number.isInteger(value.dataRowCount)
-    || value.dataRowCount < 0
-  ) fail('PROVISION_RESPONSE_INVALID', 'The production provision response was not complete and sanitized.');
-  return value;
+    || value.dataRowCount !== 0
+    || value.provisioningClosed !== true
+    || value.sheetStored !== true
+    || value.targetLocked !== true
+  ) fail('PROVISION_RESPONSE_AMBIGUOUS', 'The production provision response was not exact.');
+  return Object.freeze({ ...value });
+}
+
+export async function requestProductionProvisioning(
+  { webhookUrl, scriptId, timeoutMs = PROVISION_TIMEOUT_MS } = {},
+  dependencies = {},
+) {
+  const fetchImpl = dependencies.fetchImpl || globalThis.fetch;
+  const timeoutSignalFactory = dependencies.timeoutSignalFactory
+    || (milliseconds => AbortSignal.timeout(milliseconds));
+  if (
+    typeof fetchImpl !== 'function'
+    || typeof timeoutSignalFactory !== 'function'
+    || !ID_PATTERN.test(String(scriptId || ''))
+    || !/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]{8,512}\/exec$/u.test(String(webhookUrl || ''))
+    || !Number.isInteger(timeoutMs)
+    || timeoutMs < 1_000
+    || timeoutMs > 60_000
+  ) fail('PROVISION_RESPONSE_AMBIGUOUS', 'The production provision request could not be made safely.');
+
+  const provisioningSecret = derivedProductionProvisioningSecret(scriptId);
+  let response;
+  try {
+    response = await fetchImpl(webhookUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        action: PROVISION_ACTION,
+        target: 'production',
+        provisioningSecret,
+      }),
+      redirect: 'follow',
+      signal: timeoutSignalFactory(timeoutMs),
+    });
+  } catch {
+    fail('PROVISION_RESPONSE_AMBIGUOUS', 'The production provision response was ambiguous.');
+  }
+
+  let responseText;
+  try { responseText = await response.text(); }
+  catch { fail('PROVISION_RESPONSE_AMBIGUOUS', 'The production provision response was ambiguous.'); }
+  if (response.ok !== true || !responseText || responseText.length > 4_096) {
+    fail('PROVISION_RESPONSE_AMBIGUOUS', 'The production provision response was ambiguous.');
+  }
+  return strictProvisionResult(responseText);
 }
 
 function parseVersionNumber(output) {
@@ -539,7 +593,7 @@ function initialState(project, source) {
     lifecycle: 'script-created',
     project: {
       scriptId: project.scriptId,
-      projectId: project.projectId,
+      cloudProjectMode: 'apps-script-default',
       title: PRODUCTION_SCRIPT_TITLE,
     },
     deployment: {
@@ -571,11 +625,11 @@ function initialState(project, source) {
 
 function projectFromState(state) {
   const scriptId = state?.project?.scriptId;
-  const projectId = state?.project?.projectId;
-  if (!ID_PATTERN.test(String(scriptId || '')) || !PROJECT_ID_PATTERN.test(String(projectId || ''))) {
+  const cloudProjectMode = state?.project?.cloudProjectMode;
+  if (!ID_PATTERN.test(String(scriptId || '')) || cloudProjectMode !== 'apps-script-default') {
     fail('PRIVATE_PROJECT_STATE_MISSING', 'The ignored production project identity is incomplete.');
   }
-  return { scriptId, projectId };
+  return { scriptId, cloudProjectMode };
 }
 
 function safeSummary(overrides = {}) {
@@ -585,6 +639,7 @@ function safeSummary(overrides = {}) {
     sourceReady: overrides.sourceReady === true,
     privatePathIgnored: overrides.privatePathIgnored === true,
     authUsable: overrides.authUsable === true,
+    defaultCloudProjectIntentional: overrides.defaultCloudProjectIntentional === true,
     projectStateUsable: overrides.projectStateUsable === true,
     stagedFileCount: Number(overrides.stagedFileCount || 0),
     commandCount: Number(overrides.commandCount || 0),
@@ -634,7 +689,7 @@ export async function statusProductionProvisioning(options = {}, dependencies = 
     state
     && project
     && state.project?.scriptId === project.scriptId
-    && state.project?.projectId === project.projectId
+    && state.project?.cloudProjectMode === 'apps-script-default'
   );
   return safeSummary({
     ok: true,
@@ -642,6 +697,7 @@ export async function statusProductionProvisioning(options = {}, dependencies = 
     sourceReady,
     privatePathIgnored: ignored,
     authUsable,
+    defaultCloudProjectIntentional: sourceReady,
     projectStateUsable,
     sheetResolved: state?.sheet?.resolved === true,
     sheetCreated: state?.sheet?.created === true,
@@ -677,7 +733,6 @@ export async function prepareProductionProvisioning(options = {}, dependencies =
     || STAGED_SOURCE_FILES.some(name => !stage.has(name))
   ) fail('PRODUCTION_SOURCE_UNSAFE', 'The reviewed production stage is incomplete.');
   const config = readPrivateConfig(paths, fs);
-  if (!config) fail('PRIVATE_CONFIG_MISSING', 'An ignored production config with the standard project ID is required.');
   const authPath = resolvePrivateAuthPath(config, paths, fs);
   await claspPreflight({ paths, runner, env: options.env || process.env, authPath });
   const state = readPrivateState(paths, fs);
@@ -688,11 +743,12 @@ export async function prepareProductionProvisioning(options = {}, dependencies =
     sourceReady: true,
     privatePathIgnored: true,
     authUsable: true,
+    defaultCloudProjectIntentional: true,
     projectStateUsable: Boolean(
       state
       && project
       && state.project?.scriptId === project.scriptId
-      && state.project?.projectId === project.projectId
+      && state.project?.cloudProjectMode === 'apps-script-default'
     ),
     stagedFileCount: stage.size,
     lifecycle: state?.lifecycle || 'absent',
@@ -705,7 +761,11 @@ function summaryFromState(state, overrides = {}) {
     sourceReady: true,
     privatePathIgnored: true,
     authUsable: true,
-    projectStateUsable: Boolean(state?.project?.scriptId),
+    defaultCloudProjectIntentional: true,
+    projectStateUsable: Boolean(
+      state?.project?.scriptId
+      && state?.project?.cloudProjectMode === 'apps-script-default'
+    ),
     stagedFileCount: overrides.stagedFileCount,
     commandCount: overrides.commandCount,
     sheetResolved: state?.sheet?.resolved === true,
@@ -726,7 +786,7 @@ function checkedProjectState(paths, fs, missingCode = 'PRIVATE_PROJECT_STATE_MIS
   const project = readProjectFile(paths, fs);
   if (!state || !project) fail(missingCode, 'The ignored production project state is missing.');
   const expected = projectFromState(state);
-  if (expected.scriptId !== project.scriptId || expected.projectId !== project.projectId) {
+  if (expected.scriptId !== project.scriptId) {
     fail('PRIVATE_PROJECT_STATE_MISMATCH', 'Private project identifiers do not match.');
   }
   if (state.pendingOperation) {
@@ -754,7 +814,6 @@ export async function executeProductionAction(action, options = {}, dependencies
   }
   const source = validateSource(paths, fs);
   const config = readPrivateConfig(paths, fs);
-  if (!config) fail('PRIVATE_CONFIG_MISSING', 'An ignored production config with the standard project ID is required.');
   const authPath = resolvePrivateAuthPath(config, paths, fs);
   await claspPreflight({ paths, runner, env, authPath });
 
@@ -783,7 +842,7 @@ export async function executeProductionAction(action, options = {}, dependencies
     if (!created || !ID_PATTERN.test(String(created.scriptId || ''))) {
       fail('CLASP_CREATE_STATE_MISSING', 'Clasp did not create a usable private project file.');
     }
-    const project = { scriptId: created.scriptId, projectId: config.projectId };
+    const project = { scriptId: created.scriptId };
     writeProjectFile(paths, project, fs);
     const state = initialState(project, source);
     writePrivateJson(paths.statePath, state, fs);
@@ -852,13 +911,19 @@ export async function executeProductionAction(action, options = {}, dependencies
     state.deployment.previousVersion = null;
     state.deployment.webhookUrl = `https://script.google.com/macros/s/${deploymentId}/exec`;
     state.netlify.webhookUrl = state.deployment.webhookUrl;
+    state.netlify.syncEnabled = false;
     state.lifecycle = 'deployed-unprovisioned';
     writePrivateJson(paths.statePath, state, fs);
     return summaryFromState(state, { commandCount: 2 });
   }
 
   if (normalized === 'update') {
-    if (state.lifecycle !== 'versioned' || !state.deployment.deploymentId) {
+    if (
+      state.lifecycle !== 'versioned'
+      || !state.deployment.deploymentId
+      || state.sheet?.resolved !== true
+      || !Number.isInteger(state.deployment.approvedVersion)
+    ) {
       fail('LIFECYCLE_ORDER_INVALID', 'Update requires an existing deployment and immutable candidate.');
     }
     const fromVersion = state.deployment.currentVersion;
@@ -869,7 +934,10 @@ export async function executeProductionAction(action, options = {}, dependencies
     });
     state.deployment.previousVersion = fromVersion;
     state.deployment.currentVersion = toVersion;
-    state.lifecycle = 'deployed-unprovisioned';
+    state.deployment.approvedVersion = toVersion;
+    state.deployment.candidateVersion = null;
+    state.netlify.syncEnabled = false;
+    state.lifecycle = 'provisioned';
     writePrivateJson(paths.statePath, state, fs);
     return summaryFromState(state, { commandCount: 3 });
   }
@@ -888,17 +956,39 @@ export async function executeProductionAction(action, options = {}, dependencies
     if (deploymentVersionFromList(listed.stdout, deploymentId) !== version) {
       fail('CLASP_DEPLOYMENT_STATE_DRIFT', 'Remote deployment state changed before provisioning.');
     }
-    const spec = command('provision', [
-      'run-function',
-      PROVISION_FUNCTION,
-      '--nondev',
-      '--json',
-    ], paths.projectDir, paths, authPath);
-    const output = await runCaptured(runner, { ...spec, env }, 'CLASP_PROVISION_FAILED');
-    const result = strictProvisionResult(output.stdout);
+    const webhookUrl = `https://script.google.com/macros/s/${deploymentId}/exec`;
+    if (state.deployment.webhookUrl !== webhookUrl || state.netlify.webhookUrl !== webhookUrl) {
+      fail('PROVISION_ENDPOINT_INVALID', 'The private production provision endpoint did not match deployment state.');
+    }
+    state.pendingOperation = {
+      action: 'provision',
+      deploymentId,
+      fromVersion: version,
+      toVersion: version,
+    };
+    state.lifecycle = 'provisioning-ambiguous';
+    state.netlify.syncEnabled = false;
+    writePrivateJson(paths.statePath, state, fs);
+
+    const provisionRequester = dependencies.provisionRequester || requestProductionProvisioning;
+    let requested;
+    try {
+      requested = await provisionRequester({
+        webhookUrl,
+        scriptId: state.project.scriptId,
+        timeoutMs: PROVISION_TIMEOUT_MS,
+      }, {
+        fetchImpl: dependencies.fetchImpl,
+        timeoutSignalFactory: dependencies.timeoutSignalFactory,
+      });
+    } catch (error) {
+      if (error instanceof ProductionProvisionError) throw error;
+      fail('PROVISION_RESPONSE_AMBIGUOUS', 'The production provision response was ambiguous.');
+    }
+    const result = strictProvisionResult(requested);
     state.sheet = {
       title: PRODUCTION_SHEET_TITLE,
-      resolved: true,
+      resolved: result.sheetStored,
       created: result.created,
       matchCount: result.spreadsheetMatches,
       headerCount: result.headerCount,
@@ -907,6 +997,8 @@ export async function executeProductionAction(action, options = {}, dependencies
     state.deployment.approvedVersion = state.deployment.currentVersion;
     state.deployment.candidateVersion = null;
     state.deployment.rolledBackFromVersion = null;
+    state.pendingOperation = null;
+    state.netlify.syncEnabled = false;
     state.lifecycle = 'provisioned';
     writePrivateJson(paths.statePath, state, fs);
     return summaryFromState(state, { commandCount: 2 });
@@ -928,7 +1020,6 @@ async function moveDeployment(action, options, dependencies) {
   const env = options.env || process.env;
   if (!privatePathIgnored({ ...paths, fs })) fail('PRIVATE_PATH_NOT_IGNORED', 'Private state is not ignored.');
   const config = readPrivateConfig(paths, fs);
-  if (!config) fail('PRIVATE_CONFIG_MISSING', 'The ignored production config is missing.');
   const authPath = resolvePrivateAuthPath(config, paths, fs);
   await claspPreflight({ paths, runner, env, authPath });
   const { state } = checkedProjectState(paths, fs);
@@ -970,6 +1061,7 @@ async function moveDeployment(action, options, dependencies) {
     state.deployment.rolledBackFromVersion = null;
     state.lifecycle = 'provisioned';
   }
+  state.netlify.syncEnabled = false;
   writePrivateJson(paths.statePath, state, fs);
   return Object.freeze({
     summary: summaryFromState(state, { commandCount: 3 }),
@@ -1071,6 +1163,7 @@ export async function generateProductionInstallerLink(options = {}, dependencies
     summary: safeSummary({
       ok: true,
       privatePathIgnored: true,
+      defaultCloudProjectIntentional: true,
       projectStateUsable: true,
       installerLinkSaved: true,
       expiresInSeconds: INSTALL_CAPABILITY_SECONDS,

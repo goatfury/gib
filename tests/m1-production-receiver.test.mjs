@@ -28,7 +28,7 @@ const SIGNIN_HEADERS = Object.freeze([
 ]);
 const ROW_ID = 'gib-m1-12345678-1234-4123-8123-123456789abc';
 
-function makeSheet(initialRows = []) {
+function makeSheet(initialRows = [], onWrite = () => {}) {
   const values = initialRows.map(row => [...row]);
   const numberFormats = new Map();
   let maxRows = Math.max(1000, values.length);
@@ -38,6 +38,7 @@ function makeSheet(initialRows = []) {
     numberFormats,
     get frozenRows() { return frozenRows; },
     deleteRow(rowNumber) {
+      onWrite('deleteRow');
       values.splice(rowNumber - 1, 1);
     },
     getDataRange() {
@@ -64,6 +65,7 @@ function makeSheet(initialRows = []) {
           });
         },
         setValues(rows) {
+          onWrite('setValues');
           rows.forEach((source, rowOffset) => {
             const rowIndex = startRow - 1 + rowOffset;
             if (!values[rowIndex]) values[rowIndex] = [];
@@ -74,6 +76,7 @@ function makeSheet(initialRows = []) {
           return this;
         },
         setNumberFormat(format) {
+          onWrite('setNumberFormat');
           for (let rowOffset = 0; rowOffset < rowCount; rowOffset += 1) {
             for (let columnOffset = 0; columnOffset < columnCount; columnOffset += 1) {
               numberFormats.set(`${startRow + rowOffset}:${startColumn + columnOffset}`, format);
@@ -87,9 +90,11 @@ function makeSheet(initialRows = []) {
       return maxRows;
     },
     insertRowsAfter(_afterRow, count) {
+      onWrite('insertRowsAfter');
       maxRows += count;
     },
     setFrozenRows(count) {
+      onWrite('setFrozenRows');
       frozenRows = count;
     }
   };
@@ -149,9 +154,13 @@ function createHarness({
     GIB_M1_LEGACY_KIOSK_TOKEN: 'production-legacy-token',
     GIB_M1_ADMIN_ACTION_TOKEN: 'production-admin-token',
     GIB_M1_RECOVERY_TOKEN: 'production-recovery-token',
+    GIB_M1_PROVISIONING_CLOSED: 'closed-v1',
     ...initialProperties
   }));
-  let signins = initialRows === null ? null : makeSheet(initialRows);
+  const sheetWriteEvents = [];
+  const propertyWriteEvents = [];
+  const recordSheetWrite = operation => sheetWriteEvents.push(operation);
+  let signins = initialRows === null ? null : makeSheet(initialRows, recordSheetWrite);
   let spreadsheetOpens = 0;
   let spreadsheetCreates = 0;
   let driveQueries = 0;
@@ -164,7 +173,8 @@ function createHarness({
     },
     insertSheet(name) {
       assert.equal(name, 'Signins');
-      signins = makeSheet();
+      recordSheetWrite('insertSheet');
+      signins = makeSheet([], recordSheetWrite);
       return signins;
     }
   };
@@ -174,6 +184,9 @@ function createHarness({
   const scriptId = 'private-production-script-id';
   const derivedToken = createHash('sha256')
     .update(`gib-m1-production:${scriptId}`, 'utf8')
+    .digest('base64url');
+  const provisioningSecret = createHash('sha256')
+    .update(`gib-m1-production-provisioning:${scriptId}`, 'utf8')
     .digest('base64url');
 
   const context = {
@@ -205,7 +218,19 @@ function createHarness({
       getScriptProperties: () => ({
         getProperty: name => propertyValues.get(name) || '',
         setProperty(name, value) {
+          propertyWriteEvents.push({ operation: 'setProperty', names: [name] });
           propertyValues.set(name, String(value));
+          return this;
+        },
+        setProperties(values, deleteAllOthers = false) {
+          propertyWriteEvents.push({
+            operation: 'setProperties',
+            names: Object.keys(values).sort()
+          });
+          if (deleteAllOthers) propertyValues.clear();
+          for (const [name, value] of Object.entries(values)) {
+            propertyValues.set(name, String(value));
+          }
           return this;
         }
       })
@@ -258,18 +283,51 @@ function createHarness({
   return {
     apps: vmContext,
     derivedToken,
+    provisioningSecret,
     propertyValues,
     get signins() { return signins; },
     get spreadsheetOpens() { return spreadsheetOpens; },
     get spreadsheetCreates() { return spreadsheetCreates; },
     get driveQueries() { return driveQueries; },
+    get sheetWrites() { return sheetWriteEvents.length; },
+    get sheetWriteEvents() { return [...sheetWriteEvents]; },
+    get propertyWrites() { return propertyWriteEvents.length; },
+    get propertyWriteEvents() { return propertyWriteEvents.map(event => ({ ...event })); },
     post(body) {
-      const output = vmContext.adReceiverV2_({
+      const event = {
         postData: { contents: JSON.stringify(body) }
-      });
+      };
+      const output = wrapper ? vmContext.doPost(event) : vmContext.adReceiverV2_(event);
       return JSON.parse(output.text);
     }
   };
+}
+
+function provisioningRequest(harness, overrides = {}) {
+  return {
+    action: 'provisionProductionReceiver',
+    target: 'production',
+    provisioningSecret: harness.provisioningSecret,
+    ...overrides
+  };
+}
+
+function assertBooleanCountResponse(value) {
+  assert.ok(value && typeof value === 'object' && !Array.isArray(value));
+  for (const [key, item] of Object.entries(value)) {
+    assert.ok(
+      typeof item === 'boolean' || (Number.isInteger(item) && item >= 0),
+      `Provisioning response field ${key} must be a sanitized boolean or count.`
+    );
+  }
+}
+
+function assertNoProvisioningAccess(harness) {
+  assert.equal(harness.driveQueries, 0);
+  assert.equal(harness.spreadsheetOpens, 0);
+  assert.equal(harness.spreadsheetCreates, 0);
+  assert.equal(harness.sheetWrites, 0);
+  assert.equal(harness.propertyWrites, 0);
 }
 
 test('production package is separate, locked, executable, and contains no private identifier', () => {
@@ -278,7 +336,14 @@ test('production package is separate, locked, executable, and contains no privat
   assert.match(wrapperSource, /var GIB_M1_ALLOW_RECEIVER_TOKEN_OVERRIDE = false/u);
   assert.match(wrapperSource, /var GIB_M1_REQUIRE_EXACT_SIGNINS_SCHEMA = true/u);
   assert.match(wrapperSource, /RBJJ M1 \u2014 PRODUCTION/u);
-  assert.match(wrapperSource, /function doPost\(e\)\s*\{\s*return adReceiverV2_\(e\)/u);
+  assert.match(wrapperSource, /var GIB_M1_PROVISION_ACTION_ = 'provisionProductionReceiver'/u);
+  assert.match(wrapperSource, /gib-m1-production-provisioning:/u);
+  assert.match(wrapperSource, /var GIB_M1_PROVISIONING_CLOSED_VALUE_ = 'closed-v1'/u);
+  assert.match(
+    wrapperSource,
+    /function doPost\(e\)[\s\S]*gibM1HandleProductionProvisioningPost_\(e\)[\s\S]*return adReceiverV2_\(e\)/u
+  );
+  assert.doesNotMatch(wrapperSource, /function doGet\s*\(/u);
   assert.doesNotMatch(wrapperSource, /RBJJ M1 \u2014 TEST|GIB_M1_TEST_SPREADSHEET_TITLE_/u);
   assert.match(wrapperSource, /forbiddenSpreadsheetProperty: 'GIB_M1_TEST_SPREADSHEET_ID'/u);
   assert.doesNotMatch(wrapperSource, /AKfy[A-Za-z0-9_-]{20,}|\b1[A-Za-z0-9_-]{30,}\b/u);
@@ -286,7 +351,7 @@ test('production package is separate, locked, executable, and contains no privat
     access: 'ANYONE_ANONYMOUS',
     executeAs: 'USER_DEPLOYING'
   });
-  assert.deepEqual(manifest.executionApi, { access: 'MYSELF' });
+  assert.equal(Object.hasOwn(manifest, 'executionApi'), false);
   assert.match(claspIgnore, /!Code\.gs/u);
   assert.match(claspIgnore, /!GibM1Receiver\.gs/u);
   assert.match(projectGitIgnore, /^\.clasp\.json$/mu);
@@ -438,50 +503,23 @@ test('a strict target-lock flag fails closed if the wrapper target is missing', 
   assert.equal(harness.spreadsheetOpens, 0);
 });
 
-test('production provisioning creates zero matches, initializes exact schema, and returns sanitized facts', () => {
-  const harness = createHarness({
-    initialRows: null,
-    driveMatchCount: 0,
-    propertyValues: {
-      GIB_M1_PRODUCTION_SPREADSHEET_ID: '',
-      GIB_M1_DEPLOYMENT_TARGET_LOCK: ''
-    }
-  });
-  const result = harness.apps.provisionGibM1ProductionReceiver();
-  assert.deepEqual(Object.keys(result).sort(), [
-    'created',
-    'dataRowCount',
-    'headerCount',
-    'ok',
-    'signinsSheet',
-    'spreadsheetMatches',
-    'spreadsheetTitle',
-    'target'
-  ]);
-  assert.equal(harness.spreadsheetCreates, 1);
-  assert.equal(harness.driveQueries, 2);
-  assert.deepEqual([...harness.signins.values[0]], SIGNIN_HEADERS);
-  assert.equal(harness.signins.frozenRows, 1);
-  assert.equal(harness.propertyValues.get('GIB_M1_PRODUCTION_SPREADSHEET_ID'), 'production-spreadsheet-id');
-  assert.equal(harness.propertyValues.get('GIB_M1_DEPLOYMENT_TARGET_LOCK'), 'production');
-  assert.equal(result.target, 'production');
-  assert.equal(result.created, true);
-  assert.equal(result.spreadsheetMatches, 1);
-  assert.equal(result.headerCount, SIGNIN_HEADERS.length);
-  assert.equal(result.dataRowCount, 0);
-  assert.doesNotMatch(JSON.stringify(result), /production-spreadsheet-id|private-production-script-id/u);
-});
+test('production provisioning rejects inexact fields, action, target, and credentials before resource access', () => {
+  const invalidRequests = [
+    harness => provisioningRequest(harness, { provisioningSecret: 'A'.repeat(43) }),
+    harness => provisioningRequest(harness, { provisioningSecret: harness.derivedToken }),
+    harness => provisioningRequest(harness, { target: 'Production' }),
+    harness => provisioningRequest(harness, { action: 'provisionProductionReceiver ' }),
+    harness => provisioningRequest(harness, { unexpected: true }),
+    harness => provisioningRequest(harness, { provisioningSecret: undefined })
+  ];
 
-test('production provisioning resolves one exact Sheet and rejects duplicates or unsafe RowID state', () => {
-  const existing = createHarness({
-    propertyValues: {
-      GIB_M1_PRODUCTION_SPREADSHEET_ID: '',
-      GIB_M1_DEPLOYMENT_TARGET_LOCK: ''
-    }
-  });
-  const resolved = existing.apps.provisionGibM1ProductionReceiver();
-  assert.equal(resolved.created, false);
-  assert.equal(existing.spreadsheetCreates, 0);
+  for (const makeRequest of invalidRequests) {
+    const harness = createHarness();
+    const response = harness.post(makeRequest(harness));
+    assert.deepEqual(response, { ok: false, rejected: true });
+    assertBooleanCountResponse(response);
+    assertNoProvisioningAccess(harness);
+  }
 
   const testProject = createHarness({
     driveMatchCount: 0,
@@ -491,50 +529,177 @@ test('production provisioning resolves one exact Sheet and rejects duplicates or
       GIB_M1_TEST_SPREADSHEET_ID: 'private-test-spreadsheet-id'
     }
   });
-  assert.throws(
-    () => testProject.apps.provisionGibM1ProductionReceiver(),
-    /conflicts with this project/u
-  );
-  assert.equal(testProject.driveQueries, 0);
-  assert.equal(testProject.spreadsheetCreates, 0);
+  const testProjectResponse = testProject.post(provisioningRequest(testProject));
+  assert.deepEqual(testProjectResponse, { ok: false, rejected: true });
+  assertBooleanCountResponse(testProjectResponse);
+  assertNoProvisioningAccess(testProject);
+});
 
-  const duplicateTitle = createHarness({
+test('receiver and provisioning credentials cannot cross-authorize', () => {
+  const provisioningWithReceiver = createHarness();
+  const provisioningResponse = provisioningWithReceiver.post(provisioningRequest(
+    provisioningWithReceiver,
+    { provisioningSecret: provisioningWithReceiver.derivedToken }
+  ));
+  assert.deepEqual(provisioningResponse, { ok: false, rejected: true });
+  assertNoProvisioningAccess(provisioningWithReceiver);
+
+  const kioskWithProvisioning = createHarness();
+  const kioskResponse = kioskWithProvisioning.post({
+    token: kioskWithProvisioning.provisioningSecret,
+    action: 'kioskSignIn',
+    target: 'production',
+    rows: [kioskRow()]
+  });
+  assert.equal(kioskResponse.result, 'rejected');
+  assertNoProvisioningAccess(kioskWithProvisioning);
+  assert.notEqual(kioskWithProvisioning.provisioningSecret, kioskWithProvisioning.derivedToken);
+});
+
+test('zero exact-title Sheets creates one, persists the lock, closes, and cannot replay', () => {
+  const harness = createHarness({
+    initialRows: null,
+    driveMatchCount: 0,
+    propertyValues: {
+      GIB_M1_PRODUCTION_SPREADSHEET_ID: '',
+      GIB_M1_DEPLOYMENT_TARGET_LOCK: '',
+      GIB_M1_PROVISIONING_CLOSED: ''
+    }
+  });
+  const request = provisioningRequest(harness);
+  const result = harness.post(request);
+  assert.deepEqual(Object.keys(result).sort(), [
+    'created',
+    'dataRowCount',
+    'headerCount',
+    'ok',
+    'provisioningClosed',
+    'sheetStored',
+    'spreadsheetMatches',
+    'targetLocked'
+  ]);
+  assert.deepEqual(result, {
+    ok: true,
+    created: true,
+    spreadsheetMatches: 1,
+    headerCount: SIGNIN_HEADERS.length,
+    dataRowCount: 0,
+    sheetStored: true,
+    targetLocked: true,
+    provisioningClosed: true
+  });
+  assertBooleanCountResponse(result);
+  assert.equal(harness.spreadsheetCreates, 1);
+  assert.equal(harness.driveQueries, 2);
+  assert.equal(harness.spreadsheetOpens, 1);
+  assert.deepEqual([...harness.signins.values[0]], SIGNIN_HEADERS);
+  assert.equal(harness.signins.frozenRows, 1);
+  assert.equal(harness.propertyValues.get('GIB_M1_PRODUCTION_SPREADSHEET_ID'), 'production-spreadsheet-id');
+  assert.equal(harness.propertyValues.get('GIB_M1_DEPLOYMENT_TARGET_LOCK'), 'production');
+  assert.equal(harness.propertyValues.get('GIB_M1_PROVISIONING_CLOSED'), 'closed-v1');
+  assert.deepEqual(harness.propertyWriteEvents, [{
+    operation: 'setProperties',
+    names: [
+      'GIB_M1_DEPLOYMENT_TARGET_LOCK',
+      'GIB_M1_PRODUCTION_SPREADSHEET_ID',
+      'GIB_M1_PROVISIONING_CLOSED'
+    ]
+  }]);
+  assert.doesNotMatch(
+    JSON.stringify(result),
+    /production-spreadsheet-id|private-production-script-id|provisioningSecret|RBJJ/u
+  );
+
+  const beforeReplay = {
+    driveQueries: harness.driveQueries,
+    spreadsheetOpens: harness.spreadsheetOpens,
+    spreadsheetCreates: harness.spreadsheetCreates,
+    sheetWrites: harness.sheetWrites,
+    propertyWrites: harness.propertyWrites
+  };
+  const replay = harness.post(request);
+  assert.deepEqual(replay, { ok: false, rejected: true });
+  assertBooleanCountResponse(replay);
+  assert.deepEqual({
+    driveQueries: harness.driveQueries,
+    spreadsheetOpens: harness.spreadsheetOpens,
+    spreadsheetCreates: harness.spreadsheetCreates,
+    sheetWrites: harness.sheetWrites,
+    propertyWrites: harness.propertyWrites
+  }, beforeReplay);
+});
+
+test('one exact-title empty Sheet verifies without creating another', () => {
+  const harness = createHarness({
+    propertyValues: {
+      GIB_M1_PRODUCTION_SPREADSHEET_ID: '',
+      GIB_M1_DEPLOYMENT_TARGET_LOCK: '',
+      GIB_M1_PROVISIONING_CLOSED: ''
+    }
+  });
+  const result = harness.post(provisioningRequest(harness));
+  assert.equal(result.ok, true);
+  assert.equal(result.created, false);
+  assert.equal(result.spreadsheetMatches, 1);
+  assert.equal(result.dataRowCount, 0);
+  assertBooleanCountResponse(result);
+  assert.equal(harness.driveQueries, 1);
+  assert.equal(harness.spreadsheetOpens, 1);
+  assert.equal(harness.spreadsheetCreates, 0);
+  assert.equal(harness.propertyValues.get('GIB_M1_PROVISIONING_CLOSED'), 'closed-v1');
+});
+
+test('two exact-title Sheets fail closed before Sheet or property mutation', () => {
+  const harness = createHarness({
     driveMatchCount: 2,
     propertyValues: {
       GIB_M1_PRODUCTION_SPREADSHEET_ID: '',
-      GIB_M1_DEPLOYMENT_TARGET_LOCK: ''
+      GIB_M1_DEPLOYMENT_TARGET_LOCK: '',
+      GIB_M1_PROVISIONING_CLOSED: ''
     }
   });
-  assert.throws(
-    () => duplicateTitle.apps.provisionGibM1ProductionReceiver(),
-    /at most one Google Sheet/u
-  );
-  assert.equal(duplicateTitle.spreadsheetOpens, 0);
-  assert.equal(duplicateTitle.spreadsheetCreates, 0);
+  const response = harness.post(provisioningRequest(harness));
+  assert.deepEqual(response, { ok: false, rejected: true });
+  assertBooleanCountResponse(response);
+  assert.equal(harness.driveQueries, 1);
+  assert.equal(harness.spreadsheetOpens, 0);
+  assert.equal(harness.spreadsheetCreates, 0);
+  assert.equal(harness.sheetWrites, 0);
+  assert.equal(harness.propertyWrites, 0);
+});
 
+test('wrong headers and a nonempty first-time Sheet fail without persistent mutation', () => {
   const wrongHeaders = createHarness({
     initialRows: [[...SIGNIN_HEADERS.slice(0, 2), 'Wrong Date', ...SIGNIN_HEADERS.slice(3)]],
     propertyValues: {
       GIB_M1_PRODUCTION_SPREADSHEET_ID: '',
-      GIB_M1_DEPLOYMENT_TARGET_LOCK: ''
+      GIB_M1_DEPLOYMENT_TARGET_LOCK: '',
+      GIB_M1_PROVISIONING_CLOSED: ''
     }
   });
-  assert.throws(
-    () => wrongHeaders.apps.provisionGibM1ProductionReceiver(),
-    /headings do not match/u
-  );
+  const wrongHeaderResponse = wrongHeaders.post(provisioningRequest(wrongHeaders));
+  assert.deepEqual(wrongHeaderResponse, { ok: false, rejected: true });
+  assertBooleanCountResponse(wrongHeaderResponse);
+  assert.equal(wrongHeaders.spreadsheetCreates, 0);
+  assert.equal(wrongHeaders.sheetWrites, 0);
+  assert.equal(wrongHeaders.propertyWrites, 0);
   assert.equal(wrongHeaders.propertyValues.get('GIB_M1_PRODUCTION_SPREADSHEET_ID'), '');
 
-  const unsafeRows = createHarness({
-    initialRows: [SIGNIN_HEADERS, sheetRow(kioskRow()), sheetRow(kioskRow())],
+  const nonempty = createHarness({
+    initialRows: [SIGNIN_HEADERS, sheetRow(kioskRow())],
     propertyValues: {
       GIB_M1_PRODUCTION_SPREADSHEET_ID: '',
-      GIB_M1_DEPLOYMENT_TARGET_LOCK: ''
+      GIB_M1_DEPLOYMENT_TARGET_LOCK: '',
+      GIB_M1_PROVISIONING_CLOSED: ''
     }
   });
-  assert.throws(
-    () => unsafeRows.apps.provisionGibM1ProductionReceiver(),
-    /RowID state is not replay-safe/u
-  );
-  assert.equal(unsafeRows.propertyValues.get('GIB_M1_PRODUCTION_SPREADSHEET_ID'), '');
+  const nonemptyResponse = nonempty.post(provisioningRequest(nonempty));
+  assert.deepEqual(nonemptyResponse, { ok: false, rejected: true });
+  assertBooleanCountResponse(nonemptyResponse);
+  assert.equal(nonempty.spreadsheetCreates, 0);
+  assert.equal(nonempty.sheetWrites, 0);
+  assert.equal(nonempty.propertyWrites, 0);
+  assert.equal(nonempty.propertyValues.get('GIB_M1_PRODUCTION_SPREADSHEET_ID'), '');
+  assert.equal(nonempty.propertyValues.get('GIB_M1_DEPLOYMENT_TARGET_LOCK'), '');
+  assert.equal(nonempty.propertyValues.get('GIB_M1_PROVISIONING_CLOSED'), '');
 });

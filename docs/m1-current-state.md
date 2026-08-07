@@ -7,7 +7,7 @@ Verified 2026-08-07. This is a sanitized operating record: it contains no Sheet,
 - Canonical production kiosk origin: `https://gib-live.netlify.app`.
 - Live branch and commit: `main` at `7c0a1bf5cb2fff2443031e10585fe08e30f81b77`.
 - Public Netlify metadata and byte-for-byte checks of the tracked live kiosk, Admin, diagnostic, schedule, guest, and root assets confirm that commit is the live static build.
-- The production candidate is not live. This preparation does not change production Google resources, Netlify production configuration, the real Sheet, `main`, or the gym tablet.
+- The production candidate is not live. This repair created or changed no Google, Netlify, live-site, Sheet, or tablet resource; it did not change `main`.
 
 ## Proven TEST state
 
@@ -22,8 +22,8 @@ The latest genuine end-to-end TEST canary was performed against that TEST commit
 ## Production-candidate state
 
 - Branch: `agent/m1-production-candidate-prep`.
-- QA-passed candidate implementation commit: `174ab631e3891e1025d8c94ca2355b1f714b09e4`.
-- Later review commits may change documentation or be empty preview triggers; the implementation commit above remains the stable code/test identifier, while the exact current review/deploy head is verified separately in GitHub and Netlify evidence.
+- Pre-repair candidate implementation commit: `174ab631e3891e1025d8c94ca2355b1f714b09e4`.
+- The repaired implementation commit will be recorded only after the repair passes QA and is committed. No new commit hash is claimed here.
 - Intended PR shape: stacked draft PR with `agent/m1-revbjjops-test-path` as its base.
 - The candidate prepares code, tests, the secure tablet-install method, provisioning commands, rollback, and cutover instructions only. It does not provision or activate production.
 
@@ -32,11 +32,12 @@ The latest genuine end-to-end TEST canary was performed against that TEST commit
 - The browser uses only the same-origin kiosk endpoint and receives no Google URL, Google token, Sheet ID, Apps Script ID, deployment ID, or Netlify secret.
 - Deploy Previews are pinned to TEST, use only TEST server configuration, and reject real instructor names.
 - Production is pinned to the exact canonical origin and the production target. It remains disabled unless every production setting is present, including valid device authentication, and it accepts real instructor names.
-- TEST and production use separate wrappers, manifests, Google projects, Sheets, server configuration, and authentication. Neither environment's credential can authenticate the other.
+- TEST and production use separate wrappers, manifests, standalone Apps Script projects, Sheets, server configuration, and authentication. Each standalone Apps Script project intentionally uses its Apps Script-managed default Cloud project; no standard Cloud project is required for the production web-app path. Neither environment's credential can authenticate the other.
+- Production provisioning no longer uses `scripts.run` or an Apps Script API executable. A later authorized run will use one private production-only web-app POST whose credential is separate from the ordinary receiver credential, then permanently close that provisioning action.
 
 ## Tablet and auto-sync
 
-- Authorized auto-sync state: **OFF**.
+- Authorized auto-sync state: **OFF**. Production Netlify sync remains disabled after provisioning until a separately approved cutover.
 - The physical tablet was not inspected or changed during this preparation, so its local storage state is not independently claimed as observed.
 - No install link was issued and no device was installed.
 - The prepared one-time installer leaves auto-sync OFF and preserves local history and the waiting queue. Its diagnostic reveals only: correct production origin YES/NO; device authorized YES/NO; auto-sync ON/OFF; local sign-in count; waiting count; and build/version.
@@ -51,7 +52,7 @@ The latest genuine end-to-end TEST canary was performed against that TEST commit
 
 ## Next authorized action
 
-After the QA-passed candidate is reviewed, a separate authorized run may create the isolated production Google resources and prepare the production configuration while keeping auto-sync OFF. Cutover still requires its own later approval.
+After the repaired candidate is QA-passed and reviewed, a separate authorized run may create the standalone production Apps Script project, deploy its normal web app, and make the private one-time provisioning POST while keeping production Netlify sync and auto-sync OFF. Cutover still requires its own later approval.
 
 ## Rollback point
 

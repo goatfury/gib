@@ -7,6 +7,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const PROVISION_TOOL = path.join(ROOT, 'tools', 'm1-production-provision.mjs');
+const PRODUCTION_MANIFEST = path.join(
+  ROOT,
+  'integrations',
+  'google-apps-script',
+  'production',
+  'appsscript.json'
+);
 const WORKFLOW_PATH = path.join(ROOT, '.github', 'workflows', 'm1-admin-only-required.yml');
 
 function git(args, options = {}) {
@@ -207,6 +214,20 @@ test('all exact private production material paths are ignored and untracked', ()
     assert.equal(tracked.has(privatePath), false, `${privatePath} must not be tracked.`);
     assert.equal(ignored.has(privatePath), true, `${privatePath} must be covered by an ignore rule.`);
   }
+});
+
+test('production provisioning uses the default Apps Script Cloud project and no execution API path', () => {
+  const provisionSource = readFileSync(PROVISION_TOOL, 'utf8');
+  const manifestSource = readFileSync(PRODUCTION_MANIFEST, 'utf8');
+  const manifest = JSON.parse(manifestSource);
+  assert.deepEqual(manifest.webapp, {
+    access: 'ANYONE_ANONYMOUS',
+    executeAs: 'USER_DEPLOYING'
+  });
+  assert.equal(manifest.executionApi, undefined);
+  assert.doesNotMatch(provisionSource, /\brun-function\b|\bscripts\.run\b|\bapiExecutable\b/iu);
+  assert.doesNotMatch(manifestSource, /"executionApi"|"apiExecutable"/u);
+  assert.doesNotMatch(provisionSource, /\bprojectId\b|standard Cloud project/iu);
 });
 
 test('every production mutation action is protected by execute and exact confirmation gates', async () => {

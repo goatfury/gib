@@ -53,8 +53,7 @@ function makeFixture(t, provision) {
   writeFileSync(path.join(sharedSource, 'GibM1Receiver.gs'), readFileSync(REAL_RECEIVER, 'utf8'), 'utf8');
   writeFileSync(path.join(productionSource, 'appsscript.json'), readFileSync(REAL_MANIFEST, 'utf8'), 'utf8');
   writeFileSync(path.join(privateDir, 'config.json'), `${JSON.stringify({
-    schema: provision.PRIVATE_CONFIG_SCHEMA,
-    projectId: 'gib-m1-production-project'
+    schema: provision.PRIVATE_CONFIG_SCHEMA
   })}\n`, 'utf8');
 
   const fs = Object.freeze({
@@ -95,8 +94,7 @@ function commandName(spec) {
     'create-version',
     'create-deployment',
     'update-deployment',
-    'list-deployments',
-    'run-function'
+    'list-deployments'
   ];
   return known.find(name => spec.args.includes(name));
 }
@@ -162,27 +160,33 @@ function makeRemoteRunner(fixture, provision) {
         stderr: ''
       };
     }
-    if (name === 'run-function') {
-      return {
-        code: 0,
-        stdout: JSON.stringify({
-          response: {
-            ok: true,
-            target: 'production',
-            spreadsheetTitle: provision.PRODUCTION_SHEET_TITLE,
-            spreadsheetMatches: 1,
-            created: true,
-            signinsSheet: 'Signins',
-            headerCount: 11,
-            dataRowCount: 0
-          }
-        }),
-        stderr: ''
-      };
-    }
     throw new Error(`Unexpected mocked clasp action: ${name || spec.args.join(' ')}`);
   };
   return { remote, runner, scriptId };
+}
+
+function validProvisionResult(overrides = {}) {
+  return {
+    created: true,
+    dataRowCount: 0,
+    headerCount: 11,
+    ok: true,
+    provisioningClosed: true,
+    sheetStored: true,
+    spreadsheetMatches: 1,
+    targetLocked: true,
+    ...overrides
+  };
+}
+
+function makeProvisionRequester(fixture, result = validProvisionResult()) {
+  const calls = [];
+  const requester = async (request, dependencies) => {
+    calls.push({ request, dependencies });
+    fixture.events.push({ type: 'provision-request', request });
+    return result;
+  };
+  return { calls, requester };
 }
 
 function readState(fixture) {
@@ -211,8 +215,7 @@ function mutationEvents(events) {
     'push',
     'create-version',
     'create-deployment',
-    'update-deployment',
-    'run-function'
+    'update-deployment'
   ].includes(event.name));
 }
 
@@ -249,6 +252,7 @@ test('the provisioning module is import-safe and exposes phased/injected safety 
     'confirmationForAction',
     'executeProductionAction',
     'generateProductionInstallerLink',
+    'prepareProductionProvisioning',
     'restoreProductionDeployment',
     'rollbackProductionDeployment',
     'statusProductionProvisioning'
@@ -263,6 +267,19 @@ test('the provisioning module is import-safe and exposes phased/injected safety 
   ]) {
     assert.equal(exported.includes(obsolete), false, `Obsolete composite/compat export ${obsolete} must stay removed.`);
   }
+});
+
+test('the production lifecycle uses the default Apps Script Cloud project and ends with status', async () => {
+  const provision = await loadTool();
+  assert.deepEqual([...provision.PROVISIONING_SEQUENCE], [
+    'prepare',
+    'create',
+    'push',
+    'version',
+    'deploy',
+    'provision',
+    'status'
+  ]);
 });
 
 test('every mutation requires its own execute flag and action-bound confirmation', async () => {
@@ -301,9 +318,13 @@ test('closed or cross-scoped phased gates perform no runner or filesystem write'
     effects.push({ type: 'runner', spec });
     return { code: 0, stdout: '', stderr: '' };
   };
+  const provisionRequester = async request => {
+    effects.push({ type: 'provision-request', request });
+    return validProvisionResult();
+  };
   for (const action of ['create', 'push', 'version', 'deploy', 'update', 'provision']) {
     await assert.rejects(
-      () => provision.executeProductionAction(action, fixture.options, { fs, runner }),
+      () => provision.executeProductionAction(action, fixture.options, { fs, runner, provisionRequester }),
       error => error?.code === 'MUTATION_GATE_CLOSED'
     );
     assert.deepEqual(effects, []);
@@ -313,7 +334,7 @@ test('closed or cross-scoped phased gates perform no runner or filesystem write'
         ...fixture.options,
         execute: true,
         confirmation: provision.confirmationForAction(wrongAction)
-      }, { fs, runner }),
+      }, { fs, runner, provisionRequester }),
       error => error?.code === 'MUTATION_GATE_CLOSED'
     );
     assert.deepEqual(effects, []);
@@ -406,7 +427,6 @@ test('status applies a private config authPath to every clasp preflight without 
   writeFileSync(resolvedAuthPath, `${JSON.stringify({ marker: privateAuthMarker })}\n`, 'utf8');
   writeFileSync(path.join(fixture.privateDir, 'config.json'), `${JSON.stringify({
     schema: provision.PRIVATE_CONFIG_SCHEMA,
-    projectId: 'gib-m1-production-project',
     authPath: relativeAuthPath
   })}\n`, 'utf8');
   const specs = [];
@@ -441,10 +461,61 @@ test('status applies a private config authPath to every clasp preflight without 
   assertSanitized(summary, [privateAuthMarker]);
 });
 
+test('status, prepare, and create require no standard Cloud project or private config file', async t => {
+  const provision = await loadTool();
+  const fixture = makeFixture(t, provision);
+  rmSync(path.join(fixture.privateDir, 'config.json'));
+  const remote = makeRemoteRunner(fixture, provision);
+
+  const status = await provision.statusProductionProvisioning(
+    fixture.options,
+    { fs: fixture.fs, runner: remote.runner }
+  );
+  assert.equal(status.authUsable, true);
+  assert.equal(status.defaultCloudProjectIntentional, true);
+  assert.equal(status.lifecycle, 'absent');
+
+  const prepared = await provision.prepareProductionProvisioning(
+    fixture.options,
+    { fs: fixture.fs, runner: remote.runner }
+  );
+  assert.equal(prepared.defaultCloudProjectIntentional, true);
+  assert.equal(prepared.stagedFileCount, 3);
+  assert.equal(prepared.lifecycle, 'absent');
+
+  await provision.executeProductionAction(
+    'create',
+    actionOptions(fixture, provision, 'create'),
+    { fs: fixture.fs, runner: remote.runner }
+  );
+  const createEvent = fixture.events.find(event => event.type === 'runner' && event.name === 'create-script');
+  assert.ok(createEvent);
+  assert.equal(createEvent.spec.args.includes('--parentId'), false);
+  assert.equal(createEvent.spec.args.some(value => /projectId|cloudProject/iu.test(String(value))), false);
+  const projectFile = JSON.parse(readFileSync(path.join(fixture.projectDir, '.clasp.json'), 'utf8'));
+  assert.equal(projectFile.scriptId, remote.scriptId);
+  assert.equal(projectFile.projectId, undefined);
+  assert.equal(readState(fixture).project.cloudProjectMode, 'apps-script-default');
+  assert.equal(readState(fixture).project.projectId, undefined);
+
+  writeFileSync(path.join(fixture.projectDir, '.clasp.json'), `${JSON.stringify({
+    ...projectFile,
+    projectId: 'misleading-local-value-is-not-remote-association-proof'
+  })}\n`, 'utf8');
+  const statusWithMisleadingLocalProjectId = await provision.statusProductionProvisioning(
+    fixture.options,
+    { fs: fixture.fs, runner: remote.runner }
+  );
+  assert.equal(statusWithMisleadingLocalProjectId.projectStateUsable, true);
+  assert.equal(statusWithMisleadingLocalProjectId.defaultCloudProjectIntentional, true);
+  assert.equal(readState(fixture).project.projectId, undefined);
+});
+
 test('real phased actions isolate clasp bootstrap, stage exactly three files, and deploy before provision', async t => {
   const provision = await loadTool();
   const fixture = makeFixture(t, provision);
   const remote = makeRemoteRunner(fixture, provision);
+  const provisionRequest = makeProvisionRequester(fixture);
   const privateValues = [remote.scriptId, remote.remote.deploymentId];
   const results = [];
 
@@ -468,6 +539,12 @@ test('real phased actions isolate clasp bootstrap, stage exactly three files, an
   assert.equal(existsSync(path.join(fixture.projectDir, 'Code.js')), false);
   assert.equal(readFileSync(path.join(fixture.projectDir, 'Code.gs'), 'utf8'), readFileSync(REAL_WRAPPER, 'utf8'));
   assert.equal(readFileSync(path.join(fixture.projectDir, 'GibM1Receiver.gs'), 'utf8'), readFileSync(REAL_RECEIVER, 'utf8'));
+  const projectFile = JSON.parse(readFileSync(path.join(fixture.projectDir, '.clasp.json'), 'utf8'));
+  assert.equal(projectFile.scriptId, remote.scriptId);
+  assert.equal(Object.hasOwn(projectFile, 'projectId'), false);
+  assert.equal(readState(fixture).project.scriptId, remote.scriptId);
+  assert.equal(readState(fixture).project.projectId, undefined);
+  assert.equal(readState(fixture).project.cloudProjectMode, 'apps-script-default');
   assert.equal(readState(fixture).lifecycle, 'versioned');
   assert.equal(readState(fixture).deployment.candidateVersion, 12);
 
@@ -486,14 +563,29 @@ test('real phased actions isolate clasp bootstrap, stage exactly three files, an
   const provisioned = await provision.executeProductionAction(
     'provision',
     actionOptions(fixture, provision, 'provision'),
-    { fs: fixture.fs, runner: remote.runner }
+    { fs: fixture.fs, runner: remote.runner, provisionRequester: provisionRequest.requester }
   );
-  assert.deepEqual(mutationEvents(fixture.events).map(event => event.name), ['run-function']);
+  assert.deepEqual(mutationEvents(fixture.events), []);
+  assert.equal(provisionRequest.calls.length, 1);
+  assert.deepEqual(provisionRequest.calls[0].request, {
+    webhookUrl: `https://script.google.com/macros/s/${remote.remote.deploymentId}/exec`,
+    scriptId: remote.scriptId,
+    timeoutMs: provision.PROVISION_TIMEOUT_MS
+  });
   assert.equal(readState(fixture).lifecycle, 'provisioned');
+  assert.equal(readState(fixture).pendingOperation, null);
   assert.equal(readState(fixture).deployment.approvedVersion, 12);
   assert.equal(readState(fixture).sheet.resolved, true);
+  assert.equal(readState(fixture).netlify.syncEnabled, false);
 
-  for (const result of [...results, deployed, provisioned]) assertSanitized(result, privateValues);
+  const status = await provision.statusProductionProvisioning(
+    fixture.options,
+    { fs: fixture.fs, runner: remote.runner }
+  );
+  assert.equal(status.lifecycle, 'provisioned');
+  assert.equal(status.sheetResolved, true);
+
+  for (const result of [...results, deployed, provisioned, status]) assertSanitized(result, privateValues);
 });
 
 test('the real CLI recognizes positional mutation actions and defaults each to a sanitized dry run', async () => {
@@ -518,12 +610,15 @@ test('update, rollback, and restore are journaled and verified against exact rem
   const provision = await loadTool();
   const fixture = makeFixture(t, provision);
   const remote = makeRemoteRunner(fixture, provision);
+  const provisionRequest = makeProvisionRequester(fixture);
   for (const action of ['create', 'push', 'version', 'deploy', 'provision']) {
     await provision.executeProductionAction(action, actionOptions(fixture, provision, action), {
       fs: fixture.fs,
-      runner: remote.runner
+      runner: remote.runner,
+      provisionRequester: provisionRequest.requester
     });
   }
+  assert.equal(provisionRequest.calls.length, 1);
   for (const action of ['push', 'version']) {
     await provision.executeProductionAction(action, actionOptions(fixture, provision, action), {
       fs: fixture.fs,
@@ -542,12 +637,10 @@ test('update, rollback, and restore are journaled and verified against exact rem
   assert.equal(readState(fixture).pendingOperation, null);
   assert.equal(readState(fixture).deployment.currentVersion, 13);
   assert.equal(readState(fixture).deployment.previousVersion, 12);
-  assert.equal(readState(fixture).lifecycle, 'deployed-unprovisioned');
-  await provision.executeProductionAction(
-    'provision',
-    actionOptions(fixture, provision, 'provision'),
-    { fs: fixture.fs, runner: remote.runner }
-  );
+  assert.equal(readState(fixture).deployment.approvedVersion, 13);
+  assert.equal(readState(fixture).lifecycle, 'provisioned');
+  assert.equal(readState(fixture).netlify.syncEnabled, false);
+  assert.equal(provisionRequest.calls.length, 1, 'A later update must not reopen one-time provisioning.');
 
   fixture.events.length = 0;
   const rolledBack = await provision.rollbackProductionDeployment(
@@ -570,6 +663,8 @@ test('update, rollback, and restore are journaled and verified against exact rem
   assert.equal(readState(fixture).deployment.currentVersion, 13);
   assert.equal(readState(fixture).deployment.rolledBackFromVersion, null);
   assert.equal(readState(fixture).lifecycle, 'provisioned');
+  assert.equal(readState(fixture).netlify.syncEnabled, false);
+  assert.equal(provisionRequest.calls.length, 1);
   for (const result of [updated, rolledBack, restored]) {
     assertSanitized(result, [remote.remote.deploymentId, remote.scriptId]);
   }
@@ -579,10 +674,12 @@ test('a post-move verification mismatch preserves the private journal and expose
   const provision = await loadTool();
   const fixture = makeFixture(t, provision);
   const remote = makeRemoteRunner(fixture, provision);
+  const provisionRequest = makeProvisionRequester(fixture);
   for (const action of ['create', 'push', 'version', 'deploy', 'provision', 'push', 'version']) {
     await provision.executeProductionAction(action, actionOptions(fixture, provision, action), {
       fs: fixture.fs,
-      runner: remote.runner
+      runner: remote.runner,
+      provisionRequester: provisionRequest.requester
     });
   }
   remote.remote.reportPreviousAfterMove = true;
@@ -641,7 +738,122 @@ test('captured clasp failures never expose raw IDs, URLs, tokens, or stderr', as
   );
 });
 
-test('provision accepts only the exact clasp response envelope and rejects any error envelope', async t => {
+test('the private provisioning request is one bounded POST and keeps its credential only in the body', async () => {
+  const provision = await loadTool();
+  const scriptId = 'privateProductionScriptIdentifier123456789';
+  const webhookUrl = 'https://script.google.com/macros/s/privateProductionDeploymentIdentifier123456789/exec';
+  const signal = Object.freeze({ synthetic: 'timeout-signal' });
+  const calls = [];
+  const result = await provision.requestProductionProvisioning(
+    { webhookUrl, scriptId, timeoutMs: provision.PROVISION_TIMEOUT_MS },
+    {
+      timeoutSignalFactory(timeoutMs) {
+        assert.equal(timeoutMs, 25_000);
+        return signal;
+      },
+      async fetchImpl(url, init) {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(validProvisionResult())
+        };
+      }
+    }
+  );
+
+  assert.deepEqual(result, validProvisionResult());
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, webhookUrl);
+  assert.equal(calls[0].url.includes('?'), false);
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.redirect, 'follow');
+  assert.equal(calls[0].init.signal, signal);
+  assert.deepEqual(calls[0].init.headers, {
+    Accept: 'application/json',
+    'Content-Type': 'text/plain;charset=utf-8'
+  });
+  const body = JSON.parse(calls[0].init.body);
+  assert.deepEqual(Object.keys(body).sort(), ['action', 'provisioningSecret', 'target']);
+  assert.equal(body.action, provision.PROVISION_ACTION);
+  assert.equal(body.target, 'production');
+  assert.equal(typeof body.provisioningSecret, 'string');
+  assert.ok(body.provisioningSecret.length >= 32);
+  assert.notEqual(body.provisioningSecret, scriptId);
+  assert.equal(JSON.stringify({ url: calls[0].url, headers: calls[0].init.headers }).includes(body.provisioningSecret), false);
+});
+
+test('timeout, HTTP failure, unreadable JSON, and response drift stop after one sanitized request', async t => {
+  const provision = await loadTool();
+  const privateMarker = 'private-provision-response-marker-that-must-not-leak';
+  const cases = [
+    {
+      name: 'timeout',
+      fetchImpl: async () => {
+        const error = new Error(privateMarker);
+        error.name = 'AbortError';
+        throw error;
+      }
+    },
+    {
+      name: 'HTTP error',
+      fetchImpl: async () => ({
+        ok: false,
+        status: 503,
+        text: async () => privateMarker
+      })
+    },
+    {
+      name: 'unreadable JSON',
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => `<html>${privateMarker}</html>`
+      })
+    },
+    {
+      name: 'response drift',
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ ...validProvisionResult(), extra: privateMarker })
+      })
+    }
+  ];
+
+  for (const item of cases) {
+    await t.test(item.name, async () => {
+      let calls = 0;
+      let failure;
+      try {
+        await provision.requestProductionProvisioning(
+          {
+            webhookUrl: 'https://script.google.com/macros/s/privateProductionDeploymentIdentifier123456789/exec',
+            scriptId: 'privateProductionScriptIdentifier123456789',
+            timeoutMs: provision.PROVISION_TIMEOUT_MS
+          },
+          {
+            timeoutSignalFactory: () => Object.freeze({ synthetic: true }),
+            fetchImpl: async (...args) => {
+              calls += 1;
+              return item.fetchImpl(...args);
+            }
+          }
+        );
+      } catch (error) {
+        failure = error;
+      }
+      assert.equal(calls, 1);
+      assert.equal(failure?.code, 'PROVISION_RESPONSE_AMBIGUOUS');
+      assertSanitized(
+        { name: failure?.name, code: failure?.code, message: failure?.message },
+        [privateMarker, 'privateProductionDeploymentIdentifier123456789', 'privateProductionScriptIdentifier123456789']
+      );
+    });
+  }
+});
+
+test('deployment drift fails before the one-shot provisioning requester', async t => {
   const provision = await loadTool();
   const fixture = makeFixture(t, provision);
   const remote = makeRemoteRunner(fixture, provision);
@@ -651,72 +863,93 @@ test('provision accepts only the exact clasp response envelope and rejects any e
       runner: remote.runner
     });
   }
-  const validProvisionResult = {
-    ok: true,
-    target: 'production',
-    spreadsheetTitle: provision.PRODUCTION_SHEET_TITLE,
-    spreadsheetMatches: 1,
-    created: true,
-    signinsSheet: 'Signins',
-    headerCount: 11,
-    dataRowCount: 0
-  };
-  const privateErrorMarker = 'private-clasp-envelope-error-that-must-not-leak';
   remote.remote.activeVersion = 99;
-  let driftedRunCalls = 0;
+  let requestCalls = 0;
   await assert.rejects(
     () => provision.executeProductionAction(
       'provision',
       actionOptions(fixture, provision, 'provision'),
       {
         fs: fixture.fs,
-        runner: async spec => {
-          if (commandName(spec) === 'run-function') driftedRunCalls += 1;
-          return remote.runner(spec);
+        runner: remote.runner,
+        provisionRequester: async () => {
+          requestCalls += 1;
+          return validProvisionResult();
         }
       }
     ),
     error => error?.code === 'CLASP_DEPLOYMENT_STATE_DRIFT'
   );
-  assert.equal(driftedRunCalls, 0, 'Remote drift must fail before the provisioning function runs.');
+  assert.equal(requestCalls, 0);
   assert.equal(readState(fixture).lifecycle, 'deployed-unprovisioned');
-  remote.remote.activeVersion = 12;
-  const invalidOutputs = [
-    validProvisionResult,
-    { response: validProvisionResult, error: null },
-    { response: validProvisionResult, error: { message: privateErrorMarker } }
-  ];
+  assert.equal(readState(fixture).pendingOperation, null);
+});
 
-  for (const invalidOutput of invalidOutputs) {
-    const runner = async spec => {
-      if (commandName(spec) === 'run-function') {
-        return { code: 0, stdout: JSON.stringify(invalidOutput), stderr: privateErrorMarker };
-      }
-      return remote.runner(spec);
-    };
-    let failure;
-    try {
-      await provision.executeProductionAction(
-        'provision',
-        actionOptions(fixture, provision, 'provision'),
-        { fs: fixture.fs, runner }
-      );
-    } catch (error) {
-      failure = error;
-    }
-    assert.equal(failure?.code, 'PROVISION_RESPONSE_INVALID');
-    assertSanitized(
-      { name: failure?.name, code: failure?.code, message: failure?.message },
-      [privateErrorMarker]
-    );
-    assert.equal(readState(fixture).lifecycle, 'deployed-unprovisioned');
+test('an unreadable or failed provisioning result is ambiguous, journaled, sanitized, and never retried', async t => {
+  const provision = await loadTool();
+  const fixture = makeFixture(t, provision);
+  const remote = makeRemoteRunner(fixture, provision);
+  for (const action of ['create', 'push', 'version', 'deploy']) {
+    await provision.executeProductionAction(action, actionOptions(fixture, provision, action), {
+      fs: fixture.fs,
+      runner: remote.runner
+    });
   }
+  const privateErrorMarker = 'private-web-response-body-that-must-not-leak';
+  let requestCalls = 0;
+  let failure;
+  try {
+    await provision.executeProductionAction(
+      'provision',
+      actionOptions(fixture, provision, 'provision'),
+      {
+        fs: fixture.fs,
+        runner: remote.runner,
+        provisionRequester: async () => {
+          requestCalls += 1;
+          throw new Error(privateErrorMarker);
+        }
+      }
+    );
+  } catch (error) {
+    failure = error;
+  }
+  assert.equal(failure?.code, 'PROVISION_RESPONSE_AMBIGUOUS');
+  assertSanitized(
+    { name: failure?.name, code: failure?.code, message: failure?.message },
+    [privateErrorMarker, remote.remote.deploymentId, remote.scriptId]
+  );
+  assert.equal(requestCalls, 1);
+  assert.equal(readState(fixture).lifecycle, 'provisioning-ambiguous');
+  assert.deepEqual(readState(fixture).pendingOperation, {
+    action: 'provision',
+    deploymentId: remote.remote.deploymentId,
+    fromVersion: 12,
+    toVersion: 12
+  });
+
+  await assert.rejects(
+    () => provision.executeProductionAction(
+      'provision',
+      actionOptions(fixture, provision, 'provision'),
+      {
+        fs: fixture.fs,
+        runner: remote.runner,
+        provisionRequester: async () => {
+          requestCalls += 1;
+          return validProvisionResult();
+        }
+      }
+    )
+  );
+  assert.equal(requestCalls, 1, 'An ambiguous provisioning request must never be retried blindly.');
 });
 
 test('install-link saves capability material only in the ignored private artifact', async t => {
   const provision = await loadTool();
   const fixture = makeFixture(t, provision);
   const remote = makeRemoteRunner(fixture, provision);
+  const provisionRequest = makeProvisionRequester(fixture);
   const runId = 'production-install-run-0001';
   const nonce = Buffer.alloc(32, 7).toString('base64url');
   let rawToken = '';
@@ -757,9 +990,11 @@ test('install-link saves capability material only in the ignored private artifac
   for (const action of ['create', 'push', 'version', 'deploy', 'provision']) {
     await provision.executeProductionAction(action, actionOptions(fixture, provision, action), {
       fs: fixture.fs,
-      runner: remote.runner
+      runner: remote.runner,
+      provisionRequester: provisionRequest.requester
     });
   }
+  assert.equal(provisionRequest.calls.length, 1);
   const result = await provision.generateProductionInstallerLink({
     ...installOptions
   }, {
@@ -781,10 +1016,13 @@ test('install-link saves capability material only in the ignored private artifac
 
 test('the tool contains no destructive, OAuth-bootstrap, or Netlify production command', () => {
   const source = readFileSync(TOOL_PATH, 'utf8');
+  const manifestSource = readFileSync(REAL_MANIFEST, 'utf8');
   assert.doesNotMatch(
     source,
     /['"`](?:delete-script|delete-deployment|undeploy|login|logout|open-credentials-setup|enable-api|disable-api)['"`]/iu
   );
   assert.doesNotMatch(source, /netlify\s+(?:deploy\s+--prod|env:(?:set|import|unset))/iu);
   assert.doesNotMatch(source, /(?:setEnvVarValue|deleteEnvVar|production_deploy)/u);
+  assert.doesNotMatch(source, /\brun-function\b|\bscripts\.run\b|\bapiExecutable\b/iu);
+  assert.doesNotMatch(manifestSource, /"executionApi"|"apiExecutable"/u);
 });

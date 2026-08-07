@@ -12,8 +12,8 @@
  *   GIB_M1_RECOVERY_TOKEN
  *   GIB_M1_RECOVERY_WRITE_INCIDENT (present only during a bounded recovery)
  *
- * Code.gs keeps doPost(e) -> adReceiverV2_(e), which preserves the current
- * kiosk payload contract while routing all candidate operations here.
+ * TEST keeps doPost(e) -> adReceiverV2_(e). The production wrapper may handle
+ * its private one-time provisioning POST before preserving this receiver path.
  */
 
 var GIB_M1_AUDIT_SHEET_ = 'Admin Audit';
@@ -1338,9 +1338,14 @@ function gibM1VerifyPermanentRowIds_(sheet, headerCount) {
   }
 }
 
-function gibM1EnsureSigninsSchema_(spreadsheet, sheetName, headers) {
+function gibM1EnsureSigninsSchema_(spreadsheet, sheetName, headers, initializeIfMissing) {
   var sheet = spreadsheet.getSheetByName(sheetName);
-  if (!sheet) sheet = spreadsheet.insertSheet(sheetName);
+  if (!sheet) {
+    if (initializeIfMissing === false) {
+      throw new Error('The Signins headings do not match the tracked schema.');
+    }
+    sheet = spreadsheet.insertSheet(sheetName);
+  }
   if (sheet.getLastColumn() > headers.length) {
     throw new Error('The Signins headings do not match the tracked schema.');
   }
@@ -1356,12 +1361,12 @@ function gibM1EnsureSigninsSchema_(spreadsheet, sheetName, headers) {
       }
     }
   } else {
-    if (sheet.getLastRow() > 1) {
+    if (initializeIfMissing === false || sheet.getLastRow() > 1) {
       throw new Error('The Signins headings do not match the tracked schema.');
     }
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   }
-  sheet.setFrozenRows(1);
+  if (initializeIfMissing !== false) sheet.setFrozenRows(1);
   gibM1VerifyPermanentRowIds_(sheet, headers.length);
   return sheet;
 }
@@ -1372,6 +1377,9 @@ function gibM1ProvisionSpreadsheet_(options) {
   var sheetName = exactText_(options && options.sheetName);
   var propertyName = exactText_(options && options.spreadsheetProperty);
   var forbiddenPropertyName = exactText_(options && options.forbiddenSpreadsheetProperty);
+  var provisioningClosedProperty = exactText_(options && options.provisioningClosedProperty);
+  var provisioningClosedValue = exactText_(options && options.provisioningClosedValue);
+  var closesProvisioning = Boolean(provisioningClosedProperty || provisioningClosedValue);
   var headers = options && options.headers;
   if (
     target !== configuredDeploymentTarget_()
@@ -1381,6 +1389,10 @@ function gibM1ProvisionSpreadsheet_(options) {
     || !propertyName
     || !Array.isArray(headers)
     || headers.length !== GIB_M1_SIGNINS_HEADERS_.length
+    || (closesProvisioning && (!provisioningClosedProperty || !provisioningClosedValue))
+    || provisioningClosedProperty === propertyName
+    || provisioningClosedProperty === GIB_M1_TARGET_LOCK_PROPERTY_
+    || (forbiddenPropertyName && provisioningClosedProperty === forbiddenPropertyName)
   ) {
     throw new Error('Spreadsheet provisioning configuration is invalid.');
   }
@@ -1396,12 +1408,21 @@ function gibM1ProvisionSpreadsheet_(options) {
     var properties = PropertiesService.getScriptProperties();
     var storedId = exactText_(properties.getProperty(propertyName));
     var storedTarget = cleanText_(properties.getProperty(GIB_M1_TARGET_LOCK_PROPERTY_)).toLowerCase();
+    var storedProvisioningClosed = provisioningClosedProperty
+      ? exactText_(properties.getProperty(provisioningClosedProperty))
+      : '';
     if (
       (storedTarget && storedTarget !== target)
       || (forbiddenPropertyName && exactText_(properties.getProperty(forbiddenPropertyName)))
+      || (storedProvisioningClosed && storedProvisioningClosed !== provisioningClosedValue)
+      || (closesProvisioning && (storedId || storedTarget || storedProvisioningClosed))
     ) {
       throw new Error('Private production target state conflicts with this project.');
     }
+    if (
+      provisioningClosedProperty
+      && constantTimeTextEqual_(storedProvisioningClosed, provisioningClosedValue)
+    ) throw new Error('Production provisioning is permanently closed.');
     var matches = gibM1ExactSpreadsheetFiles_(title);
     if (matches.length > 1) {
       throw new Error('Expected at most one Google Sheet with the configured title.');
@@ -1426,9 +1447,51 @@ function gibM1ProvisionSpreadsheet_(options) {
     if (spreadsheet.getName() !== title) {
       throw new Error('Spreadsheet identity check failed.');
     }
-    var sheet = gibM1EnsureSigninsSchema_(spreadsheet, sheetName, headers);
-    properties.setProperty(propertyName, spreadsheet.getId());
-    properties.setProperty(GIB_M1_TARGET_LOCK_PROPERTY_, target);
+    var existingSheet = spreadsheet.getSheetByName(sheetName);
+    if (
+      options.requireEmptyDataRows === true
+      && existingSheet
+      && Math.max(0, existingSheet.getLastRow() - 1) !== 0
+    ) throw new Error('The first production provisioning Sheet must contain zero data rows.');
+    var initializeSchema = options.initializeSchemaOnlyWhenCreated === true
+      ? created
+      : true;
+    var sheet = gibM1EnsureSigninsSchema_(spreadsheet, sheetName, headers, initializeSchema);
+    var dataRowCount = Math.max(0, sheet.getLastRow() - 1);
+    if (options.requireEmptyDataRows === true && dataRowCount !== 0) {
+      throw new Error('The first production provisioning Sheet must contain zero data rows.');
+    }
+    if (closesProvisioning) {
+      var persisted = {};
+      persisted[propertyName] = spreadsheet.getId();
+      persisted[GIB_M1_TARGET_LOCK_PROPERTY_] = target;
+      persisted[provisioningClosedProperty] = provisioningClosedValue;
+      properties.setProperties(persisted, false);
+    } else {
+      properties.setProperty(propertyName, spreadsheet.getId());
+      properties.setProperty(GIB_M1_TARGET_LOCK_PROPERTY_, target);
+    }
+    if (
+      exactText_(properties.getProperty(propertyName)) !== spreadsheet.getId()
+      || cleanText_(properties.getProperty(GIB_M1_TARGET_LOCK_PROPERTY_)).toLowerCase() !== target
+      || (
+        closesProvisioning
+        && exactText_(properties.getProperty(provisioningClosedProperty)) !== provisioningClosedValue
+      )
+    ) throw new Error('Private production target state could not be verified.');
+
+    if (closesProvisioning) {
+      return {
+        ok: true,
+        created: created,
+        spreadsheetMatches: 1,
+        headerCount: headers.length,
+        dataRowCount: dataRowCount,
+        sheetStored: true,
+        targetLocked: true,
+        provisioningClosed: true
+      };
+    }
 
     return {
       ok: true,
@@ -1438,7 +1501,7 @@ function gibM1ProvisionSpreadsheet_(options) {
       created: created,
       signinsSheet: sheetName,
       headerCount: headers.length,
-      dataRowCount: Math.max(0, sheet.getLastRow() - 1)
+      dataRowCount: dataRowCount
     };
   } finally {
     lock.releaseLock();
