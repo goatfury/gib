@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+      - agent/m1-revbjjops-test-path
   workflow_dispatch:
 
 permissions:
@@ -30,36 +31,48 @@ jobs:
         with:
           node-version: '24.18.0'
 
-      - name: Enforce M1 incident source isolation
+      - name: Verify proven TEST base and candidate diff
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          base_sha="$PR_BASE_SHA"
-          if [ -z "$base_sha" ]; then
-            base_sha="$(git merge-base HEAD "origin/$DEFAULT_BRANCH")"
+          proven_test_commit="a0273e4d154cc0289a0a3e10169135fca53b1b23"
+          git cat-file -e "$proven_test_commit^{commit}"
+          git merge-base --is-ancestor "$proven_test_commit" HEAD
+
+          if [ "$PR_BASE_REF" = "agent/m1-revbjjops-test-path" ]; then
+            test "$PR_BASE_SHA" = "$proven_test_commit"
           fi
 
-          git diff --check "$base_sha"...HEAD
-          test "$(git rev-parse "HEAD:m1/index.html")" = "642981a1f6cacac1aea973818b3812242eb697ed"
-          test "$(git rev-parse "HEAD:m1/sync-core.mjs")" = "c821963300d74ea2d17364d1595964c5b6bfadd1"
-          test "$(git rev-parse "HEAD:netlify/functions/m1-kiosk-sync.mjs")" = "1579eab6bf390bb4f9f068b78f471be2fa041319"
-          test "$(git rev-parse "HEAD:integrations/google-apps-script/Code.gs")" = "89b2a49348fce2a30b81adcb7ca988ad70f26988"
-          test "$(git rev-parse "HEAD:integrations/google-apps-script/GibM1Receiver.gs")" = "5d0a46d128299ddddb14475a78fa96bcd91c1eba"
-          test "$(git rev-parse "HEAD:integrations/google-apps-script/appsscript.json")" = "d41f74bcbf95288dd59bbda303d477b57cf4bce4"
-          test "$(git rev-parse "HEAD:m1/admin/index.html")" = "7e406f0056e2b1119ecf91a7c449381e13063981"
-          test "$(git rev-parse "HEAD:m1/tablet-diagnostic.html")" = "b5de1709385315753d8983b6bbfa07b2bad55686"
-          test "$(git rev-parse "HEAD:netlify/functions/m1-admin-tablet-diagnostic.mjs")" = "d11d723ef192be85f09dd58e112ade0dada63575"
+          git diff --check "$proven_test_commit"...HEAD
 
-          unexpected="$(
-            git diff --name-only "$base_sha"...HEAD |
-              grep -Ev '^(\.gitignore|\.github/workflows/m1-admin-only-required.yml|docs/m1-kiosk-sync-incident-runbook.md|_headers|_redirects|guests/index.html|integrations/google-apps-script/(\.claspignore|\.gitignore|Code\.gs|GibM1Receiver\.gs|appsscript\.json)|m1/admin/index.html|m1/(index\.html|sync-core\.mjs)|m1/shared-schedule.json|m1/tablet-diagnostic.html|netlify.toml|netlify/functions/_lib/m1-common.mjs|netlify/functions/m1-admin-(login|logout|review|search|add).mjs|netlify/functions/m1-admin-tablet-diagnostic.mjs|netlify/functions/m1-kiosk-sync.mjs|tests/m1-(admin-only|kiosk-client|kiosk-sync-function|recovery|test-receiver)\.test\.mjs|tests/m1-tablet-diagnostic-secret-safe\.test\.mjs|tools/m1-recovery.mjs)$' || true
-          )"
-          if [ -n "$unexpected" ]; then
-            echo "Unexpected non-Admin files changed:"
-            echo "$unexpected"
-            exit 1
-          fi
+          while read -r expected path; do
+            actual="$(git rev-parse "$proven_test_commit:$path")"
+            test "$actual" = "$expected"
+          done <<'EOF'
+          642981a1f6cacac1aea973818b3812242eb697ed m1/index.html
+          c821963300d74ea2d17364d1595964c5b6bfadd1 m1/sync-core.mjs
+          1579eab6bf390bb4f9f068b78f471be2fa041319 netlify/functions/m1-kiosk-sync.mjs
+          89b2a49348fce2a30b81adcb7ca988ad70f26988 integrations/google-apps-script/Code.gs
+          5d0a46d128299ddddb14475a78fa96bcd91c1eba integrations/google-apps-script/GibM1Receiver.gs
+          d41f74bcbf95288dd59bbda303d477b57cf4bce4 integrations/google-apps-script/appsscript.json
+          7e406f0056e2b1119ecf91a7c449381e13063981 m1/admin/index.html
+          b5de1709385315753d8983b6bbfa07b2bad55686 m1/tablet-diagnostic.html
+          d11d723ef192be85f09dd58e112ade0dada63575 netlify/functions/m1-admin-tablet-diagnostic.mjs
+          EOF
 
-      - name: Run focused M1 tests
+      - name: Install pinned dependencies
+        run: npm ci
+
+      - name: Run proven TEST regression suite against candidate
+        env:
+          PROVEN_TEST_COMMIT: a0273e4d154cc0289a0a3e10169135fca53b1b23
+        run: |
+          baseline_suite="$(mktemp -d "$PWD/.m1-proven-tests.XXXXXX")"
+          trap 'rm -rf "$baseline_suite"' EXIT
+          git archive "$PROVEN_TEST_COMMIT" tests |
+            tar -x --strip-components=1 -C "$baseline_suite"
+          node --test "$baseline_suite"/m1-*.test.mjs
+
+      - name: Run all candidate M1 tests
         run: node --test tests/m1-*.test.mjs

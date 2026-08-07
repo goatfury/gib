@@ -6,6 +6,12 @@ import {
   runtimeConfig,
   validNonFutureDate
 } from './_lib/m1-common.mjs';
+import {
+  productionDeviceAuthorization,
+  productionDeviceCookieHeader,
+  productionRuntimeConfig,
+  validExactProductionRequest
+} from './_lib/m1-production-runtime.mjs';
 
 export const KIOSK_SYNC_PATH = '/api/m1-kiosk-sync';
 export const MAX_KIOSK_SYNC_ROWS = 50;
@@ -109,7 +115,7 @@ function validRowShape(value) {
     && keys.every(key => ALLOWED_ROW_KEYS.has(key));
 }
 
-function validateRow(input, now) {
+function validateRow(input, now, requireObviousTestValue = true) {
   if (!validRowShape(input)) return null;
 
   const rowId = typeof input.RowID === 'string' && ROW_ID_PATTERN.test(input.RowID)
@@ -137,7 +143,7 @@ function validateRow(input, now) {
     || duration <= 0
     || duration > 8
     || !instructor
-    || !obviousTestValue(instructor)
+    || (requireObviousTestValue && !obviousTestValue(instructor))
     || !site
     || device == null
     || build == null
@@ -185,13 +191,13 @@ function validResultLink(item) {
   return item.linkedRecordId === '';
 }
 
-function sanitizeGoogleResults(google, forwardedRows) {
+function sanitizeGoogleResults(google, forwardedRows, expectedTarget = 'test') {
   if (
     !google.readable
     || !google.value
     || !exactObjectKeys(google.value, ['ok', 'results', 'target'])
     || google.value.ok !== true
-    || google.value.target !== 'test'
+    || google.value.target !== expectedTarget
     || !Array.isArray(google.value.results)
     || google.value.results.length !== forwardedRows.length
   ) {
@@ -231,12 +237,48 @@ function previewRuntimeConfig(env, requestUrl) {
   }, { requestUrl });
 }
 
+function successResponse(target, results) {
+  return target === 'test'
+    ? { ok: true, test: true, results }
+    : { ok: true, production: true, results };
+}
+
 export async function handleKioskSync(request, dependencies = {}) {
-  if (!validPreviewSameOriginRequest(request)) {
+  const target = validPreviewSameOriginRequest(request)
+    ? 'test'
+    : validExactProductionRequest(request, KIOSK_SYNC_PATH)
+      ? 'production'
+      : '';
+  if (!target) {
     return jsonResponse(403, {
       ok: false,
       message: 'Deploy Preview same-origin sync required.'
     });
+  }
+
+  const env = dependencies.env || process.env;
+  let runtime;
+  let productionDeviceCredential = '';
+  if (target === 'production') {
+    runtime = productionRuntimeConfig(env);
+    if (!runtime) {
+      return jsonResponse(403, {
+        ok: false,
+        message: 'Production sync is not configured.'
+      });
+    }
+    const device = productionDeviceAuthorization(
+      request,
+      runtime,
+      dependencies.now ?? Date.now()
+    );
+    if (!device.authorized) {
+      return jsonResponse(401, {
+        ok: false,
+        message: 'Production device authorization required.'
+      });
+    }
+    productionDeviceCredential = device.credential;
   }
 
   const parsed = await readJson(request, MAX_REQUEST_BYTES);
@@ -258,24 +300,23 @@ export async function handleKioskSync(request, dependencies = {}) {
   }
 
   const now = dependencies.dateNow || new Date();
-  const validatedRows = inputRows.map(row => validateRow(row, now));
+  const validatedRows = inputRows.map(row => validateRow(row, now, target === 'test'));
   const forwardedRows = validatedRows.filter(Boolean);
   const localResults = validatedRows.map((row, index) => row ? null : rejectedResult(inputRows[index]));
 
   if (!forwardedRows.length) {
-    return jsonResponse(200, {
-      ok: true,
-      test: true,
-      results: localResults
-    });
+    return jsonResponse(200, successResponse(target, localResults), target === 'production'
+      ? { 'Set-Cookie': productionDeviceCookieHeader(productionDeviceCredential) }
+      : {});
   }
 
-  const env = dependencies.env || process.env;
-  const runtime = previewRuntimeConfig(env, request.url);
-  if (!runtime || runtime.preview !== true) {
+  if (target === 'test') runtime = previewRuntimeConfig(env, request.url);
+  if (!runtime || (target === 'test' && runtime.preview !== true)) {
     return jsonResponse(503, {
       ok: false,
-      message: 'TEST sync is not configured.'
+      message: target === 'test'
+        ? 'TEST sync is not configured.'
+        : 'Production sync is not configured.'
     });
   }
 
@@ -285,22 +326,23 @@ export async function handleKioskSync(request, dependencies = {}) {
     { rows: forwardedRows },
     dependencies.fetch || fetch
   );
-  const upstreamResults = sanitizeGoogleResults(google, forwardedRows);
+  const upstreamResults = sanitizeGoogleResults(google, forwardedRows, target);
   if (!upstreamResults) {
     return jsonResponse(google.status === 0 ? 504 : 502, {
       ok: false,
       message: google.status === 0
-        ? 'TEST sync timed out or could not be reached.'
-        : 'TEST sync did not return a complete readable acknowledgment.'
+        ? `${target === 'test' ? 'TEST' : 'Production'} sync timed out or could not be reached.`
+        : `${target === 'test' ? 'TEST' : 'Production'} sync did not return a complete readable acknowledgment.`
     });
   }
 
   const byRowId = new Map(upstreamResults.map(result => [result.rowId, result]));
-  return jsonResponse(200, {
-    ok: true,
-    test: true,
-    results: validatedRows.map((row, index) => row ? byRowId.get(row.RowID) : localResults[index])
-  });
+  return jsonResponse(200, successResponse(
+    target,
+    validatedRows.map((row, index) => row ? byRowId.get(row.RowID) : localResults[index])
+  ), target === 'production'
+    ? { 'Set-Cookie': productionDeviceCookieHeader(productionDeviceCredential) }
+    : {});
 }
 
 export default request => handleKioskSync(request);

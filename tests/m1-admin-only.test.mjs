@@ -154,6 +154,7 @@ function makeSheet(initialRows = [], options = {}) {
 function receiverHarness({
   testSpreadsheet = false,
   productionSpreadsheet = true,
+  allowedTarget = testSpreadsheet && !productionSpreadsheet ? 'test' : 'production',
   receiverToken = 'receiver-token',
   adminActionToken = '',
   legacyKioskToken = 'legacy-kiosk-token',
@@ -195,6 +196,7 @@ function receiverHarness({
     console,
     EXPECTED_SPREADSHEET_NAME: 'Expected Signins',
     SHEET_NAME: 'Signins',
+    GIB_M1_ALLOWED_TARGET: allowedTarget,
     ContentService: {
       MimeType: { JSON: 'application/json' },
       createTextOutput(text) {
@@ -277,6 +279,22 @@ function kioskRow(overrides = {}) {
   };
 }
 
+function signinSheetRow(row, status = 'OK') {
+  return [
+    row.RowID,
+    row.Timestamp,
+    row.Date,
+    row['Class Label'],
+    row['Duration (hr)'],
+    row.Instructor,
+    row.Site,
+    row.Device || '',
+    row.Build || '',
+    row.Notes || '',
+    status
+  ];
+}
+
 function adminAddition(overrides = {}) {
   return {
     token: 'receiver-token',
@@ -348,7 +366,7 @@ function recoveryRequest(rows, overrides = {}) {
 }
 
 test('legacy {token, rows} payload remains readable and backward-compatible', () => {
-  const harness = receiverHarness();
+  const harness = receiverHarness({ testSpreadsheet: true, productionSpreadsheet: false });
   const first = harness.post({ token: 'legacy-kiosk-token', rows: [kioskRow()] });
   const retry = harness.post({ token: 'legacy-kiosk-token', rows: [kioskRow()] });
   const mixed = harness.post({
@@ -368,7 +386,11 @@ test('legacy {token, rows} payload remains readable and backward-compatible', ()
 });
 
 test('legacy append authentication is isolated and fails closed before writes', () => {
-  const harness = receiverHarness({ adminActionToken: 'admin-action-token' });
+  const harness = receiverHarness({
+    testSpreadsheet: true,
+    productionSpreadsheet: false,
+    adminActionToken: 'admin-action-token'
+  });
   const before = harness.signins.values.length;
   for (const body of [
     { rows: [kioskRow()] },
@@ -396,7 +418,7 @@ test('legacy append authentication is isolated and fails closed before writes', 
 });
 
 test('legacy exact kiosk replay adds zero duplicate rows', () => {
-  const harness = receiverHarness();
+  const harness = receiverHarness({ testSpreadsheet: true, productionSpreadsheet: false });
   const base = kioskRow();
   const exact = harness.post({ token: 'legacy-kiosk-token', rows: [base] });
   const replay = harness.post({ token: 'legacy-kiosk-token', rows: [base] });
@@ -406,7 +428,7 @@ test('legacy exact kiosk replay adds zero duplicate rows', () => {
 });
 
 test('legitimate repeated coarse business events remain distinct', () => {
-  const harness = receiverHarness();
+  const harness = receiverHarness({ testSpreadsheet: true, productionSpreadsheet: false });
   const exact = harness.post({ token: 'legacy-kiosk-token', rows: [kioskRow()] });
   const distinct = harness.post({
     token: 'legacy-kiosk-token',
@@ -930,8 +952,10 @@ test('Admin-first delayed kiosk collisions are retained for audit and visibly he
   const adminFirst = receiverHarness({ adminActionToken: 'production-admin-token' });
   assert.equal(adminFirst.post(adminAddition()).result, 'added');
   const delayedRequest = {
-    token: 'legacy-kiosk-token',
-    rows: [kioskRow({ RowID: 'delayed-kiosk' })]
+    token: 'receiver-token',
+    action: 'kioskSignIn',
+    target: 'production',
+    rows: [kioskRow({ RowID: 'gib-m1-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' })]
   };
   const delayed = adminFirst.post(delayedRequest);
   assert.equal(delayed.results[0].result, 'review required');
@@ -956,8 +980,10 @@ test('Admin-first delayed kiosk collisions are retained for audit and visibly he
 
   const kioskFirst = receiverHarness({ adminActionToken: 'production-admin-token' });
   assert.equal(kioskFirst.post({
-    token: 'legacy-kiosk-token',
-    rows: [kioskRow()]
+    token: 'receiver-token',
+    action: 'kioskSignIn',
+    target: 'production',
+    rows: [kioskRow({ RowID: 'gib-m1-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' })]
   }).results[0].result, 'added');
   assert.equal(kioskFirst.post(adminAddition()).result, 'already exists');
   assert.equal(kioskFirst.signins.values.length, 2);
@@ -980,6 +1006,26 @@ test('rapid Admin retry creates one payroll event and readable results', () => {
   assert.equal(harness.audit.values.length, 3);
   assert.ok(first.auditActionNumber > 0);
   assert.ok(retry.auditActionNumber > first.auditActionNumber);
+});
+
+test('Admin request IDs remain permanent after payload changes or VOID', () => {
+  const changed = receiverHarness({ adminActionToken: 'production-admin-token' });
+  assert.equal(changed.post(adminAddition()).result, 'added');
+  assert.equal(changed.post(adminAddition({ reason: 'Changed retry payload' })).result, 'rejected');
+  assert.equal(changed.signins.values.length, 2);
+
+  const voidedAdminRow = kioskRow({
+    RowID: 'gib-admin-qa-admin-one',
+    Device: 'Admin Daily Review',
+    Build: 'm1-admin-only-couch-rollout',
+    Notes: 'Admin-added | Admin: Stuart Turner | Reason: Missed tablet sign-in'
+  });
+  const voided = receiverHarness({
+    adminActionToken: 'production-admin-token',
+    rows: [signinSheetRow(voidedAdminRow, 'VOID')]
+  });
+  assert.equal(voided.post(adminAddition()).result, 'rejected');
+  assert.equal(voided.signins.values.length, 2);
 });
 
 test('rapid double-click reaches one added result and one duplicate-safe result', async () => {

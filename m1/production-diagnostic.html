@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'none'; base-uri 'none'; object-src 'none'">
+  <title>M1 Production Tablet Diagnostic</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #f4f5f7; color: #17202a; }
+    main { max-width: 620px; margin: 32px auto; padding: 24px; background: white; border-radius: 14px; box-shadow: 0 8px 28px #17202a1a; }
+    h1 { margin-top: 0; font-size: 1.5rem; }
+    .notice { padding: 12px; border: 1px solid #b8c4d0; border-radius: 8px; background: #f8fafc; }
+    .status { margin-top: 16px; font-weight: 700; }
+    dl { display: grid; grid-template-columns: 1fr auto; gap: 10px 18px; margin-top: 24px; }
+    dt { font-weight: 700; }
+    dd { margin: 0; font-family: ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>M1 production tablet diagnostic</h1>
+    <p class="notice">This read-only check reports only safe tablet state. It does not change local records, the waiting queue, auto-sync, or device authorization.</p>
+    <p id="statusMessage" class="status" role="status" aria-live="polite">Checking safe tablet state...</p>
+    <dl id="diagnosticResults" aria-live="polite">
+      <dt>Correct production origin</dt><dd id="originResult">NO</dd>
+      <dt>Device authorized</dt><dd id="authorizationResult">NO</dd>
+      <dt>Auto-sync</dt><dd id="autoSyncResult">OFF</dd>
+      <dt>Local sign-in count</dt><dd id="historyCountResult">0</dd>
+      <dt>Waiting count</dt><dd id="waitingCountResult">0</dd>
+      <dt>Build/version</dt><dd id="buildResult">2026-08-07 M1 PRODUCTION candidate</dd>
+    </dl>
+  </main>
+  <script>
+    (() => {
+      'use strict';
+
+      const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
+      const EXPECTED_PATH = '/m1/production-diagnostic.html';
+      const STATUS_ENDPOINT = '/api/m1-tablet-status';
+      const BUILD_VERSION = '2026-08-07 M1 PRODUCTION candidate';
+      const LOCAL_STATE_KEY = 'gib_m1_local_state_v2';
+      const AUTO_SYNC_KEY = 'gib_m1_sync_auto_v1';
+      const LEGACY_QUEUE_KEY = 'gib_m1_sync_queue_v1';
+      const LEGACY_HISTORY_KEY = 'gib_m1_signins_v1';
+
+      const byId = id => document.getElementById(id);
+      const exactKeys = (value, expected) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+        const actual = Object.keys(value).sort();
+        const wanted = [...expected].sort();
+        return actual.length === wanted.length
+          && actual.every((key, index) => key === wanted[index]);
+      };
+      const safeArrayCount = key => {
+        try {
+          const value = JSON.parse(localStorage.getItem(key) || '[]');
+          return Array.isArray(value) ? value.length : 0;
+        } catch {
+          return 0;
+        }
+      };
+      const localCounts = () => {
+        try {
+          const state = JSON.parse(localStorage.getItem(LOCAL_STATE_KEY) || 'null');
+          if (
+            state
+            && state.version === 2
+            && Array.isArray(state.ledger)
+            && Array.isArray(state.queue)
+          ) {
+            return { historyCount: state.ledger.length, waitingCount: state.queue.length };
+          }
+        } catch {}
+        return {
+          historyCount: safeArrayCount(LEGACY_HISTORY_KEY),
+          waitingCount: safeArrayCount(LEGACY_QUEUE_KEY)
+        };
+      };
+
+      const run = async () => {
+        const correctOrigin = window.location.origin === PRODUCTION_ORIGIN;
+        const allowedLocation = correctOrigin
+          && window.location.pathname === EXPECTED_PATH
+          && !window.location.search;
+        const counts = localCounts();
+        let autoSync = 'ON';
+        try {
+          autoSync = localStorage.getItem(AUTO_SYNC_KEY) === 'true' ? 'ON' : 'OFF';
+        } catch {}
+
+        let authorized = false;
+        if (allowedLocation) {
+          try {
+            const response = await fetch(STATUS_ENDPOINT, {
+              method: 'POST',
+              mode: 'same-origin',
+              credentials: 'same-origin',
+              cache: 'no-store',
+              redirect: 'error',
+              referrerPolicy: 'no-referrer',
+              headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json'
+              },
+              body: '{}'
+            });
+            const responseText = await response.text();
+            if (responseText && responseText.length <= 1_024) {
+              const result = JSON.parse(responseText);
+              authorized = response.ok === true
+                && exactKeys(result, ['authorized'])
+                && result.authorized === true;
+            }
+          } catch {}
+        }
+
+        byId('originResult').textContent = correctOrigin ? 'YES' : 'NO';
+        byId('authorizationResult').textContent = authorized ? 'YES' : 'NO';
+        byId('autoSyncResult').textContent = autoSync;
+        byId('historyCountResult').textContent = String(counts.historyCount);
+        byId('waitingCountResult').textContent = String(counts.waitingCount);
+        byId('buildResult').textContent = BUILD_VERSION;
+        byId('statusMessage').textContent = 'Diagnostic complete. These six fields are safe to report.';
+      };
+
+      run().catch(() => {
+        byId('statusMessage').textContent = 'Diagnostic could not be completed.';
+      });
+    })();
+  </script>
+</body>
+</html>

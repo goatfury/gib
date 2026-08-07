@@ -62,9 +62,11 @@ export async function requestAcknowledgements(rows, options = {}) {
   if (options.online === false) throw new Error('The device is offline.');
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   if (typeof fetchImpl !== 'function') throw new Error('Sync transport is unavailable.');
+  const productionOrigin = options.productionOrigin === true;
   const response = await fetchImpl(SYNC_ENDPOINT, {
     method: 'POST',
-    credentials: 'omit',
+    credentials: productionOrigin ? 'same-origin' : 'omit',
+    ...(productionOrigin ? { mode: 'same-origin', redirect: 'error' } : {}),
     cache: 'no-store',
     headers: {
       'Content-Type': 'application/json',
@@ -153,10 +155,14 @@ function validResult(value) {
     && value.linkedRecordId.length <= 240;
 }
 
-export function evaluateAcknowledgements(submittedRows, payload) {
+export function evaluateAcknowledgements(submittedRows, payload, options = {}) {
   const submitted = Array.isArray(submittedRows) ? submittedRows : [];
   const submittedIds = submitted.map(row => row && row.RowID);
   const uniqueSubmittedIds = new Set(submittedIds);
+  const productionOrigin = options.productionOrigin === true;
+  const envelopeKeys = productionOrigin
+    ? ['ok', 'production', 'results']
+    : ['ok', 'test', 'results'];
   const unreadable = {
     readable: false,
     confirmedRowIds: [],
@@ -167,9 +173,9 @@ export function evaluateAcknowledgements(submittedRows, payload) {
     submittedIds.length < 1
     || uniqueSubmittedIds.size !== submittedIds.length
     || submittedIds.some(rowId => !validPermanentRowId(rowId))
-    || !exactKeys(payload, ['ok', 'test', 'results'])
+    || !exactKeys(payload, envelopeKeys)
     || payload.ok !== true
-    || payload.test !== true
+    || (productionOrigin ? payload.production !== true : payload.test !== true)
     || !Array.isArray(payload.results)
     || payload.results.length !== submittedIds.length
     || payload.results.some(result => !validResult(result))
@@ -200,9 +206,9 @@ export function evaluateAcknowledgements(submittedRows, payload) {
   };
 }
 
-export function applyAcknowledgements(state, submittedRows, payload, acknowledgedAt) {
+export function applyAcknowledgements(state, submittedRows, payload, acknowledgedAt, options = {}) {
   if (!validLocalState(state)) throw new Error('The local sign-in state was not valid.');
-  const evaluation = evaluateAcknowledgements(submittedRows, payload);
+  const evaluation = evaluateAcknowledgements(submittedRows, payload, options);
   if (!evaluation.readable || evaluation.confirmedRowIds.length === 0) {
     return { state, ...evaluation };
   }
@@ -213,9 +219,11 @@ export function applyAcknowledgements(state, submittedRows, payload, acknowledge
     version: 2,
     ledger: state.ledger.map(row => {
       if (!row || !confirmed.has(row.RowID)) return row;
+      const syncResult = resultById.get(row.RowID);
       return {
         ...row,
-        __syncResult: resultById.get(row.RowID),
+        ...(syncResult === 'review required' ? { Status: 'REVIEW' } : {}),
+        __syncResult: syncResult,
         __syncedAt: acknowledgedAt
       };
     }),

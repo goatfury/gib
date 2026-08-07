@@ -1,0 +1,10 @@
+.clasp.json
+.clasprc.json
+.env*
+.generated/
+private/
+client_secret*.json
+credentials*.json
+*deployment*.json
+*provision*.json
+*production-config*.json

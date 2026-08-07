@@ -51,6 +51,10 @@ function ack(results) {
   return { ok: true, test: true, results };
 }
 
+function productionAck(results) {
+  return { ok: true, production: true, results };
+}
+
 function result(rowId, status, linkedRecordId = rowId) {
   return { rowId, result: status, linkedRecordId };
 }
@@ -209,6 +213,23 @@ test('one accepted and one rejected clears only the uniquely confirmed row', () 
   assert.equal(applied.state.ledger[1].__syncResult, undefined);
 });
 
+test('review-required confirmation clears only that row and retains visible review status', () => {
+  const value = row(IDS[0]);
+  const batch = localBatch([value]);
+  const state = appendBatchToState(blankLocalState(), batch.ledger, batch.queue);
+  const applied = applyAcknowledgements(
+    state,
+    state.queue,
+    ack([result(IDS[0], 'review required')]),
+    '2026-08-07T13:00:01.000Z'
+  );
+  assert.equal(applied.readable, true);
+  assert.deepEqual(applied.confirmedRowIds, [IDS[0]]);
+  assert.equal(applied.state.queue.length, 0);
+  assert.equal(applied.state.ledger[0].Status, 'REVIEW');
+  assert.equal(applied.state.ledger[0].__syncResult, 'review required');
+});
+
 test('added requires its linked record to be the submitted RowID', () => {
   const value = row(IDS[0]);
   const batch = localBatch([value]);
@@ -269,10 +290,81 @@ test('browser request is same-origin JSON and contains no credential or internal
   assert.equal(captured.url, '/api/m1-kiosk-sync');
   assert.equal(captured.init.method, 'POST');
   assert.equal(captured.init.credentials, 'omit');
+  assert.equal(Object.hasOwn(captured.init, 'mode'), false);
+  assert.equal(Object.hasOwn(captured.init, 'redirect'), false);
   assert.equal(captured.init.body.includes(secretCanary), false);
   assert.equal(captured.init.body.includes('token'), false);
   assert.equal(captured.init.body.includes('__batchId'), false);
   assert.equal(captured.init.body.includes('target'), false);
+});
+
+test('production transport explicitly includes only the host-only same-origin credential', async () => {
+  const secretCanary = 'CANARY-INTERNAL-MUST-NOT-LEAK';
+  const value = row(IDS[0], { __privateCanary: secretCanary });
+  let captured;
+  await requestAcknowledgements([value], {
+    productionOrigin: true,
+    fetchImpl: async (url, init) => {
+      captured = { url, init };
+      return new Response(JSON.stringify(productionAck([result(IDS[0], 'added')])), { status: 200 });
+    }
+  });
+  const body = JSON.parse(captured.init.body);
+  assert.equal(captured.url, '/api/m1-kiosk-sync');
+  assert.equal(captured.init.credentials, 'same-origin');
+  assert.equal(captured.init.mode, 'same-origin');
+  assert.equal(captured.init.redirect, 'error');
+  assert.deepEqual(Object.keys(body), ['rows']);
+  assert.deepEqual(Object.keys(body.rows[0]), [
+    'RowID',
+    'Timestamp',
+    'Date',
+    'Class Label',
+    'Duration (hr)',
+    'Instructor',
+    'Site',
+    'Device',
+    'Build',
+    'Notes'
+  ]);
+  assert.equal(captured.init.body.includes(secretCanary), false);
+  assert.equal(captured.init.body.includes('token'), false);
+  assert.equal(captured.init.body.includes('target'), false);
+
+  let nonBooleanInit;
+  await requestAcknowledgements([value], {
+    productionOrigin: 'true',
+    fetchImpl: async (_url, init) => {
+      nonBooleanInit = init;
+      return new Response(JSON.stringify(ack([result(IDS[0], 'added')])), { status: 200 });
+    }
+  });
+  assert.equal(nonBooleanInit.credentials, 'omit');
+  assert.equal(Object.hasOwn(nonBooleanInit, 'mode'), false);
+  assert.equal(Object.hasOwn(nonBooleanInit, 'redirect'), false);
+});
+
+test('TEST and production acknowledgment envelopes remain exact and origin-bound', () => {
+  const submitted = [row(IDS[0])];
+  const testPayload = ack([result(IDS[0], 'added')]);
+  const prodPayload = productionAck([result(IDS[0], 'added')]);
+
+  assert.equal(evaluateAcknowledgements(submitted, testPayload).readable, true);
+  assert.equal(evaluateAcknowledgements(submitted, prodPayload).readable, false);
+  assert.equal(evaluateAcknowledgements(submitted, prodPayload, { productionOrigin: true }).readable, true);
+  assert.equal(evaluateAcknowledgements(submitted, testPayload, { productionOrigin: true }).readable, false);
+
+  const badProductionPayloads = [
+    { ...prodPayload, production: false },
+    { ...prodPayload, test: true },
+    { ok: true, results: prodPayload.results }
+  ];
+  for (const payload of badProductionPayloads) {
+    assert.equal(
+      evaluateAcknowledgements(submitted, payload, { productionOrigin: true }).readable,
+      false
+    );
+  }
 });
 
 test('kiosk source has the real double-click guard and no direct Google transport path', () => {
@@ -283,6 +375,55 @@ test('kiosk source has the real double-click guard and no direct Google transpor
   assert.doesNotMatch(kioskHtml, /SYNC_URL_KEY|SYNC_TOKEN_KEY/u);
   assert.doesNotMatch(kioskHtml, /script\.google\.com\/macros/u);
   assert.doesNotMatch(syncSource, /script\.google\.com\/macros/u);
+});
+
+test('kiosk selects production only from the exact canonical origin', () => {
+  assert.match(kioskHtml, /const PRODUCTION_ORIGIN = 'https:\/\/gib-live\.netlify\.app';/u);
+  assert.match(kioskHtml, /const IS_PRODUCTION_ORIGIN = location\.origin === PRODUCTION_ORIGIN;/u);
+  assert.doesNotMatch(kioskHtml, /endsWith\([^\n]*gib-live|includes\([^\n]*gib-live/u);
+  assert.match(kioskHtml, /requestAcknowledgements\(submittedRows, \{[\s\S]*?productionOrigin: IS_PRODUCTION_ORIGIN[\s\S]*?\}\);/u);
+  assert.equal(
+    [...kioskHtml.matchAll(/\{ productionOrigin: IS_PRODUCTION_ORIGIN \}/gu)].length,
+    2
+  );
+  assert.match(kioskHtml, /M1 TEST readable-ack/u);
+  assert.match(kioskHtml, /secure host-only cookie/u);
+});
+
+test('turning auto-sync OFF before a pending timer fires prevents the send', () => {
+  const normalizedKioskHtml = kioskHtml.replace(/\r\n/gu, '\n');
+  const autoSyncBlock = normalizedKioskHtml.match(
+    /\/\/ Attempt auto-sync if configured\s*([\s\S]*?)\n  \}\n\n  function voidLastSignin/u
+  )?.[1] || '';
+  assert.ok(autoSyncBlock.includes('window.setTimeout'));
+
+  const storage = new Map([['gib_m1_sync_auto_v1', 'true']]);
+  let pendingTimer = null;
+  let syncCalls = 0;
+  const context = vm.createContext({
+    SYNC_AUTO_KEY: 'gib_m1_sync_auto_v1',
+    localStorage: { getItem: key => storage.get(key) ?? null },
+    syncNow: () => { syncCalls += 1; },
+    window: {
+      setTimeout(callback, delay) {
+        assert.equal(delay, 15_500);
+        pendingTimer = callback;
+        return 1;
+      }
+    }
+  });
+
+  new vm.Script(autoSyncBlock, { filename: 'm1-auto-sync-block.js' }).runInContext(context);
+  assert.equal(typeof pendingTimer, 'function');
+  storage.set('gib_m1_sync_auto_v1', 'false');
+  pendingTimer();
+  assert.equal(syncCalls, 0);
+
+  storage.set('gib_m1_sync_auto_v1', 'true');
+  pendingTimer = null;
+  new vm.Script(autoSyncBlock, { filename: 'm1-auto-sync-block.js' }).runInContext(context);
+  pendingTimer();
+  assert.equal(syncCalls, 1);
 });
 
 test('the kiosk module script compiles after resolving its static import', () => {

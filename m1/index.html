@@ -682,8 +682,8 @@ input, textarea, select {
     <!-- Google Sheets sync configuration -->
     <div class="card" style="background: var(--panel);">
       <h3>Google Sheets Sync</h3>
-      <div class="subtle">Sync delivery remains available, but receiver values are managed only through authenticated M1 Admin.</div>
-      <div class="subtle" style="margin-top:12px;">Receiver settings are installed securely from M1 Admin and are not displayed here.</div>
+      <div class="subtle">Sync sends only queued rows to this site's protected same-origin endpoint.</div>
+      <div class="subtle" style="margin-top:12px;">On the production kiosk origin, device authorization is held in a secure host-only cookie and is never displayed here.</div>
       <div style="margin-top:12px;">
         <label for="cfgDeviceLabel" style="display:block; margin-bottom:4px;">Device label</label>
         <input id="cfgDeviceLabel" type="text" placeholder="Front Desk iPad" style="width:100%;">
@@ -755,7 +755,16 @@ import {
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2026-08-07 M1 TEST readable-ack';
+  const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
+  const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
+  const TEST_BUILD = '2026-08-07 M1 TEST readable-ack';
+  const PRODUCTION_BUILD = '2026-08-07 M1 PRODUCTION candidate';
+  const BUILD = IS_PRODUCTION_ORIGIN ? PRODUCTION_BUILD : TEST_BUILD;
+  if (IS_PRODUCTION_ORIGIN) {
+    document.title = 'GiB · Module 1 · Instructor Sign-In → Payroll (M1 PRODUCTION candidate)';
+    document.getElementById('buildId').textContent = PRODUCTION_BUILD;
+    document.getElementById('buildStampLarge').textContent = `Build ${PRODUCTION_BUILD}`;
+  }
   const TZ = 'America/New_York';
 // --- Instructor name suggestions (local roster) ---
 const NAME_ROSTER_KEY = 'gib_m1_instructor_names_v1';
@@ -2227,9 +2236,11 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     // its own row in the sync queue so that multi‑class sign‑ins are treated as
     // separate events with a permanent opaque RowID shared by both local copies.
     updateSyncStatus();
-    // Attempt auto‑sync if configured
+    // Attempt auto-sync if configured
     if (localStorage.getItem(SYNC_AUTO_KEY) === 'true') {
-      window.setTimeout(() => syncNow(), 15_500);
+      window.setTimeout(() => {
+        if (localStorage.getItem(SYNC_AUTO_KEY) === 'true') syncNow();
+      }, 15_500);
     }
   }
 
@@ -2319,14 +2330,16 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     try {
       const payload = await requestAcknowledgements(submittedRows, {
         online: navigator.onLine !== false,
-        signal: controller.signal
+        signal: controller.signal,
+        productionOrigin: IS_PRODUCTION_ORIGIN
       });
       const acknowledgedAt = new Date().toISOString();
       const applied = applyAcknowledgements(
         loadLocalState(),
         submittedRows,
         payload,
-        acknowledgedAt
+        acknowledgedAt,
+        { productionOrigin: IS_PRODUCTION_ORIGIN }
       );
       if (!applied.readable) throw new Error('unreadable acknowledgement');
 
@@ -2336,7 +2349,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         loadLocalState(),
         submittedRows,
         payload,
-        acknowledgedAt
+        acknowledgedAt,
+        { productionOrigin: IS_PRODUCTION_ORIGIN }
       );
       persistLocalState(latestApplied.state);
       if (latestApplied.confirmedRowIds.length) {
