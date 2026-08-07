@@ -95,8 +95,9 @@ const SIGNIN_HEADERS = Object.freeze([
   'Status'
 ]);
 
-function makeSheet(initialRows = []) {
+function makeSheet(initialRows = [], options = {}) {
   const values = initialRows.map(row => [...row]);
+  let maxRows = Math.max(options.maxRows || 1000, values.length);
   return {
     values,
     appendRow(row) {
@@ -122,6 +123,9 @@ function makeSheet(initialRows = []) {
           return rows;
         },
         setValues(rows) {
+          if (typeof options.beforeSetValues === 'function') {
+            options.beforeSetValues({ startRow, startColumn, rowCount, columnCount, rows });
+          }
           rows.forEach((source, rowOffset) => {
             const rowIndex = startRow - 1 + rowOffset;
             if (!values[rowIndex]) values[rowIndex] = [];
@@ -129,8 +133,19 @@ function makeSheet(initialRows = []) {
               values[rowIndex][startColumn - 1 + columnOffset] = value;
             });
           });
+          return this;
+        },
+        setNumberFormat() {
+          return this;
         }
       };
+    },
+    getMaxRows() {
+      return maxRows;
+    },
+    insertRowsAfter(afterRow, count) {
+      assert.equal(afterRow, maxRows);
+      maxRows += count;
     },
     setFrozenRows() {}
   };
@@ -147,17 +162,17 @@ function receiverHarness({
   failAfterAppends = null,
   rows = []
 } = {}) {
-  const signins = makeSheet([SIGNIN_HEADERS, ...rows]);
   let appendFailureAfter = failAfterAppends;
   let appendAttempts = 0;
-  const appendSigninRow = signins.appendRow.bind(signins);
-  signins.appendRow = row => {
-    if (Number.isInteger(appendFailureAfter) && appendAttempts >= appendFailureAfter) {
-      throw new Error('simulated append interruption');
+  const signins = makeSheet([SIGNIN_HEADERS, ...rows], {
+    beforeSetValues({ startRow, startColumn, columnCount }) {
+      if (startRow < 2 || startColumn !== 1 || columnCount !== SIGNIN_HEADERS.length) return;
+      if (Number.isInteger(appendFailureAfter) && appendAttempts >= appendFailureAfter) {
+        throw new Error('simulated append interruption');
+      }
+      appendAttempts += 1;
     }
-    appendAttempts += 1;
-    appendSigninRow(row);
-  };
+  });
   let audit = null;
   let spreadsheetOpens = 0;
   const spreadsheet = {

@@ -27,12 +27,16 @@ const SIGNIN_HEADERS = Object.freeze([
   'Status'
 ]);
 
-function makeSheet(initialRows = []) {
+function makeSheet(initialRows = [], options = {}) {
   const values = initialRows.map(row => [...row]);
+  const numberFormats = new Map();
+  const operations = [];
+  let maxRows = Math.max(options.maxRows || 1000, values.length);
   let frozenRows = 0;
   return {
     values,
     appendRow(row) {
+      operations.push({ type: 'appendRow', row: values.length + 1 });
       values.push([...row]);
     },
     deleteRow(rowNumber) {
@@ -66,6 +70,10 @@ function makeSheet(initialRows = []) {
           return rows;
         },
         setValues(rows) {
+          if (typeof options.beforeSetValues === 'function') {
+            options.beforeSetValues({ startRow, startColumn, rowCount, columnCount, rows });
+          }
+          operations.push({ type: 'setValues', row: startRow, column: startColumn });
           rows.forEach((source, rowOffset) => {
             const rowIndex = startRow - 1 + rowOffset;
             if (!values[rowIndex]) values[rowIndex] = [];
@@ -73,14 +81,40 @@ function makeSheet(initialRows = []) {
               values[rowIndex][startColumn - 1 + columnOffset] = value;
             });
           });
+          return this;
+        },
+        setNumberFormat(format) {
+          for (let rowOffset = 0; rowOffset < rowCount; rowOffset += 1) {
+            for (let columnOffset = 0; columnOffset < columnCount; columnOffset += 1) {
+              const row = startRow + rowOffset;
+              const column = startColumn + columnOffset;
+              numberFormats.set(`${row}:${column}`, format);
+              operations.push({ type: 'numberFormat', row, column, format });
+            }
+          }
+          return this;
         }
       };
     },
     setFrozenRows(count) {
       frozenRows = count;
     },
+    getMaxRows() {
+      return maxRows;
+    },
+    insertRowsAfter(afterRow, count) {
+      assert.equal(afterRow, maxRows);
+      maxRows += count;
+      operations.push({ type: 'insertRowsAfter', row: afterRow, count });
+    },
     get frozenRows() {
       return frozenRows;
+    },
+    get numberFormats() {
+      return new Map(numberFormats);
+    },
+    get operations() {
+      return operations.map(operation => ({ ...operation }));
     }
   };
 }
@@ -132,7 +166,8 @@ function createHarness({
   properties = {},
   driveMatchCount = 1,
   failAfterAppends = null,
-  lockAvailable = true
+  lockAvailable = true,
+  sheetMaxRows = 1000
 } = {}) {
   const propertyValues = new Map(Object.entries({
     GIB_M1_TEST_SPREADSHEET_ID: 'unit-test-spreadsheet-id',
@@ -142,17 +177,18 @@ function createHarness({
     GIB_M1_RECOVERY_TOKEN: 'unit-recovery-token',
     ...properties
   }));
-  const signins = makeSheet(initialRows);
   let appendFailureAfter = failAfterAppends;
   let appendAttempts = 0;
-  const realAppend = signins.appendRow.bind(signins);
-  signins.appendRow = row => {
-    if (Number.isInteger(appendFailureAfter) && appendAttempts >= appendFailureAfter) {
-      throw new Error('simulated append failure');
+  const signins = makeSheet(initialRows, {
+    maxRows: sheetMaxRows,
+    beforeSetValues({ startRow, startColumn, columnCount }) {
+      if (startRow < 2 || startColumn !== 1 || columnCount !== SIGNIN_HEADERS.length) return;
+      if (Number.isInteger(appendFailureAfter) && appendAttempts >= appendFailureAfter) {
+        throw new Error('simulated append failure');
+      }
+      appendAttempts += 1;
     }
-    appendAttempts += 1;
-    realAppend(row);
-  };
+  });
 
   const sheets = new Map([['Signins', signins]]);
   const spreadsheet = {
@@ -386,6 +422,32 @@ test('two fake rows receive one readable result each and write exact RowIDs', ()
     [['test-row-101', 'added'], ['test-row-102', 'added']]
   );
   assert.deepEqual(harness.signins.values.slice(1).map(row => row[0]), ['test-row-101', 'test-row-102']);
+  assert.deepEqual(
+    harness.signins.operations.map(operation => [operation.type, operation.row, operation.column || '', operation.format || '']),
+    [
+      ['numberFormat', 2, 2, '@'],
+      ['numberFormat', 2, 3, '@'],
+      ['setValues', 2, 1, ''],
+      ['numberFormat', 3, 2, '@'],
+      ['numberFormat', 3, 3, '@'],
+      ['setValues', 3, 1, '']
+    ]
+  );
+});
+
+test('a full Signins grid expands before a literal-text row write', () => {
+  const harness = createHarness({ sheetMaxRows: 1 });
+  const response = harness.post(receiverRequest([kioskRow({ RowID: 'test-row-grid-growth' })]));
+  assert.equal(response.results[0].result, 'added');
+  assert.deepEqual(harness.signins.operations[0], {
+    type: 'insertRowsAfter',
+    row: 1,
+    count: 1
+  });
+  assert.equal(harness.signins.numberFormats.get('2:2'), '@');
+  assert.equal(harness.signins.numberFormats.get('2:3'), '@');
+  assert.equal(harness.signins.values[1][1], '2026-08-06 09:00:00');
+  assert.equal(harness.signins.values[1][2], '2026-08-06');
 });
 
 test('TEST fake-name enforcement is per row in a mixed batch', () => {

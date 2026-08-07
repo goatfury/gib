@@ -45,7 +45,7 @@ jobs:
           test "$(git rev-parse "HEAD:m1/sync-core.mjs")" = "c821963300d74ea2d17364d1595964c5b6bfadd1"
           test "$(git rev-parse "HEAD:netlify/functions/m1-kiosk-sync.mjs")" = "1579eab6bf390bb4f9f068b78f471be2fa041319"
           test "$(git rev-parse "HEAD:integrations/google-apps-script/Code.gs")" = "89b2a49348fce2a30b81adcb7ca988ad70f26988"
-          test "$(git rev-parse "HEAD:integrations/google-apps-script/GibM1Receiver.gs")" = "d20cbe5e02d8c4898765c793351c0860aff00e10"
+          test "$(git rev-parse "HEAD:integrations/google-apps-script/GibM1Receiver.gs")" = "5d0a46d128299ddddb14475a78fa96bcd91c1eba"
           test "$(git rev-parse "HEAD:integrations/google-apps-script/appsscript.json")" = "d41f74bcbf95288dd59bbda303d477b57cf4bce4"
           test "$(git rev-parse "HEAD:m1/admin/index.html")" = "7e406f0056e2b1119ecf91a7c449381e13063981"
           test "$(git rev-parse "HEAD:m1/tablet-diagnostic.html")" = "b5de1709385315753d8983b6bbfa07b2bad55686"

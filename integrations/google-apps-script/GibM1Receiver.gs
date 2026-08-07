@@ -558,7 +558,15 @@ function appendSignin_(sheet, state, record) {
   writeValue_(row, state.indexes, 'build', record.build);
   writeValue_(row, state.indexes, 'notes', record.notes);
   writeValue_(row, state.indexes, 'status', record.status || 'OK');
-  sheet.appendRow(row);
+  var nextRow = sheet.getLastRow() + 1;
+  if (nextRow > sheet.getMaxRows()) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), nextRow - sheet.getMaxRows());
+  }
+  // Sheets otherwise auto-coerces these canonical strings into serial dates.
+  // Plain-text cells preserve the exact retry identity across reads.
+  sheet.getRange(nextRow, state.indexes.timestamp + 1, 1, 1).setNumberFormat('@');
+  sheet.getRange(nextRow, state.indexes.date + 1, 1, 1).setNumberFormat('@');
+  sheet.getRange(nextRow, 1, 1, row.length).setValues([row]);
   state.records.push(record);
 }
 
