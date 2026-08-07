@@ -23,7 +23,7 @@ The latest genuine end-to-end TEST canary was performed against that TEST commit
 
 - Branch: `agent/m1-production-candidate-prep`.
 - QA-passed candidate implementation commit: `174ab631e3891e1025d8c94ca2355b1f714b09e4`.
-- The branch head may include a later documentation-only commit that records this stable implementation SHA.
+- Later review commits may change documentation or be empty preview triggers; the implementation commit above remains the stable code/test identifier, while the exact current review/deploy head is verified separately in GitHub and Netlify evidence.
 - Intended PR shape: stacked draft PR with `agent/m1-revbjjops-test-path` as its base.
 - The candidate prepares code, tests, the secure tablet-install method, provisioning commands, rollback, and cutover instructions only. It does not provision or activate production.
 
