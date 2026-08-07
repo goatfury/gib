@@ -85,7 +85,7 @@ The command writes the 60-second, run-bound link to `private/m1-production/insta
 
 ## Sanitized output and private artifacts
 
-Successful CLI output is one JSON summary containing only booleans, counts, expiry seconds, and the lifecycle. Its fields are: `ok`, `dryRun`, `sourceReady`, `privatePathIgnored`, `authUsable`, `projectStateUsable`, `stagedFileCount`, `commandCount`, `sheetResolved`, `sheetCreated`, `sheetMatchCount`, `headerCount`, `dataRowCount`, `rollbackPrepared`, `restorePrepared`, `installerLinkSaved`, `expiresInSeconds`, and `lifecycle`. It contains no Google identifier, webhook URL, token, credential, row, or instructor name.
+Successful CLI output is one JSON summary containing only booleans, counts, expiry seconds, and an allowlisted lifecycle. Its fields are: `ok`, `dryRun`, `sourceReady`, `privatePathIgnored`, `authUsable`, `defaultCloudProjectIntentional`, `projectStateUsable`, `stagedFileCount`, `commandCount`, `sheetResolved`, `sheetCreated`, `sheetMatchCount`, `headerCount`, `dataRowCount`, `rollbackPrepared`, `restorePrepared`, `installerLinkSaved`, `expiresInSeconds`, and `lifecycle`. It contains no Google identifier, webhook URL, token, credential, row, or instructor name.
 
 All generated state stays under the ignored `private/m1-production/` tree with private file permissions:
 

@@ -58,6 +58,18 @@ const SOURCE_FILES = Object.freeze([
 const CLASP_IGNORE = '**/*\n!Code.gs\n!GibM1Receiver.gs\n!appsscript.json\n';
 const ID_PATTERN = /^[A-Za-z0-9_-]{8,512}$/u;
 const INSTALL_TOKEN_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/u;
+const SAFE_LIFECYCLES = Object.freeze(new Set([
+  'absent',
+  'unchanged',
+  'unknown',
+  'script-created',
+  'source-pushed',
+  'versioned',
+  'deployed-unprovisioned',
+  'provisioning-ambiguous',
+  'provisioned',
+  'rolled-back',
+]));
 
 export class ProductionProvisionError extends Error {
   constructor(code, message) {
@@ -632,6 +644,36 @@ function projectFromState(state) {
   return { scriptId, cloudProjectMode };
 }
 
+function safeLifecycle(value) {
+  const lifecycle = typeof value === 'string' ? value : 'unknown';
+  return SAFE_LIFECYCLES.has(lifecycle) ? lifecycle : 'unknown';
+}
+
+function rollbackIsPrepared(state) {
+  const deployment = state?.deployment;
+  return state?.lifecycle === 'provisioned'
+    && ID_PATTERN.test(String(deployment?.deploymentId || ''))
+    && Number.isInteger(deployment?.currentVersion)
+    && Number.isInteger(deployment?.approvedVersion)
+    && Number.isInteger(deployment?.previousVersion)
+    && deployment.currentVersion === deployment.approvedVersion
+    && deployment.previousVersion !== deployment.currentVersion
+    && deployment.rolledBackFromVersion == null;
+}
+
+function restoreIsPrepared(state) {
+  const deployment = state?.deployment;
+  return state?.lifecycle === 'rolled-back'
+    && ID_PATTERN.test(String(deployment?.deploymentId || ''))
+    && Number.isInteger(deployment?.currentVersion)
+    && Number.isInteger(deployment?.approvedVersion)
+    && Number.isInteger(deployment?.previousVersion)
+    && Number.isInteger(deployment?.rolledBackFromVersion)
+    && deployment.rolledBackFromVersion === deployment.approvedVersion
+    && deployment.currentVersion === deployment.previousVersion
+    && deployment.currentVersion !== deployment.approvedVersion;
+}
+
 function safeSummary(overrides = {}) {
   return Object.freeze({
     ok: overrides.ok === true,
@@ -652,7 +694,7 @@ function safeSummary(overrides = {}) {
     restorePrepared: overrides.restorePrepared === true,
     installerLinkSaved: overrides.installerLinkSaved === true,
     expiresInSeconds: Number(overrides.expiresInSeconds || 0),
-    lifecycle: String(overrides.lifecycle || 'unknown'),
+    lifecycle: safeLifecycle(overrides.lifecycle),
   });
 }
 
@@ -707,8 +749,8 @@ export async function statusProductionProvisioning(options = {}, dependencies = 
     currentVersion: state?.deployment?.currentVersion,
     approvedVersion: state?.deployment?.approvedVersion,
     previousVersion: state?.deployment?.previousVersion,
-    rollbackPrepared: Number.isInteger(state?.deployment?.previousVersion),
-    restorePrepared: state?.deployment?.rolledBackFromVersion === state?.deployment?.approvedVersion,
+    rollbackPrepared: rollbackIsPrepared(state),
+    restorePrepared: restoreIsPrepared(state),
     installerLinkSaved: state?.installer?.generated === true,
     expiresInSeconds: state?.installer?.expiresInSeconds,
     lifecycle: state?.lifecycle || 'absent',
@@ -773,8 +815,8 @@ function summaryFromState(state, overrides = {}) {
     sheetMatchCount: state?.sheet?.matchCount,
     headerCount: state?.sheet?.headerCount,
     dataRowCount: state?.sheet?.dataRowCount,
-    rollbackPrepared: Number.isInteger(state?.deployment?.previousVersion),
-    restorePrepared: state?.deployment?.rolledBackFromVersion === state?.deployment?.approvedVersion,
+    rollbackPrepared: rollbackIsPrepared(state),
+    restorePrepared: restoreIsPrepared(state),
     installerLinkSaved: state?.installer?.generated === true,
     expiresInSeconds: state?.installer?.expiresInSeconds,
     lifecycle: state?.lifecycle,
@@ -1026,15 +1068,13 @@ async function moveDeployment(action, options, dependencies) {
   let fromVersion;
   let toVersion;
   if (action === 'rollback') {
-    if (state.lifecycle !== 'provisioned') fail('ROLLBACK_NOT_PREPARED', 'Rollback requires the approved lifecycle.');
+    if (!rollbackIsPrepared(state)) fail('ROLLBACK_NOT_PREPARED', 'Rollback requires the approved lifecycle.');
     fromVersion = state.deployment.currentVersion;
     toVersion = state.deployment.previousVersion;
-    if (!Number.isInteger(toVersion)) fail('ROLLBACK_NOT_PREPARED', 'A recorded prior version is required.');
   } else {
-    if (
-      state.lifecycle !== 'rolled-back'
-      || state.deployment.rolledBackFromVersion !== state.deployment.approvedVersion
-    ) fail('RESTORE_NOT_PREPARED', 'Restore requires the exact matching recorded rollback.');
+    if (!restoreIsPrepared(state)) {
+      fail('RESTORE_NOT_PREPARED', 'Restore requires the exact matching recorded rollback.');
+    }
     fromVersion = state.deployment.currentVersion;
     toVersion = state.deployment.approvedVersion;
   }

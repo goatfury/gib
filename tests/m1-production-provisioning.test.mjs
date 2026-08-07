@@ -474,6 +474,8 @@ test('status, prepare, and create require no standard Cloud project or private c
   assert.equal(status.authUsable, true);
   assert.equal(status.defaultCloudProjectIntentional, true);
   assert.equal(status.lifecycle, 'absent');
+  assert.equal(status.rollbackPrepared, false);
+  assert.equal(status.restorePrepared, false);
 
   const prepared = await provision.prepareProductionProvisioning(
     fixture.options,
@@ -584,6 +586,8 @@ test('real phased actions isolate clasp bootstrap, stage exactly three files, an
   );
   assert.equal(status.lifecycle, 'provisioned');
   assert.equal(status.sheetResolved, true);
+  assert.equal(status.rollbackPrepared, false);
+  assert.equal(status.restorePrepared, false);
 
   for (const result of [...results, deployed, provisioned, status]) assertSanitized(result, privateValues);
 });
@@ -641,6 +645,8 @@ test('update, rollback, and restore are journaled and verified against exact rem
   assert.equal(readState(fixture).lifecycle, 'provisioned');
   assert.equal(readState(fixture).netlify.syncEnabled, false);
   assert.equal(provisionRequest.calls.length, 1, 'A later update must not reopen one-time provisioning.');
+  assert.equal(updated.rollbackPrepared, true);
+  assert.equal(updated.restorePrepared, false);
 
   fixture.events.length = 0;
   const rolledBack = await provision.rollbackProductionDeployment(
@@ -652,6 +658,8 @@ test('update, rollback, and restore are journaled and verified against exact rem
   assert.equal(readState(fixture).deployment.currentVersion, 12);
   assert.equal(readState(fixture).deployment.rolledBackFromVersion, 13);
   assert.equal(readState(fixture).lifecycle, 'rolled-back');
+  assert.equal(rolledBack.summary.rollbackPrepared, false);
+  assert.equal(rolledBack.summary.restorePrepared, true);
 
   fixture.events.length = 0;
   const restored = await provision.restoreProductionDeployment(
@@ -665,6 +673,8 @@ test('update, rollback, and restore are journaled and verified against exact rem
   assert.equal(readState(fixture).lifecycle, 'provisioned');
   assert.equal(readState(fixture).netlify.syncEnabled, false);
   assert.equal(provisionRequest.calls.length, 1);
+  assert.equal(restored.summary.rollbackPrepared, true);
+  assert.equal(restored.summary.restorePrepared, false);
   for (const result of [updated, rolledBack, restored]) {
     assertSanitized(result, [remote.remote.deploymentId, remote.scriptId]);
   }
@@ -781,6 +791,34 @@ test('the private provisioning request is one bounded POST and keeps its credent
   assert.ok(body.provisioningSecret.length >= 32);
   assert.notEqual(body.provisioningSecret, scriptId);
   assert.equal(JSON.stringify({ url: calls[0].url, headers: calls[0].init.headers }).includes(body.provisioningSecret), false);
+});
+
+test('status allowlists lifecycle text and never claims rollback or restore from corrupt state', async t => {
+  const provision = await loadTool();
+  const fixture = makeFixture(t, provision);
+  const remote = makeRemoteRunner(fixture, provision);
+  await provision.executeProductionAction(
+    'create',
+    actionOptions(fixture, provision, 'create'),
+    { fs: fixture.fs, runner: remote.runner }
+  );
+  const lifecycleCanary = 'private-lifecycle-canary-that-must-not-leak';
+  const state = readState(fixture);
+  state.lifecycle = lifecycleCanary;
+  state.deployment.currentVersion = 12;
+  state.deployment.approvedVersion = 12;
+  state.deployment.previousVersion = 11;
+  state.deployment.rolledBackFromVersion = 12;
+  writeFileSync(fixture.statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+
+  const status = await provision.statusProductionProvisioning(
+    fixture.options,
+    { fs: fixture.fs, runner: remote.runner }
+  );
+  assert.equal(status.lifecycle, 'unknown');
+  assert.equal(status.rollbackPrepared, false);
+  assert.equal(status.restorePrepared, false);
+  assert.equal(JSON.stringify(status).includes(lifecycleCanary), false);
 });
 
 test('timeout, HTTP failure, unreadable JSON, and response drift stop after one sanitized request', async t => {
