@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -7,8 +7,10 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync
 } from 'node:fs';
 import os from 'node:os';
@@ -29,13 +31,37 @@ const BASE_FS = Object.freeze({
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
+  statSync,
   writeFileSync
 });
 
 async function loadTool() {
   assert.equal(existsSync(TOOL_PATH), true, 'The repository-driven production provisioning tool is required.');
   return import(`${TOOL_URL}?phased-provisioning-contract=${Date.now()}`);
+}
+
+function installFixtureClaspPackage(repoRoot, {
+  version = '3.3.0',
+  bin = { clasp: 'build/src/index.js' },
+  createEntrypoint = true,
+  entrypointSource = 'process.stdout.write("fixture clasp must not run directly\\n");\n'
+} = {}) {
+  const packageDir = path.join(repoRoot, 'node_modules', '@google', 'clasp');
+  const packageJsonPath = path.join(packageDir, 'package.json');
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(packageJsonPath, `${JSON.stringify({
+    name: '@google/clasp',
+    version,
+    bin
+  })}\n`, 'utf8');
+  if (createEntrypoint && bin && typeof bin === 'object' && typeof bin.clasp === 'string') {
+    const entrypointPath = path.resolve(packageDir, bin.clasp);
+    mkdirSync(path.dirname(entrypointPath), { recursive: true });
+    writeFileSync(entrypointPath, entrypointSource, 'utf8');
+  }
+  return { packageDir, packageJsonPath };
 }
 
 function makeFixture(t, provision) {
@@ -52,6 +78,7 @@ function makeFixture(t, provision) {
   writeFileSync(path.join(productionSource, 'Code.gs'), readFileSync(REAL_WRAPPER, 'utf8'), 'utf8');
   writeFileSync(path.join(sharedSource, 'GibM1Receiver.gs'), readFileSync(REAL_RECEIVER, 'utf8'), 'utf8');
   writeFileSync(path.join(productionSource, 'appsscript.json'), readFileSync(REAL_MANIFEST, 'utf8'), 'utf8');
+  installFixtureClaspPackage(repoRoot, { version: provision.REQUIRED_CLASP_VERSION });
   writeFileSync(path.join(privateDir, 'config.json'), `${JSON.stringify({
     schema: provision.PRIVATE_CONFIG_SCHEMA
   })}\n`, 'utf8');
@@ -78,8 +105,7 @@ function makeFixture(t, provision) {
     fs,
     options: {
       repoRoot,
-      privateDir,
-      claspPath: path.join(repoRoot, 'private', 'fake-clasp')
+      privateDir
     }
   };
 }
@@ -253,6 +279,7 @@ test('the provisioning module is import-safe and exposes phased/injected safety 
     'executeProductionAction',
     'generateProductionInstallerLink',
     'prepareProductionProvisioning',
+    'resolveClaspLaunch',
     'restoreProductionDeployment',
     'rollbackProductionDeployment',
     'statusProductionProvisioning'
@@ -267,6 +294,215 @@ test('the provisioning module is import-safe and exposes phased/injected safety 
   ]) {
     assert.equal(exported.includes(obsolete), false, `Obsolete composite/compat export ${obsolete} must stay removed.`);
   }
+});
+
+test('every platform launches the installed clasp JavaScript entrypoint through process.execPath', async t => {
+  const provision = await loadTool();
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  const toolSource = readFileSync(TOOL_PATH, 'utf8');
+  try {
+    for (const platform of ['win32', 'linux', 'darwin']) {
+      Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+      const fixture = makeFixture(t, provision);
+      const specs = [];
+      const runner = async spec => {
+        specs.push(spec);
+        if (commandName(spec) === '--version') {
+          return { code: 0, stdout: `${provision.REQUIRED_CLASP_VERSION}\n`, stderr: '' };
+        }
+        if (commandName(spec) === 'show-authorized-user') {
+          return { code: 0, stdout: '{"loggedIn":true}', stderr: '' };
+        }
+        throw new Error('Only read-only clasp preflight commands are allowed in launcher tests.');
+      };
+      const prepared = await provision.prepareProductionProvisioning(
+        fixture.options,
+        { fs: fixture.fs, runner }
+      );
+      const launch = provision.resolveClaspLaunch({ repoRoot: fixture.repoRoot, fs: fixture.fs });
+      assert.equal(prepared.authUsable, true);
+      assert.equal(specs.length, 2);
+      assert.deepEqual(specs.map(commandName), ['--version', 'show-authorized-user']);
+      assert.deepEqual(specs[0].args, [launch.entrypoint, '--version']);
+      assert.deepEqual(specs[1].args, [launch.entrypoint, 'show-authorized-user', '--json']);
+      for (const spec of specs) {
+        assert.equal(spec.executable, process.execPath, `${platform} must launch clasp through Node.`);
+        assert.equal(spec.args[0], launch.entrypoint);
+        assert.doesNotMatch(spec.executable, /clasp(?:\.cmd)?$/iu);
+        assert.doesNotMatch(spec.args[0], /[\\/]\.bin[\\/]|clasp\.cmd$/iu);
+      }
+      assert.deepEqual(mutationEvents(fixture.events), []);
+    }
+  } finally {
+    Object.defineProperty(process, 'platform', platformDescriptor);
+  }
+
+  assert.doesNotMatch(toolSource, /clasp\.cmd|['"]clasp-bin['"]|node_modules[^\n]*[\\/]\.bin/iu);
+  assert.doesNotMatch(toolSource, /shell\s*:\s*true|\bexec\s*\(|cmd\.exe|powershell|\bnpx\b/iu);
+  assert.match(toolSource, /shell\s*:\s*false/u);
+});
+
+test('clasp package metadata and entrypoint validation fail closed before any command runs', async t => {
+  const provision = await loadTool();
+  const privateMarker = 'private-clasp-package-marker-that-must-not-leak';
+
+  async function expectPrepareFailure(fixture, code) {
+    const calls = [];
+    let failure;
+    try {
+      await provision.prepareProductionProvisioning(fixture.options, {
+        fs: fixture.fs,
+        runner: async spec => {
+          calls.push(spec);
+          return { code: 0, stdout: '', stderr: '' };
+        }
+      });
+    } catch (error) {
+      failure = error;
+    }
+    assert.equal(failure?.code, code);
+    assert.deepEqual(calls, []);
+    assert.doesNotMatch(
+      JSON.stringify({ name: failure?.name, code: failure?.code, message: failure?.message }),
+      new RegExp(privateMarker, 'iu')
+    );
+  }
+
+  {
+    const fixture = makeFixture(t, provision);
+    rmSync(path.join(fixture.repoRoot, 'node_modules', '@google', 'clasp'), { recursive: true, force: true });
+    await expectPrepareFailure(fixture, 'CLASP_PACKAGE_UNAVAILABLE');
+  }
+
+  {
+    const fixture = makeFixture(t, provision);
+    installFixtureClaspPackage(fixture.repoRoot, {
+      version: `3.3.1-${privateMarker}`,
+      createEntrypoint: false
+    });
+    await expectPrepareFailure(fixture, 'CLASP_VERSION_MISMATCH');
+  }
+
+  const invalidCases = [
+    { name: 'missing bin', bin: null, createEntrypoint: false },
+    { name: 'string bin', bin: `build/${privateMarker}.js`, createEntrypoint: false },
+    { name: 'missing clasp member', bin: { other: `build/${privateMarker}.js` }, createEntrypoint: false },
+    { name: 'empty clasp member', bin: { clasp: '' }, createEntrypoint: false },
+    { name: 'parent escape', bin: { clasp: `../../${privateMarker}.js` }, createEntrypoint: true },
+    { name: 'POSIX absolute path', bin: { clasp: `/tmp/${privateMarker}.js` }, createEntrypoint: false },
+    { name: 'Windows absolute path', bin: { clasp: `C:\\${privateMarker}.js` }, createEntrypoint: false },
+    { name: 'command shim', bin: { clasp: `build/${privateMarker}.cmd` }, createEntrypoint: true },
+    { name: 'missing JavaScript file', bin: { clasp: `build/${privateMarker}.js` }, createEntrypoint: false }
+  ];
+  for (const invalidCase of invalidCases) {
+    const fixture = makeFixture(t, provision);
+    installFixtureClaspPackage(fixture.repoRoot, {
+      version: provision.REQUIRED_CLASP_VERSION,
+      bin: invalidCase.bin,
+      createEntrypoint: invalidCase.createEntrypoint
+    });
+    await expectPrepareFailure(fixture, 'CLASP_ENTRYPOINT_INVALID');
+  }
+
+  {
+    const fixture = makeFixture(t, provision);
+    const bin = { clasp: `build/${privateMarker}.js` };
+    installFixtureClaspPackage(fixture.repoRoot, {
+      version: provision.REQUIRED_CLASP_VERSION,
+      bin,
+      createEntrypoint: false
+    });
+    mkdirSync(path.resolve(
+      fixture.repoRoot,
+      'node_modules',
+      '@google',
+      'clasp',
+      bin.clasp
+    ), { recursive: true });
+    await expectPrepareFailure(fixture, 'CLASP_ENTRYPOINT_INVALID');
+  }
+});
+
+test('runtime clasp version validation remains exact after package validation', async t => {
+  const provision = await loadTool();
+  const fixture = makeFixture(t, provision);
+  const calls = [];
+  await assert.rejects(
+    () => provision.prepareProductionProvisioning(fixture.options, {
+      fs: fixture.fs,
+      runner: async spec => {
+        calls.push(spec);
+        return { code: 0, stdout: '3.3.1\n', stderr: 'private stderr must remain captured' };
+      }
+    }),
+    error => error?.code === 'CLASP_VERSION_MISMATCH'
+  );
+  assert.deepEqual(calls.map(commandName), ['--version']);
+});
+
+test('command runner preserves spaced and shell-like arguments, output, and exit codes with shell disabled', async t => {
+  const provision = await loadTool();
+  const runnerRoot = mkdtempSync(path.join(os.tmpdir(), 'gib clasp runner with spaces-'));
+  t.after(() => rmSync(runnerRoot, { recursive: true, force: true }));
+  const helperPath = path.join(runnerRoot, 'inert argv helper.js');
+  writeFileSync(helperPath, [
+    "process.stdout.write(JSON.stringify(process.argv.slice(2)));",
+    "process.stderr.write('captured stderr');",
+    'process.exitCode = 23;'
+  ].join('\n'), 'utf8');
+  const inertArguments = [
+    'path containing spaces',
+    '-A',
+    path.join(runnerRoot, 'private auth path with spaces.json'),
+    ';',
+    '&',
+    '|',
+    '>',
+    '$(not-a-command)',
+    '"quoted value"'
+  ];
+  let invocation;
+  const runner = provision.createCommandRunner({
+    spawnImpl(executable, args, options) {
+      invocation = { executable, args: [...args], options: { ...options } };
+      return spawn(executable, args, options);
+    }
+  });
+  const result = await runner({
+    executable: process.execPath,
+    args: [helperPath, ...inertArguments],
+    cwd: runnerRoot,
+    env: process.env
+  });
+  assert.equal(invocation.executable, process.execPath);
+  assert.deepEqual(invocation.args, [helperPath, ...inertArguments]);
+  assert.equal(invocation.options.shell, false);
+  assert.equal(result.code, 23);
+  assert.deepEqual(JSON.parse(result.stdout), inertArguments);
+  assert.equal(result.stderr, 'captured stderr');
+});
+
+test('command runner timeout still captures partial stdout and stderr', async t => {
+  const provision = await loadTool();
+  const runnerRoot = mkdtempSync(path.join(os.tmpdir(), 'gib clasp timeout with spaces-'));
+  t.after(() => rmSync(runnerRoot, { recursive: true, force: true }));
+  const helperPath = path.join(runnerRoot, 'timeout helper.js');
+  writeFileSync(helperPath, [
+    "process.stdout.write('stdout before timeout');",
+    "process.stderr.write('stderr before timeout');",
+    'setInterval(() => {}, 1_000);'
+  ].join('\n'), 'utf8');
+  const startedAt = Date.now();
+  const result = await provision.createCommandRunner({ timeoutMs: 500 })({
+    executable: process.execPath,
+    args: [helperPath],
+    cwd: runnerRoot,
+    env: process.env
+  });
+  assert.ok(Date.now() - startedAt < 5_000, 'Timed out clasp processes must be terminated promptly.');
+  assert.equal(result.code, 1);
+  assert.equal(result.stdout, 'stdout before timeout');
+  assert.equal(result.stderr, 'stderr before timeout');
 });
 
 test('the production lifecycle uses the default Apps Script Cloud project and ends with status', async () => {
@@ -420,7 +656,7 @@ test('the real main rejects outside-private artifact flags without exposing thei
 test('status applies a private config authPath to every clasp preflight without leaking it', async t => {
   const provision = await loadTool();
   const fixture = makeFixture(t, provision);
-  const relativeAuthPath = path.join('auth', 'clasp-auth.json');
+  const relativeAuthPath = path.join('auth folder with spaces & inert', 'clasp auth.json');
   const resolvedAuthPath = path.join(fixture.privateDir, relativeAuthPath);
   const privateAuthMarker = 'synthetic-private-auth-material-that-must-not-leak';
   mkdirSync(path.dirname(resolvedAuthPath), { recursive: true });
@@ -453,7 +689,8 @@ test('status applies a private config authPath to every clasp preflight without 
   assert.equal(summary.authUsable, true);
   assert.deepEqual(specs.map(commandName), ['--version', 'show-authorized-user']);
   for (const spec of specs) {
-    assert.deepEqual(spec.args.slice(0, 2), ['-A', resolvedAuthPath]);
+    assert.equal(spec.executable, process.execPath);
+    assert.deepEqual(spec.args.slice(1, 3), ['-A', resolvedAuthPath]);
   }
   const serialized = JSON.stringify(summary);
   assert.equal(serialized.includes(resolvedAuthPath), false);

@@ -7,7 +7,9 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -125,7 +127,9 @@ const nodeFs = Object.freeze({
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
+  statSync,
   writeFileSync,
 });
 
@@ -135,12 +139,12 @@ function cleanEnvironment(env) {
   }));
 }
 
-export function createCommandRunner({ timeoutMs = 60_000 } = {}) {
+export function createCommandRunner({ timeoutMs = 60_000, spawnImpl = spawn } = {}) {
   return ({ executable, args, cwd, env = process.env }) => new Promise(resolve => {
     let stdout = '';
     let stderr = '';
     let settled = false;
-    const child = spawn(executable, args, {
+    const child = spawnImpl(executable, args, {
       cwd,
       env: cleanEnvironment(env),
       shell: false,
@@ -182,12 +186,6 @@ function resolvePaths(options = {}) {
     wrapperPath: path.resolve(options.wrapperPath || path.join(repoRoot, 'integrations', 'google-apps-script', 'production', 'Code.gs')),
     receiverPath: path.resolve(options.receiverPath || path.join(repoRoot, 'integrations', 'google-apps-script', 'GibM1Receiver.gs')),
     manifestPath: path.resolve(options.manifestPath || path.join(repoRoot, 'integrations', 'google-apps-script', 'production', 'appsscript.json')),
-    claspPath: path.resolve(options.claspPath || path.join(
-      repoRoot,
-      'node_modules',
-      '.bin',
-      process.platform === 'win32' ? 'clasp.cmd' : 'clasp',
-    )),
   };
   for (const privatePath of [
     resolved.projectDir,
@@ -205,7 +203,101 @@ function resolvePaths(options = {}) {
 
 function isInside(parent, child) {
   const relative = path.relative(parent, child);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  return relative === '' || (
+    !path.isAbsolute(relative)
+    && relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+  );
+}
+
+export function resolveClaspLaunch({ repoRoot, fs = nodeFs } = {}) {
+  const resolvedRepoRoot = path.resolve(repoRoot || '.');
+  const nodeModulesPath = path.join(resolvedRepoRoot, 'node_modules');
+  const packagePath = path.join(nodeModulesPath, '@google', 'clasp');
+  const packageJsonPath = path.join(packagePath, 'package.json');
+  let realNodeModules;
+  let realPackagePath;
+  let packageMetadata;
+
+  try {
+    if (!fs.existsSync(packageJsonPath)) {
+      fail('CLASP_PACKAGE_UNAVAILABLE', 'The pinned clasp package is unavailable.');
+    }
+    realNodeModules = fs.realpathSync(nodeModulesPath);
+    realPackagePath = fs.realpathSync(packagePath);
+    const realPackageJsonPath = fs.realpathSync(packageJsonPath);
+    if (
+      !fs.statSync(realNodeModules).isDirectory()
+      || !fs.statSync(realPackagePath).isDirectory()
+      || !fs.statSync(realPackageJsonPath).isFile()
+      || realPackagePath === realNodeModules
+      || !isInside(realNodeModules, realPackagePath)
+      || !isInside(realPackagePath, realPackageJsonPath)
+    ) {
+      fail('CLASP_PACKAGE_INVALID', 'The pinned clasp package is invalid.');
+    }
+    packageMetadata = parseJson(
+      fs.readFileSync(realPackageJsonPath, 'utf8'),
+      'CLASP_PACKAGE_INVALID',
+    );
+  } catch (error) {
+    if (error instanceof ProductionProvisionError) throw error;
+    fail('CLASP_PACKAGE_UNAVAILABLE', 'The pinned clasp package is unavailable.');
+  }
+
+  if (
+    !packageMetadata
+    || typeof packageMetadata !== 'object'
+    || Array.isArray(packageMetadata)
+    || packageMetadata.name !== '@google/clasp'
+  ) {
+    fail('CLASP_PACKAGE_INVALID', 'The pinned clasp package is invalid.');
+  }
+  if (packageMetadata.version !== REQUIRED_CLASP_VERSION) {
+    fail('CLASP_VERSION_MISMATCH', 'The pinned clasp version is unavailable.');
+  }
+
+  const bin = packageMetadata.bin;
+  const binEntry = bin && typeof bin === 'object' && !Array.isArray(bin)
+    && Object.prototype.hasOwnProperty.call(bin, 'clasp')
+    ? bin.clasp
+    : null;
+  const pathSegments = typeof binEntry === 'string' ? binEntry.split(/[\\/]+/u) : [];
+  if (
+    typeof binEntry !== 'string'
+    || !binEntry
+    || binEntry !== binEntry.trim()
+    || binEntry.includes('\0')
+    || path.posix.parse(binEntry).root !== ''
+    || path.win32.parse(binEntry).root !== ''
+    || pathSegments.includes('..')
+    || !['.js', '.mjs', '.cjs'].includes(path.extname(binEntry).toLowerCase())
+  ) {
+    fail('CLASP_ENTRYPOINT_INVALID', 'The pinned clasp entrypoint is invalid.');
+  }
+
+  const entrypointPath = path.resolve(realPackagePath, binEntry);
+  let realEntrypointPath;
+  try {
+    if (!isInside(realPackagePath, entrypointPath) || !fs.existsSync(entrypointPath)) {
+      fail('CLASP_ENTRYPOINT_INVALID', 'The pinned clasp entrypoint is invalid.');
+    }
+    realEntrypointPath = fs.realpathSync(entrypointPath);
+    if (
+      !isInside(realPackagePath, realEntrypointPath)
+      || !fs.statSync(realEntrypointPath).isFile()
+    ) {
+      fail('CLASP_ENTRYPOINT_INVALID', 'The pinned clasp entrypoint is invalid.');
+    }
+  } catch (error) {
+    if (error instanceof ProductionProvisionError) throw error;
+    fail('CLASP_ENTRYPOINT_INVALID', 'The pinned clasp entrypoint is invalid.');
+  }
+
+  return Object.freeze({
+    executable: process.execPath,
+    entrypoint: realEntrypointPath,
+  });
 }
 
 export function privatePathIgnored({ repoRoot, privateDir, fs = nodeFs }) {
@@ -374,9 +466,14 @@ function stageReviewedSource(paths, source, fs, authorization) {
   ensureNoUnexpectedStageFiles(paths, fs);
 }
 
-function command(action, args, cwd, paths, authPath = null) {
+function command(action, args, cwd, claspLaunch, authPath = null) {
   const finalArgs = authPath ? ['-A', authPath, ...args] : args;
-  return Object.freeze({ action, executable: paths.claspPath, args: Object.freeze(finalArgs), cwd });
+  return Object.freeze({
+    action,
+    executable: claspLaunch.executable,
+    args: Object.freeze([claspLaunch.entrypoint, ...finalArgs]),
+    cwd,
+  });
 }
 
 async function runCaptured(runner, spec, errorCode) {
@@ -397,10 +494,11 @@ function findJsonValue(output) {
   return null;
 }
 
-async function claspPreflight({ paths, runner, env, authPath = null }) {
+async function claspPreflight({ paths, runner, env, fs, authPath = null }) {
+  const claspLaunch = resolveClaspLaunch({ repoRoot: paths.repoRoot, fs });
   const version = await runCaptured(
     runner,
-    command('status', ['--version'], paths.repoRoot, paths, authPath),
+    command('status', ['--version'], paths.repoRoot, claspLaunch, authPath),
     'CLASP_UNAVAILABLE',
   );
   if (version.stdout.trim().replace(/^v/u, '') !== REQUIRED_CLASP_VERSION) {
@@ -408,7 +506,7 @@ async function claspPreflight({ paths, runner, env, authPath = null }) {
   }
   const auth = await runCaptured(
     runner,
-    { ...command('status', ['show-authorized-user', '--json'], paths.repoRoot, paths, authPath), env },
+    { ...command('status', ['show-authorized-user', '--json'], paths.repoRoot, claspLaunch, authPath), env },
     'CLASP_AUTH_UNUSABLE',
   );
   const value = findJsonValue(auth.stdout);
@@ -418,7 +516,7 @@ async function claspPreflight({ paths, runner, env, authPath = null }) {
   if (value.loggedIn !== true) {
     fail('CLASP_AUTH_UNUSABLE', 'Existing clasp authorization could not be verified.');
   }
-  return true;
+  return claspLaunch;
 }
 
 function strictProvisionResult(output) {
@@ -545,6 +643,7 @@ async function verifiedDeploymentMove({
   toVersion,
   description,
   paths,
+  claspLaunch,
   authPath,
   fs,
   runner,
@@ -556,7 +655,7 @@ async function verifiedDeploymentMove({
     || !Number.isInteger(fromVersion)
     || !Number.isInteger(toVersion)
   ) fail('DEPLOYMENT_MOVE_STATE_INVALID', 'A deployment move requires exact private versions.');
-  const listSpec = command('status', ['list-deployments', '--json'], paths.projectDir, paths, authPath);
+  const listSpec = command('status', ['list-deployments', '--json'], paths.projectDir, claspLaunch, authPath);
   const before = await runCaptured(runner, { ...listSpec, env }, 'CLASP_DEPLOYMENT_LIST_FAILED');
   if (deploymentVersionFromList(before.stdout, deploymentId) !== fromVersion) {
     fail('CLASP_DEPLOYMENT_STATE_DRIFT', 'Remote deployment state changed outside the private lifecycle.');
@@ -576,7 +675,7 @@ async function verifiedDeploymentMove({
     '--description',
     description,
     '--json',
-  ], paths.projectDir, paths, authPath);
+  ], paths.projectDir, claspLaunch, authPath);
   await runCaptured(runner, { ...updateSpec, env }, `CLASP_${action.toUpperCase().replace('-', '_')}_FAILED`);
   const after = await runCaptured(runner, { ...listSpec, env }, 'CLASP_DEPLOYMENT_LIST_FAILED');
   if (deploymentVersionFromList(after.stdout, deploymentId) !== toVersion) {
@@ -719,7 +818,7 @@ export async function statusProductionProvisioning(options = {}, dependencies = 
   }
   if (authConfigUsable) {
     try {
-      await claspPreflight({ paths, runner, env: options.env || process.env, authPath });
+      await claspPreflight({ paths, runner, env: options.env || process.env, fs, authPath });
       authUsable = true;
     } catch {}
   }
@@ -776,7 +875,7 @@ export async function prepareProductionProvisioning(options = {}, dependencies =
   ) fail('PRODUCTION_SOURCE_UNSAFE', 'The reviewed production stage is incomplete.');
   const config = readPrivateConfig(paths, fs);
   const authPath = resolvePrivateAuthPath(config, paths, fs);
-  await claspPreflight({ paths, runner, env: options.env || process.env, authPath });
+  await claspPreflight({ paths, runner, env: options.env || process.env, fs, authPath });
   const state = readPrivateState(paths, fs);
   const project = readProjectFile(paths, fs);
   return safeSummary({
@@ -857,7 +956,7 @@ export async function executeProductionAction(action, options = {}, dependencies
   const source = validateSource(paths, fs);
   const config = readPrivateConfig(paths, fs);
   const authPath = resolvePrivateAuthPath(config, paths, fs);
-  await claspPreflight({ paths, runner, env, authPath });
+  const claspLaunch = await claspPreflight({ paths, runner, env, fs, authPath });
 
   if (normalized === 'create') {
     if (readPrivateState(paths, fs) || readProjectFile(paths, fs)) {
@@ -877,7 +976,7 @@ export async function executeProductionAction(action, options = {}, dependencies
         '--rootDir',
         '.',
         '--json',
-      ], paths.bootstrapDir, paths, authPath);
+      ], paths.bootstrapDir, claspLaunch, authPath);
       await runCaptured(runner, { ...spec, env }, 'CLASP_CREATE_FAILED');
       created = readOptionalJson(path.join(paths.bootstrapDir, '.clasp.json'), fs);
     }
@@ -897,10 +996,10 @@ export async function executeProductionAction(action, options = {}, dependencies
       fail('LIFECYCLE_ORDER_INVALID', 'Source push requires a created or approved production project.');
     }
     stageReviewedSource(paths, source, fs, true);
-    const fileStatus = command('status', ['show-file-status', '--json'], paths.projectDir, paths, authPath);
+    const fileStatus = command('status', ['show-file-status', '--json'], paths.projectDir, claspLaunch, authPath);
     const statusOutput = await runCaptured(runner, { ...fileStatus, env }, 'CLASP_FILE_STATUS_FAILED');
     validateFileStatus(statusOutput.stdout);
-    const pushSpec = command('push', ['push', '--force'], paths.projectDir, paths, authPath);
+    const pushSpec = command('push', ['push', '--force'], paths.projectDir, claspLaunch, authPath);
     await runCaptured(runner, { ...pushSpec, env }, 'CLASP_PUSH_FAILED');
     state.source = source.hashes;
     state.lifecycle = 'source-pushed';
@@ -914,7 +1013,7 @@ export async function executeProductionAction(action, options = {}, dependencies
       'create-version',
       'GIB M1 production candidate',
       '--json',
-    ], paths.projectDir, paths, authPath);
+    ], paths.projectDir, claspLaunch, authPath);
     const output = await runCaptured(runner, { ...spec, env }, 'CLASP_VERSION_FAILED');
     state.deployment.candidateVersion = parseVersionNumber(output.stdout);
     state.lifecycle = 'versioned';
@@ -937,12 +1036,12 @@ export async function executeProductionAction(action, options = {}, dependencies
       '--description',
       'GIB M1 production candidate',
       '--json',
-    ], paths.projectDir, paths, authPath);
+    ], paths.projectDir, claspLaunch, authPath);
     const output = await runCaptured(runner, { ...spec, env }, 'CLASP_DEPLOY_FAILED');
     const deploymentId = parseDeploymentId(output.stdout);
     state.pendingOperation.deploymentId = deploymentId;
     writePrivateJson(paths.statePath, state, fs);
-    const listSpec = command('status', ['list-deployments', '--json'], paths.projectDir, paths, authPath);
+    const listSpec = command('status', ['list-deployments', '--json'], paths.projectDir, claspLaunch, authPath);
     const listed = await runCaptured(runner, { ...listSpec, env }, 'CLASP_DEPLOYMENT_LIST_FAILED');
     if (deploymentVersionFromList(listed.stdout, deploymentId) !== version) {
       fail('CLASP_DEPLOYMENT_STATE_AMBIGUOUS', 'Initial deployment could not be verified; private journal was preserved.');
@@ -972,7 +1071,7 @@ export async function executeProductionAction(action, options = {}, dependencies
     const toVersion = state.deployment.candidateVersion;
     await verifiedDeploymentMove({
       action: 'update', state, fromVersion, toVersion,
-      description: 'GIB M1 production candidate', paths, authPath, fs, runner, env,
+      description: 'GIB M1 production candidate', paths, claspLaunch, authPath, fs, runner, env,
     });
     state.deployment.previousVersion = fromVersion;
     state.deployment.currentVersion = toVersion;
@@ -993,7 +1092,7 @@ export async function executeProductionAction(action, options = {}, dependencies
     if (!ID_PATTERN.test(String(deploymentId || '')) || !Number.isInteger(version)) {
       fail('CLASP_DEPLOYMENT_STATE_AMBIGUOUS', 'The deployment state required for provisioning is incomplete.');
     }
-    const listSpec = command('status', ['list-deployments', '--json'], paths.projectDir, paths, authPath);
+    const listSpec = command('status', ['list-deployments', '--json'], paths.projectDir, claspLaunch, authPath);
     const listed = await runCaptured(runner, { ...listSpec, env }, 'CLASP_DEPLOYMENT_LIST_FAILED');
     if (deploymentVersionFromList(listed.stdout, deploymentId) !== version) {
       fail('CLASP_DEPLOYMENT_STATE_DRIFT', 'Remote deployment state changed before provisioning.');
@@ -1063,7 +1162,7 @@ async function moveDeployment(action, options, dependencies) {
   if (!privatePathIgnored({ ...paths, fs })) fail('PRIVATE_PATH_NOT_IGNORED', 'Private state is not ignored.');
   const config = readPrivateConfig(paths, fs);
   const authPath = resolvePrivateAuthPath(config, paths, fs);
-  await claspPreflight({ paths, runner, env, authPath });
+  const claspLaunch = await claspPreflight({ paths, runner, env, fs, authPath });
   const { state } = checkedProjectState(paths, fs);
   let fromVersion;
   let toVersion;
@@ -1087,6 +1186,7 @@ async function moveDeployment(action, options, dependencies) {
       ? 'GIB M1 production rollback'
       : 'GIB M1 production restore approved version',
     paths,
+    claspLaunch,
     authPath,
     fs,
     runner,
@@ -1241,7 +1341,6 @@ async function main() {
     statePath: args.state,
     installerLinkPath: args['installer-link-path'],
     installerSecretFile: args['installer-secret-file'],
-    claspPath: args['clasp-bin'],
   };
   let result;
   if (action === 'status') {
