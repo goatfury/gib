@@ -10,7 +10,7 @@ export const PRODUCTION_HOST = 'gib-live.netlify.app';
 export const PRODUCTION_DEVICE_COOKIE = '__Host-gib_m1_production_device';
 export const PRODUCTION_INSTALL_PURPOSE = 'production-tablet-install';
 export const PRODUCTION_INSTALL_SIGNATURE_DOMAIN = 'gib-m1-production-install:v1\0';
-export const PRODUCTION_INSTALL_MAX_SECONDS = 60;
+export const PRODUCTION_INSTALL_MAX_SECONDS = 36_000;
 export const PRODUCTION_INSTALL_TOKEN_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/u;
 export const PRODUCTION_INSTALL_STORE = 'gib-m1-production-installer';
 

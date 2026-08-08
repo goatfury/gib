@@ -15,6 +15,7 @@ import {
 } from '../netlify/functions/m1-tablet-status.mjs';
 import {
   PRODUCTION_DEVICE_COOKIE,
+  PRODUCTION_INSTALL_MAX_SECONDS,
   PRODUCTION_INSTALL_SIGNATURE_DOMAIN,
   PRODUCTION_INSTALL_STORE,
   PRODUCTION_ORIGIN,
@@ -53,7 +54,7 @@ function capability(overrides = {}) {
     secret: INSTALL_SECRET,
     runId: RUN_ID,
     issuedAt: NOW_SECONDS,
-    expiresAt: NOW_SECONDS + 60,
+    expiresAt: NOW_SECONDS + PRODUCTION_INSTALL_MAX_SECONDS,
     nonce: NONCE,
     ...overrides
   });
@@ -132,11 +133,12 @@ test('installer and status routes are literal and independently rate-limited', (
 });
 
 test('capability helper and default-Date.now device credential use canonical seconds', () => {
+  const now = Date.now();
   const token = createProductionInstallCapability({
     secret: INSTALL_SECRET,
     runId: RUN_ID,
-    issuedAt: Date.now(),
-    expiresAt: Date.now() + 60_000,
+    issuedAt: now,
+    expiresAt: now + (PRODUCTION_INSTALL_MAX_SECONDS * 1_000),
     nonce: NONCE
   });
   assert.ok(readProductionInstallCapability(token, {
@@ -150,6 +152,42 @@ test('capability helper and default-Date.now device credential use canonical sec
   );
   assert.equal(validProductionDeviceCredential(credential, DEVICE_TOKEN), true);
   assert.match(credential, /^v1\.[A-Za-z0-9_-]{43}\.[1-9][0-9]{9}\.[A-Za-z0-9_-]{43}$/u);
+});
+
+test('install capabilities accept exactly ten hours and reject longer durations', () => {
+  assert.equal(PRODUCTION_INSTALL_MAX_SECONDS, 36_000);
+  const exactBoundary = createProductionInstallCapability({
+    secret: INSTALL_SECRET,
+    runId: RUN_ID,
+    issuedAt: NOW_SECONDS,
+    expiresAt: NOW_SECONDS + PRODUCTION_INSTALL_MAX_SECONDS,
+    nonce: NONCE
+  });
+  assert.equal(
+    readProductionInstallCapability(exactBoundary, {
+      installSecret: INSTALL_SECRET,
+      runId: RUN_ID
+    }, (NOW_SECONDS + PRODUCTION_INSTALL_MAX_SECONDS - 1) * 1_000)?.expiresAt,
+    NOW_SECONDS + PRODUCTION_INSTALL_MAX_SECONDS
+  );
+  assert.equal(readProductionInstallCapability(exactBoundary, {
+    installSecret: INSTALL_SECRET,
+    runId: RUN_ID
+  }, (NOW_SECONDS + PRODUCTION_INSTALL_MAX_SECONDS) * 1_000), null);
+
+  assert.throws(() => createProductionInstallCapability({
+    secret: INSTALL_SECRET,
+    runId: RUN_ID,
+    issuedAt: NOW_SECONDS,
+    expiresAt: NOW_SECONDS + PRODUCTION_INSTALL_MAX_SECONDS + 1,
+    nonce: NONCE
+  }), /Invalid production install capability input/u);
+  assert.equal(readProductionInstallCapability(resignCapability(exactBoundary, {
+    expiresAt: NOW_SECONDS + PRODUCTION_INSTALL_MAX_SECONDS + 1
+  }), {
+    installSecret: INSTALL_SECRET,
+    runId: RUN_ID
+  }, NOW_MS), null);
 });
 
 test('install rejects preview and malformed production boundaries before replay storage', async () => {
@@ -264,8 +302,14 @@ test('expired, future, tampered, wrong-run, and replayed capabilities fail close
   const store = oneTimeStore();
   const valid = capability();
   const cases = [
-    capability({ issuedAt: NOW_SECONDS - 61, expiresAt: NOW_SECONDS - 1 }),
-    capability({ issuedAt: NOW_SECONDS + 1, expiresAt: NOW_SECONDS + 60 }),
+    capability({
+      issuedAt: NOW_SECONDS - PRODUCTION_INSTALL_MAX_SECONDS,
+      expiresAt: NOW_SECONDS - 1
+    }),
+    capability({
+      issuedAt: NOW_SECONDS + 1,
+      expiresAt: NOW_SECONDS + PRODUCTION_INSTALL_MAX_SECONDS
+    }),
     `${valid.slice(0, -1)}${valid.endsWith('A') ? 'B' : 'A'}`,
     resignCapability(valid, { purpose: 'diagnostic' }),
     resignCapability(valid, { origin: 'https://bjjsite.com' }),
@@ -274,7 +318,7 @@ test('expired, future, tampered, wrong-run, and replayed capabilities fail close
       secret: INSTALL_SECRET,
       runId: 'different-production-run',
       issuedAt: NOW_SECONDS,
-      expiresAt: NOW_SECONDS + 60,
+      expiresAt: NOW_SECONDS + PRODUCTION_INSTALL_MAX_SECONDS,
       nonce: NONCE
     })
   ];

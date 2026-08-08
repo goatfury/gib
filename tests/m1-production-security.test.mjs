@@ -327,6 +327,7 @@ test('required CI checks the immutable TEST source and both regression suites', 
   assert.match(workflow, /a0273e4d154cc0289a0a3e10169135fca53b1b23/u);
   assert.match(workflow, /git archive "\$PROVEN_TEST_COMMIT" tests/u);
   assert.match(workflow, /npm ci[\s\S]*node --test "\$baseline_suite"\/m1-\*\.test\.mjs[\s\S]*node --test tests\/m1-\*\.test\.mjs/u);
+  assert.doesNotMatch(workflow, /git merge-base --is-ancestor "\$proven_test_commit" HEAD/u);
   assert.doesNotMatch(workflow, /unexpected non-Admin files changed/iu);
   assert.doesNotMatch(workflow, /git rev-parse "HEAD:m1\//u);
 });
