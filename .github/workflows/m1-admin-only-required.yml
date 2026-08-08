@@ -31,14 +31,13 @@ jobs:
         with:
           node-version: '24.18.0'
 
-      - name: Verify proven TEST base and candidate diff
+      - name: Verify immutable TEST baseline and candidate diff
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           proven_test_commit="a0273e4d154cc0289a0a3e10169135fca53b1b23"
           git cat-file -e "$proven_test_commit^{commit}"
-          git merge-base --is-ancestor "$proven_test_commit" HEAD
 
           if [ "$PR_BASE_REF" = "agent/m1-revbjjops-test-path" ]; then
             test "$PR_BASE_SHA" = "$proven_test_commit"

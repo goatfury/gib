@@ -81,7 +81,7 @@ Only after isolated production Google and Netlify configuration has passed separ
 node tools/m1-production-provision.mjs install-link --execute --confirm M1-PRODUCTION-INSTALL-LINK
 ```
 
-The command writes the 60-second, run-bound link to `private/m1-production/installer-link.txt`; it does not print the link or permanent device credential. The link opens only on `https://gib-live.netlify.app`, carries its one-time capability in the URL fragment, and leaves auto-sync OFF. A lost successful redemption burns the capability; issue a fresh link instead of replaying it.
+The command writes the 36,000-second (10-hour), run-bound link to `private/m1-production/installer-link.txt`; it does not print the link or permanent device credential. The link opens only on `https://gib-live.netlify.app`, carries its one-time capability in the URL fragment, and leaves auto-sync OFF. A lost successful redemption burns the capability; issue a fresh link instead of replaying it.
 
 ## Sanitized output and private artifacts
 

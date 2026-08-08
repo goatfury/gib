@@ -25,7 +25,7 @@ export const PROVISION_TIMEOUT_MS = 25_000;
 export const PRIVATE_STATE_SCHEMA = 'gib-m1-production-private-state/v1';
 export const PRIVATE_CONFIG_SCHEMA = 'gib-m1-production-private-config/v1';
 export const INSTALL_LINK_PATH = '/m1/tablet-install.html';
-export const INSTALL_CAPABILITY_SECONDS = 60;
+export const INSTALL_CAPABILITY_SECONDS = 36_000;
 export const PROVISIONING_SEQUENCE = Object.freeze([
   'prepare',
   'create',

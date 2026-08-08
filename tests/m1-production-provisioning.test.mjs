@@ -1222,6 +1222,7 @@ test('an unreadable or failed provisioning result is ambiguous, journaled, sanit
 
 test('install-link saves capability material only in the ignored private artifact', async t => {
   const provision = await loadTool();
+  assert.equal(provision.INSTALL_CAPABILITY_SECONDS, 36_000);
   const fixture = makeFixture(t, provision);
   const remote = makeRemoteRunner(fixture, provision);
   const provisionRequest = makeProvisionRequester(fixture);
@@ -1231,6 +1232,7 @@ test('install-link saves capability material only in the ignored private artifac
   let capabilityCalls = 0;
   const capabilityFactory = async ({ issuedAt, expiresAt }) => {
     capabilityCalls += 1;
+    assert.equal(expiresAt - issuedAt, provision.INSTALL_CAPABILITY_SECONDS);
     const payload = {
       v: 1,
       purpose: 'production-tablet-install',
@@ -1285,7 +1287,7 @@ test('install-link saves capability material only in the ignored private artifac
   assertSanitized(result, [rawToken, remote.scriptId, remote.remote.deploymentId]);
   assert.equal(capabilityCalls, 1);
   assert.equal(result.summary.installerLinkSaved, true);
-  assert.equal(result.summary.expiresInSeconds, 60);
+  assert.equal(result.summary.expiresInSeconds, 36_000);
   assert.equal(result.summary.lifecycle, 'provisioned');
 });
 
