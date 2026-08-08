@@ -1,13 +1,13 @@
 # M1 current state
 
-Verified 2026-08-07. This is a sanitized operating record: it contains no Sheet, Script, deployment, webhook, device, or credential identifiers.
+Verified 2026-08-08. This is a sanitized operating record: it contains no Sheet, Script, deployment, webhook, device, or credential identifiers.
 
 ## Currently live
 
 - Canonical production kiosk origin: `https://gib-live.netlify.app`.
 - Live branch and commit: `main` at `7c0a1bf5cb2fff2443031e10585fe08e30f81b77`.
 - Public Netlify metadata and byte-for-byte checks of the tracked live kiosk, Admin, diagnostic, schedule, guest, and root assets confirm that commit is the live static build.
-- The production candidate is not live. This repair created or changed no Google, Netlify, live-site, Sheet, or tablet resource; it did not change `main`.
+- The production candidate is not live. Its isolated Google receiver is provisioned but remains disconnected from Netlify production; the live site, `main`, old Sheet, and tablet are unchanged.
 
 ## Proven TEST state
 
@@ -22,10 +22,19 @@ The latest genuine end-to-end TEST canary was performed against that TEST commit
 ## Production-candidate state
 
 - Branch: `agent/m1-production-candidate-prep`.
-- Pre-repair candidate implementation commit: `174ab631e3891e1025d8c94ca2355b1f714b09e4`.
-- The repaired implementation commit will be recorded only after the repair passes QA and is committed. No new commit hash is claimed here.
-- Intended PR shape: stacked draft PR with `agent/m1-revbjjops-test-path` as its base.
-- The candidate prepares code, tests, the secure tablet-install method, provisioning commands, rollback, and cutover instructions only. It does not provision or activate production.
+- Draft PR: #51, open, unmerged, and stacked on `agent/m1-revbjjops-test-path`.
+- The reviewed production source passed the complete candidate and proven TEST regression suites before deployment.
+- No production Netlify configuration, site deployment, tablet installation, or sign-in canary has been performed.
+
+## Production Google state
+
+- One standalone production Apps Script project was created under the dedicated account.
+- One immutable web-app deployment was created and verified against the reviewed source.
+- The existing production Sheet was resolved; no new Sheet was created.
+- The `Signins` schema is exactly eleven required headers and contains zero data rows.
+- The receiver target is permanently locked to production and the one-time provisioning action is permanently closed.
+- Required private connection state is retained only in the ignored private directory.
+- Netlify production remains disconnected.
 
 ## TEST and production separation
 
@@ -33,7 +42,7 @@ The latest genuine end-to-end TEST canary was performed against that TEST commit
 - Deploy Previews are pinned to TEST, use only TEST server configuration, and reject real instructor names.
 - Production is pinned to the exact canonical origin and the production target. It remains disabled unless every production setting is present, including valid device authentication, and it accepts real instructor names.
 - TEST and production use separate wrappers, manifests, standalone Apps Script projects, Sheets, server configuration, and authentication. Each standalone Apps Script project intentionally uses its Apps Script-managed default Cloud project; no standard Cloud project is required for the production web-app path. Neither environment's credential can authenticate the other.
-- Production provisioning no longer uses `scripts.run` or an Apps Script API executable. A later authorized run will use one private production-only web-app POST whose credential is separate from the ordinary receiver credential, then permanently close that provisioning action.
+- Production provisioning used one private production-only web-app POST whose credential is separate from the ordinary receiver credential. It did not use `scripts.run` or an Apps Script API executable, and the provisioning action is now permanently closed.
 
 ## Tablet and auto-sync
 
@@ -44,7 +53,6 @@ The latest genuine end-to-end TEST canary was performed against that TEST commit
 
 ## Known limitations
 
-- The isolated production Sheet and standalone production Apps Script project have not been created.
 - Production Netlify settings and a production device authorization have not been installed or activated.
 - No real production sign-in, migration, or cutover has been attempted.
 - The current live path remains unchanged until a later approved run.
@@ -52,8 +60,8 @@ The latest genuine end-to-end TEST canary was performed against that TEST commit
 
 ## Next authorized action
 
-After the repaired candidate is QA-passed and reviewed, a separate authorized run may create the standalone production Apps Script project, deploy its normal web app, and make the private one-time provisioning POST while keeping production Netlify sync and auto-sync OFF. Cutover still requires its own later approval.
+Configure the retained private receiver values in Netlify production while keeping production sync and tablet auto-sync OFF. Cutover still requires its own later approval.
 
 ## Rollback point
 
-No rollback is required for this preparation because nothing live changes. The code rollback point remains live commit `7c0a1bf5cb2fff2443031e10585fe08e30f81b77`; the operational rollback point is the intact old tablet. Before any later activation, record the then-current Apps Script deployment version privately so the prepared rollback command can restore it without exposing an identifier.
+No live-site rollback is required because Netlify production and `main` are unchanged. The code rollback point remains live commit `7c0a1bf5cb2fff2443031e10585fe08e30f81b77`; the operational rollback point is the intact old tablet. The verified Apps Script deployment version is retained privately for a later approved rollback if needed.
