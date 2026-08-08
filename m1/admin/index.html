@@ -330,7 +330,7 @@
           <p id="sessionLabel" class="muted"></p>
         </div>
         <div class="topbar-actions">
-          <button id="installSyncSettingsButton" class="btn warn" type="button" hidden>Install repaired sync settings</button>
+          <button id="installSyncSettingsButton" class="btn warn" type="button" hidden disabled aria-hidden="true">Legacy browser credential installer removed</button>
           <button id="tabletDiagnosticButton" class="btn ghost" type="button" hidden>Open tablet diagnostic</button>
           <span id="tabletDiagnosticOriginMessage" class="muted" hidden>Tablet diagnostic must be opened from https://gib-live.netlify.app.</span>
           <button id="logoutButton" class="btn ghost" type="button">Log Out</button>
@@ -632,7 +632,7 @@
       }
 
       async function openTabletDiagnostic(purpose = 'diagnostic') {
-        if (purpose !== 'diagnostic' && purpose !== 'install') return;
+        if (purpose !== 'diagnostic') return;
         const installing = purpose === 'install';
         if (!validTabletDiagnosticOrigin()) {
           if (installing) failSyncInstallation();
@@ -1282,7 +1282,7 @@
           && location.hostname.includes('--');
         $('#testEntry').style.display = deployPreviewHost ? 'block' : 'none';
         const diagnosticOriginAllowed = validTabletDiagnosticOrigin();
-        $('#installSyncSettingsButton').hidden = !diagnosticOriginAllowed;
+        $('#installSyncSettingsButton').hidden = true;
         $('#tabletDiagnosticButton').hidden = !diagnosticOriginAllowed;
         $('#tabletDiagnosticOriginMessage').hidden = diagnosticOriginAllowed;
         try {
@@ -1302,7 +1302,6 @@
         if (event.key === 'Enter') login(false);
       });
       $('#logoutButton').addEventListener('click', logout);
-      $('#installSyncSettingsButton').addEventListener('click', () => openTabletDiagnostic('install'));
       $('#tabletDiagnosticButton').addEventListener('click', () => openTabletDiagnostic('diagnostic'));
       $('#previousDay').addEventListener('click', () => loadReview(shiftDate(currentDate, -1)));
       $('#yesterday').addEventListener('click', () => loadReview(defaultYesterday()));

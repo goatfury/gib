@@ -12,8 +12,8 @@
  *   GIB_M1_RECOVERY_TOKEN
  *   GIB_M1_RECOVERY_WRITE_INCIDENT (present only during a bounded recovery)
  *
- * Code.gs keeps doPost(e) -> adReceiverV2_(e), which preserves the current
- * kiosk payload contract while routing all candidate operations here.
+ * TEST keeps doPost(e) -> adReceiverV2_(e). The production wrapper may handle
+ * its private one-time provisioning POST before preserving this receiver path.
  */
 
 var GIB_M1_AUDIT_SHEET_ = 'Admin Audit';
@@ -41,6 +41,21 @@ var GIB_M1_RECOVERY_WRITE_PROPERTY_ = 'GIB_M1_RECOVERY_WRITE_INCIDENT';
 var GIB_M1_RECOVERY_INCIDENT_ = 'M1-2026-08-03_04';
 var GIB_M1_COLLISION_DEVICE_ = 'Kiosk collision review';
 var GIB_M1_COLLISION_STATUS_ = 'REVIEW';
+var GIB_M1_TARGET_LOCK_PROPERTY_ = 'GIB_M1_DEPLOYMENT_TARGET_LOCK';
+var GIB_M1_PRODUCTION_ROW_ID_PATTERN_ = /^gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+var GIB_M1_SIGNINS_HEADERS_ = [
+  'RowID',
+  'Timestamp',
+  'Date',
+  'Class Label',
+  'Duration (hr)',
+  'Instructor',
+  'Site',
+  'Device',
+  'Build',
+  'Notes',
+  'Status'
+];
 
 function adReceiverV2_(e) {
   try {
@@ -54,10 +69,18 @@ function adReceiverV2_(e) {
     }
 
     var action = cleanText_(body.action);
+    var legacyKioskRequest = !action && Array.isArray(body.rows);
     if (!action && Array.isArray(body.rows)) action = 'kioskSignIn';
 
     if (action === 'kioskSignIn') {
-      if (!legacyKioskAuthorized_(body)) return rejectedAuthResult_();
+      if (legacyKioskRequest) {
+        if (!legacyKioskAuthorized_(body)) return rejectedAuthResult_();
+        // The compatibility contract exists only for the permanently TEST-
+        // locked project. Never infer a target from whichever ID is present.
+        if (configuredDeploymentTarget_() === 'test') body.target = 'test';
+      } else if (!receiverKioskAuthorized_(body)) {
+        return rejectedAuthResult_();
+      }
       return kioskSignInAction_(body);
     }
     if (
@@ -178,7 +201,14 @@ function scriptProperty_(name) {
 }
 
 function configuredReceiverSecret_() {
-  return scriptProperty_(GIB_M1_RECEIVER_PROPERTY_);
+  var stored = scriptProperty_(GIB_M1_RECEIVER_PROPERTY_);
+  var allowStoredOverride = typeof GIB_M1_ALLOW_RECEIVER_TOKEN_OVERRIDE === 'undefined'
+    || GIB_M1_ALLOW_RECEIVER_TOKEN_OVERRIDE === true;
+  if (allowStoredOverride && stored) return stored;
+  if (typeof gibM1DerivedReceiverSecret_ === 'function') {
+    return exactText_(gibM1DerivedReceiverSecret_());
+  }
+  return '';
 }
 
 function configuredSecretsArePairwiseDistinct_(values) {
@@ -192,6 +222,8 @@ function configuredSecretsArePairwiseDistinct_(values) {
 }
 
 function legacyKioskAuthorized_(body) {
+  var configured = configuredDeploymentTarget_();
+  if (configured && configured !== 'test') return false;
   var legacy = scriptProperty_(GIB_M1_LEGACY_KIOSK_PROPERTY_);
   var receiver = configuredReceiverSecret_();
   var admin = scriptProperty_(GIB_M1_ADMIN_ACTION_PROPERTY_);
@@ -201,9 +233,47 @@ function legacyKioskAuthorized_(body) {
     && constantTimeTextEqual_(body && body.token, legacy);
 }
 
+function configuredDeploymentTarget_() {
+  var target = typeof GIB_M1_ALLOWED_TARGET === 'undefined'
+    ? ''
+    : cleanText_(GIB_M1_ALLOWED_TARGET).toLowerCase();
+  return target;
+}
+
+function deploymentTargetAllowed_(target) {
+  var configured = configuredDeploymentTarget_();
+  var requiresPersistedLock = typeof GIB_M1_REQUIRE_PERSISTED_TARGET_LOCK !== 'undefined'
+    && GIB_M1_REQUIRE_PERSISTED_TARGET_LOCK === true;
+  if (!configured) return !requiresPersistedLock;
+  if (
+    (configured !== 'test' && configured !== 'production')
+    || cleanText_(target).toLowerCase() !== configured
+  ) return false;
+  return !requiresPersistedLock
+    || constantTimeTextEqual_(scriptProperty_(GIB_M1_TARGET_LOCK_PROPERTY_), configured);
+}
+
+function receiverKioskAuthorized_(body) {
+  var target = cleanText_(body && body.target).toLowerCase();
+  if (
+    (target !== 'test' && target !== 'production')
+    || !deploymentTargetAllowed_(target)
+  ) return false;
+  var receiver = configuredReceiverSecret_();
+  var legacy = scriptProperty_(GIB_M1_LEGACY_KIOSK_PROPERTY_);
+  var admin = scriptProperty_(GIB_M1_ADMIN_ACTION_PROPERTY_);
+  var recovery = scriptProperty_(GIB_M1_RECOVERY_PROPERTY_);
+  return Boolean(receiver)
+    && configuredSecretsArePairwiseDistinct_([receiver, legacy, admin, recovery])
+    && constantTimeTextEqual_(body && body.token, receiver);
+}
+
 function adminActionAuthorized_(body) {
   var target = cleanText_(body && body.target).toLowerCase();
-  if (target !== 'test' && target !== 'production') return false;
+  if (
+    (target !== 'test' && target !== 'production')
+    || !deploymentTargetAllowed_(target)
+  ) return false;
   var receiver = configuredReceiverSecret_();
   var admin = scriptProperty_(GIB_M1_ADMIN_ACTION_PROPERTY_);
   var legacy = scriptProperty_(GIB_M1_LEGACY_KIOSK_PROPERTY_);
@@ -216,7 +286,10 @@ function adminActionAuthorized_(body) {
 
 function recoveryAuthorized_(body) {
   var target = cleanText_(body && body.target).toLowerCase();
-  if (target !== 'test' && target !== 'production') return false;
+  if (
+    (target !== 'test' && target !== 'production')
+    || !deploymentTargetAllowed_(target)
+  ) return false;
   var receiver = configuredReceiverSecret_();
   var recovery = scriptProperty_(GIB_M1_RECOVERY_PROPERTY_);
   var legacy = scriptProperty_(GIB_M1_LEGACY_KIOSK_PROPERTY_);
@@ -237,6 +310,12 @@ function requestTarget_(body) {
   if (target && target !== 'test' && target !== 'production') {
     throw new Error('Spreadsheet target is not configured.');
   }
+  if (!deploymentTargetAllowed_(target)) {
+    throw new Error('Spreadsheet target is not allowed by this deployment.');
+  }
+  if (!target && configuredDeploymentTarget_()) {
+    throw new Error('Spreadsheet target is not configured.');
+  }
   return target;
 }
 
@@ -245,6 +324,9 @@ function configuredSpreadsheetId_(body) {
   var testId = typeof TEST_SPREADSHEET_ID === 'undefined'
     ? ''
     : cleanText_(TEST_SPREADSHEET_ID);
+  if (!testId && typeof gibM1ResolveTestSpreadsheetId_ === 'function') {
+    testId = cleanText_(gibM1ResolveTestSpreadsheetId_());
+  }
   var productionId = typeof SPREADSHEET_ID === 'undefined'
     ? ''
     : cleanText_(SPREADSHEET_ID);
@@ -353,10 +435,13 @@ function sameExactSignin_(record, candidate) {
 
 function findExactSignin_(records, candidate) {
   var id = exactText_(candidate && candidate.rowId);
+  var idMatches = [];
   for (var i = 0; i < records.length; i += 1) {
-    if (activeRecord_(records[i]) && id && exactText_(records[i].rowId) === id) {
-      return sameExactSignin_(records[i], candidate) ? records[i] : { conflict: true };
-    }
+    if (id && exactText_(records[i].rowId) === id) idMatches.push(records[i]);
+  }
+  if (idMatches.length) {
+    if (idMatches.length !== 1 || !activeRecord_(idMatches[0])) return { conflict: true };
+    return sameExactSignin_(idMatches[0], candidate) ? idMatches[0] : { conflict: true };
   }
   for (var j = 0; j < records.length; j += 1) {
     if (sameExactSignin_(records[j], candidate)) return records[j];
@@ -402,6 +487,18 @@ function readSignins_(sheet) {
   var values = sheet.getDataRange().getValues();
   if (!values.length) throw new Error('Signins headings are missing.');
   var headers = values[0].map(cleanText_);
+  var requiresExactSchema = typeof GIB_M1_REQUIRE_EXACT_SIGNINS_SCHEMA !== 'undefined'
+    && GIB_M1_REQUIRE_EXACT_SIGNINS_SCHEMA === true;
+  if (requiresExactSchema) {
+    if (headers.length !== GIB_M1_SIGNINS_HEADERS_.length) {
+      throw new Error('Signins headings do not match the production schema.');
+    }
+    for (var headerIndex = 0; headerIndex < GIB_M1_SIGNINS_HEADERS_.length; headerIndex += 1) {
+      if (headers[headerIndex] !== GIB_M1_SIGNINS_HEADERS_[headerIndex]) {
+        throw new Error('Signins headings do not match the production schema.');
+      }
+    }
+  }
   var map = headerMap_(headers);
   var indexes = {
     rowId: firstHeaderIndex_(map, ['RowID', 'f']),
@@ -469,6 +566,31 @@ function findExistingEvent_(records, candidate) {
   return null;
 }
 
+function sameAdminRequest_(record, candidate) {
+  return activeRecord_(record)
+    && exactText_(record.rowId) === exactText_(candidate.rowId)
+    && displayDate_(record.date) === displayDate_(candidate.date)
+    && exactText_(record.classLabel) === exactText_(candidate.classLabel)
+    && canonicalDuration_(record.duration) === canonicalDuration_(candidate.duration)
+    && exactText_(record.instructor) === exactText_(candidate.instructor)
+    && exactText_(record.site) === exactText_(candidate.site)
+    && exactText_(record.device) === exactText_(candidate.device)
+    && exactText_(record.build) === exactText_(candidate.build)
+    && exactText_(record.notes) === exactText_(candidate.notes);
+}
+
+function findPermanentAdminRequest_(records, candidate) {
+  var id = exactText_(candidate && candidate.rowId);
+  var matches = records.filter(function(record) {
+    return id && exactText_(record.rowId) === id;
+  });
+  if (!matches.length) return null;
+  if (matches.length !== 1 || !sameAdminRequest_(matches[0], candidate)) {
+    return { conflict: true };
+  }
+  return matches[0];
+}
+
 function adminAddedRecord_(record) {
   return /^admin/i.test(cleanText_(record && record.device))
     || /admin-added/i.test(exactText_(record && record.notes));
@@ -509,7 +631,15 @@ function appendSignin_(sheet, state, record) {
   writeValue_(row, state.indexes, 'build', record.build);
   writeValue_(row, state.indexes, 'notes', record.notes);
   writeValue_(row, state.indexes, 'status', record.status || 'OK');
-  sheet.appendRow(row);
+  var nextRow = sheet.getLastRow() + 1;
+  if (nextRow > sheet.getMaxRows()) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), nextRow - sheet.getMaxRows());
+  }
+  // Sheets otherwise auto-coerces these canonical strings into serial dates.
+  // Plain-text cells preserve the exact retry identity across reads.
+  sheet.getRange(nextRow, state.indexes.timestamp + 1, 1, 1).setNumberFormat('@');
+  sheet.getRange(nextRow, state.indexes.date + 1, 1, 1).setNumberFormat('@');
+  sheet.getRange(nextRow, 1, 1, row.length).setValues([row]);
   state.records.push(record);
 }
 
@@ -545,12 +675,48 @@ function validateKioskRow_(row) {
   return value;
 }
 
+function requestedKioskRowId_(row) {
+  return safeExactText_(row && (row.RowID || row.rowId), 240, true);
+}
+
+function kioskRowResult_(row, result, linkedRecordId) {
+  return {
+    rowId: requestedKioskRowId_(row),
+    result: result,
+    linkedRecordId: linkedRecordId || ''
+  };
+}
+
+function duplicateKioskRowIds_(rows) {
+  var seen = {};
+  for (var i = 0; i < rows.length; i += 1) {
+    var id = requestedKioskRowId_(rows[i]);
+    if (!id) continue;
+    if (seen[id]) return true;
+    seen[id] = true;
+  }
+  return false;
+}
+
 function kioskSignInAction_(body) {
+  var target = requestTarget_(body);
   if (!Array.isArray(body.rows) || body.rows.length < 1 || body.rows.length > GIB_M1_MAX_KIOSK_ROWS_) {
     return jsonResult_({
       ok: false,
+      target: target,
       result: 'rejected',
       message: 'Rows were rejected.'
+    });
+  }
+  if (duplicateKioskRowIds_(body.rows)) {
+    return jsonResult_({
+      ok: false,
+      target: target,
+      result: 'rejected',
+      message: 'Duplicate RowIDs were rejected.',
+      results: body.rows.map(function(row) {
+        return kioskRowResult_(row, 'rejected', '');
+      })
     });
   }
 
@@ -558,8 +724,12 @@ function kioskSignInAction_(body) {
   if (!lock.tryLock(10000)) {
     return jsonResult_({
       ok: false,
+      target: target,
       result: 'failed',
-      message: 'The receiver was busy. Rows were not changed.'
+      message: 'The receiver was busy. Rows were not changed.',
+      results: body.rows.map(function(row) {
+        return kioskRowResult_(row, 'failed', '');
+      })
     });
   }
 
@@ -568,8 +738,18 @@ function kioskSignInAction_(body) {
     var sheet = signinsSheet_(spreadsheet);
     var state = readSignins_(sheet);
     var results = body.rows.map(function(row) {
-      var requestedId = cleanText_(row && (row.RowID || row.rowId));
+      var requestedId = requestedKioskRowId_(row);
       var candidate = validateKioskRow_(row);
+      if (candidate && target === 'test' && !obviousTestValue_(candidate.instructor)) {
+        candidate = null;
+      }
+      if (
+        candidate
+        && target === 'production'
+        && !GIB_M1_PRODUCTION_ROW_ID_PATTERN_.test(candidate.rowId)
+      ) {
+        candidate = null;
+      }
       if (!candidate) {
         return { rowId: requestedId, result: 'rejected', linkedRecordId: '' };
       }
@@ -601,7 +781,7 @@ function kioskSignInAction_(body) {
       }
     });
     SpreadsheetApp.flush();
-    return jsonResult_({ ok: true, results: results });
+    return jsonResult_({ ok: true, target: target, results: results });
   } finally {
     lock.releaseLock();
   }
@@ -1060,8 +1240,16 @@ function addMissedInstructorAction_(body) {
         + (value.notes ? ' | Notes: ' + value.notes : ''),
       status: 'OK'
     };
+    var permanentRequest = findPermanentAdminRequest_(state.records, candidate);
+    if (permanentRequest && permanentRequest.conflict) {
+      return jsonResult_({
+        ok: false,
+        result: 'rejected',
+        message: 'The Admin request ID conflicts with an existing record.'
+      });
+    }
+    var existing = permanentRequest || findExistingEvent_(state.records, candidate);
     var auditSheet = adminAuditSheet_(spreadsheet);
-    var existing = findExistingEvent_(state.records, candidate);
 
     if (existing) {
       var existingAuditNumber = appendAdminAudit_(
@@ -1099,6 +1287,227 @@ function addMissedInstructorAction_(body) {
   }
 }
 
+function gibM1ExactSpreadsheetFiles_(title) {
+  var expectedTitle = exactText_(title);
+  if (!expectedTitle) throw new Error('Spreadsheet title is not configured.');
+  var matches = [];
+  var files = DriveApp.getFilesByName(expectedTitle);
+  while (files.hasNext()) {
+    var file = files.next();
+    var active = typeof file.isTrashed !== 'function' || !file.isTrashed();
+    if (active && file.getMimeType() === MimeType.GOOGLE_SHEETS) matches.push(file);
+  }
+  return matches;
+}
+
+function gibM1ResolveCreatedSpreadsheet_(title, createdId) {
+  for (var attempt = 0; attempt < 5; attempt += 1) {
+    var matches = gibM1ExactSpreadsheetFiles_(title);
+    if (matches.length > 1) {
+      throw new Error('The created Google Sheet could not be uniquely resolved.');
+    }
+    if (matches.length === 1) {
+      if (matches[0].getId() !== createdId) {
+        throw new Error('The created Google Sheet could not be uniquely resolved.');
+      }
+      return matches;
+    }
+    if (attempt < 4) Utilities.sleep(250);
+  }
+  throw new Error('The created Google Sheet could not be uniquely resolved.');
+}
+
+function gibM1VerifyPermanentRowIds_(sheet, headerCount) {
+  var values = sheet.getDataRange().getValues();
+  var seen = {};
+  for (var i = 1; i < values.length; i += 1) {
+    var row = values[i] || [];
+    var populated = false;
+    for (var j = 0; j < headerCount; j += 1) {
+      if (exactText_(row[j])) {
+        populated = true;
+        break;
+      }
+    }
+    if (!populated) continue;
+    var rowId = exactText_(row[0]);
+    if (!rowId || seen[rowId]) {
+      throw new Error('The Signins RowID state is not replay-safe.');
+    }
+    seen[rowId] = true;
+  }
+}
+
+function gibM1EnsureSigninsSchema_(spreadsheet, sheetName, headers, initializeIfMissing) {
+  var sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet) {
+    if (initializeIfMissing === false) {
+      throw new Error('The Signins headings do not match the tracked schema.');
+    }
+    sheet = spreadsheet.insertSheet(sheetName);
+  }
+  if (sheet.getLastColumn() > headers.length) {
+    throw new Error('The Signins headings do not match the tracked schema.');
+  }
+  var headings = sheet
+    .getRange(1, 1, 1, headers.length)
+    .getValues()[0]
+    .map(function(value) { return exactText_(value); });
+  var hasHeadings = headings.some(function(value) { return Boolean(value); });
+  if (hasHeadings) {
+    for (var i = 0; i < headers.length; i += 1) {
+      if (headings[i] !== headers[i]) {
+        throw new Error('The Signins headings do not match the tracked schema.');
+      }
+    }
+  } else {
+    if (initializeIfMissing === false || sheet.getLastRow() > 1) {
+      throw new Error('The Signins headings do not match the tracked schema.');
+    }
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  }
+  if (initializeIfMissing !== false) sheet.setFrozenRows(1);
+  gibM1VerifyPermanentRowIds_(sheet, headers.length);
+  return sheet;
+}
+
+function gibM1ProvisionSpreadsheet_(options) {
+  var target = cleanText_(options && options.target).toLowerCase();
+  var title = exactText_(options && options.title);
+  var sheetName = exactText_(options && options.sheetName);
+  var propertyName = exactText_(options && options.spreadsheetProperty);
+  var forbiddenPropertyName = exactText_(options && options.forbiddenSpreadsheetProperty);
+  var provisioningClosedProperty = exactText_(options && options.provisioningClosedProperty);
+  var provisioningClosedValue = exactText_(options && options.provisioningClosedValue);
+  var closesProvisioning = Boolean(provisioningClosedProperty || provisioningClosedValue);
+  var headers = options && options.headers;
+  if (
+    target !== configuredDeploymentTarget_()
+    || (target !== 'test' && target !== 'production')
+    || !title
+    || !sheetName
+    || !propertyName
+    || !Array.isArray(headers)
+    || headers.length !== GIB_M1_SIGNINS_HEADERS_.length
+    || (closesProvisioning && (!provisioningClosedProperty || !provisioningClosedValue))
+    || provisioningClosedProperty === propertyName
+    || provisioningClosedProperty === GIB_M1_TARGET_LOCK_PROPERTY_
+    || (forbiddenPropertyName && provisioningClosedProperty === forbiddenPropertyName)
+  ) {
+    throw new Error('Spreadsheet provisioning configuration is invalid.');
+  }
+  for (var h = 0; h < headers.length; h += 1) {
+    if (headers[h] !== GIB_M1_SIGNINS_HEADERS_[h]) {
+      throw new Error('Spreadsheet provisioning configuration is invalid.');
+    }
+  }
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) throw new Error('Spreadsheet provisioning is busy.');
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    var storedId = exactText_(properties.getProperty(propertyName));
+    var storedTarget = cleanText_(properties.getProperty(GIB_M1_TARGET_LOCK_PROPERTY_)).toLowerCase();
+    var storedProvisioningClosed = provisioningClosedProperty
+      ? exactText_(properties.getProperty(provisioningClosedProperty))
+      : '';
+    if (
+      (storedTarget && storedTarget !== target)
+      || (forbiddenPropertyName && exactText_(properties.getProperty(forbiddenPropertyName)))
+      || (storedProvisioningClosed && storedProvisioningClosed !== provisioningClosedValue)
+      || (closesProvisioning && (storedId || storedTarget || storedProvisioningClosed))
+    ) {
+      throw new Error('Private production target state conflicts with this project.');
+    }
+    if (
+      provisioningClosedProperty
+      && constantTimeTextEqual_(storedProvisioningClosed, provisioningClosedValue)
+    ) throw new Error('Production provisioning is permanently closed.');
+    var matches = gibM1ExactSpreadsheetFiles_(title);
+    if (matches.length > 1) {
+      throw new Error('Expected at most one Google Sheet with the configured title.');
+    }
+    var created = false;
+    if (!matches.length) {
+      if (!options.createIfMissing) {
+        throw new Error('Expected exactly one Google Sheet with the configured title.');
+      }
+      var createdSpreadsheet = SpreadsheetApp.create(title);
+      created = true;
+      matches = gibM1ResolveCreatedSpreadsheet_(title, createdSpreadsheet.getId());
+    }
+    if (matches.length !== 1) {
+      throw new Error('Expected exactly one Google Sheet with the configured title.');
+    }
+    if (storedId && storedId !== matches[0].getId()) {
+      throw new Error('Private production target state conflicts with the resolved Sheet.');
+    }
+
+    var spreadsheet = SpreadsheetApp.openById(matches[0].getId());
+    if (spreadsheet.getName() !== title) {
+      throw new Error('Spreadsheet identity check failed.');
+    }
+    var existingSheet = spreadsheet.getSheetByName(sheetName);
+    if (
+      options.requireEmptyDataRows === true
+      && existingSheet
+      && Math.max(0, existingSheet.getLastRow() - 1) !== 0
+    ) throw new Error('The first production provisioning Sheet must contain zero data rows.');
+    var initializeSchema = options.initializeSchemaOnlyWhenCreated === true
+      ? created
+      : true;
+    var sheet = gibM1EnsureSigninsSchema_(spreadsheet, sheetName, headers, initializeSchema);
+    var dataRowCount = Math.max(0, sheet.getLastRow() - 1);
+    if (options.requireEmptyDataRows === true && dataRowCount !== 0) {
+      throw new Error('The first production provisioning Sheet must contain zero data rows.');
+    }
+    if (closesProvisioning) {
+      var persisted = {};
+      persisted[propertyName] = spreadsheet.getId();
+      persisted[GIB_M1_TARGET_LOCK_PROPERTY_] = target;
+      persisted[provisioningClosedProperty] = provisioningClosedValue;
+      properties.setProperties(persisted, false);
+    } else {
+      properties.setProperty(propertyName, spreadsheet.getId());
+      properties.setProperty(GIB_M1_TARGET_LOCK_PROPERTY_, target);
+    }
+    if (
+      exactText_(properties.getProperty(propertyName)) !== spreadsheet.getId()
+      || cleanText_(properties.getProperty(GIB_M1_TARGET_LOCK_PROPERTY_)).toLowerCase() !== target
+      || (
+        closesProvisioning
+        && exactText_(properties.getProperty(provisioningClosedProperty)) !== provisioningClosedValue
+      )
+    ) throw new Error('Private production target state could not be verified.');
+
+    if (closesProvisioning) {
+      return {
+        ok: true,
+        created: created,
+        spreadsheetMatches: 1,
+        headerCount: headers.length,
+        dataRowCount: dataRowCount,
+        sheetStored: true,
+        targetLocked: true,
+        provisioningClosed: true
+      };
+    }
+
+    return {
+      ok: true,
+      target: target,
+      spreadsheetTitle: title,
+      spreadsheetMatches: 1,
+      created: created,
+      signinsSheet: sheetName,
+      headerCount: headers.length,
+      dataRowCount: dataRowCount
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     cleanText_: cleanText_,
@@ -1112,15 +1521,19 @@ if (typeof module !== 'undefined' && module.exports) {
     activeRecord_: activeRecord_,
     sameEvent_: sameEvent_,
     findExistingEvent_: findExistingEvent_,
+    findPermanentAdminRequest_: findPermanentAdminRequest_,
     findAdminCollision_: findAdminCollision_,
     collisionReviewRecord_: collisionReviewRecord_,
     requestTarget_: requestTarget_,
     configuredSpreadsheetId_: configuredSpreadsheetId_,
     legacyKioskAuthorized_: legacyKioskAuthorized_,
+    receiverKioskAuthorized_: receiverKioskAuthorized_,
     adminActionAuthorized_: adminActionAuthorized_,
     recoveryAuthorized_: recoveryAuthorized_,
     recoveryWritesEnabled_: recoveryWritesEnabled_,
     validateKioskRow_: validateKioskRow_,
-    validateRecoveryRow_: validateRecoveryRow_
+    duplicateKioskRowIds_: duplicateKioskRowIds_,
+    validateRecoveryRow_: validateRecoveryRow_,
+    gibM1ProvisionSpreadsheet_: gibM1ProvisionSpreadsheet_
   };
 }

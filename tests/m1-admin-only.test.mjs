@@ -95,8 +95,9 @@ const SIGNIN_HEADERS = Object.freeze([
   'Status'
 ]);
 
-function makeSheet(initialRows = []) {
+function makeSheet(initialRows = [], options = {}) {
   const values = initialRows.map(row => [...row]);
+  let maxRows = Math.max(options.maxRows || 1000, values.length);
   return {
     values,
     appendRow(row) {
@@ -122,6 +123,9 @@ function makeSheet(initialRows = []) {
           return rows;
         },
         setValues(rows) {
+          if (typeof options.beforeSetValues === 'function') {
+            options.beforeSetValues({ startRow, startColumn, rowCount, columnCount, rows });
+          }
           rows.forEach((source, rowOffset) => {
             const rowIndex = startRow - 1 + rowOffset;
             if (!values[rowIndex]) values[rowIndex] = [];
@@ -129,8 +133,19 @@ function makeSheet(initialRows = []) {
               values[rowIndex][startColumn - 1 + columnOffset] = value;
             });
           });
+          return this;
+        },
+        setNumberFormat() {
+          return this;
         }
       };
+    },
+    getMaxRows() {
+      return maxRows;
+    },
+    insertRowsAfter(afterRow, count) {
+      assert.equal(afterRow, maxRows);
+      maxRows += count;
     },
     setFrozenRows() {}
   };
@@ -139,6 +154,7 @@ function makeSheet(initialRows = []) {
 function receiverHarness({
   testSpreadsheet = false,
   productionSpreadsheet = true,
+  allowedTarget = testSpreadsheet && !productionSpreadsheet ? 'test' : 'production',
   receiverToken = 'receiver-token',
   adminActionToken = '',
   legacyKioskToken = 'legacy-kiosk-token',
@@ -147,17 +163,17 @@ function receiverHarness({
   failAfterAppends = null,
   rows = []
 } = {}) {
-  const signins = makeSheet([SIGNIN_HEADERS, ...rows]);
   let appendFailureAfter = failAfterAppends;
   let appendAttempts = 0;
-  const appendSigninRow = signins.appendRow.bind(signins);
-  signins.appendRow = row => {
-    if (Number.isInteger(appendFailureAfter) && appendAttempts >= appendFailureAfter) {
-      throw new Error('simulated append interruption');
+  const signins = makeSheet([SIGNIN_HEADERS, ...rows], {
+    beforeSetValues({ startRow, startColumn, columnCount }) {
+      if (startRow < 2 || startColumn !== 1 || columnCount !== SIGNIN_HEADERS.length) return;
+      if (Number.isInteger(appendFailureAfter) && appendAttempts >= appendFailureAfter) {
+        throw new Error('simulated append interruption');
+      }
+      appendAttempts += 1;
     }
-    appendAttempts += 1;
-    appendSigninRow(row);
-  };
+  });
   let audit = null;
   let spreadsheetOpens = 0;
   const spreadsheet = {
@@ -180,6 +196,7 @@ function receiverHarness({
     console,
     EXPECTED_SPREADSHEET_NAME: 'Expected Signins',
     SHEET_NAME: 'Signins',
+    GIB_M1_ALLOWED_TARGET: allowedTarget,
     ContentService: {
       MimeType: { JSON: 'application/json' },
       createTextOutput(text) {
@@ -262,6 +279,22 @@ function kioskRow(overrides = {}) {
   };
 }
 
+function signinSheetRow(row, status = 'OK') {
+  return [
+    row.RowID,
+    row.Timestamp,
+    row.Date,
+    row['Class Label'],
+    row['Duration (hr)'],
+    row.Instructor,
+    row.Site,
+    row.Device || '',
+    row.Build || '',
+    row.Notes || '',
+    status
+  ];
+}
+
 function adminAddition(overrides = {}) {
   return {
     token: 'receiver-token',
@@ -333,7 +366,7 @@ function recoveryRequest(rows, overrides = {}) {
 }
 
 test('legacy {token, rows} payload remains readable and backward-compatible', () => {
-  const harness = receiverHarness();
+  const harness = receiverHarness({ testSpreadsheet: true, productionSpreadsheet: false });
   const first = harness.post({ token: 'legacy-kiosk-token', rows: [kioskRow()] });
   const retry = harness.post({ token: 'legacy-kiosk-token', rows: [kioskRow()] });
   const mixed = harness.post({
@@ -353,7 +386,11 @@ test('legacy {token, rows} payload remains readable and backward-compatible', ()
 });
 
 test('legacy append authentication is isolated and fails closed before writes', () => {
-  const harness = receiverHarness({ adminActionToken: 'admin-action-token' });
+  const harness = receiverHarness({
+    testSpreadsheet: true,
+    productionSpreadsheet: false,
+    adminActionToken: 'admin-action-token'
+  });
   const before = harness.signins.values.length;
   for (const body of [
     { rows: [kioskRow()] },
@@ -381,7 +418,7 @@ test('legacy append authentication is isolated and fails closed before writes', 
 });
 
 test('legacy exact kiosk replay adds zero duplicate rows', () => {
-  const harness = receiverHarness();
+  const harness = receiverHarness({ testSpreadsheet: true, productionSpreadsheet: false });
   const base = kioskRow();
   const exact = harness.post({ token: 'legacy-kiosk-token', rows: [base] });
   const replay = harness.post({ token: 'legacy-kiosk-token', rows: [base] });
@@ -391,7 +428,7 @@ test('legacy exact kiosk replay adds zero duplicate rows', () => {
 });
 
 test('legitimate repeated coarse business events remain distinct', () => {
-  const harness = receiverHarness();
+  const harness = receiverHarness({ testSpreadsheet: true, productionSpreadsheet: false });
   const exact = harness.post({ token: 'legacy-kiosk-token', rows: [kioskRow()] });
   const distinct = harness.post({
     token: 'legacy-kiosk-token',
@@ -565,11 +602,13 @@ test('recovery and Admin credentials cannot cross scopes', () => {
   assert.equal(harness.signins.values.length, 1);
 });
 
-test('legacy no-cors regression fixture clears only on network fulfillment and cannot read logical rejection', () => {
-  assert.match(kioskHtml, /mode:\s*'no-cors'/);
-  assert.match(kioskHtml, /await fetch\(url,[\s\S]*?saveSyncQueue\(\[\]\)/);
-  assert.match(kioskHtml, /response is opaque in no-cors/);
-  assert.doesNotMatch(kioskHtml, /await fetch\(url,[\s\S]*?response\.json\(\)/);
+test('kiosk requires readable same-origin row acknowledgments and never clears the whole queue', () => {
+  assert.doesNotMatch(kioskHtml, /mode:\s*['"]no-cors['"]/u);
+  assert.doesNotMatch(kioskHtml, /SYNC_URL_KEY|SYNC_TOKEN_KEY/u);
+  assert.doesNotMatch(kioskHtml, /saveSyncQueue\(\[\]\)/u);
+  assert.match(kioskHtml, /requestAcknowledgements\(submittedRows/u);
+  assert.match(kioskHtml, /applyAcknowledgements\([\s\S]*submittedRows/u);
+  assert.match(kioskHtml, /if \(!applied\.readable\) throw/u);
 });
 
 test('receiver requires two credentials and an explicit target before Sheet access', () => {
@@ -913,8 +952,10 @@ test('Admin-first delayed kiosk collisions are retained for audit and visibly he
   const adminFirst = receiverHarness({ adminActionToken: 'production-admin-token' });
   assert.equal(adminFirst.post(adminAddition()).result, 'added');
   const delayedRequest = {
-    token: 'legacy-kiosk-token',
-    rows: [kioskRow({ RowID: 'delayed-kiosk' })]
+    token: 'receiver-token',
+    action: 'kioskSignIn',
+    target: 'production',
+    rows: [kioskRow({ RowID: 'gib-m1-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' })]
   };
   const delayed = adminFirst.post(delayedRequest);
   assert.equal(delayed.results[0].result, 'review required');
@@ -939,8 +980,10 @@ test('Admin-first delayed kiosk collisions are retained for audit and visibly he
 
   const kioskFirst = receiverHarness({ adminActionToken: 'production-admin-token' });
   assert.equal(kioskFirst.post({
-    token: 'legacy-kiosk-token',
-    rows: [kioskRow()]
+    token: 'receiver-token',
+    action: 'kioskSignIn',
+    target: 'production',
+    rows: [kioskRow({ RowID: 'gib-m1-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' })]
   }).results[0].result, 'added');
   assert.equal(kioskFirst.post(adminAddition()).result, 'already exists');
   assert.equal(kioskFirst.signins.values.length, 2);
@@ -963,6 +1006,26 @@ test('rapid Admin retry creates one payroll event and readable results', () => {
   assert.equal(harness.audit.values.length, 3);
   assert.ok(first.auditActionNumber > 0);
   assert.ok(retry.auditActionNumber > first.auditActionNumber);
+});
+
+test('Admin request IDs remain permanent after payload changes or VOID', () => {
+  const changed = receiverHarness({ adminActionToken: 'production-admin-token' });
+  assert.equal(changed.post(adminAddition()).result, 'added');
+  assert.equal(changed.post(adminAddition({ reason: 'Changed retry payload' })).result, 'rejected');
+  assert.equal(changed.signins.values.length, 2);
+
+  const voidedAdminRow = kioskRow({
+    RowID: 'gib-admin-qa-admin-one',
+    Device: 'Admin Daily Review',
+    Build: 'm1-admin-only-couch-rollout',
+    Notes: 'Admin-added | Admin: Stuart Turner | Reason: Missed tablet sign-in'
+  });
+  const voided = receiverHarness({
+    adminActionToken: 'production-admin-token',
+    rows: [signinSheetRow(voidedAdminRow, 'VOID')]
+  });
+  assert.equal(voided.post(adminAddition()).result, 'rejected');
+  assert.equal(voided.signins.values.length, 2);
 });
 
 test('rapid double-click reaches one added result and one duplicate-safe result', async () => {
@@ -1195,13 +1258,15 @@ test('all inline scripts on touched production pages compile', () => {
   }
 });
 
-test('tablet diagnostic has no network permission and installs only bounded sync settings', () => {
+test('tablet diagnostic has no network permission and removes the browser credential path', () => {
   assert.match(tabletDiagnosticHtml, /connect-src 'none'/);
-  assert.match(tabletDiagnosticHtml, /Receiver endpoint[\s\S]*Legacy credential[\s\S]*Auto-sync[\s\S]*Current queue count[\s\S]*Current local-history record count/);
-  assert.match(tabletDiagnosticHtml, /'EXPECTED'\s*:\s*'UNEXPECTED'/);
-  assert.match(tabletDiagnosticHtml, /'MATCH'\s*:\s*'MISMATCH'/);
+  assert.match(tabletDiagnosticHtml, /Kiosk transport[\s\S]*Browser credential[\s\S]*Auto-sync[\s\S]*Current queue count[\s\S]*Current local-history record count/);
+  assert.match(tabletDiagnosticHtml, /'SAME-ORIGIN'\s*:\s*'UNEXPECTED'/);
+  assert.match(tabletDiagnosticHtml, /'ABSENT'\s*:\s*'UNEXPECTED'/);
   assert.doesNotMatch(tabletDiagnosticHtml, /\bfetch\s*\(|XMLHttpRequest|sendBeacon|console\.|clipboard/);
-  assert.match(tabletDiagnosticHtml, /localStorage\.setItem\(STORAGE\.autoSync,\s*'false'\)[\s\S]*localStorage\.setItem\(STORAGE\.endpoint,\s*endpoint\)[\s\S]*localStorage\.setItem\(STORAGE\.credential,\s*credential\)/u);
-  assert.doesNotMatch(tabletDiagnosticHtml, /localStorage\.(?:setItem|removeItem)\(STORAGE\.(?:queue|history)/u);
+  assert.match(tabletDiagnosticHtml, /OBSOLETE_BROWSER_SYNC_KEYS\.forEach\(key => localStorage\.removeItem\(key\)\)/u);
+  assert.match(tabletDiagnosticHtml, /localStorage\.setItem\(AUTO_SYNC_KEY,\s*'false'\)/u);
+  assert.doesNotMatch(tabletDiagnosticHtml, /localStorage\.setItem\([^\n]*(?:sync_url|sync_token)/u);
+  assert.doesNotMatch(tabletDiagnosticHtml, /script\.google\.com|macros\/s\/|installEnvelope|decryptInstall/u);
   assert.doesNotMatch(tabletDiagnosticHtml, /AKfy[A-Za-z0-9_-]{20,}|GIB_(?:M1|TEST)_/u);
 });

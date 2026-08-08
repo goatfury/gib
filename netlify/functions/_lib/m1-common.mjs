@@ -170,21 +170,27 @@ export function validNonFutureDate(value, now = new Date()) {
 export async function postGoogle(config, action, data, fetchImpl = fetch) {
   let response;
   try {
+    const body = {
+      ...data,
+      token: config.webhookToken,
+      action,
+      target: config.preview ? 'test' : 'production'
+    };
+    // Preserve the proven TEST wire contract (including its empty Admin field)
+    // and production Admin actions, while the production kiosk forwards only
+    // rows plus its pinned kiosk authentication, action, and target.
+    if (config.preview || config.adminActionToken) {
+      body.adminActionToken = config.adminActionToken;
+    }
     response = await fetchImpl(config.webhookUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'text/plain;charset=utf-8',
         Accept: 'application/json'
       },
-      body: JSON.stringify({
-        ...data,
-        token: config.webhookToken,
-        adminActionToken: config.adminActionToken,
-        action,
-        target: config.preview ? 'test' : 'production'
-      }),
+      body: JSON.stringify(body),
       redirect: 'follow',
-      signal: AbortSignal.timeout(8_000)
+      signal: AbortSignal.timeout(25_000)
     });
   } catch {
     return { readable: false, status: 0 };

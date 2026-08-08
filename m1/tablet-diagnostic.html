@@ -22,11 +22,11 @@
 <body>
   <main>
     <h1>M1 tablet configuration check</h1>
-    <p class="notice">Supervised M1 Admin use only. This page has no network permission and never displays, logs, copies, or transmits raw receiver or credential values. An explicitly authorized installation writes them only to the two M1 sync-setting keys and forces auto-sync off.</p>
-    <p id="statusMessage" class="status" role="status" aria-live="polite">Validating the supervised Admin session…</p>
+    <p class="notice">Supervised M1 Admin use only. The kiosk sync path is same-origin. This page has no network permission, receives no receiver address or credential, removes obsolete browser sync settings, and keeps auto-sync off.</p>
+    <p id="statusMessage" class="status" role="status" aria-live="polite">Validating the supervised Admin session...</p>
     <dl id="diagnosticResults" aria-live="polite" hidden>
-      <dt>Receiver endpoint</dt><dd id="endpointResult">NOT CHECKED</dd>
-      <dt>Legacy credential</dt><dd id="credentialResult">NOT CHECKED</dd>
+      <dt>Kiosk transport</dt><dd id="endpointResult">NOT CHECKED</dd>
+      <dt>Browser credential</dt><dd id="credentialResult">NOT CHECKED</dd>
       <dt>Auto-sync</dt><dd id="autoResult">NOT CHECKED</dd>
       <dt>Current queue count</dt><dd id="queueResult">NOT CHECKED</dd>
       <dt>Current local-history record count</dt><dd id="historyResult">NOT CHECKED</dd>
@@ -39,32 +39,23 @@
     const DEPLOY_PREVIEW_ORIGIN_PATTERN = /^https:\/\/deploy-preview-\d+--gib-live\.netlify\.app$/;
     const EXPECTED_PATH = '/m1/tablet-diagnostic.html';
     const ADMIN_PATHS = Object.freeze(['/m1/admin', '/m1/admin/', '/m1/admin/index.html']);
-    const MESSAGE_TYPE = Object.freeze({
-      request: 'gib:m1:diagnostic-request:v1',
-      installInit: 'gib:m1:diagnostic-install-init:v1',
-      installReady: 'gib:m1:diagnostic-install-ready:v1',
-      installRequest: 'gib:m1:diagnostic-install-request:v1',
-      proofs: 'gib:m1:diagnostic-proofs:v1',
-      result: 'gib:m1:diagnostic-result:v1',
-      installResult: 'gib:m1:diagnostic-install-result:v1'
-    });
-    const STORAGE = Object.freeze({
-      endpoint: 'gib_m1_sync_url_v1',
-      credential: 'gib_m1_sync_token_v1',
-      autoSync: 'gib_m1_sync_auto_v1',
-      queue: 'gib_m1_sync_queue_v1',
-      history: 'gib_m1_signins_v1'
-    });
-    const HMAC_DOMAIN = Object.freeze({
-      endpoint: 'gib-m1-tablet-diagnostic:endpoint:v2',
-      credential: 'gib-m1-tablet-diagnostic:credential:v2'
-    });
-    const INSTALL_KEY_DOMAIN = 'gib-m1-tablet-diagnostic:install-envelope:key:v1';
-    const INSTALL_AAD_DOMAIN = 'gib-m1-tablet-diagnostic:install-envelope:aad:v1';
+    const REQUEST_TYPE = 'gib:m1:diagnostic-request:v1';
+    const PROOFS_TYPE = 'gib:m1:diagnostic-proofs:v1';
+    const RESULT_TYPE = 'gib:m1:diagnostic-result:v1';
+    const TRANSPORT_PROOF_DOMAIN = 'gib-m1-tablet-diagnostic:transport:v3';
+    const CREDENTIAL_PROOF_DOMAIN = 'gib-m1-tablet-diagnostic:credential-absence:v3';
+    const TRANSPORT_PROOF_VALUE = '/api/m1-kiosk-sync';
+    const CREDENTIAL_PROOF_VALUE = 'browser-credential-absent';
+    const LOCAL_STATE_KEY = 'gib_m1_local_state_v2';
+    const AUTO_SYNC_KEY = 'gib_m1_sync_auto_v1';
+    const LEGACY_QUEUE_KEY = 'gib_m1_sync_queue_v1';
+    const LEGACY_HISTORY_KEY = 'gib_m1_signins_v1';
+    const OBSOLETE_BROWSER_SYNC_KEYS = Object.freeze([
+      'gib_m1_sync_url_v1',
+      'gib_m1_sync_token_v1'
+    ]);
     const RUN_ID_PATTERN = /^[a-f0-9]{32}$/;
     const PROOF_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-    const INSTALL_ENVELOPE_PATTERN = /^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{22}$/;
-    const GOOGLE_ENDPOINT_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]{20,256}\/exec$/;
     const allowedOrigin = window.location.origin === PRODUCTION_ORIGIN
       || DEPLOY_PREVIEW_ORIGIN_PATTERN.test(window.location.origin)
       ? window.location.origin
@@ -72,12 +63,15 @@
     const byId = id => document.getElementById(id);
     const status = message => { byId('statusMessage').textContent = message; };
     const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-    const hasExactKeys = (value, keys) => {
+    const exactKeys = (value, keys) => {
+      if (!isRecord(value)) return false;
       const actual = Object.keys(value).sort();
       const expected = [...keys].sort();
-      return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+      return actual.length === expected.length
+        && actual.every((key, index) => key === expected[index]);
     };
-    const arrayCount = key => {
+
+    const safeArrayCount = key => {
       try {
         const value = JSON.parse(localStorage.getItem(key) || '[]');
         return Array.isArray(value) ? value.length : 0;
@@ -85,391 +79,147 @@
         return 0;
       }
     };
-    const bytesToHex = buffer => Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, '0')).join('');
-    const hmacProof = async (key, domain, runId, value) => {
-      let message = `${domain}\0${runId}\0${value}`;
-      const messageBytes = new TextEncoder().encode(message);
-      message = '';
+
+    const localCounts = () => {
       try {
-        return bytesToHex(await crypto.subtle.sign('HMAC', key, messageBytes));
-      } finally {
-        messageBytes.fill(0);
-      }
-    };
-
-    const base64UrlBytes = value => {
-      if (typeof value !== 'string' || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error('Invalid encoding.');
-      const base64 = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
-      const decoded = atob(base64);
-      return Uint8Array.from(decoded, character => character.charCodeAt(0));
-    };
-
-    const concatenateBytes = (...arrays) => {
-      const combined = new Uint8Array(arrays.reduce((length, value) => length + value.length, 0));
-      let offset = 0;
-      arrays.forEach(value => {
-        combined.set(value, offset);
-        offset += value.length;
-      });
-      return combined;
-    };
-
-    const validInstallPayload = (value, runId) => isRecord(value)
-      && hasExactKeys(value, ['v', 'runId', 'endpoint', 'credential', 'autoSync'])
-      && value.v === 1
-      && value.runId === runId
-      && value.autoSync === false
-      && typeof value.endpoint === 'string'
-      && GOOGLE_ENDPOINT_PATTERN.test(value.endpoint)
-      && typeof value.credential === 'string'
-      && value.credential.length >= 1
-      && value.credential.length <= 512
-      && value.credential.trim().length > 0
-      && !/[\u0000-\u001f\u007f-\u009f]/.test(value.credential);
-
-    const decryptInstallEnvelope = async (envelope, proofKey, runId, privateKey) => {
-      if (typeof envelope !== 'string' || envelope.length > 2_048 || !INSTALL_ENVELOPE_PATTERN.test(envelope)) {
-        throw new Error('Invalid envelope.');
-      }
-      const parts = envelope.split('.');
-      if (parts.length !== 5) throw new Error('Invalid envelope.');
-
-      let serverX = base64UrlBytes(parts[0]);
-      let serverY = base64UrlBytes(parts[1]);
-      let initializationVector = base64UrlBytes(parts[2]);
-      let ciphertext = base64UrlBytes(parts[3]);
-      let authenticationTag = base64UrlBytes(parts[4]);
-      if (
-        serverX.length !== 32
-        || serverY.length !== 32
-        || initializationVector.length !== 12
-        || !ciphertext.length
-        || ciphertext.length > 1_536
-        || authenticationTag.length !== 16
-      ) {
-        serverX.fill(0);
-        serverY.fill(0);
-        initializationVector.fill(0);
-        ciphertext.fill(0);
-        authenticationTag.fill(0);
-        throw new Error('Invalid envelope.');
-      }
-
-      let additionalData = new TextEncoder().encode(
-        `${INSTALL_AAD_DOMAIN}\0${allowedOrigin}\0${EXPECTED_PATH}\0${runId}`
-      );
-      let keyInfo = new TextEncoder().encode(`${INSTALL_KEY_DOMAIN}\0${proofKey}`);
-      let encrypted = concatenateBytes(ciphertext, authenticationTag);
-      let sharedSecret;
-      let plaintextBytes;
-      let plaintext = '';
-      try {
-        const serverPublicKey = await crypto.subtle.importKey('jwk', {
-          kty: 'EC',
-          crv: 'P-256',
-          x: parts[0],
-          y: parts[1],
-          ext: true,
-          key_ops: []
-        }, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
-        sharedSecret = new Uint8Array(await crypto.subtle.deriveBits({
-          name: 'ECDH',
-          public: serverPublicKey
-        }, privateKey, 256));
-        const keyMaterial = await crypto.subtle.importKey('raw', sharedSecret, { name: 'HKDF' }, false, ['deriveKey']);
-        const key = await crypto.subtle.deriveKey({
-          name: 'HKDF',
-          hash: 'SHA-256',
-          salt: additionalData,
-          info: keyInfo
-        }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-        plaintextBytes = new Uint8Array(await crypto.subtle.decrypt({
-          name: 'AES-GCM',
-          iv: initializationVector,
-          additionalData,
-          tagLength: 128
-        }, key, encrypted));
-        plaintext = new TextDecoder('utf-8', { fatal: true }).decode(plaintextBytes);
-        const value = JSON.parse(plaintext);
-        plaintext = '';
-        if (!validInstallPayload(value, runId)) throw new Error('Invalid payload.');
-        return value;
-      } finally {
-        serverX.fill(0);
-        serverY.fill(0);
-        additionalData.fill(0);
-        keyInfo.fill(0);
-        encrypted.fill(0);
-        initializationVector.fill(0);
-        ciphertext.fill(0);
-        authenticationTag.fill(0);
-        if (sharedSecret) sharedSecret.fill(0);
-        if (plaintextBytes) plaintextBytes.fill(0);
-        plaintext = '';
-      }
-    };
-
-    const forceSafeInstallState = () => {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        try { localStorage.removeItem(STORAGE.credential); } catch {}
-        try { localStorage.setItem(STORAGE.autoSync, 'false'); } catch {}
-        try {
-          if (
-            localStorage.getItem(STORAGE.credential) === null
-            && localStorage.getItem(STORAGE.autoSync) === 'false'
-          ) return true;
-        } catch {}
-      }
-      return false;
-    };
-
-    const installSettings = (endpoint, credential) => {
-      try {
-        localStorage.setItem(STORAGE.autoSync, 'false');
-        if (localStorage.getItem(STORAGE.autoSync) !== 'false') throw new Error('Auto-sync was not disabled.');
-        localStorage.removeItem(STORAGE.credential);
-        if (localStorage.getItem(STORAGE.credential) !== null) throw new Error('Legacy credential was not cleared.');
-        localStorage.setItem(STORAGE.endpoint, endpoint);
-        if (localStorage.getItem(STORAGE.endpoint) !== endpoint) throw new Error('Receiver endpoint was not retained.');
-        localStorage.setItem(STORAGE.credential, credential);
-        if (
-          localStorage.getItem(STORAGE.credential) !== credential
-          || localStorage.getItem(STORAGE.autoSync) !== 'false'
-        ) {
-          throw new Error('Settings were not retained.');
+        const state = JSON.parse(localStorage.getItem(LOCAL_STATE_KEY) || 'null');
+        if (state && state.version === 2 && Array.isArray(state.queue) && Array.isArray(state.ledger)) {
+          return { queueCount: state.queue.length, historyCount: state.ledger.length };
         }
-        return true;
-      } catch {
-        return forceSafeInstallState() ? false : null;
-      }
+      } catch {}
+      return {
+        queueCount: safeArrayCount(LEGACY_QUEUE_KEY),
+        historyCount: safeArrayCount(LEGACY_HISTORY_KEY)
+      };
     };
 
-    let started = false;
-    let pending = null;
-    let installHandshake = null;
-    let complete = false;
-
-    const trustedOpener = () => {
-      if (!window.opener || window.opener.closed) return false;
+    const establishSafeBrowserState = () => {
       try {
-        return window.opener.location.origin === allowedOrigin && ADMIN_PATHS.includes(window.opener.location.pathname);
+        OBSOLETE_BROWSER_SYNC_KEYS.forEach(key => localStorage.removeItem(key));
+        localStorage.setItem(AUTO_SYNC_KEY, 'false');
+        return localStorage.getItem(AUTO_SYNC_KEY) === 'false';
       } catch {
         return false;
       }
     };
 
-    const clearPending = () => {
-      if (pending) {
-        pending.endpoint = '';
-        pending.credential = '';
-      }
-      pending = null;
-    };
+    const bytesToHex = buffer => Array.from(
+      new Uint8Array(buffer),
+      byte => byte.toString(16).padStart(2, '0')
+    ).join('');
 
-    const clearInstallHandshake = () => {
-      if (installHandshake) installHandshake.privateKey = null;
-      installHandshake = null;
-    };
-
-    const postInstallResult = (runId, installed) => {
-      clearPending();
-      clearInstallHandshake();
-      complete = true;
-      byId('diagnosticResults').hidden = true;
-      status(installed ? 'Repaired sync settings installed' : 'Installation failed safely');
-      window.opener.postMessage({
-        type: MESSAGE_TYPE.installResult,
-        runId,
-        installed
-      }, allowedOrigin);
-    };
-
-    const handleInstallInit = async message => {
-      if (complete || started || installHandshake || !hasExactKeys(message, ['type', 'runId'])) return;
-      if (!RUN_ID_PATTERN.test(message.runId)) {
-        complete = true;
-        status('Installation failed safely');
-        return;
-      }
-
-      const runId = message.runId;
-      installHandshake = { runId, privateKey: null };
+    const hmacProof = async (proofKey, domain, runId, value) => {
+      const keyBytes = new TextEncoder().encode(proofKey);
+      const messageBytes = new TextEncoder().encode(`${domain}\0${runId}\0${value}`);
+      let key;
       try {
-        const pair = await crypto.subtle.generateKey({
-          name: 'ECDH',
-          namedCurve: 'P-256'
-        }, false, ['deriveBits']);
-        if (pair.privateKey.extractable !== false || pair.privateKey.usages.join(',') !== 'deriveBits') {
-          throw new Error('Invalid private key.');
-        }
-        const exported = await crypto.subtle.exportKey('jwk', pair.publicKey);
-        if (
-          !hasExactKeys(exported, ['kty', 'crv', 'x', 'y', 'ext', 'key_ops'])
-          || exported.kty !== 'EC'
-          || exported.crv !== 'P-256'
-          || exported.ext !== true
-          || !Array.isArray(exported.key_ops)
-          || exported.key_ops.length !== 0
-          || typeof exported.x !== 'string'
-          || typeof exported.y !== 'string'
-          || !/^[A-Za-z0-9_-]{43}$/.test(exported.x)
-          || !/^[A-Za-z0-9_-]{43}$/.test(exported.y)
-        ) {
-          throw new Error('Invalid public key.');
-        }
-        installHandshake.privateKey = pair.privateKey;
-        const clientPublicKey = {
-          kty: 'EC',
-          crv: 'P-256',
-          x: exported.x,
-          y: exported.y,
-          ext: true,
-          key_ops: []
-        };
-        exported.x = '';
-        exported.y = '';
-        window.opener.postMessage({
-          type: MESSAGE_TYPE.installReady,
-          runId,
-          clientPublicKey
-        }, allowedOrigin);
-      } catch (error) {
-        clearInstallHandshake();
-        throw error;
+        key = await crypto.subtle.importKey(
+          'raw',
+          keyBytes,
+          { name: 'HMAC', hash: 'SHA-256' },
+          false,
+          ['sign']
+        );
+        return bytesToHex(await crypto.subtle.sign('HMAC', key, messageBytes));
+      } finally {
+        keyBytes.fill(0);
+        messageBytes.fill(0);
+        key = null;
       }
     };
+
+    const trustedOpener = () => {
+      if (!window.opener || window.opener.closed) return false;
+      try {
+        return window.opener.location.origin === allowedOrigin
+          && ADMIN_PATHS.includes(window.opener.location.pathname);
+      } catch {
+        return false;
+      }
+    };
+
+    let pending = null;
+    let complete = false;
 
     const handleRequest = async message => {
-      const installing = message.type === MESSAGE_TYPE.installRequest;
-      const expectedKeys = installing
-        ? ['type', 'runId', 'proofKey', 'installEnvelope']
-        : ['type', 'runId', 'proofKey'];
-      if (complete || started || !hasExactKeys(message, expectedKeys)) return;
       if (
-        (installing && (
-          !installHandshake
-          || installHandshake.runId !== message.runId
-          || !installHandshake.privateKey
-        ))
-        || (!installing && installHandshake)
+        complete
+        || pending
+        || !exactKeys(message, ['type', 'runId', 'proofKey'])
+        || message.type !== REQUEST_TYPE
+        || !RUN_ID_PATTERN.test(message.runId)
+        || !PROOF_KEY_PATTERN.test(message.proofKey)
       ) return;
-      if (!RUN_ID_PATTERN.test(message.runId) || !PROOF_KEY_PATTERN.test(message.proofKey)) {
-        if (installing) postInstallResult(message.runId, false);
-        else status('Authorization could not be validated. Close this page and return to M1 Admin.');
+
+      if (!establishSafeBrowserState()) {
+        complete = true;
+        status('Safe local state could not be confirmed. Close this page and return to M1 Admin.');
         return;
       }
-      started = true;
 
       const runId = message.runId;
       let proofKey = message.proofKey;
       message.proofKey = '';
-      let endpoint = '';
-      let credential = '';
-      if (installing) {
-        let installEnvelope = message.installEnvelope;
-        message.installEnvelope = '';
-        const privateKey = installHandshake.privateKey;
-        clearInstallHandshake();
-        let payload = await decryptInstallEnvelope(installEnvelope, proofKey, runId, privateKey);
-        installEnvelope = '';
-        endpoint = payload.endpoint;
-        credential = payload.credential;
-        payload.endpoint = '';
-        payload.credential = '';
-        payload = null;
-      } else {
-        endpoint = (localStorage.getItem(STORAGE.endpoint) || '').trim();
-        credential = (localStorage.getItem(STORAGE.credential) || '').trim();
-      }
-
-      const keyBytes = new TextEncoder().encode(proofKey);
-      proofKey = '';
-
-      let key;
-      try {
-        key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-      } finally {
-        keyBytes.fill(0);
-      }
-
-      let endpointProof;
-      let credentialProof;
-      try {
-        endpointProof = await hmacProof(key, HMAC_DOMAIN.endpoint, runId, endpoint);
-        credentialProof = await hmacProof(key, HMAC_DOMAIN.credential, runId, credential);
-      } finally {
-        key = null;
-      }
-
-      pending = {
-        mode: installing ? 'install' : 'diagnostic',
+      const counts = localCounts();
+      const endpointProof = await hmacProof(
+        proofKey,
+        TRANSPORT_PROOF_DOMAIN,
         runId,
-        endpoint: installing ? endpoint : '',
-        credential: installing ? credential : '',
-        autoSync: installing ? false : localStorage.getItem(STORAGE.autoSync) === 'true',
-        queueCount: arrayCount(STORAGE.queue),
-        historyCount: arrayCount(STORAGE.history)
+        TRANSPORT_PROOF_VALUE
+      );
+      const credentialProof = await hmacProof(
+        proofKey,
+        CREDENTIAL_PROOF_DOMAIN,
+        runId,
+        CREDENTIAL_PROOF_VALUE
+      );
+      proofKey = '';
+      pending = {
+        runId,
+        autoSync: false,
+        queueCount: counts.queueCount,
+        historyCount: counts.historyCount
       };
-      endpoint = '';
-      credential = '';
-      byId('diagnosticResults').hidden = installing;
-      status('Secure comparison in progress…');
+      status('Safe same-origin comparison in progress...');
       window.opener.postMessage({
-        type: MESSAGE_TYPE.proofs,
+        type: PROOFS_TYPE,
         runId,
         endpointProof,
         credentialProof,
-        autoSync: pending.autoSync,
-        queueCount: pending.queueCount,
-        historyCount: pending.historyCount
+        autoSync: false,
+        queueCount: counts.queueCount,
+        historyCount: counts.historyCount
       }, allowedOrigin);
-      endpointProof = '';
-      credentialProof = '';
     };
 
     const handleResult = message => {
-      if (complete || !pending || !hasExactKeys(message, ['type', 'runId', 'endpointExpected', 'credentialMatch'])) return;
-      if (message.runId !== pending.runId || typeof message.endpointExpected !== 'boolean' || typeof message.credentialMatch !== 'boolean') return;
-
-      if (pending.mode === 'install') {
-        let endpoint = pending.endpoint;
-        let credential = pending.credential;
-        const proofsAccepted = message.endpointExpected === true && message.credentialMatch === true;
-        const installed = proofsAccepted
-          ? installSettings(endpoint, credential)
-          : (forceSafeInstallState() ? false : null);
-        endpoint = '';
-        credential = '';
-        if (installed === null) {
-          clearPending();
-          clearInstallHandshake();
-          complete = true;
-          byId('diagnosticResults').hidden = true;
-          status('');
-          try { window.close(); } catch {}
-          return;
-        }
-        postInstallResult(message.runId, installed);
-        return;
-      }
+      if (
+        complete
+        || !pending
+        || !exactKeys(message, ['type', 'runId', 'endpointExpected', 'credentialMatch'])
+        || message.type !== RESULT_TYPE
+        || message.runId !== pending.runId
+        || typeof message.endpointExpected !== 'boolean'
+        || typeof message.credentialMatch !== 'boolean'
+      ) return;
 
       byId('diagnosticResults').hidden = false;
-      byId('endpointResult').textContent = message.endpointExpected ? 'EXPECTED' : 'UNEXPECTED';
-      byId('credentialResult').textContent = message.credentialMatch ? 'MATCH' : 'MISMATCH';
-      byId('autoResult').textContent = pending.autoSync ? 'NOT OFF' : 'OFF';
+      byId('endpointResult').textContent = message.endpointExpected ? 'SAME-ORIGIN' : 'UNEXPECTED';
+      byId('credentialResult').textContent = message.credentialMatch ? 'ABSENT' : 'UNEXPECTED';
+      byId('autoResult').textContent = 'OFF';
       byId('queueResult').textContent = String(pending.queueCount);
       byId('historyResult').textContent = String(pending.historyCount);
-      clearPending();
+      pending = null;
       complete = true;
       status('Check complete. These five outputs are safe to report.');
     };
 
     if (!allowedOrigin || window.location.pathname !== EXPECTED_PATH) {
-      status('Wrong location. Production use is allowed only at https://gib-live.netlify.app/m1/tablet-diagnostic.html. Close this page and return to M1 Admin.');
+      status('Wrong location. Close this page and return to M1 Admin.');
     } else if (!trustedOpener()) {
       status('Direct access is disabled. Launch this check from the supervised M1 Admin page on this site.');
     } else {
-      status('Waiting for supervised M1 Admin authorization…');
+      status('Waiting for supervised M1 Admin authorization...');
       window.addEventListener('message', event => {
         if (
           event.origin !== allowedOrigin
@@ -477,28 +227,12 @@
           || !trustedOpener()
           || !isRecord(event.data)
         ) return;
-        if (event.data.type === MESSAGE_TYPE.installInit) {
-          const runId = event.data.runId;
-          handleInstallInit(event.data).catch(() => {
-            clearInstallHandshake();
-            if (RUN_ID_PATTERN.test(String(runId || ''))) postInstallResult(runId, false);
-            else {
-              complete = true;
-              status('Installation failed safely');
-            }
-          });
-        } else if (event.data.type === MESSAGE_TYPE.request || event.data.type === MESSAGE_TYPE.installRequest) {
-          const installing = event.data.type === MESSAGE_TYPE.installRequest;
-          const runId = event.data.runId;
+        if (event.data.type === REQUEST_TYPE) {
           handleRequest(event.data).catch(() => {
-            clearPending();
-            if (installing && RUN_ID_PATTERN.test(String(runId || ''))) {
-              postInstallResult(runId, false);
-            } else {
-              status('The secure comparison could not be completed. Close this page and return to M1 Admin.');
-            }
+            pending = null;
+            status('The safe comparison could not be completed. Close this page and return to M1 Admin.');
           });
-        } else if (event.data.type === MESSAGE_TYPE.result) {
+        } else if (event.data.type === RESULT_TYPE) {
           handleResult(event.data);
         }
       });

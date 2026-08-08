@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (Build 2026-01-07 13:45)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (M1 TEST readable-ack)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -433,7 +433,7 @@ input, textarea, select {
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-01-07 13:45</span>
+        Build <span class="kbd" id="buildId">2026-08-07 M1 TEST readable-ack</span>
       </div>
     </div>
 
@@ -445,7 +445,7 @@ input, textarea, select {
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-01-07 13:45
+      Build 2026-08-07 M1 TEST readable-ack
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -682,8 +682,8 @@ input, textarea, select {
     <!-- Google Sheets sync configuration -->
     <div class="card" style="background: var(--panel);">
       <h3>Google Sheets Sync</h3>
-      <div class="subtle">Sync delivery remains available, but receiver values are managed only through authenticated M1 Admin.</div>
-      <div class="subtle" style="margin-top:12px;">Receiver settings are installed securely from M1 Admin and are not displayed here.</div>
+      <div class="subtle">Sync sends only queued rows to this site's protected same-origin endpoint.</div>
+      <div class="subtle" style="margin-top:12px;">On the production kiosk origin, device authorization is held in a secure host-only cookie and is never displayed here.</div>
       <div style="margin-top:12px;">
         <label for="cfgDeviceLabel" style="display:block; margin-bottom:4px;">Device label</label>
         <input id="cfgDeviceLabel" type="text" placeholder="Front Desk iPad" style="width:100%;">
@@ -741,11 +741,30 @@ input, textarea, select {
   </div>
 </div>
 
-<script>
+<script type="module">
+import {
+  appendBatchToState,
+  applyAcknowledgements,
+  createPermanentRowId,
+  removeBatchFromState,
+  requestAcknowledgements,
+  validLocalState,
+  validPermanentRowId
+} from './sync-core.mjs';
+
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
-  const BUILD = '2026-01-07 13:45';
+  const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
+  const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
+  const TEST_BUILD = '2026-08-07 M1 TEST readable-ack';
+  const PRODUCTION_BUILD = '2026-08-07 M1 PRODUCTION candidate';
+  const BUILD = IS_PRODUCTION_ORIGIN ? PRODUCTION_BUILD : TEST_BUILD;
+  if (IS_PRODUCTION_ORIGIN) {
+    document.title = 'GiB · Module 1 · Instructor Sign-In → Payroll (M1 PRODUCTION candidate)';
+    document.getElementById('buildId').textContent = PRODUCTION_BUILD;
+    document.getElementById('buildStampLarge').textContent = `Build ${PRODUCTION_BUILD}`;
+  }
   const TZ = 'America/New_York';
 // --- Instructor name suggestions (local roster) ---
 const NAME_ROSTER_KEY = 'gib_m1_instructor_names_v1';
@@ -826,9 +845,8 @@ const SCHEDULE_URL_KEY  = 'gib_m1_schedule_url_v1';
 const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
   // Sync keys
+  const LOCAL_STATE_KEY  = 'gib_m1_local_state_v2';
   const SYNC_QUEUE_KEY   = 'gib_m1_sync_queue_v1';
-  const SYNC_URL_KEY     = 'gib_m1_sync_url_v1';
-  const SYNC_TOKEN_KEY   = 'gib_m1_sync_token_v1';
   const SYNC_AUTO_KEY    = 'gib_m1_sync_auto_v1';
   const DEVICE_LABEL_KEY = 'gib_m1_device_label_v1';
 
@@ -959,6 +977,88 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     localStorage.setItem(key, JSON.stringify(value));
   }
 
+  function legacyEventKey(row) {
+    return JSON.stringify([
+      row && (row.Timestamp || row.timestamp) || '',
+      row && (row.Date || row.date) || '',
+      row && (row['Class Label'] || row.classLabel) || '',
+      row && (row['Duration (hr)'] ?? row.duration) || '',
+      row && (row.Instructor || row.instructor) || '',
+      row && (row.Site || row.site) || '',
+      row && (row.Notes || row.notes) || ''
+    ]);
+  }
+
+  function migrateLocalState() {
+    let legacyLedger = safeParse(SIGNINS_KEY, null);
+    if (!Array.isArray(legacyLedger)) {
+      legacyLedger = [];
+      for (const key of OLD_SIGNINS_KEYS) {
+        const candidate = safeParse(key, null);
+        if (Array.isArray(candidate) && candidate.length) {
+          legacyLedger = candidate;
+          break;
+        }
+      }
+    }
+    const legacyQueue = safeParse(SYNC_QUEUE_KEY, []);
+    const ledger = legacyLedger.map(row => ({ ...row }));
+    const queue = Array.isArray(legacyQueue) ? legacyQueue.map(row => ({ ...row })) : [];
+    const availableLedgerIndexes = new Map();
+    ledger.forEach((row, index) => {
+      const key = legacyEventKey(row);
+      if (!availableLedgerIndexes.has(key)) availableLedgerIndexes.set(key, []);
+      availableLedgerIndexes.get(key).push(index);
+    });
+    const usedIds = new Set();
+    const linkedLedgerIndexes = new Set();
+
+    queue.forEach(row => {
+      let rowId = validPermanentRowId(row.RowID) && !usedIds.has(row.RowID)
+        ? row.RowID
+        : createPermanentRowId();
+      while (usedIds.has(rowId)) rowId = createPermanentRowId();
+      usedIds.add(rowId);
+      row.RowID = rowId;
+      const matches = availableLedgerIndexes.get(legacyEventKey(row)) || [];
+      const ledgerIndex = matches.shift();
+      if (typeof ledgerIndex === 'number') {
+        ledger[ledgerIndex].RowID = rowId;
+        linkedLedgerIndexes.add(ledgerIndex);
+      }
+    });
+
+    ledger.forEach((row, index) => {
+      if (linkedLedgerIndexes.has(index)) return;
+      let rowId = row.RowID;
+      if (!validPermanentRowId(rowId) || usedIds.has(rowId)) {
+        rowId = createPermanentRowId();
+      }
+      while (usedIds.has(rowId)) rowId = createPermanentRowId();
+      usedIds.add(rowId);
+      row.RowID = rowId;
+    });
+
+    return { version: 2, ledger, queue };
+  }
+
+  function persistLocalState(state) {
+    if (!validLocalState(state)) throw new Error('Local sign-in state is invalid.');
+    // This one canonical write durably records ledger and queue together before
+    // any network request. The legacy arrays are compatibility mirrors only.
+    localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(state));
+    try { localStorage.setItem(SIGNINS_KEY, JSON.stringify(state.ledger)); } catch (error) {}
+    try { localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(state.queue)); } catch (error) {}
+  }
+
+  function loadLocalState() {
+    const stored = safeParse(LOCAL_STATE_KEY, null);
+    if (validLocalState(stored)) return stored;
+    const migrated = migrateLocalState();
+    persistLocalState(migrated);
+    return migrated;
+  }
+
   // Normalize day keys so admin + kiosk always match
   const dayMap = {
     'mon':'Monday','monday':'Monday',
@@ -996,7 +1096,12 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     // Wipe legacy gib_* and rbjj_* keys (except current sign-ins) that could confuse installs
     try {
       Object.keys(localStorage).forEach(k => {
-        if ((k.startsWith('gib_') || k.startsWith('rbjj_')) && k !== SIGNINS_KEY) {
+        if (
+          (k.startsWith('gib_') || k.startsWith('rbjj_'))
+          && k !== SIGNINS_KEY
+          && k !== SYNC_QUEUE_KEY
+          && k !== LOCAL_STATE_KEY
+        ) {
           localStorage.removeItem(k);
         }
       });
@@ -1721,39 +1826,21 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
   // Sign-ins
   function loadSignins() {
-    const rows = safeParse(SIGNINS_KEY, null);
-    if (Array.isArray(rows)) {
-      let updated = false;
-      rows.forEach(r => {
-        if (!r.Status) {
-          r.Status = 'OK';
-          updated = true;
-        }
-      });
-      if (updated) saveSignins(rows);
-      return rows;
-    }
-
-    // Back-compat: if new key empty, load from old
-    for (const k of OLD_SIGNINS_KEYS) {
-      const old = safeParse(k, null);
-      if (Array.isArray(old) && old.length) {
-        let updated = false;
-        old.forEach(r => {
-          if (!r.Status) {
-            r.Status = 'OK';
-            updated = true;
-          }
-        });
-        safeSet(SIGNINS_KEY, old);
-        if (updated) saveSignins(old);
-        return old;
+    const state = loadLocalState();
+    const rows = state.ledger;
+    let updated = false;
+    rows.forEach(row => {
+      if (!row.Status) {
+        row.Status = 'OK';
+        updated = true;
       }
-    }
-    return [];
+    });
+    if (updated) persistLocalState(state);
+    return rows;
   }
   function saveSignins(rows) {
-    safeSet(SIGNINS_KEY, rows);
+    const state = loadLocalState();
+    persistLocalState({ ...state, ledger: rows });
   }
 
   // Sign-in confirmation modal state (kiosk sign-ins)
@@ -1761,6 +1848,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   let signInCountdownId = null;
   let signInSecondsRemaining = 0;
   let lastSigninFormSnapshot = null;
+  let signInLocked = false;
 
   function clearSignInCountdown() {
     if (signInCountdownId) {
@@ -1846,16 +1934,15 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   function closeSignInModal() {
     clearSignInCountdown();
     signInSecondsRemaining = 0;
+    signInLocked = false;
     toggleSignInModal(false);
   }
 
   function undoLastSigninBatch() {
     if (!lastSigninBatchId || signInSecondsRemaining <= 0) return;
-    const rows = loadSignins();
-    const nextRows = rows.filter(r => r.__batchId !== lastSigninBatchId);
-    if (nextRows.length !== rows.length) {
-      saveSignins(nextRows);
-    }
+    const state = loadLocalState();
+    const nextState = removeBatchFromState(state, lastSigninBatchId);
+    if (nextState !== state) persistLocalState(nextState);
     renderAdminTable();
     closeSignInModal();
     restoreKioskForm(lastSigninFormSnapshot);
@@ -2080,35 +2167,62 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   function signIn() {
+    if (signInLocked) return;
+    signInLocked = true;
     const name = ($('#nameInput').value || '').trim();
     const classes = selectedClasses();
     const site = getSiteCode();
     const notes = ($('#notesInput').value || '').trim();
     if (!name || !classes.length) {
+      signInLocked = false;
       alert('Please enter a name and select one or more classes.');
       return;
     }
-upsertName(name);
-refreshNameDatalist();
-
-    const rows = loadSignins();
     const now = new Date();
-    const batchId = `${now.getTime()}-${Math.random().toString(16).slice(2, 8)}`;
-    classes.forEach(cls => {
-      const duration = getDurationForClass(cls);
-      rows.push({
-        'Timestamp': fmtTS(now),
-        'Date': fmtDate(now),
-        'Class Label': cls,
-        'Duration (hr)': duration,
-        'Instructor': name,
-        'Site': site,
-        'Notes': notes,
-        'Status': 'OK',
-        '__batchId': batchId
+    const timestamp = fmtTS(now);
+    const date = fmtDate(now);
+    let batchId = '';
+    const deviceLabel = (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim();
+    const ledgerRows = [];
+    const queuedRows = [];
+
+    try {
+      batchId = createPermanentRowId();
+      classes.forEach(cls => {
+        const rowId = createPermanentRowId();
+        const duration = getDurationForClass(cls);
+        const shared = {
+          'RowID': rowId,
+          'Timestamp': timestamp,
+          'Date': date,
+          'Class Label': cls,
+          'Duration (hr)': duration,
+          'Instructor': name,
+          'Site': site,
+          'Notes': notes,
+          '__batchId': batchId
+        };
+        ledgerRows.push({
+          ...shared,
+          'Status': 'OK'
+        });
+        queuedRows.push({
+          ...shared,
+          'Device': deviceLabel,
+          'Build': BUILD
+        });
       });
-    });
-    saveSignins(rows);
+      const state = appendBatchToState(loadLocalState(), ledgerRows, queuedRows);
+      persistLocalState(state);
+    } catch (error) {
+      signInLocked = false;
+      alert('This sign-in could not be saved on the device. Nothing was sent.');
+      return;
+    }
+    try {
+      upsertName(name);
+      refreshNameDatalist();
+    } catch (error) {}
 
     // Confirmation
     openSignInModal({
@@ -2118,43 +2232,25 @@ refreshNameDatalist();
       formSnapshot: { name, notes, classes }
     });
 
-    // Build sync rows and queue them for upload.  Each class selected produces
+    // Ledger and queue rows were saved together above. Each class produces
     // its own row in the sync queue so that multi‑class sign‑ins are treated as
-    // separate events.  A unique RowID is constructed from the timestamp,
-    // instructor name, class label and site to allow de‑duplication server‑side.
-    const autoSync = (localStorage.getItem(SYNC_AUTO_KEY) === 'true');
-    const deviceLabel = (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim();
-    const queuedRows = [];
-    classes.forEach(cls => {
-      const duration = getDurationForClass(cls);
-      const rowId = `${fmtTS(now)}|${name}|${cls}|${site}`;
-      const row = {
-        'RowID': rowId,
-        'Timestamp': fmtTS(now),
-        'Date': fmtDate(now),
-        'Class Label': cls,
-        'Duration (hr)': duration,
-        'Instructor': name,
-        'Site': site,
-        'Device': deviceLabel,
-        'Build': BUILD,
-        'Notes': notes,
-
-      };
-      queuedRows.push(row);
-    });
-    // Enqueue rows in one batch to minimize queue writes
-    queuedRows.forEach(r => enqueueRow(r));
-    // Attempt auto‑sync if configured
-    if (autoSync) {
-      syncNow();
-    } else {
-      updateSyncStatus();
+    // separate events with a permanent opaque RowID shared by both local copies.
+    updateSyncStatus();
+    // Attempt auto-sync if configured
+    if (localStorage.getItem(SYNC_AUTO_KEY) === 'true') {
+      window.setTimeout(() => {
+        if (localStorage.getItem(SYNC_AUTO_KEY) === 'true') syncNow();
+      }, 15_500);
     }
   }
 
   function voidLastSignin() {
-    const rows = loadSignins();
+    if (syncInFlight) {
+      alert('Wait for the current sync attempt to finish before voiding a sign-in.');
+      return;
+    }
+    const state = loadLocalState();
+    const rows = state.ledger;
     if (!rows.length) {
       alert('No sign-ins to void.');
       return;
@@ -2175,23 +2271,20 @@ refreshNameDatalist();
     rows[idx].Status = 'VOID';
     rows[idx].void_reason = reason.trim();
     rows[idx].voided_at = fmtTS(new Date());
-    saveSignins(rows);
+    const voidedRowId = rows[idx].RowID;
+    persistLocalState({
+      ...state,
+      ledger: rows,
+      queue: state.queue.filter(row => row && row.RowID !== voidedRowId)
+    });
     renderAdminTable();
     showToast('Last sign-in voided');
   }
 
   // --- Sync helpers ---
+  let syncInFlight = false;
   function loadSyncQueue() {
-    const q = safeParse(SYNC_QUEUE_KEY, null);
-    return Array.isArray(q) ? q : [];
-  }
-  function saveSyncQueue(q) {
-    safeSet(SYNC_QUEUE_KEY, q);
-  }
-  function enqueueRow(row) {
-    const q = loadSyncQueue();
-    q.push(row);
-    saveSyncQueue(q);
+    return loadLocalState().queue;
   }
   function loadSyncSettings() {
     $('#cfgDeviceLabel').value = localStorage.getItem(DEVICE_LABEL_KEY) || '';
@@ -2207,51 +2300,75 @@ refreshNameDatalist();
     const last = localStorage.getItem('gib_m1_sync_last') || '';
     const err = localStorage.getItem('gib_m1_sync_error') || '';
     const parts = [];
-    parts.push(`Queued: <span class="kbd">${q.length}</span>`);
-    if (last) parts.push(`Last sync: <span class="kbd">${new Date(last).toLocaleString()}</span>`);
-    if (err) parts.push(`<span style="color:#f87171;">Error: ${err}</span>`);
-    $('#syncStatus').innerHTML = parts.join(' · ');
+    parts.push(`Waiting: ${q.length}`);
+    if (last) parts.push(`Last confirmed: ${new Date(last).toLocaleString()}`);
+    if (err) parts.push(`Status: ${err}`);
+    $('#syncStatus').textContent = parts.join(' | ');
   }
   async function syncNow() {
-    const url = (localStorage.getItem(SYNC_URL_KEY) || '').trim();
-    const token = (localStorage.getItem(SYNC_TOKEN_KEY) || '').trim();
-    if (!url || !token) {
-      alert('Please configure the webhook URL and token first.');
+    if (syncInFlight) return;
+    if (lastSigninBatchId && signInSecondsRemaining > 0) {
+      showToast('Sync waits until the undo window closes');
       return;
     }
-    const queue = loadSyncQueue();
-    if (!queue.length) {
+    const submittedRows = loadSyncQueue();
+    if (!submittedRows.length) {
       showToast('No rows to sync');
       updateSyncStatus();
       return;
     }
+    if (navigator.onLine === false) {
+      localStorage.setItem('gib_m1_sync_error', 'Offline; rows are still waiting.');
+      updateSyncStatus();
+      showToast('Offline — rows kept');
+      return;
+    }
+
+    syncInFlight = true;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 30_000);
     try {
-      const body = JSON.stringify({ token, rows: queue });
-
-      // IMPORTANT: Google Apps Script web apps do not reliably return CORS headers.
-      // If we use Content-Type: application/json, browsers will preflight and fail.
-      // To keep this MVP reliable, we send a SIMPLE request:
-      // - Content-Type: text/plain (no preflight)
-      // - mode: no-cors (browser doesn't require allow-origin response)
-      // This means we cannot read the JSON response, but the request will be delivered
-      // as long as the network is available.
-      await fetch(url, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body
+      const payload = await requestAcknowledgements(submittedRows, {
+        online: navigator.onLine !== false,
+        signal: controller.signal,
+        productionOrigin: IS_PRODUCTION_ORIGIN
       });
+      const acknowledgedAt = new Date().toISOString();
+      const applied = applyAcknowledgements(
+        loadLocalState(),
+        submittedRows,
+        payload,
+        acknowledgedAt,
+        { productionOrigin: IS_PRODUCTION_ORIGIN }
+      );
+      if (!applied.readable) throw new Error('unreadable acknowledgement');
 
-      // Clear queue on successful network send (response is opaque in no-cors)
-      saveSyncQueue([]);
-      localStorage.setItem('gib_m1_sync_last', new Date().toISOString());
+      // Re-read the current state before applying results, so a row queued while
+      // this request was in flight is never removed by an older response.
+      const latestApplied = applyAcknowledgements(
+        loadLocalState(),
+        submittedRows,
+        payload,
+        acknowledgedAt,
+        { productionOrigin: IS_PRODUCTION_ORIGIN }
+      );
+      persistLocalState(latestApplied.state);
+      if (latestApplied.confirmedRowIds.length) {
+        localStorage.setItem('gib_m1_sync_last', acknowledgedAt);
+      }
       localStorage.removeItem('gib_m1_sync_error');
       updateSyncStatus();
-      showToast(`Sync sent (${queue.length})`);
-    } catch (err) {
-      localStorage.setItem('gib_m1_sync_error', (err && err.message) ? err.message : String(err));
+      const waiting = loadSyncQueue().length;
+      showToast(waiting
+        ? `${latestApplied.confirmedRowIds.length} confirmed; ${waiting} waiting`
+        : `${latestApplied.confirmedRowIds.length} confirmed`);
+    } catch (error) {
+      localStorage.setItem('gib_m1_sync_error', 'No readable confirmation; rows are still waiting.');
       updateSyncStatus();
-      showToast('Sync failed');
+      showToast('Not confirmed — rows kept');
+    } finally {
+      window.clearTimeout(timeout);
+      syncInFlight = false;
     }
   }
 
@@ -2575,6 +2692,10 @@ refreshNameDatalist();
   $('#btnCopy').addEventListener('click', copyCSV);
   $('#btnVoidLast').addEventListener('click', voidLastSignin);
   $('#btnClearSignins').addEventListener('click', () => {
+    if (syncInFlight || loadSyncQueue().length) {
+      alert('Waiting rows must be confirmed or individually voided before clearing local sign-ins.');
+      return;
+    }
     if (!confirm('Clear ALL locally stored sign-ins on this device?')) return;
     saveSignins([]);
     renderAdminTable();
