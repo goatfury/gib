@@ -25,6 +25,137 @@ const TRANSPORT_FIELDS = Object.freeze([
 
 const ROW_ID_PATTERN = /^gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
+export const NEW_YORK_TIME_ZONE = 'America/New_York';
+export const DAY_ROLLOVER_CHECK_INTERVAL_MS = 60_000;
+
+function padTwoDigits(value) {
+  return String(value).padStart(2, '0');
+}
+
+export function formatDateInTimeZone(date, timeZone = NEW_YORK_TIME_ZONE) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(date);
+}
+
+export function formatTimestampInTimeZone(date, timeZone = NEW_YORK_TIME_ZONE) {
+  const day = formatDateInTimeZone(date, timeZone);
+  const hour = padTwoDigits(new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    hour12: false
+  }).format(date));
+  const minute = padTwoDigits(new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    minute: '2-digit'
+  }).format(date));
+  const second = padTwoDigits(new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    second: '2-digit'
+  }).format(date));
+  return `${day} ${hour}:${minute}:${second}`;
+}
+
+export function createDayRolloverController(options = {}) {
+  const {
+    getDateKey,
+    isFormInProgress,
+    updateDisplayedDay,
+    replaceClasses,
+    schedule = globalThis.setInterval,
+    cancelSchedule = globalThis.clearInterval,
+    documentTarget = globalThis.document,
+    windowTarget = globalThis.window
+  } = options;
+
+  if (
+    typeof getDateKey !== 'function'
+    || typeof isFormInProgress !== 'function'
+    || typeof updateDisplayedDay !== 'function'
+    || typeof replaceClasses !== 'function'
+    || typeof schedule !== 'function'
+    || typeof cancelSchedule !== 'function'
+    || !documentTarget
+    || !windowTarget
+  ) {
+    throw new Error('Day rollover dependencies were not available.');
+  }
+
+  let renderedDate = getDateKey();
+  let displayedDate = renderedDate;
+  let pendingDate = '';
+  let intervalId = null;
+  let started = false;
+
+  function refresh(currentDate, requested = false) {
+    const changed = currentDate !== renderedDate;
+    if (!currentDate || (!requested && !changed && !pendingDate)) {
+      return Object.freeze({ changed: false, deferred: false });
+    }
+
+    if (currentDate !== displayedDate) {
+      updateDisplayedDay(currentDate);
+      displayedDate = currentDate;
+    }
+    if (isFormInProgress()) {
+      pendingDate = currentDate;
+      return Object.freeze({ changed, deferred: true });
+    }
+
+    replaceClasses(currentDate);
+    renderedDate = currentDate;
+    pendingDate = '';
+    return Object.freeze({ changed, deferred: false });
+  }
+
+  function checkNow() {
+    return refresh(getDateKey());
+  }
+
+  function requestRefresh() {
+    return refresh(getDateKey(), true);
+  }
+
+  function flushPending() {
+    if (!pendingDate) return Object.freeze({ changed: false, deferred: false });
+    return checkNow();
+  }
+
+  function onVisibilityChange() {
+    if (documentTarget.visibilityState === 'visible') checkNow();
+  }
+
+  function start() {
+    if (started) return;
+    started = true;
+    intervalId = schedule(checkNow, DAY_ROLLOVER_CHECK_INTERVAL_MS);
+    documentTarget.addEventListener('visibilitychange', onVisibilityChange);
+    documentTarget.addEventListener('resume', checkNow);
+    windowTarget.addEventListener('focus', checkNow);
+    windowTarget.addEventListener('pageshow', checkNow);
+  }
+
+  function stop() {
+    if (!started) return;
+    started = false;
+    if (intervalId != null) cancelSchedule(intervalId);
+    intervalId = null;
+    documentTarget.removeEventListener('visibilitychange', onVisibilityChange);
+    documentTarget.removeEventListener('resume', checkNow);
+    windowTarget.removeEventListener('focus', checkNow);
+    windowTarget.removeEventListener('pageshow', checkNow);
+  }
+
+  function snapshot() {
+    return Object.freeze({ renderedDate, pendingDate, started });
+  }
+
+  return Object.freeze({ checkNow, flushPending, requestRefresh, snapshot, start, stop });
+}
+
 function exactKeys(value, expected) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const actual = Object.keys(value).sort();

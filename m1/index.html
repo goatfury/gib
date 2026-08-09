@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (M1 TEST readable-ack)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (M1 TEST timestamp-rollover)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -433,7 +433,7 @@ input, textarea, select {
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-08-07 M1 TEST readable-ack</span>
+        Build <span class="kbd" id="buildId">2026-08-09 M1 TEST timestamp-rollover</span>
       </div>
     </div>
 
@@ -445,7 +445,7 @@ input, textarea, select {
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-08-07 M1 TEST readable-ack
+      Build 2026-08-09 M1 TEST timestamp-rollover
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -745,7 +745,10 @@ input, textarea, select {
 import {
   appendBatchToState,
   applyAcknowledgements,
+  createDayRolloverController,
   createPermanentRowId,
+  formatDateInTimeZone,
+  formatTimestampInTimeZone,
   removeBatchFromState,
   requestAcknowledgements,
   validLocalState,
@@ -757,11 +760,11 @@ import {
   // NOTE: bump this whenever you make changes to the kiosk or admin.
   const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
   const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
-  const TEST_BUILD = '2026-08-07 M1 TEST readable-ack';
-  const PRODUCTION_BUILD = '2026-08-07 M1 PRODUCTION candidate';
+  const TEST_BUILD = '2026-08-09 M1 TEST timestamp-rollover';
+  const PRODUCTION_BUILD = '2026-08-09 M1 PRODUCTION timestamp-rollover';
   const BUILD = IS_PRODUCTION_ORIGIN ? PRODUCTION_BUILD : TEST_BUILD;
   if (IS_PRODUCTION_ORIGIN) {
-    document.title = 'GiB · Module 1 · Instructor Sign-In → Payroll (M1 PRODUCTION candidate)';
+    document.title = 'GiB · Module 1 · Instructor Sign-In → Payroll (M1 PRODUCTION timestamp-rollover)';
     document.getElementById('buildId').textContent = PRODUCTION_BUILD;
     document.getElementById('buildStampLarge').textContent = `Build ${PRODUCTION_BUILD}`;
   }
@@ -949,18 +952,28 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   const $ = (sel) => document.querySelector(sel);
 
   // Time helpers
-  function todayName() {
-    return new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'long' }).format(new Date());
+  function todayName(date = new Date()) {
+    return new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'long' }).format(date);
   }
   function fmtDate(d) {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit' }).format(d);
+    return formatDateInTimeZone(d, TZ);
   }
   function fmtTS(d) {
-    const date = fmtDate(d);
-    const hh = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour:'2-digit', hour12:false }).format(d);
-    const mm = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, minute:'2-digit' }).format(d);
-    const ss = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, second:'2-digit' }).format(d);
-    return `${date} ${hh}:${mm}:${ss}`;
+    return formatTimestampInTimeZone(d, TZ);
+  }
+  function dayNameForDateKey(dateKey) {
+    const match = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/u);
+    if (!match) return todayName();
+    const dateAtUtcNoon = new Date(Date.UTC(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      12
+    ));
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'UTC',
+      weekday: 'long'
+    }).format(dateAtUtcNoon);
   }
 
   // Storage helpers
@@ -1167,7 +1180,11 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     return siteCode || 'Rev';
   }
 
-  function applyDeviceToUI() {
+  function updateDisplayedDay(dateKey = fmtDate(new Date())) {
+    $('#todayName').textContent = ` · (Today: ${dayNameForDateKey(dateKey)})`;
+  }
+
+  function applyDeviceToUI(dateKey = fmtDate(new Date())) {
     const cfg = loadDevice();
     const configured = !!(cfg && (cfg.gymName || cfg.location || cfg.siteCode));
     const pill = $('#devicePill');
@@ -1189,8 +1206,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       hdrLoc.textContent = 'Set device location in Admin.';
     }
 
-    const dn = todayName();
-    $('#todayName').textContent = ` · (Today: ${dn})`;
+    updateDisplayedDay(dateKey);
   }
 
   // Schedule
@@ -1329,9 +1345,9 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       .filter(Boolean);
   }
 
-  function seriesClassesForToday() {
-    const dayName = todayName();
-    const today = fmtDate(new Date());
+  function seriesClassesForToday(date = new Date()) {
+    const dayName = todayName(date);
+    const today = fmtDate(date);
     return seriesClassesForDate(dayName, today);
   }
 
@@ -1791,17 +1807,21 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     showToast(`Generated ${added} rule${added === 1 ? '' : 's'}`);
   }
 
-  function classesForToday() {
-    const dn = todayName();
+  function classesForDateKey(dateKey) {
+    const dn = dayNameForDateKey(dateKey);
     const sch = loadSchedule();
     const scheduled = sch.days[dn] || [];
-    const series = seriesClassesForToday();
+    const series = seriesClassesForDate(dn, dateKey);
     const combined = mergeUniqueClasses(scheduled, series);
     return { day: dn, classes: combined, meta: sch };
   }
 
-  function populateClassesForToday() {
-    const { day, classes, meta } = classesForToday();
+  function classesForToday(date = new Date()) {
+    return classesForDateKey(fmtDate(date));
+  }
+
+  function renderClassesForDateKey(dateKey) {
+    const { day, classes, meta } = classesForDateKey(dateKey);
     const wrap = $('#classListWrap');
     wrap.innerHTML = '';
     if (!classes.length) {
@@ -1822,6 +1842,12 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         wrap.appendChild(label);
       });
     }
+  }
+
+  function populateClassesForToday() {
+    if (dayRolloverController) return dayRolloverController.requestRefresh();
+    renderClassesForDateKey(fmtDate(new Date()));
+    return Object.freeze({ changed: false, deferred: false });
   }
 
   // Sign-ins
@@ -1849,6 +1875,15 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   let signInSecondsRemaining = 0;
   let lastSigninFormSnapshot = null;
   let signInLocked = false;
+  let dayRolloverController = null;
+
+  function kioskFormInProgress() {
+    return Boolean(
+      ($('#nameInput').value || '').trim()
+      || ($('#notesInput').value || '').trim()
+      || selectedClasses().length
+    );
+  }
 
   function clearSignInCountdown() {
     if (signInCountdownId) {
@@ -1882,6 +1917,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     $('#notesInput').value = '';
     document.querySelectorAll('#classListWrap input[type="checkbox"]').forEach(cb => cb.checked = false);
     $('#classListWrap').style.display = 'none';
+    dayRolloverController?.checkNow();
   }
 
   function restoreKioskForm(snapshot) {
@@ -2419,7 +2455,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     $('#admin').style.display = 'none';
     adminAuthenticated = false;
     applyDeviceToUI();
-    // Important: always populate from the SAME stored schedule.
+    // The guarded refresh defers replacement while name, notes, or classes are active.
     populateClassesForToday();
     // Hide list by default so it doesn't appear "stuck open"
     $('#classListWrap').style.display = 'none';
@@ -2717,12 +2753,25 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   });
 
   // Init
+  dayRolloverController = createDayRolloverController({
+    getDateKey: () => fmtDate(new Date()),
+    isFormInProgress: kioskFormInProgress,
+    updateDisplayedDay,
+    replaceClasses: renderClassesForDateKey,
+    schedule: window.setInterval.bind(window),
+    cancelSchedule: window.clearInterval.bind(window),
+    documentTarget: document,
+    windowTarget: window
+  });
+  const initialDateKey = dayRolloverController.snapshot().renderedDate;
   initScheduleEditor();
   document.body.classList.add('kiosk-mode');
   loadScheduleIntoAdmin();
   renderDurationRules();
-  applyDeviceToUI();
-  populateClassesForToday();
+  applyDeviceToUI(initialDateKey);
+  renderClassesForDateKey(initialDateKey);
+  dayRolloverController.start();
+  dayRolloverController.checkNow();
   // Load sync settings and refresh status on first load
   loadSyncSettings();
   updateSyncStatus();

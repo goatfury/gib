@@ -30,7 +30,7 @@ export const config = {
 const MAX_REQUEST_BYTES = 256_000;
 const DEPLOY_PREVIEW_HOST = /^deploy-preview-\d+--gib-live\.netlify\.app$/u;
 const ROW_ID_PATTERN = /^gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/u;
+const TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2} (?:[01]\d|2[0-3]):[0-5]\d:)([0-9]|[0-5]\d)$/u;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 const FORMULA_PREFIX_PATTERN = /^[=+\-@]/u;
 const ACCEPTED_RESULT_VALUES = new Set([
@@ -115,13 +115,20 @@ function validRowShape(value) {
     && keys.every(key => ALLOWED_ROW_KEYS.has(key));
 }
 
+function canonicalTimestamp(value) {
+  const timestamp = exactText(value, 19);
+  if (!timestamp) return null;
+  const match = timestamp.match(TIMESTAMP_PATTERN);
+  return match ? `${match[1]}${match[2].padStart(2, '0')}` : null;
+}
+
 function validateRow(input, now, requireObviousTestValue = true) {
   if (!validRowShape(input)) return null;
 
   const rowId = typeof input.RowID === 'string' && ROW_ID_PATTERN.test(input.RowID)
     ? input.RowID
     : '';
-  const timestamp = exactText(input.Timestamp, 19);
+  const timestamp = canonicalTimestamp(input.Timestamp);
   const date = typeof input.Date === 'string' ? input.Date : '';
   const classLabel = exactText(input['Class Label'], 200);
   const duration = input['Duration (hr)'];
@@ -134,7 +141,6 @@ function validateRow(input, now, requireObviousTestValue = true) {
   if (
     !rowId
     || !timestamp
-    || !TIMESTAMP_PATTERN.test(timestamp)
     || timestamp.slice(0, 10) !== date
     || !validNonFutureDate(date, now)
     || !classLabel
