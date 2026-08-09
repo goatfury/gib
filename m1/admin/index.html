@@ -153,6 +153,14 @@
       gap: 12px;
       margin-bottom: 14px;
     }
+    .schedule-heading { min-width: 0; }
+    .schedule-source {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: .78rem;
+      line-height: 1.35;
+    }
+    .schedule-source.fallback { color: var(--amber); }
     .count {
       color: var(--muted);
       font-size: .82rem;
@@ -354,7 +362,10 @@
       <div class="content-grid">
         <section id="reviewSection" class="panel section">
           <div class="section-head">
-            <h2>Scheduled Rev classes</h2>
+            <div class="schedule-heading">
+              <h2>Scheduled Rev classes</h2>
+              <p id="scheduleSource" class="schedule-source" role="status">Schedule status unavailable</p>
+            </div>
             <span id="classCount" class="count"></span>
           </div>
           <div id="reviewMessage" class="message" role="alert"></div>
@@ -390,6 +401,7 @@
             <div id="recentResults" class="result-list"></div>
           </div>
           <div class="limitation">
+            Daily Review uses the current canonical regular weekly schedule from the Revolution BJJ website. Recorded sign-ins with historical, local-override, or Series labels remain visible as unmatched rather than being hidden.
             Daily Review uses the shared Rev schedule. Local schedule edits and Series classes must also be added to the shared schedule or they will not appear as blanks.
           </div>
         </aside>
@@ -409,6 +421,8 @@
         review: '/.netlify/functions/m1-admin-review',
         search: '/.netlify/functions/m1-admin-search',
         add: '/.netlify/functions/m1-admin-add',
+        schedule: '/api/m1-schedule',
+        scheduleBootstrap: '/m1/shared-schedule.json',
         tabletDiagnostic: '/api/m1-tablet-diagnostic-verifier'
       });
       const ADMIN_REQUEST_HEADER = 'X-GIB-M1-Admin-Request-Token';
@@ -425,6 +439,33 @@
       const DEPLOY_PREVIEW_ORIGIN_PATTERN = /^https:\/\/deploy-preview-\d+--gib-live\.netlify\.app$/;
       const TIME_ZONE = 'America/New_York';
       const SITE = 'Rev';
+      const SCHEDULE_DAYS = Object.freeze([
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+        'Sunday'
+      ]);
+      const SCHEDULE_SOURCE_URL = 'https://revolutionbjj.com/schedule/';
+      const SCHEDULE_UPSTREAM_URL = 'https://revolutionbjj.com/wp-json/wp/v2/pages?slug=schedule&status=publish&_fields=id,type,slug,status,link,title,modified,modified_gmt,content';
+      const SCHEDULE_VERSION_PATTERN = /^revbjj-([a-f0-9]{16})$/;
+      const SCHEDULE_HASH_PATTERN = /^[a-f0-9]{64}$/;
+      const SCHEDULE_STATUS_REASON_PATTERN = /^[a-z0-9-]{1,80}$/;
+      const MAX_CLASSES_PER_DAY = 24;
+      const MIN_TOTAL_CLASSES = 30;
+      const MAX_TOTAL_CLASSES = 100;
+      const MAX_CLASS_LABEL_LENGTH = 240;
+      const MIN_CLASSES_BY_DAY = Object.freeze({
+        Monday: 5,
+        Tuesday: 5,
+        Wednesday: 5,
+        Thursday: 5,
+        Friday: 2,
+        Saturday: 2,
+        Sunday: 1
+      });
       const inFlightAdditions = new Set();
       let schedule = null;
       let currentDate = '';
@@ -452,6 +493,281 @@
           .toLocaleLowerCase('en-US')
           .replace(/[’‘`´]/g, "'")
           .replace(/[‐‑‒–—―−]/g, '-');
+      }
+
+      function isObject(value) {
+        return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+      }
+
+      function validIsoTimestamp(value) {
+        return typeof value === 'string'
+          && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)
+          && Number.isFinite(Date.parse(value));
+      }
+
+      function validSourceUrl(value) {
+        try {
+          const url = new URL(value);
+          return url.protocol === 'https:'
+            && url.hostname === 'revolutionbjj.com'
+            && url.port === ''
+            && url.username === ''
+            && url.password === ''
+            && url.hash === ''
+            && url.pathname === '/wp-json/wp/v2/pages'
+            && url.searchParams.get('slug') === 'schedule';
+        } catch {
+          return false;
+        }
+      }
+
+      function comparisonScheduleLabel(value) {
+        return String(value == null ? '' : value)
+          .normalize('NFKC')
+          .trim()
+          .replace(/\s+/g, ' ')
+          .toLocaleLowerCase('en-US')
+          .replace(/[’‘`´]/g, "'")
+          .replace(/[‐‑‒–—―−]/g, '-')
+          .replace(/\s*\/\s*/g, '/')
+          .replace(/\s+/g, ' ');
+      }
+
+      function validScheduleLabel(value) {
+        if (typeof value !== 'string') return false;
+        const label = value.normalize('NFC').trim().replace(/\s+/g, ' ');
+        return value === label
+          && label.length <= MAX_CLASS_LABEL_LENGTH
+          && /^(?:1[0-2]|[1-9]):[0-5]\d\s+(?:AM|PM)\b/.test(label)
+          && !/[\u0000-\u001f\u007f-\u009f<>]/.test(label)
+          && !/\p{Cf}/u.test(label)
+          && !/\b(?:javascript|data)\s*:/i.test(label)
+          && !/\bon[a-z]+\s*=/i.test(label);
+      }
+
+      async function scheduleDaysHash(days) {
+        if (!globalThis.crypto?.subtle || typeof TextEncoder !== 'function') {
+          throw new Error('Secure schedule verification is unavailable.');
+        }
+        const bytes = new TextEncoder().encode(JSON.stringify(days));
+        const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+        return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+      }
+
+      async function validateScheduleResponse(value) {
+        if (!isObject(value) || value.timezone !== TIME_ZONE || value.site !== SITE) {
+          throw new Error('Canonical schedule scope is invalid.');
+        }
+
+        const versionMatch = typeof value.version === 'string'
+          ? SCHEDULE_VERSION_PATTERN.exec(value.version)
+          : null;
+        if (
+          !versionMatch
+          || typeof value.contentHash !== 'string'
+          || !SCHEDULE_HASH_PATTERN.test(value.contentHash)
+          || versionMatch[1] !== value.contentHash.slice(0, 16)
+        ) {
+          throw new Error('Canonical schedule version is invalid.');
+        }
+
+        if (!isObject(value.days)) throw new Error('Canonical schedule days are invalid.');
+        const dayKeys = Object.keys(value.days);
+        if (
+          dayKeys.length !== SCHEDULE_DAYS.length
+          || dayKeys.some(day => !SCHEDULE_DAYS.includes(day))
+        ) {
+          throw new Error('Canonical schedule weekdays are invalid.');
+        }
+
+        let total = 0;
+        const days = {};
+        for (const day of SCHEDULE_DAYS) {
+          const labels = value.days[day];
+          if (
+            !Array.isArray(labels)
+            || labels.length < MIN_CLASSES_BY_DAY[day]
+            || labels.length > MAX_CLASSES_PER_DAY
+          ) {
+            throw new Error('Canonical schedule day is empty or oversized.');
+          }
+          const seen = new Set();
+          days[day] = labels.map(label => {
+            if (!validScheduleLabel(label)) throw new Error('Canonical schedule label is invalid.');
+            const comparison = comparisonScheduleLabel(label);
+            if (seen.has(comparison)) throw new Error('Canonical schedule contains a duplicate class.');
+            seen.add(comparison);
+            return label;
+          });
+          total += days[day].length;
+        }
+        if (total < MIN_TOTAL_CLASSES || total > MAX_TOTAL_CLASSES) {
+          throw new Error('Canonical schedule class count is implausible.');
+        }
+        if (await scheduleDaysHash(days) !== value.contentHash) {
+          throw new Error('Canonical schedule hash does not match its classes.');
+        }
+
+        if (
+          !isObject(value.source)
+          || value.source.url !== SCHEDULE_SOURCE_URL
+          || !['wordpress-rest', 'checked-in-bootstrap'].includes(value.source.type)
+          || value.source.upstreamUrl !== SCHEDULE_UPSTREAM_URL
+          || typeof value.source.modifiedAt !== 'string'
+          || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?$/.test(value.source.modifiedAt)
+        ) {
+          throw new Error('Canonical schedule source is invalid.');
+        }
+        if (
+          value.source.type === 'wordpress-rest'
+          && (!Number.isInteger(value.source.pageId) || value.source.pageId < 1)
+        ) {
+          throw new Error('Canonical schedule page identity is invalid.');
+        }
+
+        if (
+          typeof value.current !== 'boolean'
+          || !['none', 'last-known-good', 'bootstrap'].includes(value.fallback)
+          || !isObject(value.status)
+          || value.status.current !== value.current
+          || value.status.fallback !== value.fallback
+          || value.status.state !== (value.current ? 'current' : 'fallback')
+          || (value.current && value.fallback !== 'none')
+          || (!value.current && value.fallback === 'none')
+          || (value.fallback === 'bootstrap' && value.source.type !== 'checked-in-bootstrap')
+          || (value.fallback !== 'bootstrap' && value.source.type !== 'wordpress-rest')
+          || (
+            value.status.reason !== null
+            && (
+              typeof value.status.reason !== 'string'
+              || !SCHEDULE_STATUS_REASON_PATTERN.test(value.status.reason)
+            )
+          )
+          || (
+            value.status.storageWarning !== null
+            && (
+              typeof value.status.storageWarning !== 'string'
+              || !SCHEDULE_STATUS_REASON_PATTERN.test(value.status.storageWarning)
+            )
+          )
+          || !validIsoTimestamp(value.fetchedAt)
+          || !validIsoTimestamp(value.status.servedAt)
+          || Date.parse(value.status.servedAt) < Date.parse(value.fetchedAt)
+        ) {
+          throw new Error('Canonical schedule status is invalid.');
+        }
+
+        if (
+          !isObject(value.cache)
+          || !Number.isInteger(value.cache.refreshIntervalSeconds)
+          || value.cache.refreshIntervalSeconds < 30
+          || value.cache.refreshIntervalSeconds > 900
+        ) {
+          throw new Error('Canonical schedule cache metadata is invalid.');
+        }
+
+        return {
+          timezone: value.timezone,
+          site: value.site,
+          version: value.version,
+          contentHash: value.contentHash,
+          days,
+          source: {
+            url: value.source.url,
+            type: value.source.type,
+            modifiedAt: value.source.modifiedAt
+          },
+          fetchedAt: value.fetchedAt,
+          current: value.current,
+          fallback: value.fallback,
+          status: {
+            state: value.status.state,
+            reason: value.status.reason,
+            storageWarning: value.status.storageWarning,
+            servedAt: value.status.servedAt
+          },
+          cache: {
+            refreshIntervalSeconds: value.cache.refreshIntervalSeconds
+          }
+        };
+      }
+
+      async function loadCheckedInScheduleBootstrap(reason = 'schedule-service-unavailable') {
+        const response = await fetch(API.scheduleBootstrap, {
+          cache: 'no-store',
+          headers: { Accept: 'application/json' }
+        });
+        if (!response.ok) throw new Error('Checked-in schedule bootstrap unavailable.');
+        const value = await response.json();
+        if (
+          !isObject(value)
+          || value.timezone !== TIME_ZONE
+          || value.site !== SITE
+          || !/^\d{4}-\d{2}-\d{2}$/.test(value.version || '')
+          || !isObject(value.days)
+        ) {
+          throw new Error('Checked-in schedule bootstrap is invalid.');
+        }
+        const contentHash = await scheduleDaysHash(value.days);
+        const servedAt = new Date().toISOString();
+        return validateScheduleResponse({
+          timezone: value.timezone,
+          site: value.site,
+          version: `revbjj-${contentHash.slice(0, 16)}`,
+          contentHash,
+          days: value.days,
+          source: {
+            url: SCHEDULE_SOURCE_URL,
+            upstreamUrl: SCHEDULE_UPSTREAM_URL,
+            type: 'checked-in-bootstrap',
+            pageId: null,
+            modifiedAt: value.version
+          },
+          fetchedAt: servedAt,
+          current: false,
+          fallback: 'bootstrap',
+          status: {
+            state: 'fallback',
+            current: false,
+            fallback: 'bootstrap',
+            reason,
+            storageWarning: null,
+            servedAt
+          },
+          cache: { refreshIntervalSeconds: 300 }
+        });
+      }
+
+      function renderScheduleSource() {
+        const element = $('#scheduleSource');
+        if (!element || !schedule) return;
+        const source = schedule.source.type === 'checked-in-bootstrap'
+          ? 'checked-in bootstrap'
+          : 'Revolution BJJ website';
+        const state = schedule.current
+          ? 'current'
+          : (schedule.fallback === 'last-known-good' ? 'last validated fallback' : 'bootstrap fallback');
+        const fetched = new Date(schedule.fetchedAt).toLocaleString('en-US', {
+          timeZone: TIME_ZONE,
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit'
+        });
+        const parts = [
+          `Source: ${source}`,
+          `Status: ${state}`,
+          `Version: ${schedule.version}`,
+          `Fetched: ${fetched}`
+        ];
+        if (schedule.status.reason) parts.push(`Detail: ${schedule.status.reason}`);
+        if (schedule.status.storageWarning) parts.push(`Storage: ${schedule.status.storageWarning}`);
+        element.textContent = parts.join(' · ');
+        element.classList.toggle(
+          'fallback',
+          !schedule.current || Boolean(schedule.status.reason) || Boolean(schedule.status.storageWarning)
+        );
       }
 
       function nyDate(now = new Date()) {
@@ -1286,13 +1602,23 @@
         $('#tabletDiagnosticButton').hidden = !diagnosticOriginAllowed;
         $('#tabletDiagnosticOriginMessage').hidden = diagnosticOriginAllowed;
         try {
-          const response = await fetch('/m1/shared-schedule.json', { cache: 'no-store' });
-          if (!response.ok) throw new Error('Shared schedule unavailable.');
-          schedule = await response.json();
-          if (!schedule || !schedule.days) throw new Error('Shared schedule unreadable.');
+          try {
+            const response = await fetch(API.schedule, {
+              cache: 'no-store',
+              headers: { Accept: 'application/json' }
+            });
+            if (!response.ok) throw new Error('Canonical schedule unavailable.');
+            schedule = await validateScheduleResponse(await response.json());
+          } catch {
+            schedule = await loadCheckedInScheduleBootstrap();
+          }
+          renderScheduleSource();
           await loadReview(defaultYesterday());
         } catch {
-          setLoggedOut('The shared Rev schedule could not be loaded.');
+          schedule = null;
+          $('#scheduleSource').textContent = 'Schedule status unavailable';
+          $('#scheduleSource').classList.add('fallback');
+          setLoggedOut('The canonical Rev schedule could not be loaded.');
         }
       }
 

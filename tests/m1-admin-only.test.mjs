@@ -1126,8 +1126,14 @@ test('Daily Review workflow is yesterday-first, date-selectable, complete, and e
   assert.match(adminHtml, /Five recent active sign-ins/);
   assert.match(
     adminHtml,
-    /Daily Review uses the shared Rev schedule\. Local schedule edits and Series classes must also be added to the shared schedule or they will not appear as blanks\./
+    /Daily Review uses the current canonical regular weekly schedule from the Revolution BJJ website\. Recorded sign-ins with historical, local-override, or Series labels remain visible as unmatched rather than being hidden\./
   );
+  assert.match(adminHtml, /schedule:\s*'\/api\/m1-schedule'/);
+  assert.match(adminHtml, /function validateScheduleResponse\(value\)/);
+  assert.match(adminHtml, /id="scheduleSource"[^>]*role="status"/);
+  assert.match(adminHtml, /Version: \$\{schedule\.version\}/);
+  assert.match(adminHtml, /scheduleBootstrap:\s*'\/m1\/shared-schedule\.json'/);
+  assert.match(adminHtml, /function loadCheckedInScheduleBootstrap\(reason/);
   assert.equal(validNonFutureDate('2025-01-10', fixedDateNow), true);
   assert.equal(validNonFutureDate('2026-07-27', fixedDateNow), false);
 });
