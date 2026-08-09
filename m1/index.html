@@ -440,6 +440,231 @@ input, textarea, select {
 #classListWrap label { padding: 16px 12px; }
 #classListWrap input[type="checkbox"] { width: 28px; height: 28px; }
 
+/* Local Admin View: compact status first, infrequent controls disclosed on demand. */
+body.admin-mode header { display: none; }
+body.admin-mode .container { max-width: 1120px; }
+
+#admin.admin-shell {
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  font-size: 16px;
+}
+#admin h2 { font-size: 28px; }
+#admin h3 { font-size: 18px; }
+#admin label { font-size: 16px; }
+#admin input,
+#admin textarea,
+#admin select {
+  padding: 12px;
+  border-radius: 10px;
+  font-size: 16px;
+}
+#admin input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+}
+#admin .btn {
+  padding: 12px 15px;
+  border-radius: 10px;
+  font-size: 16px;
+}
+#admin .btn.small {
+  padding: 9px 12px;
+  font-size: 14px;
+}
+.admin-panel {
+  padding: 20px;
+  border: 1px solid var(--outline);
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+.admin-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.admin-header h2 { margin: 0; }
+.admin-header-actions,
+.admin-primary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.admin-overview {
+  margin-top: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--outline);
+}
+.admin-section-title {
+  margin: 0 0 10px;
+  color: #dbeafe;
+  font-size: 17px;
+}
+.admin-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.admin-status-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #243045;
+  border-radius: 12px;
+  background: #0b1322;
+}
+.admin-status-card.good { border-color: rgba(34,197,94,.35); }
+.admin-status-card.warn { border-color: rgba(245,158,11,.45); }
+.admin-status-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.admin-status-value {
+  margin-top: 5px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.admin-status-card.good .admin-status-value { color: #bbf7d0; }
+.admin-status-card.warn .admin-status-value { color: #fde68a; }
+.admin-actions-block {
+  margin-top: 16px;
+  padding: 15px;
+  border: 1px solid rgba(96,165,250,.28);
+  border-radius: 14px;
+  background: rgba(59,130,246,.07);
+}
+.admin-actions-block .statusRow { margin-top: 10px; }
+.admin-link-button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+.admin-disclosure {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--outline);
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+.admin-disclosure > summary,
+.admin-subdisclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 17px 20px;
+  color: #dbeafe;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+.admin-disclosure > summary::-webkit-details-marker,
+.admin-subdisclosure > summary::-webkit-details-marker { display: none; }
+.admin-disclosure > summary:focus-visible,
+.admin-subdisclosure > summary:focus-visible {
+  outline: 3px solid rgba(59,130,246,.65);
+  outline-offset: -3px;
+}
+.admin-disclosure > summary::after,
+.admin-subdisclosure > summary::after {
+  content: '+';
+  flex: none;
+  color: var(--muted);
+  font-size: 24px;
+  font-weight: 400;
+}
+.admin-disclosure[open] > summary::after,
+.admin-subdisclosure[open] > summary::after { content: '−'; }
+.admin-disclosure[open] > summary { border-bottom: 1px solid var(--outline); }
+.admin-disclosure-body { padding: 18px 20px 20px; }
+.admin-disclosure .admin-organizable,
+.admin-subdisclosure .admin-organizable {
+  margin-top: 0;
+  padding: 0;
+  border: 0;
+  background: transparent !important;
+  box-shadow: none;
+}
+#advancedPinSlot > #btnAdminPinToggle { margin-top: 10px; }
+#advancedPinSlot > #adminPinPanel { margin-top: 12px; }
+.admin-subsection + .admin-subsection {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--outline);
+}
+.admin-subsection h3 { margin: 0 0 7px; }
+.admin-subdisclosure {
+  margin-top: 14px;
+  border: 1px solid #243045;
+  border-radius: 12px;
+  background: #0b1322;
+}
+.admin-subdisclosure > summary {
+  padding: 14px 16px;
+  font-size: 16px;
+}
+.admin-subdisclosure-body { padding: 0 16px 16px; }
+.admin-danger-zone {
+  border-color: rgba(239,68,68,.38);
+  background: rgba(127,29,29,.12);
+}
+.admin-danger-zone > summary { color: #fecaca; }
+.admin-danger-zone[open] > summary { border-bottom-color: rgba(239,68,68,.25); }
+.admin-danger-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.admin-history-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+#adminTableWrap { overflow-x: auto; }
+#recentSignins { scroll-margin-top: 12px; }
+.week-day li { overflow-wrap: anywhere; }
+#scheduleStatus { min-width: 0; overflow-wrap: anywhere; }
+
+@media (min-width: 720px) {
+  .admin-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 1000px) {
+  .admin-summary-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  body.admin-mode .container { padding: 12px; }
+  .admin-panel { padding: 16px; }
+  .admin-header { align-items: flex-start; flex-direction: column; }
+  .admin-header-actions,
+  .admin-primary-actions { width: 100%; }
+  .admin-header-actions .btn,
+  .admin-primary-actions .btn,
+  .admin-primary-actions .admin-link-button {
+    flex: 1 1 138px;
+    justify-content: center;
+    text-align: center;
+  }
+  .admin-disclosure > summary { padding: 15px 16px; }
+  .admin-disclosure-body { padding: 16px; }
+  .duration-rule-row { grid-template-columns: 1fr; }
+  .series-row { grid-template-columns: minmax(0, 1fr); }
+}
+
 </style>
 </head>
 <body>
@@ -469,7 +694,6 @@ input, textarea, select {
     </div>
 
     <nav>
-      <button id="btnKiosk" class="btn brand" type="button">Instructor Sign‑In</button>
       <button id="btnAdmin" class="btn" type="button">Admin View</button>
     </nav>
   </header>
@@ -504,22 +728,110 @@ input, textarea, select {
   </section>
 
   <!-- ADMIN -->
-  <section id="admin" class="card" style="display:none;">
-    <div class="inline" style="justify-content: space-between; align-items:center;">
-      <h2 style="margin: 0;">Admin View</h2>
-      <div class="inline" style="gap:8px;">
+  <section id="admin" class="admin-shell" style="display:none;">
+    <div class="admin-panel">
+      <div class="admin-header">
+        <div>
+          <h2 id="adminHeading" tabindex="-1">M1 Admin</h2>
+          <div class="subtle">Current device status and everyday sign-in tools.</div>
+        </div>
+        <div class="admin-header-actions">
+          <button id="btnKiosk" class="btn brand" type="button">Return to Instructor Sign-In</button>
         <button id="btnAdminPinToggle" class="btn small" type="button" style="display:none;">Change PIN</button>
         <button id="btnAdminLogout" class="btn warn small" type="button">Log out Admin</button>
+        </div>
       </div>
+
+      <section class="admin-overview" aria-labelledby="adminStatusHeading">
+        <h3 id="adminStatusHeading" class="admin-section-title">Status summary</h3>
+        <div class="admin-summary-grid" role="list">
+          <div id="adminSummaryScheduleCard" class="admin-status-card" role="listitem">
+            <div class="admin-status-label">Schedule</div>
+            <div id="adminSummarySchedule" class="admin-status-value" role="status" aria-live="polite">Checking schedule…</div>
+          </div>
+          <div id="adminSummarySyncCard" class="admin-status-card" role="listitem">
+            <div class="admin-status-label">Sync</div>
+            <div id="adminSummarySync" class="admin-status-value" role="status" aria-live="polite">0 rows waiting to sync</div>
+          </div>
+          <div id="adminSummaryLastSyncCard" class="admin-status-card" role="listitem">
+            <div class="admin-status-label">Last confirmed sync</div>
+            <div id="adminSummaryLastSync" class="admin-status-value">No confirmed sync yet.</div>
+          </div>
+          <div id="adminSummaryDeviceCard" class="admin-status-card" role="listitem">
+            <div class="admin-status-label">Device</div>
+            <div id="adminSummaryDevice" class="admin-status-value">Not configured.</div>
+          </div>
+          <div id="adminSummarySigninsCard" class="admin-status-card" role="listitem">
+            <div class="admin-status-label">Sign-ins</div>
+            <div id="adminSummarySignins" class="admin-status-value">0 active sign-ins</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="admin-actions-block" aria-labelledby="adminActionsHeading">
+        <h3 id="adminActionsHeading" class="admin-section-title">Ordinary actions</h3>
+        <div id="adminPrimaryActions" class="admin-primary-actions">
+          <a id="recentSigninsLink" class="btn admin-link-button" href="#recentSignins">View recent sign-ins</a>
+        </div>
+        <div id="syncStatus" class="statusRow" role="status" aria-live="polite"></div>
+      </section>
     </div>
 
-    <div id="adminPinPanel" class="card" style="background: var(--panel); display:none;">
+    <details id="recentSignins" class="admin-disclosure" open>
+      <summary>Recent sign-ins</summary>
+      <div id="recentSigninsSlot" class="admin-disclosure-body"></div>
+    </details>
+
+    <details id="temporaryClassesSection" class="admin-disclosure">
+      <summary>Temporary classes</summary>
+      <div id="temporaryClassesSlot" class="admin-disclosure-body"></div>
+    </details>
+
+    <details id="weeklyScheduleSection" class="admin-disclosure">
+      <summary>Weekly schedule</summary>
+      <div id="weeklyScheduleSlot" class="admin-disclosure-body"></div>
+    </details>
+
+    <details id="advancedSettings" class="admin-disclosure">
+      <summary>Advanced settings</summary>
+      <div class="admin-disclosure-body">
+        <section class="admin-subsection" aria-labelledby="advancedPinHeading">
+          <h3 id="advancedPinHeading">Admin PIN</h3>
+          <div class="subtle">Set or change the PIN that protects Admin View on this device.</div>
+          <div id="advancedPinSlot"></div>
+        </section>
+        <section id="advancedDeviceSlot" class="admin-subsection"></section>
+        <section id="advancedSyncSlot" class="admin-subsection"></section>
+        <details id="manualScheduleSettings" class="admin-subdisclosure">
+          <summary>Manual schedule tools</summary>
+          <div id="advancedScheduleSlot" class="admin-subdisclosure-body"></div>
+        </details>
+        <details id="durationRulesSettings" class="admin-subdisclosure">
+          <summary>Duration rules</summary>
+          <div id="advancedDurationSlot" class="admin-subdisclosure-body"></div>
+        </details>
+        <details id="troubleshootingSettings" class="admin-subdisclosure">
+          <summary>Troubleshooting</summary>
+          <div id="advancedTroubleshootingSlot" class="admin-subdisclosure-body"></div>
+        </details>
+      </div>
+    </details>
+
+    <details id="dangerZone" class="admin-disclosure admin-danger-zone">
+      <summary>Danger zone</summary>
+      <div class="admin-disclosure-body">
+        <div class="subtle">These actions can remove settings or sign-in history from this device. You will still be asked to confirm each action.</div>
+        <div id="dangerZoneActions" class="admin-danger-actions"></div>
+      </div>
+    </details>
+
+    <div id="adminPinPanel" class="card admin-organizable" style="background: var(--panel); display:none;">
       <h3>Admin access</h3>
       <div class="subtle" id="adminPinHint">Set a PIN to lock Admin view on this device.</div>
 
       <div class="grid twoEq" style="margin-top: 12px;">
         <div>
-          <label id="adminPinLabel">Set PIN</label>
+          <label id="adminPinLabel" for="adminPinInput">Set PIN</label>
           <input id="adminPinInput" type="password" inputmode="numeric" placeholder="Enter a 4-6 digit PIN" />
           <div class="hint">Stored locally on this device.</div>
         </div>
@@ -532,24 +844,24 @@ input, textarea, select {
       </div>
     </div>
 
-    <div class="card" style="background: var(--panel);">
+    <div id="deviceSetupCard" class="card admin-organizable" style="background: var(--panel);">
       <h3>Device setup</h3>
-      <div class="subtle">This is stored <b>on this device</b> (local storage). Use it to label exports and auto-fill Site.</div>
+      <div class="subtle">Saved on this device. These details label exports and fill the Site field.</div>
 
       <div class="grid twoEq" style="margin-top: 12px;">
         <div>
-          <label>Gym name</label>
+          <label for="cfgGymName">Gym name</label>
           <input id="cfgGymName" type="text" placeholder="e.g. Revolution BJJ" />
         </div>
         <div>
-          <label>Location / device label</label>
+          <label for="cfgLocation">Location</label>
           <input id="cfgLocation" type="text" placeholder="e.g. Front Desk iPad (Rev)" />
         </div>
       </div>
 
       <div class="grid twoEq" style="margin-top: 12px;">
         <div>
-          <label>Default site code</label>
+          <label for="cfgSiteCode">Default site code</label>
           <input id="cfgSiteCode" type="text" placeholder="Rev" />
           <div class="hint">Used as the Site value for kiosk sign-ins and exports.</div>
         </div>
@@ -557,74 +869,71 @@ input, textarea, select {
           <label>Actions</label>
           <div class="inline" style="flex-wrap: wrap; gap:6px;">
             <button id="btnSaveDevice" class="btn brand" type="button">Save device</button>
-            <button id="btnResetDevice" class="btn danger" type="button">Reset device location</button>
+            <button id="btnResetDevice" class="btn danger" type="button">Reset device location and settings</button>
             <button id="btnFactoryReset" class="btn danger" type="button">Factory reset</button>
           </div>
-          <div class="hint warn">Reset device clears: gym name, location label, site code, schedule data, series classes, and duration rules (sign‑ins preserved).  Factory reset clears <em>all</em> local data (device, schedule, series classes, duration rules, sign‑ins).</div>
+          <div class="hint warn">Reset and Factory reset are kept in the closed Danger zone below.</div>
         </div>
       </div>
 
       <div class="statusRow" id="deviceStatus"></div>
     </div>
 
-    <div class="card" style="background: var(--panel);">
-      <h3>Schedule (used by “Classes Today”)</h3>
+    <div id="scheduleEditorCard" class="card admin-organizable" style="background: var(--panel);">
+      <h3>Manual schedule editing</h3>
       <div class="subtle">
-        Normal mode follows the shared Revolution BJJ website schedule. Any locally saved schedule remains an explicit override until reverted here.
+        M1 normally follows the Revolution website. Saving here uses this device's local schedule until you return to the website schedule.
       </div>
 
-      <div class="grid twoEq" style="margin-top: 12px; display: none;">
+      <div class="grid twoEq" style="margin-top: 12px;">
   <div>
-    <label>Schedule URL (optional)</label>
+    <label for="cfgScheduleUrl">Import from a web address (optional)</label>
     <input id="cfgScheduleUrl" type="url" placeholder="https://example.com/schedule.json" />
-    <div class="hint">Paste a JSON schedule URL here for a one-time local override import.</div>
+    <div class="hint">This is a one-time import. It does not keep checking that address.</div>
   </div>
   <div>
-    <label>&nbsp;</label>
     <div class="inline">
       <button id="btnLoadScheduleUrl" class="btn" type="button">Load from URL</button>
     </div>
-    <div class="hint">One-time import only. Website schedule updates pause while this override is active.</div>
+    <div class="hint">Website updates pause while an imported schedule is in use.</div>
   </div>
 </div>
 <div style="margin-top: 12px;">
-  <label>Day</label>
+  <label for="schedDay">Day</label>
   <select id="schedDay"></select>
 </div>
 <div style="margin-top: 12px;">
   <label>Schedule actions</label>
   <div class="inline">
     <button id="btnSaveSchedule" class="btn brand" type="button">Save schedule</button>
-    <button id="btnLoadDefaultSchedule" class="btn" type="button">Load default Rev schedule</button>
-    <button id="btnLoadRichSchedule" class="btn" type="button">Load Richmond BJJ schedule</button>
+    <button id="btnLoadDefaultSchedule" class="btn" type="button">Load Revolution schedule as local</button>
+    <button id="btnLoadRichSchedule" class="btn" type="button">Load Richmond schedule (legacy / other school)</button>
     <button id="btnClearSchedule" class="btn" type="button">Revert to website schedule</button>
     <button id="btnDisableSchedule" class="btn warn" type="button">Disable schedule</button>
   </div>
 </div>
 
       <div style="margin-top: 12px;">
-        <label>Classes for selected day (one per line)</label>
+        <label for="schedText">Classes for selected day (one per line)</label>
         <textarea id="schedText" placeholder="6:00 AM BJJ (Level 2)
 12:00 PM BJJ (Level 2)
 ..."></textarea>
         <div class="hint" id="scheduleHint"></div>
       </div>
 
-      <div class="statusRow" id="scheduleStatus"></div>
     </div>
 
-    <div class="card" style="background: var(--panel);">
-      <h3>Week at a glance</h3>
-      <div class="subtle">Read-only view of the active weekly schedule, with dated Series classes overlaid.</div>
+    <div id="weeklyScheduleCard" class="card admin-organizable" style="background: var(--panel);">
+      <div class="subtle">Read-only view of the active seven-day schedule, including temporary classes.</div>
+      <div class="statusRow" id="scheduleStatus" role="status" aria-live="polite"></div>
       <div id="weekAtGlance" class="week-glance" style="margin-top: 12px;"></div>
     </div>
 
-    <div class="card" style="background: var(--panel);">
-      <h3>Series classes</h3>
-      <div class="subtle">Add limited-run recurring classes that appear in Classes Today only within their date range.</div>
+    <div id="temporaryClassesCard" class="card admin-organizable" style="background: var(--panel);">
+      <div class="subtle">Add a recurring class for a limited number of weeks. It appears in Classes Today only during that date range.</div>
       <div class="grid twoEq" style="margin-top: 12px;">
         <div>
-          <label>Label</label>
+          <label for="seriesLabel">Class name</label>
           <input id="seriesLabel" type="text" placeholder="Intro" />
         </div>
         <div>
@@ -647,27 +956,26 @@ input, textarea, select {
       </div>
       <div class="grid twoEq" style="margin-top: 12px;">
         <div>
-          <label>Start date</label>
+        <label for="seriesStart">Start date</label>
           <input id="seriesStart" type="date" />
         </div>
         <div>
-          <label>Weeks</label>
+          <label for="seriesWeeks">Number of weeks</label>
           <input id="seriesWeeks" type="number" min="1" step="1" value="8" />
         </div>
       </div>
       <input id="seriesEnd" type="hidden" />
       <div class="subtle" id="seriesEndDisplay" style="margin-top: 6px;">Ends: —</div>
       <div class="inline" style="margin-top: 12px;">
-        <button id="btnAddSeries" class="btn brand" type="button">Add series</button>
+        <button id="btnAddSeries" class="btn brand" type="button">Add temporary class</button>
         <button id="btnClearSeriesForm" class="btn" type="button">Clear</button>
       </div>
       <div class="hint" id="seriesHint"></div>
       <div id="seriesList" class="series-list" style="margin-top: 12px;"></div>
     </div>
 
-    <div class="card" style="background: var(--panel);">
-      <h3>Duration rules</h3>
-      <div class="subtle">Match text → duration (first match wins, case-insensitive “contains”).</div>
+    <div id="durationRulesCard" class="card admin-organizable" style="background: var(--panel);">
+      <div class="subtle">Set how many hours a class name counts toward payroll. The first matching rule is used.</div>
       <div id="durationRulesWrap" class="duration-rule-list" style="margin-top: 10px;"></div>
       <div class="inline" style="margin-top: 10px;">
         <button id="btnAddDurationRule" class="btn" type="button">Add rule</button>
@@ -676,12 +984,12 @@ input, textarea, select {
       <div class="statusRow" id="durationRulesStatus"></div>
     </div>
 
-    <div class="card" style="background: var(--panel);">
-      <h3>Sign-ins</h3>
-      <div class="subtle">Export CSV compatible with payroll. Columns: Timestamp, Date, Class Label, Duration (hr), Instructor, Site, Notes.</div>
+    <div id="signinsCard" class="card admin-organizable" style="background: var(--panel);">
+      <!-- Export CSV compatible with payroll; the visible label emphasizes its backup purpose. -->
+      <div class="subtle">Records stay in order and keep their current status labels. The backup includes active rows in the usual payroll-ready columns.</div>
 
       <div class="inline" style="margin:12px 0 12px 0;">
-        <button id="btnExport" class="btn brand" type="button">Export CSV</button>
+        <button id="btnExport" class="btn brand" type="button">Export backup CSV</button>
         <button id="btnCopy" class="btn" type="button">Copy CSV</button>
         <button id="btnVoidLast" class="btn warn" type="button">Void last sign‑in</button>
         <button id="btnClearSignins" class="btn danger" type="button">Clear All Sign‑ins</button>
@@ -695,28 +1003,25 @@ input, textarea, select {
       </div>
     </div>
 
-    <!-- Google Sheets sync configuration -->
-    <div class="card" style="background: var(--panel);">
-      <h3>Google Sheets Sync</h3>
-      <div class="subtle">Sync sends only queued rows to this site's protected same-origin endpoint.</div>
-      <div class="subtle" style="margin-top:12px;">On the production kiosk origin, device authorization is held in a secure host-only cookie and is never displayed here.</div>
+    <div id="syncSettingsCard" class="card admin-organizable" style="background: var(--panel);">
+      <h3>Sign-in backup and syncing</h3>
+      <!-- Production authorization remains a secure host-only cookie and is never displayed here. -->
+      <div class="subtle">Choose the device label saved with waiting sign-ins and whether M1 should try to sync automatically after sign-in.</div>
       <div style="margin-top:12px;">
         <label for="cfgDeviceLabel" style="display:block; margin-bottom:4px;">Device label</label>
         <input id="cfgDeviceLabel" type="text" placeholder="Front Desk iPad" style="width:100%;">
       </div>
       <div style="margin-top:12px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
         <label style="display:flex; align-items:center; gap:6px;"><input id="cfgAutoSync" type="checkbox">Auto‑sync after sign‑in</label>
-        <button id="btnSyncNow" class="btn" type="button">Sync now</button>
+        <button id="btnSyncNow" class="btn brand" type="button">Sync now</button>
       </div>
-      <div id="syncStatus" class="statusRow" style="margin-top:8px;"></div>
     </div>
 
-    <div class="card" style="background: rgba(148,163,184,.06); border-color: rgba(148,163,184,.18);">
-      <h3>Quick debug</h3>
-      <div class="subtle">If something feels “stuck”, copy this into chat and I’ll patch fast.</div>
+    <div id="troubleshootingCard" class="card admin-organizable" style="background: rgba(148,163,184,.06); border-color: rgba(148,163,184,.18);">
+      <div class="subtle">Open this only when diagnosing a problem. These details help explain what this device currently sees.</div>
       <div class="inline" style="margin-top:10px;">
-        <button id="btnCopyDebug" class="btn" type="button">Copy debug snapshot</button>
-        <button id="btnSelectDebug" class="btn" type="button">Select debug text</button>
+        <button id="btnCopyDebug" class="btn" type="button">Copy troubleshooting details</button>
+        <button id="btnSelectDebug" class="btn" type="button">Select troubleshooting text</button>
       </div>
       <!-- render debug output in a textarea for reliable selection on tablets -->
       <textarea id="debugBox" readonly style="margin-top:10px; white-space:pre-wrap; color:#e2e8f0; font-size:12px; background:#0b1322; border:1px solid #243045; border-radius:10px; padding:12px; width:100%; min-height:160px;"></textarea>
@@ -1656,6 +1961,96 @@ function refreshNameDatalist() {
       adminStatus.textContent = message;
       adminStatus.classList.toggle('warn', warning);
     }
+    renderAdminSummary(schedule);
+  }
+
+  function adminScheduleSummary(schedule = loadSchedule()) {
+    if (schedule.override) {
+      if (schedule.mode === 'disabled') {
+        return { text: 'Schedule disabled on this device', tone: 'warn' };
+      }
+      return { text: 'Local schedule in use', tone: 'warn' };
+    }
+    const canonical = schedule.canonical;
+    if (canonical?.current === true && canonicalScheduleRuntime.phase !== 'error') {
+      const needsAttention = Boolean(canonical.status?.reason)
+        || Boolean(canonical.status?.storageWarning);
+      return {
+        text: needsAttention ? 'Website schedule current; attention needed' : 'Website schedule current',
+        tone: needsAttention ? 'warn' : 'good'
+      };
+    }
+    if (canonical?.current === true && canonicalScheduleRuntime.phase === 'error') {
+      return { text: 'Website schedule refresh unavailable', tone: 'warn' };
+    }
+    if (canonicalScheduleRuntime.phase === 'loading' && !canonical) {
+      return { text: 'Checking website schedule', tone: '' };
+    }
+    return { text: 'Using a safe fallback schedule', tone: 'warn' };
+  }
+
+  function readAdminLocalStateSnapshot() {
+    const state = safeParse(LOCAL_STATE_KEY, null);
+    if (state && Array.isArray(state.ledger) && Array.isArray(state.queue)) {
+      return { ledger: state.ledger, queue: state.queue };
+    }
+    const legacyLedger = safeParse(SIGNINS_KEY, []);
+    const legacyQueue = safeParse(SYNC_QUEUE_KEY, []);
+    return {
+      ledger: Array.isArray(legacyLedger) ? legacyLedger : [],
+      queue: Array.isArray(legacyQueue) ? legacyQueue : []
+    };
+  }
+
+  function setAdminSummaryValue(valueId, cardId, text, tone = '') {
+    const value = $(valueId);
+    const card = $(cardId);
+    if (value) value.textContent = text;
+    if (card) {
+      card.classList.remove('good', 'warn');
+      if (tone) card.classList.add(tone);
+    }
+  }
+
+  function renderAdminSummary(schedule = loadSchedule()) {
+    const admin = $('#admin');
+    if (!admin || admin.style.display === 'none') return;
+    const localState = readAdminLocalStateSnapshot();
+    const scheduleSummary = adminScheduleSummary(schedule);
+    setAdminSummaryValue('#adminSummarySchedule', '#adminSummaryScheduleCard', scheduleSummary.text, scheduleSummary.tone);
+
+    const waiting = localState.queue.length;
+    setAdminSummaryValue(
+      '#adminSummarySync',
+      '#adminSummarySyncCard',
+      `${waiting} row${waiting === 1 ? '' : 's'} waiting to sync`,
+      waiting ? 'warn' : 'good'
+    );
+
+    const last = localStorage.getItem('gib_m1_sync_last') || '';
+    const lastDate = last ? new Date(last) : null;
+    const hasValidLastSync = Boolean(lastDate && Number.isFinite(lastDate.getTime()));
+    const lastText = hasValidLastSync
+      ? lastDate.toLocaleString()
+      : 'No confirmed sync yet.';
+    setAdminSummaryValue('#adminSummaryLastSync', '#adminSummaryLastSyncCard', lastText, hasValidLastSync ? 'good' : '');
+
+    const cfg = loadDevice();
+    const deviceLabel = (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim()
+      || (cfg?.location || '').trim();
+    setAdminSummaryValue(
+      '#adminSummaryDevice',
+      '#adminSummaryDeviceCard',
+      deviceLabel || 'Not configured.',
+      deviceLabel ? 'good' : 'warn'
+    );
+
+    const activeSignins = localState.ledger.filter(row => (row.Status || 'OK') !== 'VOID').length;
+    setAdminSummaryValue(
+      '#adminSummarySignins',
+      '#adminSummarySigninsCard',
+      `${activeSignins} active sign-in${activeSignins === 1 ? '' : 's'}`
+    );
   }
 
   const DAY_ABBREV = {
@@ -1858,7 +2253,7 @@ function refreshNameDatalist() {
     const series = loadSeries();
     wrap.innerHTML = '';
     if (!series.length) {
-      wrap.innerHTML = '<div class="subtle">No series yet. Add one above.</div>';
+      wrap.innerHTML = '<div class="subtle">No temporary classes yet. Add one above.</div>';
       return;
     }
 
@@ -1869,6 +2264,7 @@ function refreshNameDatalist() {
       const toggle = document.createElement('input');
       toggle.type = 'checkbox';
       toggle.checked = item.enabled !== false;
+      toggle.setAttribute('aria-label', `Enable ${seriesLabel(item) || 'temporary class'}`);
       toggle.addEventListener('change', () => {
         item.enabled = toggle.checked;
         saveSeries(series);
@@ -1878,7 +2274,7 @@ function refreshNameDatalist() {
 
       const body = document.createElement('div');
       const title = document.createElement('div');
-      title.textContent = seriesLabel(item) || 'Untitled series';
+      title.textContent = seriesLabel(item) || 'Untitled temporary class';
       const meta = document.createElement('div');
       meta.className = 'meta';
       meta.textContent = `${seriesDaysLabel(item.days)} · ${item.startDate} → ${item.endDate}`;
@@ -1889,13 +2285,14 @@ function refreshNameDatalist() {
       remove.type = 'button';
       remove.className = 'btn small';
       remove.textContent = 'Delete';
+      remove.setAttribute('aria-label', `Delete ${seriesLabel(item) || 'temporary class'}`);
       remove.addEventListener('click', () => {
-        if (!confirm('Delete this series?')) return;
+        if (!confirm('Delete this temporary class?')) return;
         const next = series.filter(s => s.id !== item.id);
         saveSeries(next);
         renderSeriesList();
         populateClassesForToday();
-        showToast('Series deleted');
+        showToast('Temporary class deleted');
       });
 
       row.appendChild(toggle);
@@ -1908,7 +2305,7 @@ function refreshNameDatalist() {
   function addSeriesFromForm() {
     const data = readSeriesForm();
     if (!data.label) {
-      updateSeriesHint('Enter a label for the series.', true);
+      updateSeriesHint('Enter a name for the temporary class.', true);
       return;
     }
     const timeMinutes = parseStartMinutes(data.time);
@@ -1953,8 +2350,8 @@ function refreshNameDatalist() {
     renderSeriesList();
     clearSeriesForm();
     populateClassesForToday();
-    updateSeriesHint('Series saved.');
-    showToast('Series saved');
+    updateSeriesHint('Temporary class saved.');
+    showToast('Temporary class saved');
   }
 
   function defaultDurationRules() {
@@ -2604,13 +3001,14 @@ function refreshNameDatalist() {
   }
 
   function renderAdminTable() {
-    const rows = loadSignins();
+    const rows = readAdminLocalStateSnapshot().ledger;
     if (!rows.length) {
       $('#adminTableWrap').innerHTML = '<div class="subtle">No sign-ins yet.</div>';
+      renderAdminSummary();
       return;
     }
-    let html = '<div style="overflow:auto; max-height:420px;"><table><thead><tr>' +
-      '<th>#</th><th>Status</th><th>Timestamp</th><th>Date</th><th>Class</th><th>Duration (hr)</th><th>Instructor</th><th>Site</th><th>Notes</th>' +
+    let html = '<div role="region" aria-label="Recent sign-ins table" tabindex="0" style="overflow:auto; max-height:420px;"><table><thead><tr>' +
+      '<th scope="col">#</th><th scope="col">Status</th><th scope="col">Timestamp</th><th scope="col">Date</th><th scope="col">Class</th><th scope="col">Duration (hr)</th><th scope="col">Instructor</th><th scope="col">Site</th><th scope="col">Notes</th>' +
       '</tr></thead><tbody>';
     rows.forEach((r,i) => {
       const status = r.Status || 'OK';
@@ -2633,6 +3031,7 @@ function refreshNameDatalist() {
     });
     html += '</tbody></table></div>';
     $('#adminTableWrap').innerHTML = html;
+    renderAdminSummary();
   }
 
   function buildCSV() {
@@ -2703,6 +3102,45 @@ function refreshNameDatalist() {
       area.focus(); area.select();
       alert('Clipboard not available. CSV shown for copy.');
     }
+  }
+
+  let adminViewOrganized = false;
+  function moveAdminElement(elementId, targetId) {
+    const element = $(`#${elementId}`);
+    const target = $(`#${targetId}`);
+    if (element && target && element.parentElement !== target) {
+      target.appendChild(element);
+    }
+  }
+
+  function organizeAdminView() {
+    if (adminViewOrganized) return;
+
+    const primaryActions = $('#adminPrimaryActions');
+    const recentSigninsLink = $('#recentSigninsLink');
+    if (primaryActions && recentSigninsLink) {
+      ['btnSyncNow', 'btnExport', 'btnVoidLast'].forEach(id => {
+        const action = $(`#${id}`);
+        if (action) primaryActions.insertBefore(action, recentSigninsLink);
+      });
+    }
+
+    moveAdminElement('signinsCard', 'recentSigninsSlot');
+    moveAdminElement('temporaryClassesCard', 'temporaryClassesSlot');
+    moveAdminElement('weeklyScheduleCard', 'weeklyScheduleSlot');
+    moveAdminElement('btnAdminPinToggle', 'advancedPinSlot');
+    moveAdminElement('adminPinPanel', 'advancedPinSlot');
+    moveAdminElement('deviceSetupCard', 'advancedDeviceSlot');
+    moveAdminElement('syncSettingsCard', 'advancedSyncSlot');
+    moveAdminElement('scheduleEditorCard', 'advancedScheduleSlot');
+    moveAdminElement('durationRulesCard', 'advancedDurationSlot');
+    moveAdminElement('troubleshootingCard', 'advancedTroubleshootingSlot');
+
+    ['btnResetDevice', 'btnFactoryReset', 'btnClearSignins', 'btnDisableSchedule'].forEach(id => {
+      moveAdminElement(id, 'dangerZoneActions');
+    });
+
+    adminViewOrganized = true;
   }
 
   // UI helpers
@@ -2831,6 +3269,7 @@ function refreshNameDatalist() {
       queue: state.queue.filter(row => row && row.RowID !== voidedRowId)
     });
     renderAdminTable();
+    updateSyncStatus();
     showToast('Last sign-in voided');
   }
 
@@ -2849,14 +3288,20 @@ function refreshNameDatalist() {
     updateSyncStatus();
   }
   function updateSyncStatus() {
-    const q = loadSyncQueue();
+    const q = readAdminLocalStateSnapshot().queue;
     const last = localStorage.getItem('gib_m1_sync_last') || '';
     const err = localStorage.getItem('gib_m1_sync_error') || '';
     const parts = [];
-    parts.push(`Waiting: ${q.length}`);
-    if (last) parts.push(`Last confirmed: ${new Date(last).toLocaleString()}`);
-    if (err) parts.push(`Status: ${err}`);
-    $('#syncStatus').textContent = parts.join(' | ');
+    parts.push(`${q.length} row${q.length === 1 ? '' : 's'} waiting to sync`);
+    if (last) {
+      const lastDate = new Date(last);
+      parts.push(Number.isFinite(lastDate.getTime())
+        ? `Last confirmed sync: ${lastDate.toLocaleString()}`
+        : 'No confirmed sync yet.');
+    }
+    if (err) parts.push(`Latest attempt: ${err}`);
+    $('#syncStatus').textContent = parts.join(' · ');
+    renderAdminSummary();
   }
   async function syncNow() {
     if (syncInFlight) return;
@@ -2932,7 +3377,7 @@ function refreshNameDatalist() {
     const cls = (sch.days[today] || []);
     const series = loadSeries();
     const activeSeriesToday = seriesClassesForToday();
-    const signins = loadSignins();
+    const signins = readAdminLocalStateSnapshot().ledger;
     return {
       build: BUILD,
       url: location.href,
@@ -2965,9 +3410,12 @@ function refreshNameDatalist() {
     }
   }
 
+  organizeAdminView();
+
   // Wire events
   function showKiosk() {
     document.body.classList.add('kiosk-mode');
+    document.body.classList.remove('admin-mode');
     $('#kiosk').style.display = 'block';
     $('#admin').style.display = 'none';
     adminAuthenticated = false;
@@ -2976,10 +3424,13 @@ function refreshNameDatalist() {
     populateClassesForToday();
     // Hide list by default so it doesn't appear "stuck open"
     $('#classListWrap').style.display = 'none';
+    window.setTimeout(() => $('#btnAdmin')?.focus(), 0);
   }
 
   function showAdmin() {
+    organizeAdminView();
     document.body.classList.remove('kiosk-mode');
+    document.body.classList.add('admin-mode');
     $('#kiosk').style.display = 'none';
     $('#admin').style.display = 'block';
 
@@ -3003,9 +3454,11 @@ function refreshNameDatalist() {
     // the current queue count and last sync information are visible.
     loadSyncSettings();
     updateSyncStatus();
+    renderAdminSummary();
 
     // Debug box
     $('#debugBox').value = JSON.stringify(debugSnapshot(), null, 2);
+    window.setTimeout(() => $('#adminHeading')?.focus(), 0);
   }
 
   // Toggle class list
@@ -3025,6 +3478,9 @@ function refreshNameDatalist() {
     showAdmin();
   });
   $('#btnAdminLogout').addEventListener('click', showKiosk);
+  $('#recentSigninsLink').addEventListener('click', () => {
+    $('#recentSignins').open = true;
+  });
   $('#btnSignIn').addEventListener('click', signIn);
   $('#btnConfirmSignInUndo').addEventListener('click', undoLastSigninBatch);
   $('#btnConfirmSignInDone').addEventListener('click', confirmSigninDone);
@@ -3052,6 +3508,7 @@ function refreshNameDatalist() {
     saveDevice(cfg);
     applyDeviceToUI();
     $('#deviceStatus').innerHTML = `Saved: <span class="kbd">${cfg.gymName}</span> · <span class="kbd">${cfg.location}</span> · Site <span class="kbd">${cfg.siteCode}</span>`;
+    renderAdminSummary();
     showToast('Device saved');
   });
 
@@ -3059,6 +3516,8 @@ function refreshNameDatalist() {
     if (!confirm('Reset this device location + schedule data + duration rules? (Sign-ins are NOT deleted)')) return;
     resetDevice();
     $('#deviceStatus').innerHTML = 'Device reset. Configure again above.';
+    loadSyncSettings();
+    updateSyncStatus();
   });
 
   $('#btnFactoryReset').addEventListener('click', () => {
@@ -3070,6 +3529,8 @@ function refreshNameDatalist() {
     }
     factoryReset();
     $('#deviceStatus').innerHTML = 'Factory reset complete. Configure again above.';
+    loadSyncSettings();
+    updateSyncStatus();
   });
 
   // Admin PIN actions
@@ -3082,6 +3543,7 @@ function refreshNameDatalist() {
     setAdminPin(nextPin);
     adminAuthenticated = true;
     updateAdminPinUI();
+    $('#btnAdminPinToggle')?.focus();
     showToast('Admin PIN saved');
   });
 
