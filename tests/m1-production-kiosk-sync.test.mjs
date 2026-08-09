@@ -284,6 +284,129 @@ test('production returns local rejection for malformed rows while forwarding onl
   ]);
 });
 
+test('production normalizes two synthetic legacy one-digit-second rows before Google', async () => {
+  const incidentDate = new Date('2026-08-09T20:00:00Z');
+  const first = row({
+    Timestamp: '2026-08-09 15:57:3',
+    Date: '2026-08-09',
+    'Class Label': 'TEST Class A',
+    Instructor: 'QA Legacy Instructor',
+    Build: 'test-build'
+  });
+  const second = row({
+    RowID: 'gib-m1-fedcba98-7654-4321-8fed-cba987654321',
+    Timestamp: '2026-08-09 15:57:3',
+    Date: '2026-08-09',
+    'Class Label': 'TEST Class B',
+    Instructor: 'QA Legacy Instructor',
+    Build: 'test-build'
+  });
+  const firstBefore = structuredClone(first);
+  const secondBefore = structuredClone(second);
+  let fetchCalls = 0;
+  let forwarded = [];
+
+  const response = await handleKioskSync(request({ body: { rows: [first, second] } }), {
+    env: PRODUCTION_ENV,
+    now: NOW_MS,
+    dateNow: incidentDate,
+    fetch: async (_url, options) => {
+      fetchCalls += 1;
+      forwarded = JSON.parse(options.body).rows;
+      return googleResponse([result(first), result(second)]);
+    }
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(fetchCalls, 1);
+  assert.deepEqual(forwarded.map(value => value.Timestamp), [
+    '2026-08-09 15:57:03',
+    '2026-08-09 15:57:03'
+  ]);
+  assert.deepEqual((await body(response)).results, [result(first), result(second)]);
+  assert.deepEqual(first, firstBefore);
+  assert.deepEqual(second, secondBefore);
+});
+
+test('production accepts every safe seconds boundary and forwards canonical timestamps', async () => {
+  const incidentDate = new Date('2026-08-09T20:00:00Z');
+  const cases = new Map([
+    ['0', '00'],
+    ['9', '09'],
+    ['00', '00'],
+    ['09', '09'],
+    ['10', '10'],
+    ['59', '59']
+  ]);
+
+  for (const [inputSeconds, expectedSeconds] of cases) {
+    const input = row({
+      Timestamp: `2026-08-09 15:57:${inputSeconds}`,
+      Date: '2026-08-09',
+      'Class Label': 'TEST Class A',
+      Instructor: 'QA Legacy Instructor'
+    });
+    const inputBefore = structuredClone(input);
+    let forwardedTimestamp = '';
+    const response = await handleKioskSync(request({ body: { rows: [input] } }), {
+      env: PRODUCTION_ENV,
+      now: NOW_MS,
+      dateNow: incidentDate,
+      fetch: async (_url, options) => {
+        forwardedTimestamp = JSON.parse(options.body).rows[0].Timestamp;
+        return googleResponse([result(input)]);
+      }
+    });
+    assert.equal(response.status, 200, inputSeconds);
+    assert.equal(forwardedTimestamp, `2026-08-09 15:57:${expectedSeconds}`, inputSeconds);
+    assert.deepEqual(input, inputBefore, inputSeconds);
+  }
+});
+
+test('production accepts only safe one- or two-digit seconds and rejects malformed timestamps before Google', async () => {
+  const incidentDate = new Date('2026-08-09T20:00:00Z');
+  const malformed = [
+    '2026-08-09 15:57:',
+    '2026-08-09 15:57:003',
+    '2026-08-09 15:57:60',
+    '2026-08-09 15:57:99',
+    '2026-08-09 15:57:+3',
+    '2026-08-09 15:57:-1',
+    '2026-08-09 15:60:3',
+    '2026-08-09 24:00:3',
+    '2026-08-09 15:57:a',
+    '2026-08-09 15:7:3',
+    '2026-08-09T15:57:3',
+    '2026-08-09 15:57:3\n',
+    3,
+    null
+  ];
+  let fetchCalls = 0;
+
+  for (const Timestamp of malformed) {
+    const input = row({ Timestamp, Date: '2026-08-09' });
+    const inputBefore = structuredClone(input);
+    const response = await handleKioskSync(request({ body: { rows: [input] } }), {
+      env: PRODUCTION_ENV,
+      now: NOW_MS,
+      dateNow: incidentDate,
+      fetch: async () => {
+        fetchCalls += 1;
+        throw new Error('malformed timestamps must not reach Google');
+      }
+    });
+    assert.equal(response.status, 200, String(Timestamp));
+    assert.deepEqual((await body(response)).results, [{
+      rowId: input.RowID,
+      result: 'rejected',
+      linkedRecordId: ''
+    }], String(Timestamp));
+    assert.deepEqual(input, inputBefore, String(Timestamp));
+  }
+
+  assert.equal(fetchCalls, 0);
+});
+
 test('production accepts only a complete exact target=production row acknowledgment', async t => {
   const first = row();
   const second = row({

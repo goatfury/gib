@@ -4,11 +4,15 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 import {
+  DAY_ROLLOVER_CHECK_INTERVAL_MS,
   appendBatchToState,
   applyAcknowledgements,
   blankLocalState,
+  createDayRolloverController,
   createPermanentRowId,
   evaluateAcknowledgements,
+  formatDateInTimeZone,
+  formatTimestampInTimeZone,
   removeBatchFromState,
   requestAcknowledgements,
   validPermanentRowId
@@ -58,6 +62,100 @@ function productionAck(results) {
 function result(rowId, status, linkedRecordId = rowId) {
   return { rowId, result: status, linkedRecordId };
 }
+
+class FakeEventTarget {
+  constructor() {
+    this.visibilityState = 'hidden';
+    this.listeners = new Map();
+  }
+
+  addEventListener(type, callback) {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type).add(callback);
+  }
+
+  removeEventListener(type, callback) {
+    this.listeners.get(type)?.delete(callback);
+  }
+
+  dispatch(type) {
+    for (const callback of this.listeners.get(type) || []) callback({ type });
+  }
+}
+
+function rolloverHarness(form = { name: '', notes: '', selectedClasses: [] }) {
+  const documentTarget = new FakeEventTarget();
+  const windowTarget = new FakeEventTarget();
+  const displayedDates = [];
+  const replacements = [];
+  const cancelled = [];
+  let scheduledCallback = null;
+  let scheduledInterval = null;
+  let scheduleCalls = 0;
+  let now = new Date('2026-08-10T03:59:59Z');
+  const controller = createDayRolloverController({
+    getDateKey: () => formatDateInTimeZone(now),
+    isFormInProgress: () => Boolean(
+      form.name.trim()
+      || form.notes.trim()
+      || form.selectedClasses.length
+    ),
+    updateDisplayedDay: dateKey => displayedDates.push(dateKey),
+    replaceClasses: dateKey => replacements.push(dateKey),
+    schedule(callback, interval) {
+      scheduleCalls += 1;
+      scheduledCallback = callback;
+      scheduledInterval = interval;
+      return 41;
+    },
+    cancelSchedule: id => cancelled.push(id),
+    documentTarget,
+    windowTarget
+  });
+
+  return {
+    controller,
+    documentTarget,
+    windowTarget,
+    displayedDates,
+    replacements,
+    cancelled,
+    get scheduleCalls() { return scheduleCalls; },
+    get scheduledInterval() { return scheduledInterval; },
+    setMonday() { now = new Date('2026-08-10T04:00:00Z'); },
+    runScheduledCheck() { scheduledCallback(); }
+  };
+}
+
+function kioskFunctionSource(name) {
+  const start = kioskHtml.indexOf(`  function ${name}(`);
+  assert.notEqual(start, -1, name);
+  const next = kioskHtml.indexOf('\n  function ', start + 12);
+  return kioskHtml.slice(start, next === -1 ? kioskHtml.length : next);
+}
+
+test('new sign-in rows store explicitly zero-padded seconds 0 through 9 in ledger and queue', () => {
+  for (let second = 0; second <= 9; second += 1) {
+    const instant = new Date(`2026-08-09T19:57:0${second}Z`);
+    const expected = `2026-08-09 15:57:0${second}`;
+    const value = row(IDS[0], {
+      Timestamp: formatTimestampInTimeZone(instant),
+      Date: '2026-08-09'
+    });
+    const batch = localBatch([value]);
+    const stored = JSON.parse(JSON.stringify(
+      appendBatchToState(blankLocalState(), batch.ledger, batch.queue)
+    ));
+    assert.equal(stored.ledger[0].Timestamp, expected);
+    assert.equal(stored.queue[0].Timestamp, expected);
+  }
+
+  const signInSource = kioskHtml.match(/function signIn\(\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  function voidLastSignin/u)?.[0] || '';
+  assert.match(kioskHtml, /function fmtTS\(d\)\s*\{\s*return formatTimestampInTimeZone\(d, TZ\);\s*\}/u);
+  assert.match(signInSource, /const now = new Date\(\);[\s\S]*?const timestamp = fmtTS\(now\);/u);
+  assert.match(signInSource, /'Timestamp': timestamp/u);
+  assert.match(signInSource, /appendBatchToState\(loadLocalState\(\), ledgerRows, queuedRows\)[\s\S]*?persistLocalState\(state\)/u);
+});
 
 test('secure UUID RowIDs are permanent, opaque, and fail closed without crypto', () => {
   const created = createPermanentRowId({
@@ -262,6 +360,347 @@ test('exact retry uses the same RowID and already exists removes it once', () =>
   assert.equal(replay.state.ledger[0].RowID, IDS[0]);
 });
 
+test('legacy confirmation clears only the exact two waiting RowIDs and leaves input state untouched', () => {
+  const values = [
+    row(IDS[0], { Timestamp: '2026-08-09 15:57:3', Date: '2026-08-09' }),
+    row(IDS[1], {
+      Timestamp: '2026-08-09 15:57:3',
+      Date: '2026-08-09',
+      'Class Label': 'TEST Class B'
+    }),
+    row(IDS[2], {
+      Timestamp: '2026-08-10 09:00:00',
+      Date: '2026-08-10',
+      'Class Label': 'TEST unrelated waiting row'
+    })
+  ];
+  const batch = localBatch(values);
+  const state = appendBatchToState(blankLocalState(), batch.ledger, batch.queue);
+  const submitted = state.queue.slice(0, 2);
+  const unrelatedLedger = structuredClone(state.ledger[2]);
+  const unrelatedQueue = structuredClone(state.queue[2]);
+  const stateBefore = structuredClone(state);
+
+  const applied = applyAcknowledgements(
+    state,
+    submitted,
+    productionAck([
+      result(IDS[0], 'added'),
+      result(IDS[1], 'added')
+    ]),
+    '2026-08-09T20:01:00.000Z',
+    { productionOrigin: true }
+  );
+
+  assert.deepEqual(applied.confirmedRowIds, [IDS[0], IDS[1]]);
+  assert.deepEqual(applied.state.queue.map(value => value.RowID), [IDS[2]]);
+  assert.deepEqual(applied.state.ledger.map(value => value.RowID), [IDS[0], IDS[1], IDS[2]]);
+  assert.deepEqual(applied.state.ledger.slice(0, 2).map(value => value.Timestamp), [
+    '2026-08-09 15:57:3',
+    '2026-08-09 15:57:3'
+  ]);
+  assert.deepEqual(applied.state.ledger[2], unrelatedLedger);
+  assert.deepEqual(applied.state.queue[0], unrelatedQueue);
+  assert.deepEqual(state, stateBefore);
+});
+
+test('legacy retry clears only one RowID while an identical sibling stays duplicate-safe', () => {
+  const values = [
+    row(IDS[0], {
+      Timestamp: '2026-08-09 15:57:3',
+      Date: '2026-08-09',
+      'Class Label': 'TEST Class A'
+    }),
+    row(IDS[1], {
+      Timestamp: '2026-08-09 15:57:3',
+      Date: '2026-08-09',
+      'Class Label': 'TEST Class A'
+    }),
+    row(IDS[2], { 'Class Label': 'TEST unrelated waiting row' })
+  ];
+  const batch = localBatch(values);
+  const state = appendBatchToState(blankLocalState(), batch.ledger, batch.queue);
+  const submitted = state.queue.slice(0, 1);
+  const siblingBefore = structuredClone(state.queue[1]);
+  const beforeLostAck = structuredClone(state);
+
+  const lostAck = applyAcknowledgements(
+    state,
+    submitted,
+    '<unreadable>',
+    'first',
+    { productionOrigin: true }
+  );
+  assert.deepEqual(lostAck.state, beforeLostAck);
+
+  const replay = applyAcknowledgements(
+    lostAck.state,
+    submitted,
+    productionAck([result(IDS[0], 'already exists')]),
+    'second',
+    { productionOrigin: true }
+  );
+  assert.deepEqual(replay.state.queue.map(value => value.RowID), [IDS[1], IDS[2]]);
+  assert.deepEqual(replay.state.queue[0], siblingBefore);
+  assert.deepEqual(replay.state.ledger.map(value => value.RowID), [IDS[0], IDS[1], IDS[2]]);
+  assert.equal(new Set(replay.state.ledger.map(value => value.RowID)).size, 3);
+
+  const duplicateReplay = applyAcknowledgements(
+    replay.state,
+    submitted,
+    productionAck([result(IDS[0], 'already exists')]),
+    'second',
+    { productionOrigin: true }
+  );
+  assert.deepEqual(duplicateReplay.state, replay.state);
+});
+
+test('New York rollover requests Monday class replacement on the minute and every wake or foreground path', () => {
+  const scenarios = [
+    ['minute interval', harness => harness.runScheduledCheck()],
+    ['Samsung resume', harness => harness.documentTarget.dispatch('resume')],
+    ['visible foreground', harness => {
+      harness.documentTarget.visibilityState = 'visible';
+      harness.documentTarget.dispatch('visibilitychange');
+    }],
+    ['window focus', harness => harness.windowTarget.dispatch('focus')],
+    ['back-forward cache pageshow', harness => harness.windowTarget.dispatch('pageshow')]
+  ];
+
+  assert.equal(formatDateInTimeZone(new Date('2026-08-10T03:59:59Z')), '2026-08-09');
+  assert.equal(formatDateInTimeZone(new Date('2026-08-10T04:00:00Z')), '2026-08-10');
+  assert.equal(DAY_ROLLOVER_CHECK_INTERVAL_MS, 60_000);
+
+  for (const [name, trigger] of scenarios) {
+    const harness = rolloverHarness();
+    harness.controller.start();
+    assert.equal(harness.scheduledInterval, DAY_ROLLOVER_CHECK_INTERVAL_MS, name);
+    harness.setMonday();
+    trigger(harness);
+    assert.deepEqual(harness.displayedDates, ['2026-08-10'], name);
+    assert.deepEqual(harness.replacements, ['2026-08-10'], name);
+    harness.controller.stop();
+    assert.deepEqual(harness.cancelled, [41], name);
+  }
+});
+
+test('rollover lifecycle is idempotent and hidden or stopped events are inert', () => {
+  const harness = rolloverHarness();
+  harness.controller.start();
+  harness.controller.start();
+  assert.equal(harness.scheduleCalls, 1);
+  assert.equal(harness.documentTarget.listeners.get('visibilitychange').size, 1);
+  assert.equal(harness.windowTarget.listeners.get('pageshow').size, 1);
+
+  harness.setMonday();
+  harness.documentTarget.visibilityState = 'hidden';
+  harness.documentTarget.dispatch('visibilitychange');
+  assert.deepEqual(harness.replacements, []);
+
+  harness.controller.stop();
+  harness.controller.stop();
+  assert.deepEqual(harness.cancelled, [41]);
+  harness.documentTarget.visibilityState = 'visible';
+  harness.documentTarget.dispatch('visibilitychange');
+  harness.documentTarget.dispatch('resume');
+  harness.windowTarget.dispatch('focus');
+  harness.windowTarget.dispatch('pageshow');
+  assert.deepEqual(harness.replacements, []);
+});
+
+test('same-day class refresh defers until the active form is cleared', () => {
+  const form = { name: 'QA Legacy Instructor', notes: '', selectedClasses: [] };
+  const harness = rolloverHarness(form);
+  harness.controller.start();
+  const deferred = harness.controller.requestRefresh();
+  assert.deepEqual(deferred, { changed: false, deferred: true });
+  assert.deepEqual(harness.replacements, []);
+  assert.equal(harness.controller.snapshot().pendingDate, '2026-08-09');
+
+  form.name = '';
+  harness.controller.checkNow();
+  assert.deepEqual(harness.replacements, ['2026-08-09']);
+  harness.controller.stop();
+});
+
+test('rollover defers class replacement for name, notes, or selections without a mutation path', () => {
+  const activeForms = [
+    { name: 'QA Legacy Instructor', notes: '', selectedClasses: [] },
+    { name: '', notes: 'TEST note', selectedClasses: [] },
+    { name: '', notes: '', selectedClasses: ['TEST Class A'] }
+  ];
+
+  for (const form of activeForms) {
+    const formBefore = structuredClone(form);
+    const harness = rolloverHarness(form);
+    harness.controller.start();
+    harness.setMonday();
+    harness.documentTarget.dispatch('resume');
+
+    assert.deepEqual(harness.displayedDates, ['2026-08-10']);
+    assert.deepEqual(harness.replacements, []);
+    assert.deepEqual(form, formBefore);
+    assert.deepEqual(harness.controller.snapshot(), {
+      renderedDate: '2026-08-09',
+      pendingDate: '2026-08-10',
+      started: true
+    });
+
+    form.name = '';
+    form.notes = '';
+    form.selectedClasses.length = 0;
+    harness.controller.flushPending();
+    assert.deepEqual(harness.replacements, ['2026-08-10']);
+    assert.deepEqual(harness.displayedDates, ['2026-08-10']);
+    assert.equal(harness.controller.snapshot().pendingDate, '');
+    harness.controller.stop();
+  }
+
+  assert.doesNotMatch(
+    createDayRolloverController.toString(),
+    /localStorage|sessionStorage|fetch|requestAcknowledgements/u
+  );
+});
+
+test('actual rollover renderer leaves every protected local-data byte and device authorization unchanged', () => {
+  const schedule = {
+    days: {
+      Monday: ['TEST Class Monday'],
+      Tuesday: [],
+      Wednesday: [],
+      Thursday: [],
+      Friday: [],
+      Saturday: [],
+      Sunday: ['TEST Class Sunday']
+    },
+    source: 'test',
+    updatedAt: '2026-08-09T12:00:00.000Z'
+  };
+  const seededStorage = new Map([
+    ['gib_m1_local_state_v2', JSON.stringify({
+      version: 2,
+      ledger: [{ RowID: IDS[0], Status: 'OK' }],
+      queue: [{ RowID: IDS[0], Timestamp: '2026-08-09 15:57:3' }]
+    })],
+    ['gib_m1_signins_v1', JSON.stringify([{ RowID: IDS[0], Status: 'OK' }])],
+    ['gib_m1_sync_queue_v1', JSON.stringify([{ RowID: IDS[0] }])],
+    ['gib_m1_sync_auto_v1', 'false'],
+    ['gib_m1_device_label_v1', 'TEST tablet'],
+    ['gib_m1_device_v1', JSON.stringify({ siteCode: 'TEST' })],
+    ['gib_m1_schedule_v1', JSON.stringify(schedule)],
+    ['gib_m1_series_v1', JSON.stringify([{
+      id: 'series_test',
+      label: 'TEST Temporary Class',
+      days: ['Monday'],
+      startDate: '2026-08-10',
+      endDate: '2026-08-10',
+      enabled: true
+    }])],
+    ['gib_m1_duration_rules_v1', JSON.stringify([{ match: 'TEST', duration: 1 }])],
+    ['gib_m1_instructor_names_v1', JSON.stringify(['QA Legacy Instructor'])],
+    ['gib_m1_admin_pin_v1', 'TEST-PIN-SENTINEL']
+  ]);
+  const storageBefore = JSON.stringify([...seededStorage]);
+  const storageWrites = [];
+  const localStorage = {
+    getItem: key => seededStorage.get(key) ?? null,
+    setItem(key, value) {
+      storageWrites.push(['setItem', key]);
+      seededStorage.set(key, String(value));
+    },
+    removeItem(key) {
+      storageWrites.push(['removeItem', key]);
+      seededStorage.delete(key);
+    },
+    clear() {
+      storageWrites.push(['clear']);
+      seededStorage.clear();
+    }
+  };
+  const classWrap = {
+    children: [],
+    style: {},
+    set innerHTML(value) {
+      assert.equal(value, '');
+      this.children = [];
+    },
+    appendChild(value) { this.children.push(value); }
+  };
+  const hint = {
+    textContent: '',
+    classList: { add() {}, remove() {} }
+  };
+  const dayLabel = { textContent: '' };
+  const documentTarget = new FakeEventTarget();
+  documentTarget.cookie = '__Host-gib_m1_production_device=TEST-AUTH-SENTINEL';
+  documentTarget.createElement = tagName => ({
+    tagName,
+    appendChild() {},
+    type: '',
+    value: '',
+    textContent: ''
+  });
+  const windowTarget = new FakeEventTarget();
+  const context = vm.createContext({
+    localStorage,
+    document: documentTarget,
+    SCHEDULE_KEY: 'gib_m1_schedule_v1',
+    SERIES_KEY: 'gib_m1_series_v1',
+    DAYS: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
+    DEFAULT_SCHEDULE: {},
+    normalizeDayKey: value => value,
+    normalizeSeriesItem: value => value,
+    seriesLabel: value => value.label,
+    $: selector => ({
+      '#todayName': dayLabel,
+      '#classListWrap': classWrap,
+      '#classesHint': hint
+    })[selector]
+  });
+  const rendererSource = [
+    'safeParse',
+    'dayNameForDateKey',
+    'updateDisplayedDay',
+    'loadSchedule',
+    'loadSeries',
+    'seriesIsActiveForDate',
+    'seriesClassesForDate',
+    'mergeUniqueClasses',
+    'classesForDateKey',
+    'renderClassesForDateKey'
+  ].map(kioskFunctionSource).join('\n');
+  new vm.Script(rendererSource, { filename: 'm1-rollover-renderer.js' }).runInContext(context);
+
+  let now = new Date('2026-08-10T03:59:59Z');
+  let formActive = true;
+  context.renderClassesForDateKey('2026-08-09');
+  const controller = createDayRolloverController({
+    getDateKey: () => formatDateInTimeZone(now),
+    isFormInProgress: () => formActive,
+    updateDisplayedDay: context.updateDisplayedDay,
+    replaceClasses: context.renderClassesForDateKey,
+    schedule: () => 1,
+    cancelSchedule() {},
+    documentTarget,
+    windowTarget
+  });
+  controller.start();
+  now = new Date('2026-08-10T04:00:00Z');
+  documentTarget.dispatch('resume');
+  assert.equal(classWrap.children.length, 1);
+  formActive = false;
+  controller.checkNow();
+  windowTarget.dispatch('focus');
+  windowTarget.dispatch('pageshow');
+  controller.stop();
+
+  assert.equal(dayLabel.textContent, ' · (Today: Monday)');
+  assert.equal(classWrap.children.length, 2);
+  assert.deepEqual(storageWrites, []);
+  assert.equal(JSON.stringify([...seededStorage]), storageBefore);
+  assert.equal(documentTarget.cookie, '__Host-gib_m1_production_device=TEST-AUTH-SENTINEL');
+});
+
 test('a row queued while a request is in flight is not removed by the older response', () => {
   const first = localBatch([row(IDS[0])]);
   const submittedState = appendBatchToState(blankLocalState(), first.ledger, first.queue);
@@ -377,6 +816,43 @@ test('kiosk source has the real double-click guard and no direct Google transpor
   assert.doesNotMatch(syncSource, /script\.google\.com\/macros/u);
 });
 
+test('kiosk wires guarded New York day rollover without a refresh or storage mutation', () => {
+  assert.match(kioskHtml, /dayRolloverController = createDayRolloverController\(\{/u);
+  assert.match(kioskHtml, /getDateKey: \(\) => fmtDate\(new Date\(\)\)/u);
+  assert.match(kioskHtml, /isFormInProgress: kioskFormInProgress/u);
+  assert.match(kioskHtml, /dayRolloverController\.start\(\);/u);
+  assert.match(kioskHtml, /function showKiosk\(\)[\s\S]*?populateClassesForToday\(\);/u);
+  assert.match(kioskHtml, /function resetKioskForm\(\)[\s\S]*?dayRolloverController\?\.checkNow\(\);/u);
+  assert.match(kioskHtml, /function kioskFormInProgress\(\)[\s\S]*?#nameInput[\s\S]*?#notesInput[\s\S]*?selectedClasses\(\)\.length/u);
+  assert.doesNotMatch(
+    createDayRolloverController.toString(),
+    /reload|location\.|localStorage|sessionStorage/u
+  );
+  const rolloverInit = kioskHtml.match(
+    /dayRolloverController = createDayRolloverController\(\{[\s\S]*?dayRolloverController\.checkNow\(\);/u
+  )?.[0] || '';
+  assert.ok(rolloverInit);
+  assert.doesNotMatch(
+    rolloverInit,
+    /persistLocalState|safeSet|removeItem|syncNow|requestAcknowledgements|fetch\(/u
+  );
+  assert.equal((kioskHtml.match(/renderClassesForDateKey\(/gu) || []).length, 3);
+
+  const actualRolloverPath = [
+    'updateDisplayedDay',
+    'loadSchedule',
+    'loadSeries',
+    'seriesClassesForDate',
+    'classesForDateKey',
+    'renderClassesForDateKey',
+    'populateClassesForToday'
+  ].map(kioskFunctionSource).join('\n') + rolloverInit;
+  assert.doesNotMatch(
+    actualRolloverPath,
+    /persistLocalState|safeSet\(|localStorage\.(?:setItem|removeItem|clear)|save(?:Device|Schedule|Series|DurationRules)|upsertName|setAdminPin|syncNow|requestAcknowledgements|fetch\(/u
+  );
+});
+
 test('kiosk selects production only from the exact canonical origin', () => {
   assert.match(kioskHtml, /const PRODUCTION_ORIGIN = 'https:\/\/gib-live\.netlify\.app';/u);
   assert.match(kioskHtml, /const IS_PRODUCTION_ORIGIN = location\.origin === PRODUCTION_ORIGIN;/u);
@@ -386,7 +862,7 @@ test('kiosk selects production only from the exact canonical origin', () => {
     [...kioskHtml.matchAll(/\{ productionOrigin: IS_PRODUCTION_ORIGIN \}/gu)].length,
     2
   );
-  assert.match(kioskHtml, /M1 TEST readable-ack/u);
+  assert.match(kioskHtml, /2026-08-09 M1 TEST timestamp-rollover/u);
   assert.match(kioskHtml, /secure host-only cookie/u);
 });
 
