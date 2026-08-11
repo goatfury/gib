@@ -1226,6 +1226,7 @@ test('Daily Review keeps every correction path visible and renders strict manual
   );
   assert.match(classRowSource, /instructors\.join\(' \+ '\)/);
   assert.match(classRowSource, /Add forgotten instructor/);
+  assert.match(classRowSource, /record\.source === 'Manual'[\s\S]*Manual Sheet row/);
   assert.match(classRowSource, /row\.append\(main, buildAddForm\(label, index\)\)/);
   assert.equal((classRowSource.match(/return row;/g) || []).length, 1);
   assert.match(adminHtml, /\.forgotten-action\s*\{[\s\S]*min-height:\s*44px/);

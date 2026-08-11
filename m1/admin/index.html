@@ -1854,6 +1854,9 @@
           if (matches.some(record => record.source === 'Admin-added')) {
             status.append(makeElement('span', 'badge', 'Admin-added'));
           }
+          if (matches.some(record => record.source === 'Manual')) {
+            status.append(makeElement('span', 'badge', 'Manual Sheet row'));
+          }
           if (matches.some(record => record.reviewRequired)) {
             status.append(makeElement('span', 'badge', 'Review possible duplicate'));
           }
