@@ -108,6 +108,7 @@
     .btn.warn { border-color: #8a6730; background: #453515; color: #ffdc92; }
     .btn.small { padding: 7px 10px; font-size: .82rem; }
     .login-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+    .return-links { display: flex; flex-wrap: wrap; gap: 8px; }
     .test-entry {
       display: none;
       margin-top: 18px;
@@ -125,6 +126,11 @@
       background: rgba(255, 130, 124, .12);
       border: 1px solid rgba(255, 130, 124, .45);
       color: #ffd0cd;
+    }
+    .message.success {
+      background: rgba(64, 215, 160, .12);
+      border-color: rgba(64, 215, 160, .5);
+      color: #c8fae8;
     }
     .toolbar {
       display: grid;
@@ -153,6 +159,14 @@
       gap: 12px;
       margin-bottom: 14px;
     }
+    .schedule-heading { min-width: 0; }
+    .schedule-source {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: .78rem;
+      line-height: 1.35;
+    }
+    .schedule-source.fallback { color: var(--amber); }
     .count {
       color: var(--muted);
       font-size: .82rem;
@@ -218,12 +232,27 @@
     .fixed b { display: block; color: var(--muted); font-size: .69rem; text-transform: uppercase; }
     .fixed span { display: block; overflow: hidden; text-overflow: ellipsis; font-size: .82rem; margin-top: 2px; }
     .form-actions { display: flex; gap: 8px; margin-top: 11px; }
+    .forgotten-action {
+      min-height: 44px;
+      padding: 10px 14px;
+      white-space: normal;
+    }
     .unmatched {
       margin-top: 15px;
       border-top: 1px solid var(--line);
       padding-top: 15px;
     }
-    .unmatched-list, .result-list { display: grid; gap: 8px; margin-top: 10px; }
+    .attention, .audit-history {
+      margin-top: 15px;
+      border: 1px solid #705b2c;
+      border-radius: 12px;
+      background: rgba(83, 61, 18, .2);
+      padding: 13px;
+    }
+    .attention h3 { color: #ffe09d; }
+    .audit-history { border-color: #344e6c; background: rgba(8, 21, 35, .48); }
+    .audit-history summary { cursor: pointer; font-weight: 800; }
+    .unmatched-list, .warning-list, .audit-list, .result-list { display: grid; gap: 8px; margin-top: 10px; }
     .record {
       border: 1px solid #2b425e;
       border-radius: 10px;
@@ -233,6 +262,7 @@
       line-height: 1.42;
     }
     .record strong { color: #eaf2fb; }
+    .record-detail { color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
     .empty {
       border: 1px dashed #3a526f;
       border-radius: 10px;
@@ -312,7 +342,10 @@
       </div>
       <div class="login-actions">
         <button id="loginButton" class="btn primary" type="button">Open Daily Review</button>
-        <a class="btn ghost" href="/m1/" style="text-decoration:none">Back to instructor sign-in</a>
+        <div class="return-links">
+          <a class="btn ghost" href="/m1/?view=admin" style="text-decoration:none">Local M1 Admin</a>
+          <a class="btn ghost" href="/m1/" style="text-decoration:none">Instructor Sign-In</a>
+        </div>
       </div>
       <div id="testEntry" class="test-entry">
         <strong>TEST ADMIN — Deploy Preview only</strong>
@@ -330,6 +363,8 @@
           <p id="sessionLabel" class="muted"></p>
         </div>
         <div class="topbar-actions">
+          <a class="btn ghost" href="/m1/?view=admin" style="text-decoration:none">Local M1 Admin</a>
+          <a class="btn ghost" href="/m1/" style="text-decoration:none">Instructor Sign-In</a>
           <button id="installSyncSettingsButton" class="btn warn" type="button" hidden disabled aria-hidden="true">Legacy browser credential installer removed</button>
           <button id="tabletDiagnosticButton" class="btn ghost" type="button" hidden>Open tablet diagnostic</button>
           <span id="tabletDiagnosticOriginMessage" class="muted" hidden>Tablet diagnostic must be opened from https://gib-live.netlify.app.</span>
@@ -354,7 +389,10 @@
       <div class="content-grid">
         <section id="reviewSection" class="panel section">
           <div class="section-head">
-            <h2>Scheduled Rev classes</h2>
+            <div class="schedule-heading">
+              <h2>Scheduled Rev classes</h2>
+              <p id="scheduleSource" class="schedule-source" role="status">Schedule status unavailable</p>
+            </div>
             <span id="classCount" class="count"></span>
           </div>
           <div id="reviewMessage" class="message" role="alert"></div>
@@ -364,6 +402,15 @@
             <p class="muted" style="font-size:.8rem;margin-top:4px">Shown separately so nothing recorded is hidden.</p>
             <div id="unmatchedList" class="unmatched-list"></div>
           </div>
+          <div id="warningSection" class="attention" hidden>
+            <h3>Sheet rows needing attention</h3>
+            <p class="muted" style="font-size:.8rem;margin-top:4px">Incomplete rows stay visible as warnings and are not silently treated as payroll sign-ins.</p>
+            <div id="warningList" class="warning-list"></div>
+          </div>
+          <details id="auditSection" class="audit-history">
+            <summary>Forgotten sign-in audit history</summary>
+            <div id="auditList" class="audit-list"></div>
+          </details>
         </section>
 
         <aside class="panel section">
@@ -390,7 +437,7 @@
             <div id="recentResults" class="result-list"></div>
           </div>
           <div class="limitation">
-            Daily Review uses the shared Rev schedule. Local schedule edits and Series classes must also be added to the shared schedule or they will not appear as blanks.
+            Daily Review uses the current canonical regular weekly schedule from the Revolution BJJ website. Recorded sign-ins with historical, local-override, or Series labels remain visible as unmatched rather than being hidden.
           </div>
         </aside>
       </div>
@@ -409,6 +456,8 @@
         review: '/.netlify/functions/m1-admin-review',
         search: '/.netlify/functions/m1-admin-search',
         add: '/.netlify/functions/m1-admin-add',
+        schedule: '/api/m1-schedule',
+        scheduleBootstrap: '/m1/shared-schedule.json',
         tabletDiagnostic: '/api/m1-tablet-diagnostic-verifier'
       });
       const ADMIN_REQUEST_HEADER = 'X-GIB-M1-Admin-Request-Token';
@@ -423,12 +472,50 @@
       const PROOF_PATTERN = /^[a-f0-9]{64}$/;
       const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
       const DEPLOY_PREVIEW_ORIGIN_PATTERN = /^https:\/\/deploy-preview-\d+--gib-live\.netlify\.app$/;
+      const TEST_ADMIN_HOST_PATTERN = /^(?:deploy-preview-\d+|[a-f0-9]{24})--gib-live\.netlify\.app$/i;
       const TIME_ZONE = 'America/New_York';
       const SITE = 'Rev';
+      const REVIEW_NOTES_MAX_LENGTH = 800;
+      const ADMIN_DURATION_OPTIONS = Object.freeze([1, 0.5]);
+      const SCHEDULE_DAYS = Object.freeze([
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+        'Sunday'
+      ]);
+      const SCHEDULE_SOURCE_URL = 'https://revolutionbjj.com/schedule/';
+      const SCHEDULE_UPSTREAM_URL = 'https://revolutionbjj.com/wp-json/wp/v2/pages?slug=schedule&status=publish&_fields=id,type,slug,status,link,title,modified,modified_gmt,content';
+      const SCHEDULE_VERSION_PATTERN = /^revbjj-([a-f0-9]{16})$/;
+      const SCHEDULE_HASH_PATTERN = /^[a-f0-9]{64}$/;
+      const SCHEDULE_STATUS_REASON_PATTERN = /^[a-z0-9-]{1,80}$/;
+      const SCHEDULE_REFRESH_INTERVAL_MS = 10 * 60 * 1_000;
+      const SCHEDULE_REQUEST_TIMEOUT_MS = 10_000;
+      const MAX_CLASSES_PER_DAY = 24;
+      const MIN_TOTAL_CLASSES = 30;
+      const MAX_TOTAL_CLASSES = 100;
+      const MAX_CLASS_LABEL_LENGTH = 200;
+      const MIN_CLASSES_BY_DAY = Object.freeze({
+        Monday: 5,
+        Tuesday: 5,
+        Wednesday: 5,
+        Thursday: 5,
+        Friday: 2,
+        Saturday: 2,
+        Sunday: 1
+      });
       const inFlightAdditions = new Set();
       let schedule = null;
+      let scheduleRefreshPromise = null;
+      let scheduleLastAttemptAt = 0;
+      let scheduleRenderPending = false;
       let currentDate = '';
       let currentRecords = [];
+      let currentWarnings = [];
+      let currentAuditHistory = [];
+      let reviewLoadGeneration = 0;
       let currentAdminName = '';
       let testMode = false;
       let adminRequestToken = '';
@@ -452,6 +539,370 @@
           .toLocaleLowerCase('en-US')
           .replace(/[’‘`´]/g, "'")
           .replace(/[‐‑‒–—―−]/g, '-');
+      }
+
+      function isObject(value) {
+        return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+      }
+
+      function validIsoTimestamp(value) {
+        return typeof value === 'string'
+          && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)
+          && Number.isFinite(Date.parse(value));
+      }
+
+      function validSourceUrl(value) {
+        try {
+          const url = new URL(value);
+          return url.protocol === 'https:'
+            && url.hostname === 'revolutionbjj.com'
+            && url.port === ''
+            && url.username === ''
+            && url.password === ''
+            && url.hash === ''
+            && url.pathname === '/wp-json/wp/v2/pages'
+            && url.searchParams.get('slug') === 'schedule';
+        } catch {
+          return false;
+        }
+      }
+
+      function comparisonScheduleLabel(value) {
+        return String(value == null ? '' : value)
+          .normalize('NFKC')
+          .trim()
+          .replace(/\s+/g, ' ')
+          .toLocaleLowerCase('en-US')
+          .replace(/[’‘`´]/g, "'")
+          .replace(/[‐‑‒–—―−]/g, '-')
+          .replace(/\s*\/\s*/g, '/')
+          .replace(/\s+/g, ' ');
+      }
+
+      function validScheduleLabel(value) {
+        if (typeof value !== 'string') return false;
+        const label = value.normalize('NFC').trim().replace(/\s+/g, ' ');
+        return value === label
+          && label.length <= MAX_CLASS_LABEL_LENGTH
+          && /^(?:1[0-2]|[1-9]):[0-5]\d\s+(?:AM|PM)\b/.test(label)
+          && !/[\u0000-\u001f\u007f-\u009f<>]/.test(label)
+          && !/\p{Cf}/u.test(label)
+          && !/\b(?:javascript|data)\s*:/i.test(label)
+          && !/\bon[a-z]+\s*=/i.test(label);
+      }
+
+      async function scheduleDaysHash(days) {
+        if (!globalThis.crypto?.subtle || typeof TextEncoder !== 'function') {
+          throw new Error('Secure schedule verification is unavailable.');
+        }
+        const bytes = new TextEncoder().encode(JSON.stringify(days));
+        const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+        return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+      }
+
+      async function validateScheduleResponse(value) {
+        if (!isObject(value) || value.timezone !== TIME_ZONE || value.site !== SITE) {
+          throw new Error('Canonical schedule scope is invalid.');
+        }
+
+        const versionMatch = typeof value.version === 'string'
+          ? SCHEDULE_VERSION_PATTERN.exec(value.version)
+          : null;
+        if (
+          !versionMatch
+          || typeof value.contentHash !== 'string'
+          || !SCHEDULE_HASH_PATTERN.test(value.contentHash)
+          || versionMatch[1] !== value.contentHash.slice(0, 16)
+        ) {
+          throw new Error('Canonical schedule version is invalid.');
+        }
+
+        if (!isObject(value.days)) throw new Error('Canonical schedule days are invalid.');
+        const dayKeys = Object.keys(value.days);
+        if (
+          dayKeys.length !== SCHEDULE_DAYS.length
+          || dayKeys.some(day => !SCHEDULE_DAYS.includes(day))
+        ) {
+          throw new Error('Canonical schedule weekdays are invalid.');
+        }
+
+        let total = 0;
+        const days = {};
+        for (const day of SCHEDULE_DAYS) {
+          const labels = value.days[day];
+          if (
+            !Array.isArray(labels)
+            || labels.length < MIN_CLASSES_BY_DAY[day]
+            || labels.length > MAX_CLASSES_PER_DAY
+          ) {
+            throw new Error('Canonical schedule day is empty or oversized.');
+          }
+          const seen = new Set();
+          days[day] = labels.map(label => {
+            if (!validScheduleLabel(label)) throw new Error('Canonical schedule label is invalid.');
+            const comparison = comparisonScheduleLabel(label);
+            if (seen.has(comparison)) throw new Error('Canonical schedule contains a duplicate class.');
+            seen.add(comparison);
+            return label;
+          });
+          total += days[day].length;
+        }
+        if (total < MIN_TOTAL_CLASSES || total > MAX_TOTAL_CLASSES) {
+          throw new Error('Canonical schedule class count is implausible.');
+        }
+        if (await scheduleDaysHash(days) !== value.contentHash) {
+          throw new Error('Canonical schedule hash does not match its classes.');
+        }
+
+        if (
+          !isObject(value.source)
+          || value.source.url !== SCHEDULE_SOURCE_URL
+          || !['wordpress-rest', 'checked-in-bootstrap'].includes(value.source.type)
+          || value.source.upstreamUrl !== SCHEDULE_UPSTREAM_URL
+          || typeof value.source.modifiedAt !== 'string'
+          || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?$/.test(value.source.modifiedAt)
+        ) {
+          throw new Error('Canonical schedule source is invalid.');
+        }
+        if (
+          value.source.type === 'wordpress-rest'
+          && (!Number.isInteger(value.source.pageId) || value.source.pageId < 1)
+        ) {
+          throw new Error('Canonical schedule page identity is invalid.');
+        }
+
+        if (
+          typeof value.current !== 'boolean'
+          || !['none', 'last-known-good', 'bootstrap'].includes(value.fallback)
+          || !isObject(value.status)
+          || value.status.current !== value.current
+          || value.status.fallback !== value.fallback
+          || value.status.state !== (value.current ? 'current' : 'fallback')
+          || (value.current && value.fallback !== 'none')
+          || (!value.current && value.fallback === 'none')
+          || (value.fallback === 'bootstrap' && value.source.type !== 'checked-in-bootstrap')
+          || (value.fallback !== 'bootstrap' && value.source.type !== 'wordpress-rest')
+          || (
+            value.status.reason !== null
+            && (
+              typeof value.status.reason !== 'string'
+              || !SCHEDULE_STATUS_REASON_PATTERN.test(value.status.reason)
+            )
+          )
+          || (
+            value.status.storageWarning !== null
+            && (
+              typeof value.status.storageWarning !== 'string'
+              || !SCHEDULE_STATUS_REASON_PATTERN.test(value.status.storageWarning)
+            )
+          )
+          || !validIsoTimestamp(value.fetchedAt)
+          || !validIsoTimestamp(value.status.servedAt)
+          || Date.parse(value.status.servedAt) < Date.parse(value.fetchedAt)
+        ) {
+          throw new Error('Canonical schedule status is invalid.');
+        }
+
+        if (
+          !isObject(value.cache)
+          || !Number.isInteger(value.cache.refreshIntervalSeconds)
+          || value.cache.refreshIntervalSeconds < 30
+          || value.cache.refreshIntervalSeconds > 900
+        ) {
+          throw new Error('Canonical schedule cache metadata is invalid.');
+        }
+
+        return {
+          timezone: value.timezone,
+          site: value.site,
+          version: value.version,
+          contentHash: value.contentHash,
+          days,
+          source: {
+            url: value.source.url,
+            type: value.source.type,
+            modifiedAt: value.source.modifiedAt
+          },
+          fetchedAt: value.fetchedAt,
+          current: value.current,
+          fallback: value.fallback,
+          status: {
+            state: value.status.state,
+            reason: value.status.reason,
+            storageWarning: value.status.storageWarning,
+            servedAt: value.status.servedAt
+          },
+          cache: {
+            refreshIntervalSeconds: value.cache.refreshIntervalSeconds
+          }
+        };
+      }
+
+      async function loadCheckedInScheduleBootstrap(reason = 'schedule-service-unavailable') {
+        const response = await fetch(API.scheduleBootstrap, {
+          cache: 'no-store',
+          headers: { Accept: 'application/json' }
+        });
+        if (!response.ok) throw new Error('Checked-in schedule bootstrap unavailable.');
+        const value = await response.json();
+        if (
+          !isObject(value)
+          || value.timezone !== TIME_ZONE
+          || value.site !== SITE
+          || !/^\d{4}-\d{2}-\d{2}$/.test(value.version || '')
+          || !isObject(value.days)
+        ) {
+          throw new Error('Checked-in schedule bootstrap is invalid.');
+        }
+        const contentHash = await scheduleDaysHash(value.days);
+        const servedAt = new Date().toISOString();
+        return validateScheduleResponse({
+          timezone: value.timezone,
+          site: value.site,
+          version: `revbjj-${contentHash.slice(0, 16)}`,
+          contentHash,
+          days: value.days,
+          source: {
+            url: SCHEDULE_SOURCE_URL,
+            upstreamUrl: SCHEDULE_UPSTREAM_URL,
+            type: 'checked-in-bootstrap',
+            pageId: null,
+            modifiedAt: value.version
+          },
+          fetchedAt: servedAt,
+          current: false,
+          fallback: 'bootstrap',
+          status: {
+            state: 'fallback',
+            current: false,
+            fallback: 'bootstrap',
+            reason,
+            storageWarning: null,
+            servedAt
+          },
+          cache: { refreshIntervalSeconds: 300 }
+        });
+      }
+
+      function renderScheduleSource() {
+        const element = $('#scheduleSource');
+        if (!element || !schedule) return;
+        const source = schedule.source.type === 'checked-in-bootstrap'
+          ? 'checked-in bootstrap'
+          : 'Revolution BJJ website';
+        const state = schedule.current
+          ? 'current'
+          : (schedule.fallback === 'last-known-good' ? 'last validated fallback' : 'bootstrap fallback');
+        const fetched = new Date(schedule.fetchedAt).toLocaleString('en-US', {
+          timeZone: TIME_ZONE,
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit'
+        });
+        const parts = [
+          `Source: ${source}`,
+          `Status: ${state}`,
+          `Version: ${schedule.version}`,
+          `Fetched: ${fetched}`
+        ];
+        if (schedule.status.reason) parts.push(`Detail: ${schedule.status.reason}`);
+        if (schedule.status.storageWarning) parts.push(`Storage: ${schedule.status.storageWarning}`);
+        element.textContent = parts.join(' · ');
+        element.classList.toggle(
+          'fallback',
+          !schedule.current || Boolean(schedule.status.reason) || Boolean(schedule.status.storageWarning)
+        );
+      }
+
+      function reviewFormInProgress() {
+        return Boolean(document.querySelector('.add-form.open'));
+      }
+
+      function applyScheduleToReviewWhenSafe() {
+        renderScheduleSource();
+        if (!currentDate || $('#appPanel').hidden) return;
+        if (reviewFormInProgress()) {
+          scheduleRenderPending = true;
+          return;
+        }
+        scheduleRenderPending = false;
+        renderReview();
+      }
+
+      function applyPendingScheduleToReview() {
+        if (scheduleRenderPending && !reviewFormInProgress()) applyScheduleToReviewWhenSafe();
+      }
+
+      function retainedScheduleAfterFailure() {
+        if (!schedule) return null;
+        const bootstrap = schedule.source.type === 'checked-in-bootstrap';
+        return {
+          ...schedule,
+          current: false,
+          fallback: bootstrap ? 'bootstrap' : 'last-known-good',
+          status: {
+            ...schedule.status,
+            state: 'fallback',
+            reason: 'client-refresh-unavailable',
+            servedAt: new Date().toISOString()
+          }
+        };
+      }
+
+      async function fetchCanonicalSchedule() {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), SCHEDULE_REQUEST_TIMEOUT_MS);
+        try {
+          const response = await fetch(API.schedule, {
+            cache: 'no-store',
+            headers: { Accept: 'application/json' },
+            signal: controller.signal
+          });
+          if (!response.ok) throw new Error('Canonical schedule unavailable.');
+          if (!/^application\/json(?:;|$)/i.test(response.headers.get('content-type') || '')) {
+            throw new Error('Canonical schedule response is invalid.');
+          }
+          return validateScheduleResponse(await response.json());
+        } finally {
+          window.clearTimeout(timeout);
+        }
+      }
+
+      function refreshCanonicalSchedule({ bootstrapWhenUnavailable = false } = {}) {
+        if (scheduleRefreshPromise) return scheduleRefreshPromise;
+        scheduleLastAttemptAt = Date.now();
+        scheduleRefreshPromise = (async () => {
+          try {
+            schedule = await fetchCanonicalSchedule();
+          } catch {
+            schedule = retainedScheduleAfterFailure();
+            if (!schedule && bootstrapWhenUnavailable) {
+              schedule = await loadCheckedInScheduleBootstrap();
+            }
+          }
+          if (!schedule) return false;
+          applyScheduleToReviewWhenSafe();
+          return true;
+        })().finally(() => { scheduleRefreshPromise = null; });
+        return scheduleRefreshPromise;
+      }
+
+      function refreshCanonicalScheduleIfDue() {
+        if (Date.now() - scheduleLastAttemptAt >= SCHEDULE_REFRESH_INTERVAL_MS) {
+          refreshCanonicalSchedule();
+        }
+      }
+
+      function startCanonicalScheduleRefresh() {
+        window.setInterval(refreshCanonicalSchedule, SCHEDULE_REFRESH_INTERVAL_MS);
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') refreshCanonicalScheduleIfDue();
+        });
+        document.addEventListener('resume', refreshCanonicalScheduleIfDue);
+        window.addEventListener('focus', refreshCanonicalScheduleIfDue);
+        window.addEventListener('pageshow', refreshCanonicalScheduleIfDue);
       }
 
       function nyDate(now = new Date()) {
@@ -480,12 +931,9 @@
         ];
       }
 
-      function durationForClass(label) {
-        return /\bkids[’']?\b/i.test(normalize(label)) ? 0.5 : 1;
-      }
-
-      function showMessage(element, message) {
+      function showMessage(element, message, tone = 'error') {
         element.textContent = message || '';
+        element.classList.toggle('success', Boolean(message) && tone === 'success');
         element.style.display = message ? 'block' : 'none';
       }
 
@@ -541,6 +989,250 @@
         const expected = [...expectedKeys].sort();
         return actual.length === expected.length
           && actual.every((key, index) => key === expected[index]);
+      }
+
+      function validReviewDisplayId(value) {
+        return typeof value === 'string' && /^sheet-row-[1-9][0-9]*$/.test(value);
+      }
+
+      function validReviewDate(value) {
+        if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+        const [year, month, day] = value.split('-').map(Number);
+        const parsed = new Date(Date.UTC(year, month - 1, day));
+        return parsed.getUTCFullYear() === year
+          && parsed.getUTCMonth() === month - 1
+          && parsed.getUTCDate() === day;
+      }
+
+      function validReviewTimestamp(value) {
+        return value === '' || (
+          typeof value === 'string'
+          && /^\d{4}-\d{2}-\d{2} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(value)
+          && validReviewDate(value.slice(0, 10))
+        );
+      }
+
+      function validReviewRecord(value, expectedDate = '') {
+        if (!exactObjectKeys(value, [
+          'displayId',
+          'recordId',
+          'timestamp',
+          'date',
+          'classLabel',
+          'duration',
+          'instructor',
+          'site',
+          'notes',
+          'source',
+          'reviewRequired',
+          'reviewMessage'
+        ])) return false;
+        return validReviewDisplayId(value.displayId)
+          && typeof value.recordId === 'string'
+          && value.recordId.length <= 240
+          && validReviewTimestamp(value.timestamp)
+          && validReviewDate(value.date)
+          && (!expectedDate || value.date === expectedDate)
+          && typeof value.classLabel === 'string'
+          && value.classLabel.length >= 1
+          && value.classLabel.length <= 200
+          && Number.isFinite(value.duration)
+          && value.duration > 0
+          && value.duration <= 8
+          && typeof value.instructor === 'string'
+          && value.instructor.length >= 1
+          && value.instructor.length <= 100
+          && typeof value.site === 'string'
+          && value.site.length >= 1
+          && value.site.length <= 80
+          && typeof value.notes === 'string'
+          && value.notes.length <= REVIEW_NOTES_MAX_LENGTH
+          && ['Kiosk', 'Admin-added', 'Manual', 'Collision review'].includes(value.source)
+          && typeof value.reviewRequired === 'boolean'
+          && (value.source === 'Collision review') === value.reviewRequired
+          && typeof value.reviewMessage === 'string'
+          && value.reviewMessage.length <= 240
+          && Boolean(value.reviewMessage) === value.reviewRequired;
+      }
+
+      function validReviewWarning(value) {
+        const messages = {
+          UNREADABLE_SIGNIN: 'One Sheet row for this date is incomplete and was not included.',
+          UNREADABLE_SIGNIN_DATE: 'One Sheet row has an unreadable date and was not included.',
+          UNREADABLE_AUDIT: 'One Daily Review audit row for this date is incomplete and was not included.',
+          AUDIT_UNAVAILABLE: 'Daily Review audit history could not be read.'
+        };
+        return exactObjectKeys(value, ['displayId', 'code', 'message'])
+          && typeof value.displayId === 'string'
+          && (
+            validReviewDisplayId(value.displayId)
+            || /^audit-row-[1-9][0-9]*$/.test(value.displayId)
+            || value.displayId === 'audit-history'
+          )
+          && Object.hasOwn(messages, value.code)
+          && value.message === messages[value.code];
+      }
+
+      function validAuditRecord(value, expectedDate) {
+        return exactObjectKeys(value, [
+          'auditId',
+          'actionNumber',
+          'adminName',
+          'actionTime',
+          'instructor',
+          'classDate',
+          'classLabel',
+          'site',
+          'duration',
+          'reason',
+          'result',
+          'linkedRecordId'
+        ])
+          && /^audit-row-[1-9][0-9]*$/.test(value.auditId)
+          && Number.isSafeInteger(value.actionNumber)
+          && value.actionNumber > 0
+          && validReviewTimestamp(value.actionTime)
+          && value.actionTime !== ''
+          && value.classDate === expectedDate
+          && ['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
+          && typeof value.adminName === 'string'
+          && value.adminName.length >= 1
+          && value.adminName.length <= 80
+          && typeof value.instructor === 'string'
+          && value.instructor.length >= 1
+          && value.instructor.length <= 100
+          && typeof value.classLabel === 'string'
+          && value.classLabel.length >= 1
+          && value.classLabel.length <= 200
+          && typeof value.site === 'string'
+          && value.site.length >= 1
+          && value.site.length <= 80
+          && Number.isFinite(value.duration)
+          && value.duration > 0
+          && value.duration <= 8
+          && typeof value.reason === 'string'
+          && value.reason.length >= 1
+          && value.reason.length <= 240
+          && ['added', 'already exists'].includes(value.result)
+          && typeof value.linkedRecordId === 'string'
+          && (value.result !== 'added' || value.linkedRecordId.startsWith('gib-admin-'))
+          && value.linkedRecordId.length <= 240;
+      }
+
+      function validDailyReviewResponse(value, expectedDate) {
+        if (!exactObjectKeys(value, [
+          'ok', 'test', 'adminName', 'date', 'records', 'warnings', 'auditHistory'
+        ])) return false;
+        if (
+          value.ok !== true
+          || typeof value.test !== 'boolean'
+          || !['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
+          || value.date !== expectedDate
+          || !Array.isArray(value.records)
+          || !Array.isArray(value.warnings)
+          || !Array.isArray(value.auditHistory)
+          || value.records.length > 2_000
+          || value.warnings.length > 2_000
+          || value.auditHistory.length > 2_000
+        ) return false;
+        const displayIds = new Set();
+        for (const record of value.records) {
+          if (!validReviewRecord(record, expectedDate) || displayIds.has(record.displayId)) return false;
+          displayIds.add(record.displayId);
+        }
+        for (const warning of value.warnings) {
+          if (!validReviewWarning(warning) || displayIds.has(warning.displayId)) return false;
+          displayIds.add(warning.displayId);
+        }
+        const auditIds = new Set();
+        const auditActionNumbers = new Set();
+        for (const audit of value.auditHistory) {
+          if (
+            !validAuditRecord(audit, expectedDate)
+            || auditIds.has(audit.auditId)
+            || auditActionNumbers.has(audit.actionNumber)
+          ) return false;
+          auditIds.add(audit.auditId);
+          auditActionNumbers.add(audit.actionNumber);
+        }
+        return true;
+      }
+
+      function validAdminAdditionResponse(value, expected) {
+        if (!exactObjectKeys(value, [
+          'ok',
+          'test',
+          'result',
+          'requestId',
+          'linkedRecordId',
+          'linkedDisplayId',
+          'auditActionNumber',
+          'confirmation',
+          'message'
+        ])) return false;
+        const confirmation = value.confirmation;
+        const expectedMessage = value.result === 'added'
+          ? 'Instructor added.'
+          : 'The same class already has this instructor. No second payroll row was created.';
+        return value.ok === true
+          && typeof value.test === 'boolean'
+          && value.test === testMode
+          && ['added', 'already exists'].includes(value.result)
+          && value.requestId === expected.requestId
+          && typeof value.linkedRecordId === 'string'
+          && (value.result !== 'added' || value.linkedRecordId === `gib-admin-${value.requestId}`)
+          && validReviewDisplayId(value.linkedDisplayId)
+          && Number.isSafeInteger(value.auditActionNumber)
+          && value.auditActionNumber > 0
+          && value.message === expectedMessage
+          && exactObjectKeys(confirmation, [
+            'adminName', 'date', 'classLabel', 'duration', 'instructor', 'site', 'reason', 'notes'
+          ])
+          && Object.keys(confirmation).every(key => confirmation[key] === expected[key]);
+      }
+
+      function validInstructorSearchResponse(value, expectedInstructor, expectedDate) {
+        if (!exactObjectKeys(value, [
+          'ok',
+          'test',
+          'adminName',
+          'instructor',
+          'date',
+          'selectedDateRecords',
+          'recentRecords'
+        ])) return false;
+        if (
+          value.ok !== true
+          || typeof value.test !== 'boolean'
+          || !['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
+          || value.instructor !== expectedInstructor
+          || value.date !== expectedDate
+          || !Array.isArray(value.selectedDateRecords)
+          || !Array.isArray(value.recentRecords)
+          || value.selectedDateRecords.length > 2_000
+          || value.recentRecords.length > 5
+        ) return false;
+        const expectedInstructorKey = normalize(expectedInstructor);
+        const selectedIds = new Set();
+        for (const record of value.selectedDateRecords) {
+          if (
+            !validReviewRecord(record, expectedDate)
+            || normalize(record.instructor) !== expectedInstructorKey
+            || selectedIds.has(record.displayId)
+          ) return false;
+          selectedIds.add(record.displayId);
+        }
+        const recentIds = new Set();
+        for (const record of value.recentRecords) {
+          if (
+            !validReviewRecord(record)
+            || record.date > nyDate()
+            || normalize(record.instructor) !== expectedInstructorKey
+            || recentIds.has(record.displayId)
+          ) return false;
+          recentIds.add(record.displayId);
+        }
+        return true;
       }
 
       function validDiagnosticIssueResponse(value, runId, purpose) {
@@ -925,13 +1617,20 @@
 
       function setLoggedOut(message = '') {
         clearDiagnosticRun(true);
+        reviewLoadGeneration += 1;
         currentRecords = [];
+        currentWarnings = [];
+        currentAuditHistory = [];
         currentAdminName = '';
         adminRequestToken = '';
         $('#appPanel').hidden = true;
         $('#loginPanel').hidden = false;
         $('#classList').replaceChildren();
         $('#unmatchedList').replaceChildren();
+        $('#unmatchedSection').hidden = true;
+        $('#warningList').replaceChildren();
+        $('#warningSection').hidden = true;
+        $('#auditList').replaceChildren();
         $('#searchResults').hidden = true;
         showMessage($('#loginMessage'), message);
       }
@@ -1013,9 +1712,42 @@
         if (record.source === 'Admin-added') {
           wrapper.append(makeElement('span', 'badge', 'Admin-added'));
         }
+        if (record.source === 'Manual') {
+          wrapper.append(makeElement('span', 'badge', 'Manual Sheet row'));
+        }
         if (record.reviewRequired) {
           wrapper.append(makeElement('span', 'badge', 'Review possible duplicate'));
         }
+        if (record.notes) {
+          wrapper.append(makeElement('div', 'record-detail', `Notes: ${record.notes}`));
+        }
+        if (record.reviewMessage) {
+          wrapper.append(makeElement('div', 'record-detail', record.reviewMessage));
+        }
+        return wrapper;
+      }
+
+      function warningElement(warning) {
+        const wrapper = makeElement('div', 'record');
+        const label = warning.displayId === 'audit-history'
+          ? 'Audit history'
+          : warning.displayId.replace(/^(?:sheet|audit)-row-/, 'Sheet row ');
+        wrapper.append(
+          makeElement('strong', '', label),
+          makeElement('div', 'record-detail', warning.message)
+        );
+        return wrapper;
+      }
+
+      function auditElement(audit) {
+        const wrapper = makeElement('div', 'record');
+        const result = audit.result === 'added' ? 'Instructor added' : 'Exact duplicate blocked';
+        wrapper.append(
+          makeElement('strong', '', `Audit #${audit.actionNumber} · ${result}`),
+          makeElement('div', 'record-detail', `${audit.actionTime} · ${audit.adminName}`),
+          makeElement('div', 'record-detail', `${audit.instructor} · ${audit.classDate} · ${audit.classLabel} · ${audit.site}`),
+          makeElement('div', 'record-detail', `Reason: ${audit.reason}`)
+        );
         return wrapper;
       }
 
@@ -1047,13 +1779,15 @@
       function buildAddForm(label, index) {
         const form = makeElement('form', 'add-form');
         form.dataset.addForm = String(index);
+        form.dataset.reviewDate = currentDate;
+        form.dataset.classLabel = label;
+        form.dataset.site = SITE;
 
         const fixed = makeElement('div', 'fixed');
         fixed.append(
           fixedValue('Date', currentDate),
           fixedValue('Class', label, label),
-          fixedValue('Site', SITE),
-          fixedValue('Duration', `${durationForClass(label)} hr`)
+          fixedValue('Site', SITE)
         );
 
         const instructorInput = document.createElement('input');
@@ -1061,6 +1795,17 @@
         instructorInput.maxLength = 100;
         instructorInput.required = true;
         instructorInput.placeholder = testMode ? 'QA Test Instructor' : 'Instructor name';
+
+        const durationSelect = document.createElement('select');
+        durationSelect.name = 'duration';
+        durationSelect.required = true;
+        ADMIN_DURATION_OPTIONS.forEach(duration => {
+          const option = document.createElement('option');
+          option.value = String(duration);
+          option.textContent = `${duration} hr`;
+          durationSelect.append(option);
+        });
+        durationSelect.value = '1';
 
         const reasonInput = document.createElement('input');
         reasonInput.name = 'reason';
@@ -1071,8 +1816,10 @@
         const miniGrid = makeElement('div', 'mini-grid');
         miniGrid.append(
           inputField(`Instructor${testMode ? ' (fake TEST name)' : ''}`, instructorInput),
-          inputField('Required reason', reasonInput)
+          inputField('Duration (choose explicitly)', durationSelect)
         );
+        const reasonField = inputField('Required reason', reasonInput);
+        reasonField.style.marginTop = '10px';
 
         const notes = document.createElement('textarea');
         notes.name = 'notes';
@@ -1090,7 +1837,7 @@
         const actions = makeElement('div', 'form-actions');
         actions.append(confirm, cancel);
 
-        form.append(fixed, miniGrid, notesField, actions);
+        form.append(fixed, miniGrid, reasonField, notesField, actions);
         return form;
       }
 
@@ -1111,13 +1858,11 @@
             status.append(makeElement('span', 'badge', 'Review possible duplicate'));
           }
           summary.append(status);
-          main.append(summary);
-          row.append(main);
-          return row;
+        } else {
+          summary.append(makeElement('div', 'blank', 'No sign-in recorded'));
         }
 
-        summary.append(makeElement('div', 'blank', 'No sign-in recorded'));
-        const toggle = makeElement('button', 'btn small add-toggle', 'Add instructor');
+        const toggle = makeElement('button', 'btn add-toggle forgotten-action', 'Add forgotten instructor');
         toggle.type = 'button';
         toggle.dataset.classIndex = String(index);
         main.append(summary, toggle);
@@ -1126,32 +1871,46 @@
       }
 
       function renderReview() {
+        scheduleRenderPending = false;
         const labels = schedule.days[dayName(currentDate)] || [];
-        const matchedRecordIds = new Set();
+        const matchedDisplayIds = new Set();
         const rows = labels.map((label, index) => {
           const matches = currentRecords.filter(record =>
             normalize(record.classLabel) === normalize(label)
             && normalize(record.site) === normalize(SITE)
           );
-          matches.forEach(record => matchedRecordIds.add(record.recordId));
+          matches.forEach(record => matchedDisplayIds.add(record.displayId));
           return classRow(label, index, matches);
         });
         $('#classList').replaceChildren(...rows);
         $('#classCount').textContent = `${labels.length} scheduled class${labels.length === 1 ? '' : 'es'}`;
 
-        const unmatched = currentRecords.filter(record => !matchedRecordIds.has(record.recordId));
+        const unmatched = currentRecords.filter(record => !matchedDisplayIds.has(record.displayId));
         $('#unmatchedSection').hidden = unmatched.length === 0;
         $('#unmatchedList').replaceChildren(...unmatched.map(recordElement));
+        $('#warningSection').hidden = currentWarnings.length === 0;
+        $('#warningList').replaceChildren(...currentWarnings.map(warningElement));
+        renderRecordList(
+          $('#auditList'),
+          currentAuditHistory,
+          'No forgotten sign-in actions are recorded for this date.',
+          auditElement
+        );
         refreshInstructorOptions(currentRecords);
         const reviewCount = currentRecords.filter(record => record.reviewRequired).length;
-        showMessage(
-          $('#reviewMessage'),
-          reviewCount ? `${reviewCount} possible Admin/kiosk duplicate${reviewCount === 1 ? '' : 's'} must be reviewed before payroll.` : ''
-        );
+        const notices = [];
+        if (reviewCount) {
+          notices.push(`${reviewCount} possible Admin/kiosk duplicate${reviewCount === 1 ? '' : 's'} must be reviewed before payroll.`);
+        }
+        if (currentWarnings.length) {
+          notices.push(`${currentWarnings.length} incomplete Sheet row warning${currentWarnings.length === 1 ? '' : 's'} shown below.`);
+        }
+        showMessage($('#reviewMessage'), notices.join(' '));
       }
 
       async function loadReview(dateString) {
-        if (!schedule) return;
+        if (!schedule) return false;
+        const generation = ++reviewLoadGeneration;
         currentDate = dateString;
         const today = nyDate();
         $('#calendarDate').value = dateString;
@@ -1165,41 +1924,105 @@
         $('#reviewSection').classList.add('loading');
         try {
           const data = await requestJson(API.review, { date: dateString });
+          if (generation !== reviewLoadGeneration) return false;
+          if (!validDailyReviewResponse(data, dateString)) {
+            throw new Error('Daily Review returned an incomplete response. Nothing on the Sheet was changed.');
+          }
           setLoggedIn(data);
           currentRecords = data.records;
+          currentWarnings = data.warnings;
+          currentAuditHistory = data.auditHistory;
           renderReview();
+          return true;
         } catch (error) {
+          if (generation !== reviewLoadGeneration) return false;
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
-            return;
+            return false;
           }
           currentRecords = [];
+          currentWarnings = [];
+          currentAuditHistory = [];
           $('#classList').replaceChildren();
+          $('#unmatchedList').replaceChildren();
+          $('#unmatchedSection').hidden = true;
+          $('#warningList').replaceChildren();
+          $('#warningSection').hidden = true;
+          renderRecordList(
+            $('#auditList'),
+            [],
+            'Audit history could not be loaded.',
+            auditElement
+          );
           showMessage($('#reviewMessage'), error.message);
+          return false;
         } finally {
-          $('#reviewSection').classList.remove('loading');
+          if (generation === reviewLoadGeneration) {
+            $('#reviewSection').classList.remove('loading');
+          }
         }
       }
 
-      function uniqueRequestId(date, label, instructor) {
+      function uniqueRequestId(date) {
         const random = crypto.getRandomValues(new Uint32Array(3));
-        return `${date}-${normalize(label)}-${normalize(instructor)}-${[...random].join('-')}`.slice(0, 160);
+        const nonce = [...random]
+          .map(value => value.toString(16).padStart(8, '0'))
+          .join('');
+        return `m1-${date}-${nonce}`;
       }
 
-      async function addInstructor(form, index) {
-        const labels = schedule.days[dayName(currentDate)] || [];
-        const classLabel = labels[index];
+      function readAdditionForm(form) {
+        const date = String(form.dataset.reviewDate || '');
+        const classLabel = String(form.dataset.classLabel || '');
+        const site = String(form.dataset.site || '');
+        const duration = Number(form.elements.duration.value);
         const instructor = clean(form.elements.instructor.value);
         const reason = clean(form.elements.reason.value);
         const notes = clean(form.elements.notes.value);
-        if (!instructor || reason.length < 3) {
-          showMessage($('#reviewMessage'), 'Enter the instructor and a clear reason.');
+        if (
+          !/^\d{4}-\d{2}-\d{2}$/.test(date)
+          || !classLabel
+          || !site
+          || !ADMIN_DURATION_OPTIONS.includes(duration)
+          || !instructor
+          || reason.length < 3
+        ) return null;
+        return { date, classLabel, site, duration, instructor, notes, reason };
+      }
+
+      function requestIdForAddition(form, addition) {
+        const fingerprint = JSON.stringify([
+          addition.date,
+          addition.classLabel,
+          addition.site,
+          addition.duration,
+          addition.instructor,
+          addition.notes,
+          addition.reason
+        ]);
+        if (!form.dataset.requestId || form.dataset.requestFingerprint !== fingerprint) {
+          form.dataset.requestId = uniqueRequestId(addition.date);
+          form.dataset.requestFingerprint = fingerprint;
+        }
+        return form.dataset.requestId;
+      }
+
+      function clearAdditionRequestId(form) {
+        delete form.dataset.requestId;
+        delete form.dataset.requestFingerprint;
+      }
+
+      async function addInstructor(form) {
+        const addition = readAdditionForm(form);
+        if (!addition) {
+          showMessage($('#reviewMessage'), 'Enter the instructor and a clear reason. Choose the duration explicitly.');
           return;
         }
-        const key = `${currentDate}|${normalize(classLabel)}|${normalize(SITE)}`;
+        const { date, classLabel, site, duration, instructor, reason } = addition;
+        const key = `${date}|${normalize(classLabel)}|${normalize(site)}|${normalize(instructor)}`;
         if (inFlightAdditions.has(key)) return;
         const confirmed = window.confirm(
-          `Add ${instructor} to:\n\n${currentDate}\n${classLabel}\n${SITE}\n${durationForClass(classLabel)} hr\n\nReason: ${reason}`
+          `Add ${instructor} to:\n\n${date}\n${classLabel}\n${site}\n${duration} hr\n\nReason: ${reason}`
         );
         if (!confirmed) return;
 
@@ -1208,20 +2031,56 @@
         submit.disabled = true;
         showMessage($('#reviewMessage'), '');
         try {
-          const data = await requestJson(API.add, {
-            requestId: uniqueRequestId(currentDate, classLabel, instructor),
-            date: currentDate,
-            classLabel,
-            site: SITE,
-            duration: durationForClass(classLabel),
-            instructor,
-            notes,
-            reason
-          });
-          toast(data.result === 'added'
-            ? (testMode ? 'Instructor added to the TEST Sheet' : 'Instructor added to the payroll Sheet')
-            : 'Already recorded — no duplicate row created');
-          await loadReview(currentDate);
+          const request = {
+            requestId: requestIdForAddition(form, addition),
+            ...addition
+          };
+          const data = await requestJson(API.add, request);
+          if (!validAdminAdditionResponse(data, {
+            requestId: request.requestId,
+            adminName: currentAdminName,
+            date: request.date,
+            classLabel: request.classLabel,
+            duration: request.duration,
+            instructor: request.instructor,
+            site: request.site,
+            reason: request.reason,
+            notes: request.notes
+          })) {
+            throw new Error('Google did not fully confirm the correction. Success is not being reported.');
+          }
+          clearAdditionRequestId(form);
+          const refreshed = await loadReview(date);
+          const refreshedRecord = currentRecords.find(record => record.displayId === data.linkedDisplayId);
+          const refreshedAudit = currentAuditHistory.find(audit => (
+            audit.actionNumber === data.auditActionNumber
+            && audit.result === data.result
+            && audit.linkedRecordId === data.linkedRecordId
+          ));
+          const refreshVerified = Boolean(
+            refreshed
+            && refreshedRecord
+            && refreshedAudit
+            && (data.result !== 'added' || refreshedRecord.source === 'Admin-added')
+          );
+          if (refreshVerified) {
+            toast(data.result === 'added'
+              ? (testMode ? 'Instructor added to the TEST Sheet' : 'Instructor added to the payroll Sheet')
+              : 'Already recorded — no duplicate row created');
+          }
+          const outcome = data.result === 'added'
+            ? `${instructor} was added to ${classLabel}.`
+            : `The exact ${instructor} sign-in already existed; no duplicate payroll row was created.`;
+          const confirmation = `${outcome} Google confirmed audit #${data.auditActionNumber}.`;
+          if (!$('#appPanel').hidden) {
+            showMessage(
+              $('#reviewMessage'),
+              refreshVerified
+                ? `${confirmation} Daily Review refreshed immediately.`
+                : `${confirmation} The refreshed review did not show both the linked sign-in and audit; do not submit this correction again.`,
+              refreshVerified ? 'success' : 'error'
+            );
+          }
         } catch (error) {
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
@@ -1234,9 +2093,9 @@
         }
       }
 
-      function renderRecordList(element, records, emptyMessage) {
+      function renderRecordList(element, records, emptyMessage, renderer = recordElement) {
         if (records.length) {
-          element.replaceChildren(...records.map(recordElement));
+          element.replaceChildren(...records.map(renderer));
           return;
         }
         element.replaceChildren(makeElement('div', 'empty', emptyMessage));
@@ -1253,6 +2112,9 @@
         $('#searchButton').disabled = true;
         try {
           const data = await requestJson(API.search, { instructor, date });
+          if (!validInstructorSearchResponse(data, instructor, date)) {
+            throw new Error('Instructor search returned an incomplete response.');
+          }
           renderRecordList(
             $('#selectedDateResults'),
             data.selectedDateRecords,
@@ -1278,21 +2140,23 @@
       async function initialize() {
         $('#calendarDate').max = nyDate();
         $('#searchDate').max = nyDate();
-        const deployPreviewHost = location.hostname.endsWith('.netlify.app')
-          && location.hostname.includes('--');
+        const deployPreviewHost = TEST_ADMIN_HOST_PATTERN.test(location.hostname);
         $('#testEntry').style.display = deployPreviewHost ? 'block' : 'none';
         const diagnosticOriginAllowed = validTabletDiagnosticOrigin();
         $('#installSyncSettingsButton').hidden = true;
         $('#tabletDiagnosticButton').hidden = !diagnosticOriginAllowed;
         $('#tabletDiagnosticOriginMessage').hidden = diagnosticOriginAllowed;
         try {
-          const response = await fetch('/m1/shared-schedule.json', { cache: 'no-store' });
-          if (!response.ok) throw new Error('Shared schedule unavailable.');
-          schedule = await response.json();
-          if (!schedule || !schedule.days) throw new Error('Shared schedule unreadable.');
+          if (!await refreshCanonicalSchedule({ bootstrapWhenUnavailable: true })) {
+            throw new Error('Canonical schedule unavailable.');
+          }
           await loadReview(defaultYesterday());
+          startCanonicalScheduleRefresh();
         } catch {
-          setLoggedOut('The shared Rev schedule could not be loaded.');
+          schedule = null;
+          $('#scheduleSource').textContent = 'Schedule status unavailable';
+          $('#scheduleSource').classList.add('fallback');
+          setLoggedOut('The canonical Rev schedule could not be loaded.');
         }
       }
 
@@ -1329,12 +2193,13 @@
           form.reset();
           form.classList.remove('open');
           document.querySelector(`.add-toggle[data-class-index="${cancel.dataset.classIndex}"]`).hidden = false;
+          applyPendingScheduleToReview();
         }
       });
       $('#reviewSection').addEventListener('submit', event => {
         if (!event.target.matches('.add-form')) return;
         event.preventDefault();
-        addInstructor(event.target, Number(event.target.dataset.addForm));
+        addInstructor(event.target);
       });
       window.addEventListener('pageshow', event => {
         if (event.persisted && !$('#appPanel').hidden && schedule) loadReview(currentDate || defaultYesterday());

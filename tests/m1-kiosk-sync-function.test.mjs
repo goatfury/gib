@@ -11,16 +11,31 @@ import {
 const ROOT = new URL('../', import.meta.url);
 const source = readFileSync(new URL('netlify/functions/m1-kiosk-sync.mjs', ROOT), 'utf8');
 const PREVIEW_ORIGIN = 'https://deploy-preview-123--gib-live.netlify.app';
+const IMMUTABLE_PREVIEW_ORIGIN = 'https://1234567890abcdef12345678--gib-live.netlify.app';
 const TEST_WEBHOOK_URL = ['https://script.google.com/macros/s/', 'SYNTHETIC_PREVIEW_RECEIVER', '/exec'].join('');
 const TEST_TOKEN = ['synthetic', 'preview', 'transport', 'canary'].join('-');
 const PRODUCTION_WEBHOOK_URL = ['https://script.google.com/macros/s/', 'SYNTHETIC_PRODUCTION_RECEIVER', '/exec'].join('');
 const PRODUCTION_TOKEN = ['synthetic', 'production', 'transport', 'canary'].join('-');
+const LEGACY_WEBHOOK_URL = ['https://script.google.com/macros/s/', 'SYNTHETIC_LEGACY_RECEIVER', '/exec'].join('');
+const LEGACY_TOKEN = ['synthetic', 'legacy', 'transport', 'canary'].join('-');
+const PRODUCTION_ADMIN_TOKEN = ['synthetic', 'production', 'admin', 'canary'].join('-');
+const RECOVERY_TOKEN = ['synthetic', 'production', 'recovery', 'canary'].join('-');
+const DEVICE_TOKEN = ['synthetic', 'production', 'device', 'canary'].join('-');
+const INSTALL_TOKEN = ['synthetic', 'production', 'install', 'canary'].join('-');
+const ADMIN_PASSPHRASE = 'synthetic production admin passphrase canary';
 const TEST_ENV = Object.freeze({
   GIB_TEST_WEBHOOK_URL: TEST_WEBHOOK_URL,
   GIB_TEST_WEBHOOK_TOKEN: TEST_TOKEN,
   GIB_TEST_ADMIN_ACTION_TOKEN: 'synthetic-preview-admin-canary',
-  GIB_M1_WEBHOOK_URL: PRODUCTION_WEBHOOK_URL,
-  GIB_M1_WEBHOOK_TOKEN: PRODUCTION_TOKEN
+  GIB_M1_PRODUCTION_WEBHOOK_URL: PRODUCTION_WEBHOOK_URL,
+  GIB_M1_PRODUCTION_WEBHOOK_TOKEN: PRODUCTION_TOKEN,
+  GIB_M1_ADMIN_ACTION_TOKEN: PRODUCTION_ADMIN_TOKEN,
+  GIB_M1_RECOVERY_TOKEN: RECOVERY_TOKEN,
+  GIB_M1_PRODUCTION_DEVICE_TOKEN: DEVICE_TOKEN,
+  GIB_M1_PRODUCTION_INSTALL_CAPABILITY_SECRET: INSTALL_TOKEN,
+  GIB_M1_ADMIN_PASSPHRASE: ADMIN_PASSPHRASE,
+  GIB_M1_WEBHOOK_URL: LEGACY_WEBHOOK_URL,
+  GIB_M1_WEBHOOK_TOKEN: LEGACY_TOKEN
 });
 const DATE_NOW = new Date('2026-08-07T16:00:00Z');
 
@@ -89,6 +104,10 @@ test('function route and preview boundary are exact and production never reaches
   const rejected = [
     request({ origin: 'https://gib-live.netlify.app' }),
     request({ origin: 'https://deploy-preview-123--other.netlify.app' }),
+    request({ origin: 'https://branch-candidate--gib-live.netlify.app' }),
+    request({ origin: 'https://1234567890abcdef1234567--gib-live.netlify.app' }),
+    request({ origin: 'https://1234567890abcdef123456789--gib-live.netlify.app' }),
+    request({ origin: 'https://1234567890abcdef1234567z--gib-live.netlify.app' }),
     request({ requestOrigin: 'https://evil.example' }),
     request({ host: 'evil.example' }),
     request({ fetchSite: 'cross-site' }),
@@ -107,6 +126,90 @@ test('function route and preview boundary are exact and production never reaches
     assert.equal(response.status, 403);
   }
   assert.equal(calls, 0);
+});
+
+test('both the PR alias and its exact immutable deploy host use isolated TEST sync', async () => {
+  for (const origin of [PREVIEW_ORIGIN, IMMUTABLE_PREVIEW_ORIGIN]) {
+    const input = row();
+    let observedUrl = '';
+    let observedBody = null;
+    const response = await handleKioskSync(request({ origin, body: { rows: [input] } }), {
+      env: TEST_ENV,
+      dateNow: DATE_NOW,
+      fetch: async (url, options) => {
+        observedUrl = url;
+        observedBody = JSON.parse(options.body);
+        return googleResponse([acknowledged(input)]);
+      }
+    });
+
+    assert.equal(response.status, 200, origin);
+    assert.deepEqual(await json(response), {
+      ok: true,
+      test: true,
+      results: [acknowledged(input)]
+    });
+    assert.equal(observedUrl, TEST_WEBHOOK_URL);
+    assert.equal(observedBody.target, 'test');
+    assert.equal(observedBody.action, 'kioskSignIn');
+    assert.equal(observedBody.token, TEST_TOKEN);
+    assert.equal(observedBody.adminActionToken, '');
+    assert.deepEqual(Object.keys(observedBody).sort(), [
+      'action',
+      'adminActionToken',
+      'rows',
+      'target',
+      'token'
+    ]);
+    assert.notEqual(observedUrl, PRODUCTION_WEBHOOK_URL);
+    for (const productionValue of [
+      PRODUCTION_WEBHOOK_URL,
+      PRODUCTION_TOKEN,
+      LEGACY_WEBHOOK_URL,
+      LEGACY_TOKEN,
+      PRODUCTION_ADMIN_TOKEN,
+      RECOVERY_TOKEN,
+      DEVICE_TOKEN,
+      INSTALL_TOKEN,
+      ADMIN_PASSPHRASE
+    ]) {
+      assert.equal(JSON.stringify(observedBody).includes(productionValue), false);
+    }
+  }
+});
+
+test('TEST sync rejects cross-scoped URL and token reuse before Google', async t => {
+  const variants = [
+    ['production receiver URL', { GIB_TEST_WEBHOOK_URL: PRODUCTION_WEBHOOK_URL }],
+    ['legacy receiver URL', { GIB_TEST_WEBHOOK_URL: LEGACY_WEBHOOK_URL }],
+    ['production receiver token', { GIB_TEST_WEBHOOK_TOKEN: PRODUCTION_TOKEN }],
+    ['legacy receiver token', { GIB_TEST_WEBHOOK_TOKEN: LEGACY_TOKEN }],
+    ['production Admin token', { GIB_TEST_WEBHOOK_TOKEN: PRODUCTION_ADMIN_TOKEN }],
+    ['recovery token', { GIB_TEST_WEBHOOK_TOKEN: RECOVERY_TOKEN }],
+    ['device token', { GIB_TEST_WEBHOOK_TOKEN: DEVICE_TOKEN }],
+    ['installer token', { GIB_TEST_WEBHOOK_TOKEN: INSTALL_TOKEN }],
+    ['Admin passphrase', { GIB_TEST_WEBHOOK_TOKEN: ADMIN_PASSPHRASE }]
+  ];
+
+  for (const [name, override] of variants) {
+    await t.test(name, async () => {
+      let calls = 0;
+      const response = await handleKioskSync(request(), {
+        env: { ...TEST_ENV, ...override },
+        dateNow: DATE_NOW,
+        fetch: async () => {
+          calls += 1;
+          return googleResponse([]);
+        }
+      });
+      assert.equal(response.status, 503);
+      assert.equal(calls, 0);
+      assert.deepEqual(await json(response), {
+        ok: false,
+        message: 'TEST sync is not configured.'
+      });
+    });
+  }
 });
 
 test('browser submits rows only while server pins TEST transport, action, and target', async () => {

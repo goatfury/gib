@@ -1,4 +1,6 @@
 import {
+  clean,
+  googleFailureClass,
   jsonResponse,
   obviousTestValue,
   postGoogle,
@@ -8,8 +10,48 @@ import {
   safeText,
   validNonFutureDate
 } from './_lib/m1-common.mjs';
+import { sanitizeAdminAdditionPayload } from './_lib/m1-admin-contracts.mjs';
+
+function additionFailureResponse(google) {
+  const failureClass = googleFailureClass(google);
+  const unreachable = failureClass === 'UNREACHABLE';
+  return jsonResponse(unreachable ? 504 : 502, {
+    ok: false,
+    result: 'failed',
+    code: `ADMIN_ADD_${failureClass}`,
+    message: unreachable
+      ? 'The forgotten-instructor correction could not reach Google. Success is not being reported.'
+      : failureClass === 'REJECTED'
+        ? 'Google rejected the forgotten-instructor correction. Success is not being reported.'
+        : failureClass === 'FAILED'
+          ? 'Google could not complete the forgotten-instructor correction. Success is not being reported.'
+          : 'Google returned an incomplete correction confirmation. Success is not being reported.'
+  });
+}
+
+function exactKeys(value, expected) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  return actual.length === wanted.length
+    && actual.every((key, index) => key === wanted[index]);
+}
 
 function validateAddition(input, config, now) {
+  if (
+    !exactKeys(input, [
+      'requestId', 'date', 'classLabel', 'duration', 'instructor', 'site', 'notes', 'reason'
+    ])
+    || typeof input.requestId !== 'string'
+    || typeof input.date !== 'string'
+    || typeof input.classLabel !== 'string'
+    || typeof input.duration !== 'number'
+    || typeof input.instructor !== 'string'
+    || typeof input.site !== 'string'
+    || typeof input.notes !== 'string'
+    || typeof input.reason !== 'string'
+  ) return null;
+  const notes = clean(input.notes);
   const value = {
     requestId: safeText(input.requestId, 160),
     date: String(input.date || ''),
@@ -17,11 +59,12 @@ function validateAddition(input, config, now) {
     duration: Number(input.duration),
     instructor: safeText(input.instructor, 100),
     site: safeText(input.site, 80),
-    notes: String(input.notes == null ? '' : input.notes).normalize('NFKC').trim().slice(0, 400),
+    notes,
     reason: safeText(input.reason, 240)
   };
   if (
     !value.requestId
+    || value.date !== clean(input.date)
     || !validNonFutureDate(value.date, now)
     || !value.classLabel
     || !Number.isFinite(value.duration)
@@ -30,6 +73,7 @@ function validateAddition(input, config, now) {
     || !value.instructor
     || !value.site
     || value.reason.length < 3
+    || value.notes.length > 400
     || /^[=+\-@]/.test(value.notes)
   ) {
     return null;
@@ -73,30 +117,31 @@ export async function handleAdminAdd(request, dependencies = {}) {
     },
     dependencies.fetch || fetch
   );
-  if (!google.readable || !google.value || google.value.ok !== true) {
-    return jsonResponse(502, {
-      ok: false,
-      result: 'failed',
-      message: 'Google did not return a clear successful result.'
-    });
-  }
-
-  const result = String(google.value.result || '');
-  if (!['added', 'already exists'].includes(result)) {
-    return jsonResponse(result === 'rejected' ? 400 : 502, {
-      ok: false,
-      result: result || 'failed',
-      message: google.value.message || 'The missed-instructor addition did not succeed.'
-    });
-  }
+  const confirmation = google.readable && google.value && google.value.ok === true
+    ? sanitizeAdminAdditionPayload(google.value, {
+      requestId: value.requestId,
+      adminName: auth.session.adminName,
+      date: value.date,
+      classLabel: value.classLabel,
+      duration: value.duration,
+      instructor: value.instructor,
+      site: value.site,
+      reason: value.reason,
+      notes: value.notes
+    })
+    : null;
+  if (!confirmation) return additionFailureResponse(google);
 
   return jsonResponse(200, {
     ok: true,
     test: config.preview,
-    result,
-    linkedRecordId: String(google.value.linkedRecordId || ''),
-    auditActionNumber: Number(google.value.auditActionNumber || 0),
-    message: result === 'added'
+    result: confirmation.result,
+    requestId: confirmation.requestId,
+    linkedRecordId: confirmation.linkedRecordId,
+    linkedDisplayId: confirmation.linkedDisplayId,
+    auditActionNumber: confirmation.auditActionNumber,
+    confirmation: confirmation.confirmation,
+    message: confirmation.result === 'added'
       ? 'Instructor added.'
       : 'The same class already has this instructor. No second payroll row was created.'
   });

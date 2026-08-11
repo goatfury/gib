@@ -36,17 +36,37 @@ const fixedRequestToken = Buffer.alloc(32, 9).toString('base64url');
 const RECOVERY_INCIDENT_ID = 'M1-2026-08-03_04';
 
 const previewUrl = 'https://deploy-preview-99--gib-live.netlify.app';
+const immutablePreviewUrl = 'https://1234567890abcdef12345678--gib-live.netlify.app';
+const productionUrl = 'https://gib-live.netlify.app';
 const previewEnv = Object.freeze({
   GIB_TEST_WEBHOOK_URL: 'https://script.google.com/macros/s/TEST_ID/exec',
   GIB_TEST_WEBHOOK_TOKEN: 'test-receiver-token-long-enough',
   GIB_TEST_ADMIN_ACTION_TOKEN: 'test-admin-action-token-long-enough'
 });
 const productionEnv = Object.freeze({
-  GIB_M1_WEBHOOK_URL: 'https://script.google.com/macros/s/PROD_ID/exec',
-  GIB_M1_WEBHOOK_TOKEN: 'production-receiver-token-long-enough',
+  GIB_M1_PRODUCTION_WEBHOOK_URL: 'https://script.google.com/macros/s/PROD_ID/exec',
+  GIB_M1_PRODUCTION_WEBHOOK_TOKEN: 'production-receiver-token-long-enough',
   GIB_M1_ADMIN_ACTION_TOKEN: 'production-admin-action-token-long-enough',
   GIB_M1_ADMIN_PASSPHRASE: 'four memorable private words'
 });
+
+function reviewRecord(overrides = {}) {
+  return {
+    displayId: 'sheet-row-2',
+    recordId: 'one',
+    timestamp: '2026-07-25 10:00:09',
+    date: '2026-07-25',
+    classLabel: '10:00 AM Kids\u2019 BJJ',
+    duration: 0.5,
+    instructor: 'QA Test Instructor',
+    site: 'Rev',
+    notes: '',
+    source: 'Kiosk',
+    reviewRequired: false,
+    reviewMessage: '',
+    ...overrides
+  };
+}
 
 function jsonRequest(url, body, cookie = '', extraHeaders = {}) {
   return new Request(url, {
@@ -711,42 +731,44 @@ test('Netlify pins both backend credentials, action, and target', async () => {
 });
 
 test('production Admin configuration fails closed without every private value', () => {
-  assert.equal(runtimeConfig({}, { admin: true, requestUrl: 'https://bjjsite.com/m1/admin/' }), null);
+  assert.equal(runtimeConfig({}, { admin: true, requestUrl: `${productionUrl}/m1/admin/` }), null);
   assert.equal(runtimeConfig({
     ...productionEnv,
     GIB_M1_ADMIN_ACTION_TOKEN: ''
-  }, { admin: true, requestUrl: 'https://bjjsite.com/m1/admin/' }), null);
+  }, { admin: true, requestUrl: `${productionUrl}/m1/admin/` }), null);
   assert.equal(runtimeConfig({
     ...productionEnv,
     GIB_M1_ADMIN_PASSPHRASE: 'three weak words'
-  }, { admin: true, requestUrl: 'https://bjjsite.com/m1/admin/' }), null);
+  }, { admin: true, requestUrl: `${productionUrl}/m1/admin/` }), null);
   assert.equal(runtimeConfig(productionEnv, {
     admin: true,
-    requestUrl: 'https://bjjsite.com/m1/admin/'
+    requestUrl: `${productionUrl}/m1/admin/`
   }).adminActionToken, productionEnv.GIB_M1_ADMIN_ACTION_TOKEN);
 });
 
-test('production preserves a short non-empty legacy webhook credential', () => {
-  const legacyEnv = {
+test('production requires the scoped transport credential and never falls back to legacy', () => {
+  const shortProductionEnv = {
     ...productionEnv,
-    GIB_M1_WEBHOOK_TOKEN: 'legacy'
+    GIB_M1_PRODUCTION_WEBHOOK_TOKEN: 'short'
   };
-  assert.equal(runtimeConfig(legacyEnv, {
+  assert.equal(runtimeConfig(shortProductionEnv, {
     admin: true,
-    requestUrl: 'https://bjjsite.com/m1/admin/'
-  }).webhookToken, legacyEnv.GIB_M1_WEBHOOK_TOKEN);
+    requestUrl: `${productionUrl}/m1/admin/`
+  }), null);
   assert.equal(runtimeConfig({
-    ...legacyEnv,
-    GIB_M1_WEBHOOK_TOKEN: ''
-  }, { admin: true, requestUrl: 'https://bjjsite.com/m1/admin/' }), null);
+    GIB_M1_WEBHOOK_URL: 'https://script.google.com/macros/s/LEGACY_ID/exec',
+    GIB_M1_WEBHOOK_TOKEN: 'legacy-receiver-token-long-enough',
+    GIB_M1_ADMIN_ACTION_TOKEN: productionEnv.GIB_M1_ADMIN_ACTION_TOKEN,
+    GIB_M1_ADMIN_PASSPHRASE: productionEnv.GIB_M1_ADMIN_PASSPHRASE
+  }, { admin: true, requestUrl: `${productionUrl}/m1/admin/` }), null);
   assert.equal(runtimeConfig({
     ...previewEnv,
     GIB_TEST_WEBHOOK_TOKEN: 'short'
   }, { admin: true, requestUrl: `${previewUrl}/m1/admin/` }), null);
   assert.equal(runtimeConfig({
-    ...legacyEnv,
+    ...productionEnv,
     GIB_M1_ADMIN_ACTION_TOKEN: 'short'
-  }, { admin: true, requestUrl: 'https://bjjsite.com/m1/admin/' }), null);
+  }, { admin: true, requestUrl: `${productionUrl}/m1/admin/` }), null);
 });
 
 test('Admin passphrase policy and production login are enforced', async () => {
@@ -758,7 +780,7 @@ test('Admin passphrase policy and production login are enforced', async () => {
   assert.equal(validAdminPassphrase('alpha beta gamma ' + 'd'.repeat(240)), false);
 
   const valid = await handleAdminLogin(
-    jsonRequest('https://bjjsite.com/.netlify/functions/m1-admin-login', {
+    jsonRequest(`${productionUrl}/.netlify/functions/m1-admin-login`, {
       adminName: 'Andrew Smith',
       passphrase: productionEnv.GIB_M1_ADMIN_PASSPHRASE,
       testShortcut: false
@@ -775,6 +797,7 @@ test('Admin passphrase policy and production login are enforced', async () => {
 
 test('TEST login shortcut is limited to the exact Deploy Preview host pattern', async () => {
   assert.equal(isDeployPreview({}, `${previewUrl}/m1/admin/`), true);
+  assert.equal(isDeployPreview({}, `${immutablePreviewUrl}/m1/admin/`), true);
   assert.equal(isDeployPreview({}, 'https://bjjsite.com/m1/admin/'), false);
   assert.equal(isDeployPreview({}, 'https://deploy-preview-99--other.netlify.app/m1/admin/'), false);
   const preview = await handleAdminLogin(
@@ -786,7 +809,7 @@ test('TEST login shortcut is limited to the exact Deploy Preview host pattern', 
   );
   assert.equal(preview.status, 200);
   const production = await handleAdminLogin(
-    jsonRequest('https://bjjsite.com/.netlify/functions/m1-admin-login', {
+    jsonRequest(`${productionUrl}/.netlify/functions/m1-admin-login`, {
       adminName: 'Stuart Turner',
       testShortcut: true
     }),
@@ -854,7 +877,10 @@ test('valid session can review, search, add, and logout with no-store responses'
       ...common,
       fetch: async () => googleResponse({
         ok: true,
-        records: [{ recordId: 'one', instructor: 'QA Test Instructor' }]
+        date: '2026-07-25',
+        records: [reviewRecord()],
+        warnings: [],
+        auditHistory: []
       })
     }
   );
@@ -873,8 +899,13 @@ test('valid session can review, search, add, and logout with no-store responses'
       ...common,
       fetch: async () => googleResponse({
         ok: true,
-        selectedDateRecords: [{ recordId: 'one' }],
-        recentRecords: Array.from({ length: 8 }, (_, index) => ({ recordId: String(index) }))
+        instructor: 'QA Test Instructor',
+        date: '2026-07-25',
+        selectedDateRecords: [reviewRecord()],
+        recentRecords: Array.from({ length: 5 }, (_, index) => reviewRecord({
+          displayId: `sheet-row-${index + 2}`,
+          recordId: String(index)
+        }))
       })
     }
   );
@@ -904,8 +935,20 @@ test('valid session can review, search, add, and logout with no-store responses'
       fetch: async () => googleResponse({
         ok: true,
         result: 'added',
+        requestId: 'qa-add',
         linkedRecordId: 'gib-admin-qa-add',
-        auditActionNumber: 1
+        linkedDisplayId: 'sheet-row-2',
+        auditActionNumber: 1,
+        confirmation: {
+          adminName: 'Stuart Turner',
+          date: '2026-07-25',
+          classLabel: '10:00 AM Kids\u2019 BJJ',
+          duration: 0.5,
+          instructor: 'QA Test Instructor',
+          site: 'Rev',
+          reason: 'Missed tablet sign-in',
+          notes: ''
+        }
       })
     }
   );
@@ -996,16 +1039,17 @@ test('Daily Review browser visibly labels possible Admin and kiosk duplicates', 
   assert.match(adminHtml, /reviewRequired/);
 });
 
-test('rapid Admin retry creates one payroll event and readable results', () => {
+test('exact Admin request replay returns the original result and one audit entry', () => {
   const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
   const first = harness.post(adminAddition());
   const retry = harness.post(adminAddition());
   assert.equal(first.result, 'added');
-  assert.equal(retry.result, 'already exists');
+  assert.equal(retry.result, 'added');
+  assert.equal(retry.requestId, first.requestId);
   assert.equal(harness.signins.values.length, 2);
-  assert.equal(harness.audit.values.length, 3);
+  assert.equal(harness.audit.values.length, 2);
   assert.ok(first.auditActionNumber > 0);
-  assert.ok(retry.auditActionNumber > first.auditActionNumber);
+  assert.equal(retry.auditActionNumber, first.auditActionNumber);
 });
 
 test('Admin request IDs remain permanent after payload changes or VOID', () => {
@@ -1045,8 +1089,20 @@ test('rapid double-click reaches one added result and one duplicate-safe result'
     return googleResponse({
       ok: true,
       result,
-      linkedRecordId: 'one-google-payroll-event',
-      auditActionNumber: auditNumber
+      requestId: body.requestId,
+      linkedRecordId: `gib-admin-${body.requestId}`,
+      linkedDisplayId: 'sheet-row-2',
+      auditActionNumber: auditNumber,
+      confirmation: {
+        adminName: body.adminName,
+        date: body.date,
+        classLabel: body.classLabel,
+        duration: body.duration,
+        instructor: body.instructor,
+        site: body.site,
+        reason: body.reason,
+        notes: body.notes
+      }
     });
   };
   const request = () => handleAdminAdd(
@@ -1126,24 +1182,215 @@ test('Daily Review workflow is yesterday-first, date-selectable, complete, and e
   assert.match(adminHtml, /Five recent active sign-ins/);
   assert.match(
     adminHtml,
-    /Daily Review uses the shared Rev schedule\. Local schedule edits and Series classes must also be added to the shared schedule or they will not appear as blanks\./
+    /Daily Review uses the current canonical regular weekly schedule from the Revolution BJJ website\. Recorded sign-ins with historical, local-override, or Series labels remain visible as unmatched rather than being hidden\./
   );
+  assert.match(adminHtml, /schedule:\s*'\/api\/m1-schedule'/);
+  assert.match(adminHtml, /function validateScheduleResponse\(value\)/);
+  assert.match(adminHtml, /id="scheduleSource"[^>]*role="status"/);
+  assert.match(adminHtml, /Version: \$\{schedule\.version\}/);
+  assert.match(adminHtml, /scheduleBootstrap:\s*'\/m1\/shared-schedule\.json'/);
+  assert.match(adminHtml, /function loadCheckedInScheduleBootstrap\(reason/);
+  assert.match(adminHtml, /const SCHEDULE_REFRESH_INTERVAL_MS = 10 \* 60 \* 1_000;/);
+  assert.match(adminHtml, /window\.setInterval\(refreshCanonicalSchedule, SCHEDULE_REFRESH_INTERVAL_MS\)/);
+  assert.match(adminHtml, /visibilitychange[\s\S]*resume[\s\S]*focus[\s\S]*pageshow/);
+  assert.match(adminHtml, /function reviewFormInProgress\(\)[\s\S]*\.add-form\.open/);
+  assert.match(adminHtml, /scheduleRenderPending = true/);
   assert.equal(validNonFutureDate('2025-01-10', fixedDateNow), true);
   assert.equal(validNonFutureDate('2026-07-27', fixedDateNow), false);
 });
 
-test('Admin addition UX has fixed fields, reason, confirmation, refresh, and Admin label', () => {
+test('Admin addition UX binds fixed identity, requires duration, confirms, refreshes, and labels Admin rows', () => {
   assert.match(adminHtml, /fixedValue\('Date'/);
   assert.match(adminHtml, /fixedValue\('Class'/);
   assert.match(adminHtml, /fixedValue\('Site'/);
-  assert.match(adminHtml, /fixedValue\('Duration'/);
+  assert.match(adminHtml, /inputField\('Duration \(choose explicitly\)', durationSelect\)/);
+  assert.match(adminHtml, /const ADMIN_DURATION_OPTIONS = Object\.freeze\(\[1, 0\.5\]\)/);
+  assert.doesNotMatch(adminHtml, /durationForClass|\bkids[^\n]*\?\s*0\.5/iu);
   assert.match(adminHtml, /Required reason/);
   assert.match(adminHtml, /Notes \(optional\)/);
   assert.match(adminHtml, /window\.confirm\(/);
-  assert.match(adminHtml, /await loadReview\(currentDate\)/);
+  assert.match(adminHtml, /await loadReview\(date\)/);
   assert.match(adminHtml, /Admin-added/);
   assert.doesNotMatch(adminHtml, /payroll approval|dashboard|analytics|void sign-in/i);
   assert.doesNotMatch(adminHtml, /<button[^>]*>[^<]*(?:schedule|void|approve)/i);
+});
+
+test('Daily Review keeps every correction path visible and renders strict manual, warning, and audit contracts', () => {
+  assert.match(adminHtml, /href="\/m1\/\?view=admin"[^>]*>Local M1 Admin<\/a>/);
+  assert.match(adminHtml, /href="\/m1\/"[^>]*>Instructor Sign-In<\/a>/);
+  assert.doesNotMatch(adminHtml, /href="\/m1\/(?:\?view=admin)?"[^>]*(?:target=|onclick=)/);
+
+  const classRowSource = adminHtml.slice(
+    adminHtml.indexOf('function classRow('),
+    adminHtml.indexOf('function renderReview(')
+  );
+  assert.match(classRowSource, /instructors\.join\(' \+ '\)/);
+  assert.match(classRowSource, /Add forgotten instructor/);
+  assert.match(classRowSource, /row\.append\(main, buildAddForm\(label, index\)\)/);
+  assert.equal((classRowSource.match(/return row;/g) || []).length, 1);
+  assert.match(adminHtml, /\.forgotten-action\s*\{[\s\S]*min-height:\s*44px/);
+
+  assert.match(adminHtml, /matchedDisplayIds\.add\(record\.displayId\)/);
+  assert.doesNotMatch(adminHtml, /matchedRecordIds\.add\(record\.recordId\)/);
+  assert.match(adminHtml, /Manual Sheet row/);
+  assert.match(adminHtml, /id="warningSection"[\s\S]*Sheet rows needing attention/);
+  assert.match(adminHtml, /id="auditSection"[\s\S]*Forgotten sign-in audit history/);
+  assert.match(adminHtml, /function warningElement\(/);
+  assert.match(adminHtml, /function auditElement\(/);
+  assert.match(adminHtml, /function validDailyReviewResponse\(/);
+  assert.match(adminHtml, /function validAdminAdditionResponse\(/);
+  assert.match(adminHtml, /Google did not fully confirm the correction\. Success is not being reported\./);
+  assert.match(adminHtml, /Daily Review refreshed immediately\./);
+  assert.match(adminHtml, /const generation = \+\+reviewLoadGeneration/);
+  assert.match(adminHtml, /generation !== reviewLoadGeneration/);
+  assert.match(adminHtml, /record\.displayId === data\.linkedDisplayId/);
+  assert.match(adminHtml, /audit\.actionNumber === data\.auditActionNumber/);
+  assert.match(adminHtml, /validInstructorSearchResponse\(data, instructor, date\)/);
+});
+
+test('Daily Review rejects duplicate audit action numbers before any success state is rendered', async () => {
+  const validatorsSource = adminHtml.slice(
+    adminHtml.indexOf('function exactObjectKeys('),
+    adminHtml.indexOf('function validAdminAdditionResponse(')
+  );
+  const context = vm.createContext({ REVIEW_NOTES_MAX_LENGTH: 800 });
+  new vm.Script(`${validatorsSource}\nthis.validDailyReviewResponse = validDailyReviewResponse;`)
+    .runInContext(context);
+
+  const audit = {
+    auditId: 'audit-row-2',
+    actionNumber: 7,
+    adminName: 'Andrew Smith',
+    actionTime: '2026-07-25 10:00:00',
+    instructor: 'QA Test Instructor',
+    classDate: '2026-07-25',
+    classLabel: '10:00 AM Kids\u2019 BJJ',
+    site: 'Rev',
+    duration: 0.5,
+    reason: 'QA forgotten sign-in',
+    result: 'added',
+    linkedRecordId: 'gib-admin-qa-audit-identity'
+  };
+  const mutatedResponse = {
+    ok: true,
+    test: true,
+    adminName: 'Stuart Turner',
+    date: '2026-07-25',
+    records: [reviewRecord()],
+    warnings: [],
+    auditHistory: [audit, { ...audit, auditId: 'audit-row-3' }]
+  };
+  assert.equal(context.validDailyReviewResponse(mutatedResponse, mutatedResponse.date), false);
+
+  const loadReviewSource = adminHtml.slice(
+    adminHtml.indexOf('async function loadReview('),
+    adminHtml.indexOf('function uniqueRequestId(')
+  );
+  const messages = [];
+  let successStateCalls = 0;
+  const element = () => ({
+    value: '',
+    textContent: '',
+    disabled: false,
+    hidden: false,
+    classList: { add() {}, remove() {} },
+    replaceChildren() {}
+  });
+  const elements = new Map();
+  Object.assign(context, {
+    schedule: {},
+    reviewLoadGeneration: 0,
+    currentDate: '',
+    currentRecords: [],
+    currentWarnings: [],
+    currentAuditHistory: [],
+    API: { review: '/.netlify/functions/m1-admin-review' },
+    $: selector => {
+      if (!elements.has(selector)) elements.set(selector, element());
+      return elements.get(selector);
+    },
+    nyDate: () => '2026-07-26',
+    defaultYesterday: () => '2026-07-25',
+    formatDateHeading: value => value,
+    showMessage: (_target, message) => messages.push(message),
+    requestJson: async () => mutatedResponse,
+    setLoggedIn: () => { successStateCalls += 1; },
+    renderReview: () => { successStateCalls += 1; },
+    setLoggedOut: () => {},
+    renderRecordList: () => {},
+    auditElement: () => {}
+  });
+  new vm.Script(`${loadReviewSource}\nthis.loadReview = loadReview;`).runInContext(context);
+  assert.equal(await context.loadReview(mutatedResponse.date), false);
+  assert.equal(successStateCalls, 0);
+  assert.equal(messages.at(-1), 'Daily Review returned an incomplete response. Nothing on the Sheet was changed.');
+});
+
+test('browser correction identity is schedule-reorder safe, opaque, and stable across indeterminate retries', () => {
+  const helpersSource = adminHtml.slice(
+    adminHtml.indexOf('function uniqueRequestId('),
+    adminHtml.indexOf('async function addInstructor(')
+  );
+  let randomCalls = 0;
+  const context = vm.createContext({
+    ADMIN_DURATION_OPTIONS: [1, 0.5],
+    Uint32Array,
+    JSON,
+    String,
+    Number,
+    clean: value => String(value == null ? '' : value).trim().replace(/\s+/gu, ' '),
+    crypto: {
+      getRandomValues(values) {
+        randomCalls += 1;
+        values.fill(randomCalls);
+        return values;
+      }
+    }
+  });
+  new vm.Script(`${helpersSource}\nthis.helpers = { readAdditionForm, requestIdForAddition, clearAdditionRequestId };`)
+    .runInContext(context);
+
+  const originalClass = `6:00 AM ${'C'.repeat(191)}`.slice(0, 200);
+  const form = {
+    dataset: {
+      reviewDate: '2026-08-10',
+      classLabel: originalClass,
+      site: 'Rev'
+    },
+    elements: {
+      duration: { value: '0.5' },
+      instructor: { value: 'QA Test First' },
+      reason: { value: 'QA forgotten sign-in' },
+      notes: { value: '' }
+    }
+  };
+  const firstAddition = context.helpers.readAdditionForm(form);
+  assert.equal(firstAddition.classLabel, originalClass);
+  assert.equal(firstAddition.duration, 0.5);
+  const firstId = context.helpers.requestIdForAddition(form, firstAddition);
+  assert.match(firstId, /^m1-2026-08-10-[a-f0-9]{24}$/u);
+  assert.equal(context.helpers.requestIdForAddition(form, firstAddition), firstId);
+  assert.equal(randomCalls, 1, 'An unchanged retry must reuse its original request ID.');
+
+  // A background schedule reorder cannot affect the class bound into the open form.
+  context.schedule = { days: { Monday: ['A different reordered class'] } };
+  assert.equal(context.helpers.readAdditionForm(form).classLabel, originalClass);
+
+  form.elements.instructor.value = 'QA Test Second';
+  const secondAddition = context.helpers.readAdditionForm(form);
+  const secondId = context.helpers.requestIdForAddition(form, secondAddition);
+  assert.notEqual(secondId, firstId);
+  assert.equal(randomCalls, 2);
+  context.helpers.clearAdditionRequestId(form);
+  assert.equal(form.dataset.requestId, undefined);
+
+  const addSource = adminHtml.slice(
+    adminHtml.indexOf('async function addInstructor('),
+    adminHtml.indexOf('function renderRecordList(')
+  );
+  assert.doesNotMatch(addSource, /schedule\.days|durationForClass/u);
+  assert.match(addSource, /requestIdForAddition\(form, addition\)/u);
+  assert.match(addSource, /clearAdditionRequestId\(form\)/u);
 });
 
 test('guest payload renders literally as text with no element, handler, code, or Admin call', () => {

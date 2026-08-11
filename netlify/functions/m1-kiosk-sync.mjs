@@ -28,7 +28,7 @@ export const config = {
 };
 
 const MAX_REQUEST_BYTES = 256_000;
-const DEPLOY_PREVIEW_HOST = /^deploy-preview-\d+--gib-live\.netlify\.app$/u;
+const DEPLOY_PREVIEW_HOST = /^(?:deploy-preview-\d+|[0-9a-f]{24})--gib-live\.netlify\.app$/u;
 const ROW_ID_PATTERN = /^gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2} (?:[01]\d|2[0-3]):[0-5]\d:)([0-9]|[0-5]\d)$/u;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
@@ -237,10 +237,10 @@ function sanitizeGoogleResults(google, forwardedRows, expectedTarget = 'test') {
 }
 
 function previewRuntimeConfig(env, requestUrl) {
-  return runtimeConfig({
-    GIB_TEST_WEBHOOK_URL: env.GIB_TEST_WEBHOOK_URL,
-    GIB_TEST_WEBHOOK_TOKEN: env.GIB_TEST_WEBHOOK_TOKEN
-  }, { requestUrl });
+  const fullConfig = runtimeConfig(env, { requestUrl });
+  return fullConfig
+    ? Object.freeze({ ...fullConfig, adminActionToken: '' })
+    : null;
 }
 
 function successResponse(target, results) {

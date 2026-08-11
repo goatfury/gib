@@ -434,6 +434,36 @@ test('production runtime fails closed if the exact Signins schema drifts', () =>
   assert.equal(harness.signins.values.length, 1);
 });
 
+test('production wrapper returns the complete read-only Daily Review contract', () => {
+  const harness = createHarness({
+    initialRows: [SIGNIN_HEADERS, sheetRow(kioskRow())]
+  });
+  const response = harness.post({
+    token: harness.derivedToken,
+    adminActionToken: 'production-admin-token',
+    action: 'dailyReview',
+    target: 'production',
+    date: '2026-08-06'
+  });
+  assert.deepEqual(Object.keys(response).sort(), [
+    'auditHistory',
+    'date',
+    'ok',
+    'records',
+    'warnings'
+  ]);
+  assert.equal(response.ok, true);
+  assert.equal(response.date, '2026-08-06');
+  assert.equal(response.records.length, 1);
+  assert.equal(response.records[0].displayId, 'sheet-row-2');
+  assert.equal(response.records[0].recordId, ROW_ID);
+  assert.equal(response.records[0].source, 'Kiosk');
+  assert.deepEqual(response.warnings, []);
+  assert.deepEqual(response.auditHistory, []);
+  assert.equal(harness.sheetWrites, 0);
+  assert.equal(harness.propertyWrites, 0);
+});
+
 test('all production auth paths reject TEST and missing persisted target locks before Sheet access', () => {
   for (const body of [
     { action: 'kioskSignIn', target: 'test', rows: [kioskRow()] },
