@@ -194,7 +194,8 @@
     .recorded {
       margin-top: 6px;
       color: #b9f6df;
-      font-size: .88rem;
+      font-size: .98rem;
+      font-weight: 800;
     }
     .blank {
       margin-top: 6px;
@@ -238,6 +239,16 @@
     .fixed span { display: block; overflow: hidden; text-overflow: ellipsis; font-size: .82rem; margin-top: 2px; }
     .form-actions { display: flex; gap: 8px; margin-top: 11px; }
     .add-status { margin-top: 10px; }
+    .class-outcome {
+      margin-top: 12px;
+      border: 1px solid rgba(64, 215, 160, .5);
+      border-radius: 10px;
+      background: rgba(64, 215, 160, .12);
+      color: #c8fae8;
+      padding: 10px 12px;
+      line-height: 1.4;
+    }
+    .class-outcome strong { display: block; margin-bottom: 2px; color: #e7fff5; }
     .add-form[aria-busy="true"] { opacity: .82; }
     .forgotten-action {
       min-height: 44px;
@@ -524,6 +535,7 @@
       let currentAuditHistory = [];
       let persistentReviewOutcome = null;
       let reviewLoadGeneration = 0;
+      let additionInteractionGeneration = 0;
       let currentAdminName = '';
       let testMode = false;
       let adminRequestToken = '';
@@ -946,9 +958,13 @@
         element.style.display = message ? 'block' : 'none';
       }
 
-      function showPersistentReviewOutcome(date, message, tone = 'error') {
-        persistentReviewOutcome = { date, message, tone };
-        if (currentDate === date) showMessage($('#reviewMessage'), message, tone);
+      function setClassOutcome(date, classLabel, instructor, result) {
+        persistentReviewOutcome = { date, classLabel, instructor, result };
+      }
+
+      function clearClassOutcome() {
+        persistentReviewOutcome = null;
+        document.querySelectorAll('.class-outcome').forEach(element => element.remove());
       }
 
       function toast(message) {
@@ -1865,6 +1881,7 @@
         const instructors = [...new Set(matches.map(record => clean(record.instructor)).filter(Boolean))];
         const row = makeElement('article', 'class-row');
         row.dataset.classIndex = String(index);
+        row.tabIndex = -1;
         const main = makeElement('div', 'class-main');
         const summary = document.createElement('div');
         summary.append(makeElement('div', 'class-label', label));
@@ -1889,7 +1906,24 @@
         toggle.type = 'button';
         toggle.dataset.classIndex = String(index);
         main.append(summary, toggle);
-        row.append(main, buildAddForm(label, index));
+        row.append(main);
+        if (
+          persistentReviewOutcome
+          && persistentReviewOutcome.date === currentDate
+          && normalize(persistentReviewOutcome.classLabel) === normalize(label)
+        ) {
+          const outcome = makeElement('div', 'class-outcome');
+          outcome.setAttribute('role', 'status');
+          outcome.setAttribute('aria-live', 'polite');
+          outcome.setAttribute('aria-atomic', 'true');
+          const title = persistentReviewOutcome.result === 'added' ? 'Added' : 'Already recorded';
+          const detail = persistentReviewOutcome.result === 'added'
+            ? `${persistentReviewOutcome.instructor} is now signed in for this class.`
+            : `${persistentReviewOutcome.instructor} is already signed in for this class. Nothing else was added.`;
+          outcome.append(makeElement('strong', '', title), makeElement('span', '', detail));
+          row.append(outcome);
+        }
+        row.append(buildAddForm(label, index));
         return row;
       }
 
@@ -1928,20 +1962,13 @@
         if (currentWarnings.length) {
           notices.push(`${currentWarnings.length} incomplete Sheet row warning${currentWarnings.length === 1 ? '' : 's'} shown below.`);
         }
-        if (persistentReviewOutcome && persistentReviewOutcome.date === currentDate) {
-          showMessage(
-            $('#reviewMessage'),
-            persistentReviewOutcome.message,
-            persistentReviewOutcome.tone
-          );
-        } else {
-          showMessage($('#reviewMessage'), notices.join(' '));
-        }
+        showMessage($('#reviewMessage'), notices.join(' '));
       }
 
       async function loadReview(dateString, options = {}) {
         if (!schedule) return false;
         const preserveOnFailure = options.preserveOnFailure === true;
+        const expectedAdditionInteraction = options.additionInteractionGeneration;
         if (options.preserveOutcome !== true) persistentReviewOutcome = null;
         const generation = ++reviewLoadGeneration;
         currentDate = dateString;
@@ -1954,10 +1981,14 @@
           : (dateString === today ? 'Today · America/New_York' : 'America/New_York');
         $('#nextDay').disabled = dateString >= today;
         showMessage($('#reviewMessage'), '');
-        $('#reviewSection').classList.add('loading');
+        if (options.quiet !== true) $('#reviewSection').classList.add('loading');
         try {
           const data = await requestJson(API.review, { date: dateString });
           if (generation !== reviewLoadGeneration) return false;
+          if (
+            Number.isInteger(expectedAdditionInteraction)
+            && expectedAdditionInteraction !== additionInteractionGeneration
+          ) return false;
           if (!validDailyReviewResponse(data, dateString)) {
             throw new Error('Daily Review returned an incomplete response. Nothing on the Sheet was changed.');
           }
@@ -1989,11 +2020,11 @@
               auditElement
             );
           }
-          showMessage($('#reviewMessage'), error.message);
+          if (options.quiet !== true) showMessage($('#reviewMessage'), error.message);
           return false;
         } finally {
           if (generation === reviewLoadGeneration) {
-            $('#reviewSection').classList.remove('loading');
+            if (options.quiet !== true) $('#reviewSection').classList.remove('loading');
           }
         }
       }
@@ -2051,8 +2082,7 @@
         delete form.dataset.requestFingerprint;
       }
 
-      function resetAdditionConfirmation(form, clearStatus = true) {
-        delete form.dataset.confirmFingerprint;
+      function resetAdditionFormState(form, clearStatus = true) {
         const submit = form.querySelector('.confirm-add');
         if (submit && !submit.disabled) submit.textContent = 'Review and add';
         if (clearStatus) {
@@ -2111,40 +2141,64 @@
         renderReview();
       }
 
+      function focusClassCard(index) {
+        const row = document.querySelector(`.class-row[data-class-index="${index}"]`);
+        if (!row) return;
+        row.focus({ preventScroll: true });
+        row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+
+      async function refreshConfirmedAddition(request, data, classIndex, interactionGeneration) {
+        const refreshed = await loadReview(request.date, {
+          preserveOnFailure: true,
+          preserveOutcome: true,
+          quiet: true,
+          additionInteractionGeneration: interactionGeneration
+        });
+        if (
+          !refreshed
+          || interactionGeneration !== additionInteractionGeneration
+          || currentDate !== request.date
+        ) return;
+        const refreshedRecord = currentRecords.find(record => record.displayId === data.linkedDisplayId);
+        const refreshedAudit = currentAuditHistory.find(audit => (
+          audit.actionNumber === data.auditActionNumber
+          && audit.result === data.result
+          && audit.linkedRecordId === data.linkedRecordId
+        ));
+        const refreshVerified = Boolean(
+          refreshedRecord
+          && refreshedAudit
+          && (data.result !== 'added' || refreshedRecord.source === 'Admin-added')
+        );
+        if (!refreshVerified) upsertConfirmedAddition(request, data);
+        focusClassCard(classIndex);
+      }
+
       async function addInstructor(form) {
         const addition = readAdditionForm(form);
         if (!addition) {
-          showMessage($('#reviewMessage'), 'Enter the instructor and a clear reason. Choose the duration explicitly.');
+          showMessage(form.querySelector('.add-status'), 'Enter the instructor and a clear reason. Choose the duration explicitly.');
           return;
         }
         const { date, classLabel, site, duration, instructor, reason } = addition;
         const key = `${date}|${normalize(classLabel)}|${normalize(site)}|${normalize(instructor)}`;
         if (inFlightAdditions.has(key)) return;
-        const fingerprint = additionFingerprint(addition);
-        if (form.dataset.confirmFingerprint !== fingerprint) {
-          form.dataset.confirmFingerprint = fingerprint;
-          const submit = form.querySelector('.confirm-add');
-          submit.textContent = 'Confirm add';
-          const review = `Review: add ${instructor} to ${classLabel} on ${date} for ${duration} hr. Select Confirm add to continue.`;
-          showMessage(form.querySelector('.add-status'), review, 'working');
-          showMessage($('#reviewMessage'), review, 'working');
-          return;
-        }
-
         inFlightAdditions.add(key);
-        delete form.dataset.confirmFingerprint;
-        setAdditionWorking(form, true, 'Adding…');
-        showMessage($('#reviewMessage'), 'Adding…', 'working');
+        clearClassOutcome();
+        setAdditionWorking(form, true, `Adding ${instructor}…`);
+        const slowTimer = window.setTimeout(() => {
+          if (form.getAttribute('aria-busy') === 'true') {
+            showMessage(form.querySelector('.add-status'), 'Still adding — do not submit again.', 'working');
+          }
+        }, 3_000);
+        let completed = false;
         try {
           const request = Object.freeze({
             requestId: requestIdForAddition(form, addition),
             ...addition
           });
-          const { data, reconciled } = await requestAdditionWithReconciliation(request, () => {
-            const message = 'Adding… checking the same request for a completed result.';
-            showMessage(form.querySelector('.add-status'), message, 'working');
-            showMessage($('#reviewMessage'), message, 'working');
-          });
+          const { data } = await requestAdditionWithReconciliation(request, () => {});
           if (!validAdminAdditionResponse(data, {
             requestId: request.requestId,
             adminName: currentAdminName,
@@ -2156,62 +2210,41 @@
             reason: request.reason,
             notes: request.notes
           })) {
-            throw new Error('Google did not fully confirm the correction. Success is not being reported.');
+            throw new Error('The correction could not be confirmed.');
           }
           clearAdditionRequestId(form);
-          showPersistentReviewOutcome(
-            date,
-            `${instructor} is confirmed. Refreshing Daily Review…`,
-            'working'
-          );
+          completed = true;
+          setClassOutcome(date, classLabel, instructor, data.result);
           upsertConfirmedAddition(request, data);
-          const refreshed = await loadReview(date, {
-            preserveOnFailure: true,
-            preserveOutcome: true
-          });
-          const refreshedRecord = currentRecords.find(record => record.displayId === data.linkedDisplayId);
-          const refreshedAudit = currentAuditHistory.find(audit => (
-            audit.actionNumber === data.auditActionNumber
-            && audit.result === data.result
-            && audit.linkedRecordId === data.linkedRecordId
-          ));
-          const refreshVerified = Boolean(
-            refreshed
-            && refreshedRecord
-            && refreshedAudit
-            && (data.result !== 'added' || refreshedRecord.source === 'Admin-added')
-          );
-          if (!refreshVerified) upsertConfirmedAddition(request, data);
-          if (refreshVerified) {
-            toast(data.result === 'added'
-              ? (testMode ? 'Instructor added to the TEST Sheet' : 'Instructor added to the payroll Sheet')
-              : 'Already recorded — no duplicate row created');
-          }
-          const outcome = data.result === 'added'
-            ? `${instructor} was added to ${classLabel}.`
-            : `The exact ${instructor} sign-in already existed; no duplicate payroll row was created.`;
-          const confirmation = `${outcome} Google confirmed audit #${data.auditActionNumber}.`;
-          if (!$('#appPanel').hidden) {
-            showPersistentReviewOutcome(
-              date,
-              `${confirmation}${reconciled ? ' The original unclear response was safely reconciled with the same request.' : ''} ${refreshVerified
-                ? 'Daily Review refreshed immediately.'
-                : 'The correction is confirmed and shown above; the fresh Sheet read is still pending. Do not submit it again.'}`,
-              'success'
-            );
+          if (currentDate === date) focusClassCard(form.dataset.classIndex);
+          if (currentDate === date) {
+            const interactionGeneration = additionInteractionGeneration;
+            void refreshConfirmedAddition(
+              request,
+              data,
+              form.dataset.classIndex,
+              interactionGeneration
+            ).catch(() => {});
           }
         } catch (error) {
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
           } else {
-            const message = `${error.message} This correction is not confirmed. Its request ID was preserved for a safe retry.`;
-            showMessage(form.querySelector('.add-status'), message);
-            showPersistentReviewOutcome(date, message);
+            showMessage(
+              form.querySelector('.add-status'),
+              'Could not confirm the sign-in. Nothing else should be submitted yet. Try again later or use the Sheet.'
+            );
           }
         } finally {
+          window.clearTimeout(slowTimer);
           inFlightAdditions.delete(key);
           setAdditionWorking(form, false);
-          resetAdditionConfirmation(form, false);
+          if (completed) {
+            form.reset();
+            form.classList.remove('open');
+            applyPendingScheduleToReview();
+          }
+          if (currentDate === date) focusClassCard(form.dataset.classIndex);
         }
       }
 
@@ -2303,6 +2336,8 @@
       $('#reviewSection').addEventListener('click', event => {
         const toggle = event.target.closest('.add-toggle');
         if (toggle) {
+          additionInteractionGeneration += 1;
+          clearClassOutcome();
           const form = document.querySelector(`[data-add-form="${toggle.dataset.classIndex}"]`);
           form.classList.add('open');
           toggle.hidden = true;
@@ -2314,7 +2349,7 @@
           const form = document.querySelector(`[data-add-form="${cancel.dataset.classIndex}"]`);
           if (form.getAttribute('aria-busy') === 'true') return;
           form.reset();
-          resetAdditionConfirmation(form);
+          resetAdditionFormState(form);
           form.classList.remove('open');
           document.querySelector(`.add-toggle[data-class-index="${cancel.dataset.classIndex}"]`).hidden = false;
           applyPendingScheduleToReview();
@@ -2322,7 +2357,7 @@
       });
       $('#reviewSection').addEventListener('input', event => {
         const form = event.target.closest('.add-form');
-        if (form && form.getAttribute('aria-busy') !== 'true') resetAdditionConfirmation(form);
+        if (form && form.getAttribute('aria-busy') !== 'true') resetAdditionFormState(form);
       });
       $('#reviewSection').addEventListener('submit', event => {
         if (!event.target.matches('.add-form')) return;

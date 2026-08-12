@@ -1046,8 +1046,8 @@ test('exact Admin request replay returns the original result and one audit entry
   assert.equal(first.result, 'added');
   assert.equal(retry.result, 'added');
   assert.equal(retry.requestId, first.requestId);
-  assert.equal(harness.signins.values.length, 2);
-  assert.equal(harness.audit.values.length, 2);
+  assert.equal(harness.signins.values.length - 1, 1, 'One logical request may create at most one sign-in row.');
+  assert.equal(harness.audit.values.length - 1, 1, 'One logical request may create at most one audit action.');
   assert.ok(first.auditActionNumber > 0);
   assert.equal(retry.auditActionNumber, first.auditActionNumber);
 });
@@ -1210,7 +1210,7 @@ test('Daily Review workflow is yesterday-first, date-selectable, complete, and e
   assert.equal(validNonFutureDate('2026-07-27', fixedDateNow), false);
 });
 
-test('Admin addition UX binds fixed identity, requires duration, confirms, refreshes, and labels Admin rows', () => {
+test('Admin addition UX binds fixed identity, requires duration, starts immediately, refreshes, and labels Admin rows', () => {
   assert.match(adminHtml, /fixedValue\('Date'/);
   assert.match(adminHtml, /fixedValue\('Class'/);
   assert.match(adminHtml, /fixedValue\('Site'/);
@@ -1223,8 +1223,9 @@ test('Admin addition UX binds fixed identity, requires duration, confirms, refre
     adminHtml.indexOf('async function addInstructor('),
     adminHtml.indexOf('function renderRecordList(')
   ), /window\.confirm\(/);
-  assert.match(adminHtml, /submit\.textContent = 'Confirm add'/);
-  assert.match(adminHtml, /await loadReview\(date, \{/);
+  assert.doesNotMatch(adminHtml, /submit\.textContent = 'Confirm add'/);
+  assert.match(adminHtml, /setAdditionWorking\(form, true, `Adding \$\{instructor\}…`\)/u);
+  assert.match(adminHtml, /refreshConfirmedAddition\([\s\S]*loadReview\(request\.date, \{/);
   assert.match(adminHtml, /Admin-added/);
   assert.doesNotMatch(adminHtml, /payroll approval|dashboard|analytics|void sign-in/i);
   assert.doesNotMatch(adminHtml, /<button[^>]*>[^<]*(?:schedule|void|approve)/i);
@@ -1242,7 +1243,7 @@ test('Daily Review keeps every correction path visible and renders strict manual
   assert.match(classRowSource, /instructors\.join\(' \+ '\)/);
   assert.match(classRowSource, /Add forgotten instructor/);
   assert.match(classRowSource, /record\.source === 'Manual'[\s\S]*Manual Sheet row/);
-  assert.match(classRowSource, /row\.append\(main, buildAddForm\(label, index\)\)/);
+  assert.match(classRowSource, /row\.append\(main\)[\s\S]*row\.append\(buildAddForm\(label, index\)\)/);
   assert.equal((classRowSource.match(/return row;/g) || []).length, 1);
   assert.match(adminHtml, /\.forgotten-action\s*\{[\s\S]*min-height:\s*44px/);
 
@@ -1255,8 +1256,8 @@ test('Daily Review keeps every correction path visible and renders strict manual
   assert.match(adminHtml, /function auditElement\(/);
   assert.match(adminHtml, /function validDailyReviewResponse\(/);
   assert.match(adminHtml, /function validAdminAdditionResponse\(/);
-  assert.match(adminHtml, /Google did not fully confirm the correction\. Success is not being reported\./);
-  assert.match(adminHtml, /Daily Review refreshed immediately\./);
+  assert.match(adminHtml, /Could not confirm the sign-in\. Nothing else should be submitted yet\. Try again later or use the Sheet\./);
+  assert.doesNotMatch(adminHtml, /Google did not fully confirm the correction\. Success is not being reported\./);
   assert.match(adminHtml, /const generation = \+\+reviewLoadGeneration/);
   assert.match(adminHtml, /generation !== reviewLoadGeneration/);
   assert.match(adminHtml, /record\.displayId === data\.linkedDisplayId/);
@@ -1504,12 +1505,8 @@ test('browser reconciles one ambiguous addition with the exact frozen request an
     /could not reach/u
   );
   assert.equal(ambiguousCalls, 2);
-  assert.match(adminHtml, /setAdditionWorking\(form, true, 'Adding…'\)/u);
   assert.match(adminHtml, /Array\.from\(form\.elements\)[\s\S]*control\.disabled = working/u);
-  assert.match(adminHtml, /showPersistentReviewOutcome\([\s\S]*Google confirmed audit/u);
   assert.match(adminHtml, /upsertConfirmedAddition\(request, data\)/u);
-  assert.match(adminHtml, /The original unclear response was safely reconciled with the same request\./u);
-  assert.match(adminHtml, /This correction is not confirmed\. Its request ID was preserved for a safe retry\./u);
   assert.doesNotMatch(
     adminHtml.slice(
       adminHtml.indexOf('async function requestAdditionWithReconciliation('),
@@ -1519,106 +1516,414 @@ test('browser reconciles one ambiguous addition with the exact frozen request an
   );
 });
 
-test('browser addition helpers visibly work, persist each outcome, and insert a confirmed instructor once', () => {
-  const busySource = adminHtml.slice(
-    adminHtml.indexOf('function resetAdditionConfirmation('),
-    adminHtml.indexOf('function ambiguousAdditionFailure(')
-  );
-  const status = { textContent: '', style: {}, classList: { toggle() {} } };
-  const submit = { disabled: false, textContent: 'Confirm add' };
-  const controls = [submit, { disabled: false }, { disabled: false }];
+function deferredPromise() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function additionResponse(result, overrides = {}) {
+  return {
+    ok: true,
+    test: true,
+    result,
+    requestId: 'm1-2026-08-10-111111112222222233333333',
+    linkedRecordId: result === 'added' ? 'gib-admin-qa-visible' : 'gib-admin-existing',
+    linkedDisplayId: result === 'added' ? 'sheet-row-99' : 'sheet-row-14',
+    auditActionNumber: result === 'added' ? 4 : 5,
+    ...overrides
+  };
+}
+
+function additionUiHarness({ responseQueue, initialRecords = [] }) {
+  const instructor = { value: 'QA Test Forgotten Instructor C', disabled: false };
+  const duration = { value: '1', disabled: false };
+  const reason = { value: 'QA TEST missed sign-in', disabled: false };
+  const notes = { value: 'DO NOT PAY', disabled: false };
+  const submit = { textContent: 'Review and add', disabled: false };
+  const cancel = { textContent: 'Cancel', disabled: false };
+  const controls = [instructor, duration, reason, notes, submit, cancel];
+  Object.assign(controls, { instructor, duration, reason, notes });
+  const status = {
+    textContent: '',
+    tone: '',
+    style: {},
+    classList: { toggle() {} }
+  };
   const attributes = new Map();
+  const formClasses = new Set(['add-form', 'open']);
+  let resetCalls = 0;
   const form = {
-    dataset: {},
+    dataset: {
+      reviewDate: '2026-08-10',
+      classLabel: '6:00 AM BJJ (Level 2)',
+      site: 'Rev',
+      classIndex: '3'
+    },
     elements: controls,
     setAttribute(name, value) { attributes.set(name, value); },
+    getAttribute(name) { return attributes.get(name) || null; },
     querySelector(selector) {
       if (selector === '.confirm-add') return submit;
       if (selector === '.add-status') return status;
       return null;
-    }
-  };
-  const busyContext = vm.createContext({
-    Array,
-    showMessage(element, message) {
-      element.textContent = message;
-      element.style.display = message ? 'block' : 'none';
-    }
-  });
-  new vm.Script(`${busySource}\nthis.setAdditionWorking = setAdditionWorking;`)
-    .runInContext(busyContext);
-  busyContext.setAdditionWorking(form, true, 'Adding…');
-  assert.equal(attributes.get('aria-busy'), 'true');
-  assert.equal(submit.textContent, 'Adding…');
-  assert.equal(status.textContent, 'Adding…');
-  assert.equal(status.style.display, 'block');
-  assert.ok(controls.every(control => control.disabled));
-  busyContext.setAdditionWorking(form, false);
-  assert.equal(attributes.get('aria-busy'), 'false');
-  assert.equal(submit.textContent, 'Review and add');
-  assert.ok(controls.every(control => !control.disabled));
-
-  const outcomeSource = adminHtml.slice(
-    adminHtml.indexOf('function showPersistentReviewOutcome('),
-    adminHtml.indexOf('function toast(')
-  );
-  const reviewMessage = { textContent: '', tone: '', style: {}, classList: { toggle() {} } };
-  const outcomeContext = vm.createContext({
-    currentDate: '2026-08-10',
-    persistentReviewOutcome: null,
-    $: selector => {
-      assert.equal(selector, '#reviewMessage');
-      return reviewMessage;
     },
-    showMessage(element, message, tone) {
-      element.textContent = message;
+    classList: {
+      add(name) { formClasses.add(name); },
+      remove(name) { formClasses.delete(name); },
+      contains(name) { return formClasses.has(name); }
+    },
+    reset() { resetCalls += 1; }
+  };
+  const timers = [];
+  const clearedTimers = [];
+  const requests = [];
+  const outcomes = [];
+  const focusCalls = [];
+  let renders = 0;
+  let scheduleApplications = 0;
+  const card = {
+    focus(options) { focusCalls.push(['focus', options]); },
+    scrollIntoView(options) { focusCalls.push(['scroll', options]); }
+  };
+  const queue = [...responseQueue];
+  const context = vm.createContext({
+    ADMIN_DURATION_OPTIONS: [1, 0.5],
+    Array,
+    JSON,
+    Object,
+    String,
+    Number,
+    currentDate: '2026-08-10',
+    currentRecords: initialRecords.map(record => ({ ...record })),
+    currentAuditHistory: [],
+    currentAdminName: 'Stuart Turner',
+    additionInteractionGeneration: 0,
+    inFlightAdditions: new Set(),
+    clean: value => String(value == null ? '' : value).trim().replace(/\s+/gu, ' '),
+    normalize: value => String(value == null ? '' : value).trim().toLocaleLowerCase('en-US'),
+    uniqueRequestId: () => 'm1-2026-08-10-111111112222222233333333',
+    clearClassOutcome() { outcomes.length = 0; },
+    setClassOutcome(date, classLabel, instructorName, result) {
+      outcomes.push({ date, classLabel, instructor: instructorName, result });
+    },
+    showMessage(element, message, tone = 'error') {
+      element.textContent = message || '';
       element.tone = tone;
+      element.style.display = message ? 'block' : 'none';
+    },
+    requestAdditionWithReconciliation(request) {
+      requests.push(request);
+      const next = queue.shift();
+      if (!next) throw new Error('Unexpected addition request.');
+      return typeof next === 'function' ? next(request) : next;
+    },
+    validAdminAdditionResponse: () => true,
+    renderReview() { renders += 1; },
+    loadReview: async () => false,
+    applyPendingScheduleToReview() { scheduleApplications += 1; },
+    setLoggedOut() {},
+    document: { querySelector: () => card },
+    window: {
+      setTimeout(callback, milliseconds) {
+        timers.push({ callback, milliseconds });
+        return timers.length;
+      },
+      clearTimeout(timerId) { clearedTimers.push(timerId); }
     }
   });
-  new vm.Script(`${outcomeSource}\nthis.showPersistentReviewOutcome = showPersistentReviewOutcome;`)
-    .runInContext(outcomeContext);
-  for (const [message, tone] of [
-    ['QA Test Instructor was added. Google confirmed audit #1.', 'success'],
-    ['The exact QA Test Instructor sign-in already existed; no duplicate payroll row was created.', 'success'],
-    ['This correction is not confirmed. Its request ID was preserved for a safe retry.', 'error']
-  ]) {
-    outcomeContext.showPersistentReviewOutcome('2026-08-10', message, tone);
-    assert.equal(reviewMessage.textContent, message);
-    assert.equal(reviewMessage.tone, tone);
-    assert.equal(outcomeContext.persistentReviewOutcome.message, message);
-  }
-
+  const helpersSource = adminHtml.slice(
+    adminHtml.indexOf('function readAdditionForm('),
+    adminHtml.indexOf('function ambiguousAdditionFailure(')
+  );
   const upsertSource = adminHtml.slice(
     adminHtml.indexOf('function upsertConfirmedAddition('),
     adminHtml.indexOf('async function addInstructor(')
   );
-  let renders = 0;
-  const upsertContext = vm.createContext({
+  const addSource = adminHtml.slice(
+    adminHtml.indexOf('async function addInstructor('),
+    adminHtml.indexOf('function renderRecordList(')
+  );
+  new vm.Script(`${helpersSource}\n${upsertSource}\n${addSource}\nthis.addInstructor = addInstructor;`)
+    .runInContext(context);
+  return {
+    context,
+    form,
+    controls,
+    instructor,
+    duration,
+    reason,
+    notes,
+    submit,
+    status,
+    attributes,
+    timers,
+    clearedTimers,
+    requests,
+    outcomes,
+    focusCalls,
+    get resetCalls() { return resetCalls; },
+    get renders() { return renders; },
+    get scheduleApplications() { return scheduleApplications; }
+  };
+}
+
+function fakeAdminElement(tagName) {
+  let ownText = '';
+  return {
+    tagName: String(tagName).toUpperCase(),
+    className: '',
+    dataset: {},
+    childNodes: [],
+    attributes: new Map(),
+    append(...children) { this.childNodes.push(...children); },
+    appendChild(child) { this.childNodes.push(child); return child; },
+    setAttribute(name, value) { this.attributes.set(name, value); },
+    get textContent() {
+      return ownText + this.childNodes.map(child => child.textContent || '').join('');
+    },
+    set textContent(value) {
+      ownText = String(value);
+      this.childNodes = [];
+    }
+  };
+}
+
+function renderClassOutcome(result, records) {
+  const classRowSource = adminHtml.slice(
+    adminHtml.indexOf('function classRow('),
+    adminHtml.indexOf('function renderReview(')
+  );
+  const makeElement = (tagName, className = '', text = '') => {
+    const element = fakeAdminElement(tagName);
+    element.className = className;
+    if (text) element.textContent = text;
+    return element;
+  };
+  const context = vm.createContext({
     currentDate: '2026-08-10',
-    currentRecords: [],
-    renderReview: () => { renders += 1; }
+    persistentReviewOutcome: {
+      date: '2026-08-10',
+      classLabel: '6:00 AM BJJ (Level 2)',
+      instructor: 'QA Test Forgotten Instructor C',
+      result
+    },
+    clean: value => String(value == null ? '' : value).trim(),
+    normalize: value => String(value == null ? '' : value).trim().toLocaleLowerCase('en-US'),
+    makeElement,
+    buildAddForm: () => makeElement('form', 'add-form'),
+    document: { createElement: fakeAdminElement }
   });
-  new vm.Script(`${upsertSource}\nthis.upsertConfirmedAddition = upsertConfirmedAddition;`)
-    .runInContext(upsertContext);
-  const request = {
-    date: '2026-08-10',
+  new vm.Script(`${classRowSource}\nthis.classRow = classRow;`).runInContext(context);
+  const row = context.classRow('6:00 AM BJJ (Level 2)', 3, records);
+  return {
+    row,
+    outcome: row.childNodes.find(child => child.className === 'class-outcome')
+  };
+}
+
+test('forgotten sign-in starts immediately, disables the form, preserves it, and shows the three-second update', async () => {
+  const deferred = deferredPromise();
+  const harness = additionUiHarness({ responseQueue: [() => deferred.promise] });
+  const addition = harness.context.addInstructor(harness.form);
+
+  assert.equal(harness.requests.length, 1, 'The first Review and add submit must start the request.');
+  assert.equal(harness.attributes.get('aria-busy'), 'true');
+  assert.equal(harness.submit.textContent, 'Adding…');
+  assert.equal(harness.status.textContent, 'Adding QA Test Forgotten Instructor C…');
+  assert.equal(harness.status.tone, 'working');
+  assert.ok(harness.controls.every(control => control.disabled));
+  assert.equal(harness.form.classList.contains('open'), true);
+  assert.deepEqual(
+    [harness.instructor.value, harness.duration.value, harness.reason.value, harness.notes.value],
+    ['QA Test Forgotten Instructor C', '1', 'QA TEST missed sign-in', 'DO NOT PAY']
+  );
+  assert.equal(harness.timers.length, 1);
+  assert.equal(harness.timers[0].milliseconds, 3_000);
+
+  harness.timers[0].callback();
+  assert.equal(harness.status.textContent, 'Still adding — do not submit again.');
+  assert.equal(harness.submit.disabled, true);
+  assert.equal(harness.form.classList.contains('open'), true);
+
+  deferred.resolve({ data: additionResponse('added') });
+  await addition;
+});
+
+test('confirmed add closes the form, keeps names dominant, and renders a persistent class-card result', async () => {
+  const harness = additionUiHarness({
+    responseQueue: [Promise.resolve({ data: additionResponse('added') })],
+    initialRecords: [{
+      displayId: 'sheet-row-14',
+      recordId: 'existing',
+      instructor: 'QA Test Existing Instructor',
+      classLabel: '6:00 AM BJJ (Level 2)',
+      site: 'Rev',
+      source: 'Kiosk',
+      reviewRequired: false
+    }]
+  });
+  await harness.context.addInstructor(harness.form);
+
+  assert.equal(harness.form.classList.contains('open'), false);
+  assert.equal(harness.resetCalls, 1);
+  assert.equal(harness.submit.disabled, false);
+  assert.equal(harness.submit.textContent, 'Review and add');
+  assert.equal(harness.outcomes.length, 1);
+  assert.equal(harness.outcomes[0].result, 'added');
+  assert.deepEqual(
+    Array.from(harness.context.currentRecords, record => record.instructor),
+    ['QA Test Existing Instructor', 'QA Test Forgotten Instructor C']
+  );
+  assert.ok(harness.focusCalls.some(([action]) => action === 'focus'));
+  assert.ok(harness.focusCalls.some(([action]) => action === 'scroll'));
+
+  const firstRender = renderClassOutcome('added', harness.context.currentRecords);
+  const secondRender = renderClassOutcome('added', harness.context.currentRecords);
+  assert.ok(firstRender.outcome);
+  assert.equal(firstRender.outcome.childNodes[0].textContent, 'Added');
+  assert.equal(
+    firstRender.outcome.childNodes[1].textContent,
+    'QA Test Forgotten Instructor C is now signed in for this class.'
+  );
+  assert.match(firstRender.row.textContent, /QA Test Existing Instructor/);
+  assert.match(firstRender.row.textContent, /QA Test Forgotten Instructor C/);
+  assert.equal(secondRender.outcome.textContent, firstRender.outcome.textContent);
+});
+
+test('already-recorded result closes the form, preserves existing names, and is not styled as an error', async () => {
+  const existing = {
+    displayId: 'sheet-row-14',
+    recordId: 'gib-admin-existing',
+    instructor: 'QA Test Forgotten Instructor C',
     classLabel: '6:00 AM BJJ (Level 2)',
-    duration: 1,
-    instructor: 'QA Test Forgotten Instructor A',
     site: 'Rev',
-    notes: 'DO NOT PAY'
+    source: 'Admin-added',
+    reviewRequired: false
   };
-  const response = {
-    linkedDisplayId: 'sheet-row-99',
-    linkedRecordId: 'gib-admin-qa-browser-visible'
-  };
-  upsertContext.upsertConfirmedAddition(request, response);
-  assert.equal(renders, 1);
-  assert.equal(upsertContext.currentRecords.length, 1);
-  assert.equal(upsertContext.currentRecords[0].instructor, request.instructor);
-  assert.equal(upsertContext.currentRecords[0].source, 'Admin-added');
-  upsertContext.upsertConfirmedAddition(request, response);
-  assert.equal(upsertContext.currentRecords.length, 1, 'A confirmation replay must not duplicate the visible instructor.');
+  const harness = additionUiHarness({
+    responseQueue: [Promise.resolve({ data: additionResponse('already exists') })],
+    initialRecords: [existing]
+  });
+  await harness.context.addInstructor(harness.form);
+
+  assert.equal(harness.form.classList.contains('open'), false);
+  assert.equal(harness.context.currentRecords.length, 1);
+  assert.equal(harness.context.currentRecords[0].instructor, existing.instructor);
+  const rendered = renderClassOutcome('already exists', harness.context.currentRecords);
+  assert.equal(rendered.outcome.childNodes[0].textContent, 'Already recorded');
+  assert.equal(
+    rendered.outcome.childNodes[1].textContent,
+    'QA Test Forgotten Instructor C is already signed in for this class. Nothing else was added.'
+  );
+  assert.equal(rendered.outcome.className, 'class-outcome');
+  assert.doesNotMatch(rendered.outcome.className, /error|danger|red/i);
+  assert.match(rendered.row.textContent, /QA Test Forgotten Instructor C/);
+  assert.match(adminHtml, /\.class-outcome\s*\{[\s\S]*rgba\(64, 215, 160/);
+});
+
+test('true failure preserves the form and request ID, then permits a same-ID retry', async () => {
+  const harness = additionUiHarness({
+    responseQueue: [
+      Promise.reject(new Error('Unproven completion')),
+      Promise.resolve({ data: additionResponse('added') })
+    ]
+  });
+  await harness.context.addInstructor(harness.form);
+
+  assert.equal(harness.form.classList.contains('open'), true);
+  assert.equal(harness.resetCalls, 0);
+  assert.equal(harness.submit.disabled, false);
+  assert.equal(harness.submit.textContent, 'Review and add');
+  assert.equal(
+    harness.status.textContent,
+    'Could not confirm the sign-in. Nothing else should be submitted yet. Try again later or use the Sheet.'
+  );
+  assert.equal(harness.status.tone, 'error');
+  assert.deepEqual(
+    [harness.instructor.value, harness.duration.value, harness.reason.value, harness.notes.value],
+    ['QA Test Forgotten Instructor C', '1', 'QA TEST missed sign-in', 'DO NOT PAY']
+  );
+  const preservedRequestId = harness.form.dataset.requestId;
+  assert.equal(preservedRequestId, 'm1-2026-08-10-111111112222222233333333');
+
+  await harness.context.addInstructor(harness.form);
+  assert.equal(harness.requests.length, 2);
+  assert.equal(harness.requests[0].requestId, preservedRequestId);
+  assert.equal(harness.requests[1].requestId, preservedRequestId);
+  assert.equal(harness.form.classList.contains('open'), false);
+});
+
+test('a newer add-form interaction invalidates an older confirmed-addition readback', async () => {
+  const readback = deferredPromise();
+  let upserts = 0;
+  let focusCalls = 0;
+  const source = adminHtml.slice(
+    adminHtml.indexOf('async function refreshConfirmedAddition('),
+    adminHtml.indexOf('async function addInstructor(')
+  );
+  const context = vm.createContext({
+    additionInteractionGeneration: 7,
+    currentDate: '2026-08-10',
+    currentRecords: [{ displayId: 'sheet-row-99', source: 'Admin-added' }],
+    currentAuditHistory: [{
+      actionNumber: 4,
+      result: 'added',
+      linkedRecordId: 'gib-admin-qa-visible'
+    }],
+    loadReview: () => readback.promise,
+    upsertConfirmedAddition: () => { upserts += 1; },
+    focusClassCard: () => { focusCalls += 1; }
+  });
+  new vm.Script(`${source}\nthis.refreshConfirmedAddition = refreshConfirmedAddition;`)
+    .runInContext(context);
+  const refresh = context.refreshConfirmedAddition(
+    { date: '2026-08-10' },
+    {
+      linkedDisplayId: 'sheet-row-99',
+      linkedRecordId: 'gib-admin-qa-visible',
+      auditActionNumber: 4,
+      result: 'added'
+    },
+    '3',
+    7
+  );
+  context.additionInteractionGeneration = 8;
+  readback.resolve(true);
+  await refresh;
+
+  assert.equal(upserts, 0);
+  assert.equal(focusCalls, 0);
+  assert.match(adminHtml, /additionInteractionGeneration \+= 1;[\s\S]*clearClassOutcome\(\)/);
+  assert.match(
+    adminHtml,
+    /expectedAdditionInteraction !== additionInteractionGeneration[\s\S]*return false;/
+  );
+});
+
+test('forgotten sign-in result copy contains no internal implementation language', () => {
+  const added = renderClassOutcome('added', []).outcome.textContent;
+  const duplicate = renderClassOutcome('already exists', [{
+    displayId: 'sheet-row-14',
+    instructor: 'QA Test Forgotten Instructor C',
+    source: 'Admin-added',
+    reviewRequired: false
+  }]).outcome.textContent;
+  const failure = 'Could not confirm the sign-in. Nothing else should be submitted yet. Try again later or use the Sheet.';
+  const userFacingResults = [added, duplicate, failure].join('\n');
+  assert.doesNotMatch(
+    userFacingResults,
+    /Google|audit|payroll row|linked record|fresh Sheet read|pending|reconciliation|success is not being reported/i
+  );
+  const addFlowSource = adminHtml.slice(
+    adminHtml.indexOf('async function addInstructor('),
+    adminHtml.indexOf('function renderRecordList(')
+  );
+  assert.doesNotMatch(addFlowSource, /#reviewMessage/);
 });
 
 test('guest payload renders literally as text with no element, handler, code, or Admin call', () => {
