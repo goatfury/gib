@@ -1905,6 +1905,39 @@ test('a newer add-form interaction invalidates an older confirmed-addition readb
   );
 });
 
+test('a newer add-form interaction survives when an older add response arrives late', async () => {
+  const olderResponse = deferredPromise();
+  const harness = additionUiHarness({ responseQueue: [() => olderResponse.promise] });
+  const olderAddition = harness.context.addInstructor(harness.form);
+
+  harness.context.additionInteractionGeneration += 1;
+  const newerForm = {
+    open: true,
+    instructor: 'QA Test Forgotten Instructor D',
+    reason: 'QA TEST second correction still being reviewed',
+    notes: 'PRESERVE THIS FORM'
+  };
+  olderResponse.resolve({ data: additionResponse('added') });
+  await olderAddition;
+
+  assert.deepEqual(
+    newerForm,
+    {
+      open: true,
+      instructor: 'QA Test Forgotten Instructor D',
+      reason: 'QA TEST second correction still being reviewed',
+      notes: 'PRESERVE THIS FORM'
+    }
+  );
+  assert.equal(harness.outcomes.length, 0);
+  assert.equal(harness.renders, 0);
+  assert.equal(harness.focusCalls.length, 0);
+  assert.match(
+    adminHtml,
+    /const interactionGeneration = additionInteractionGeneration;[\s\S]*interactionGeneration !== additionInteractionGeneration[\s\S]*return;/
+  );
+});
+
 test('forgotten sign-in result copy contains no internal implementation language', () => {
   const added = renderClassOutcome('added', []).outcome.textContent;
   const duplicate = renderClassOutcome('already exists', [{

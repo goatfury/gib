@@ -2187,6 +2187,7 @@
         inFlightAdditions.add(key);
         clearClassOutcome();
         setAdditionWorking(form, true, `Adding ${instructor}…`);
+        const interactionGeneration = additionInteractionGeneration;
         const slowTimer = window.setTimeout(() => {
           if (form.getAttribute('aria-busy') === 'true') {
             showMessage(form.querySelector('.add-status'), 'Still adding — do not submit again.', 'working');
@@ -2214,11 +2215,14 @@
           }
           clearAdditionRequestId(form);
           completed = true;
+          if (
+            interactionGeneration !== additionInteractionGeneration
+            || currentDate !== date
+          ) return;
           setClassOutcome(date, classLabel, instructor, data.result);
           upsertConfirmedAddition(request, data);
           if (currentDate === date) focusClassCard(form.dataset.classIndex);
           if (currentDate === date) {
-            const interactionGeneration = additionInteractionGeneration;
             void refreshConfirmedAddition(
               request,
               data,
@@ -2244,7 +2248,10 @@
             form.classList.remove('open');
             applyPendingScheduleToReview();
           }
-          if (currentDate === date) focusClassCard(form.dataset.classIndex);
+          if (
+            interactionGeneration === additionInteractionGeneration
+            && currentDate === date
+          ) focusClassCard(form.dataset.classIndex);
         }
       }
 
