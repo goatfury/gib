@@ -1519,6 +1519,108 @@ test('browser reconciles one ambiguous addition with the exact frozen request an
   );
 });
 
+test('browser addition helpers visibly work, persist each outcome, and insert a confirmed instructor once', () => {
+  const busySource = adminHtml.slice(
+    adminHtml.indexOf('function resetAdditionConfirmation('),
+    adminHtml.indexOf('function ambiguousAdditionFailure(')
+  );
+  const status = { textContent: '', style: {}, classList: { toggle() {} } };
+  const submit = { disabled: false, textContent: 'Confirm add' };
+  const controls = [submit, { disabled: false }, { disabled: false }];
+  const attributes = new Map();
+  const form = {
+    dataset: {},
+    elements: controls,
+    setAttribute(name, value) { attributes.set(name, value); },
+    querySelector(selector) {
+      if (selector === '.confirm-add') return submit;
+      if (selector === '.add-status') return status;
+      return null;
+    }
+  };
+  const busyContext = vm.createContext({
+    Array,
+    showMessage(element, message) {
+      element.textContent = message;
+      element.style.display = message ? 'block' : 'none';
+    }
+  });
+  new vm.Script(`${busySource}\nthis.setAdditionWorking = setAdditionWorking;`)
+    .runInContext(busyContext);
+  busyContext.setAdditionWorking(form, true, 'Adding…');
+  assert.equal(attributes.get('aria-busy'), 'true');
+  assert.equal(submit.textContent, 'Adding…');
+  assert.equal(status.textContent, 'Adding…');
+  assert.equal(status.style.display, 'block');
+  assert.ok(controls.every(control => control.disabled));
+  busyContext.setAdditionWorking(form, false);
+  assert.equal(attributes.get('aria-busy'), 'false');
+  assert.equal(submit.textContent, 'Review and add');
+  assert.ok(controls.every(control => !control.disabled));
+
+  const outcomeSource = adminHtml.slice(
+    adminHtml.indexOf('function showPersistentReviewOutcome('),
+    adminHtml.indexOf('function toast(')
+  );
+  const reviewMessage = { textContent: '', tone: '', style: {}, classList: { toggle() {} } };
+  const outcomeContext = vm.createContext({
+    currentDate: '2026-08-10',
+    persistentReviewOutcome: null,
+    $: selector => {
+      assert.equal(selector, '#reviewMessage');
+      return reviewMessage;
+    },
+    showMessage(element, message, tone) {
+      element.textContent = message;
+      element.tone = tone;
+    }
+  });
+  new vm.Script(`${outcomeSource}\nthis.showPersistentReviewOutcome = showPersistentReviewOutcome;`)
+    .runInContext(outcomeContext);
+  for (const [message, tone] of [
+    ['QA Test Instructor was added. Google confirmed audit #1.', 'success'],
+    ['The exact QA Test Instructor sign-in already existed; no duplicate payroll row was created.', 'success'],
+    ['This correction is not confirmed. Its request ID was preserved for a safe retry.', 'error']
+  ]) {
+    outcomeContext.showPersistentReviewOutcome('2026-08-10', message, tone);
+    assert.equal(reviewMessage.textContent, message);
+    assert.equal(reviewMessage.tone, tone);
+    assert.equal(outcomeContext.persistentReviewOutcome.message, message);
+  }
+
+  const upsertSource = adminHtml.slice(
+    adminHtml.indexOf('function upsertConfirmedAddition('),
+    adminHtml.indexOf('async function addInstructor(')
+  );
+  let renders = 0;
+  const upsertContext = vm.createContext({
+    currentDate: '2026-08-10',
+    currentRecords: [],
+    renderReview: () => { renders += 1; }
+  });
+  new vm.Script(`${upsertSource}\nthis.upsertConfirmedAddition = upsertConfirmedAddition;`)
+    .runInContext(upsertContext);
+  const request = {
+    date: '2026-08-10',
+    classLabel: '6:00 AM BJJ (Level 2)',
+    duration: 1,
+    instructor: 'QA Test Forgotten Instructor A',
+    site: 'Rev',
+    notes: 'DO NOT PAY'
+  };
+  const response = {
+    linkedDisplayId: 'sheet-row-99',
+    linkedRecordId: 'gib-admin-qa-browser-visible'
+  };
+  upsertContext.upsertConfirmedAddition(request, response);
+  assert.equal(renders, 1);
+  assert.equal(upsertContext.currentRecords.length, 1);
+  assert.equal(upsertContext.currentRecords[0].instructor, request.instructor);
+  assert.equal(upsertContext.currentRecords[0].source, 'Admin-added');
+  upsertContext.upsertConfirmedAddition(request, response);
+  assert.equal(upsertContext.currentRecords.length, 1, 'A confirmation replay must not duplicate the visible instructor.');
+});
+
 test('guest payload renders literally as text with no element, handler, code, or Admin call', () => {
   const payload = '<img src=x onerror="window.__GIB_XSS_EXECUTED__=true">';
   function fakeElement(tagName) {
