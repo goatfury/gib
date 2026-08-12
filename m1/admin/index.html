@@ -132,6 +132,11 @@
       border-color: rgba(64, 215, 160, .5);
       color: #c8fae8;
     }
+    .message.working {
+      background: rgba(102, 167, 255, .12);
+      border-color: rgba(102, 167, 255, .5);
+      color: #d8eaff;
+    }
     .toolbar {
       display: grid;
       grid-template-columns: auto 1fr auto;
@@ -232,6 +237,8 @@
     .fixed b { display: block; color: var(--muted); font-size: .69rem; text-transform: uppercase; }
     .fixed span { display: block; overflow: hidden; text-overflow: ellipsis; font-size: .82rem; margin-top: 2px; }
     .form-actions { display: flex; gap: 8px; margin-top: 11px; }
+    .add-status { margin-top: 10px; }
+    .add-form[aria-busy="true"] { opacity: .82; }
     .forgotten-action {
       min-height: 44px;
       padding: 10px 14px;
@@ -515,6 +522,7 @@
       let currentRecords = [];
       let currentWarnings = [];
       let currentAuditHistory = [];
+      let persistentReviewOutcome = null;
       let reviewLoadGeneration = 0;
       let currentAdminName = '';
       let testMode = false;
@@ -934,7 +942,13 @@
       function showMessage(element, message, tone = 'error') {
         element.textContent = message || '';
         element.classList.toggle('success', Boolean(message) && tone === 'success');
+        element.classList.toggle('working', Boolean(message) && tone === 'working');
         element.style.display = message ? 'block' : 'none';
+      }
+
+      function showPersistentReviewOutcome(date, message, tone = 'error') {
+        persistentReviewOutcome = { date, message, tone };
+        if (currentDate === date) showMessage($('#reviewMessage'), message, tone);
       }
 
       function toast(message) {
@@ -1621,6 +1635,7 @@
         currentRecords = [];
         currentWarnings = [];
         currentAuditHistory = [];
+        persistentReviewOutcome = null;
         currentAdminName = '';
         adminRequestToken = '';
         $('#appPanel').hidden = true;
@@ -1837,7 +1852,12 @@
         const actions = makeElement('div', 'form-actions');
         actions.append(confirm, cancel);
 
-        form.append(fixed, miniGrid, reasonField, notesField, actions);
+        const status = makeElement('div', 'message add-status');
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-live', 'polite');
+        status.setAttribute('aria-atomic', 'true');
+
+        form.append(fixed, miniGrid, reasonField, notesField, actions, status);
         return form;
       }
 
@@ -1908,11 +1928,21 @@
         if (currentWarnings.length) {
           notices.push(`${currentWarnings.length} incomplete Sheet row warning${currentWarnings.length === 1 ? '' : 's'} shown below.`);
         }
-        showMessage($('#reviewMessage'), notices.join(' '));
+        if (persistentReviewOutcome && persistentReviewOutcome.date === currentDate) {
+          showMessage(
+            $('#reviewMessage'),
+            persistentReviewOutcome.message,
+            persistentReviewOutcome.tone
+          );
+        } else {
+          showMessage($('#reviewMessage'), notices.join(' '));
+        }
       }
 
-      async function loadReview(dateString) {
+      async function loadReview(dateString, options = {}) {
         if (!schedule) return false;
+        const preserveOnFailure = options.preserveOnFailure === true;
+        if (options.preserveOutcome !== true) persistentReviewOutcome = null;
         const generation = ++reviewLoadGeneration;
         currentDate = dateString;
         const today = nyDate();
@@ -1943,20 +1973,22 @@
             setLoggedOut('Admin login required.');
             return false;
           }
-          currentRecords = [];
-          currentWarnings = [];
-          currentAuditHistory = [];
-          $('#classList').replaceChildren();
-          $('#unmatchedList').replaceChildren();
-          $('#unmatchedSection').hidden = true;
-          $('#warningList').replaceChildren();
-          $('#warningSection').hidden = true;
-          renderRecordList(
-            $('#auditList'),
-            [],
-            'Audit history could not be loaded.',
-            auditElement
-          );
+          if (!preserveOnFailure) {
+            currentRecords = [];
+            currentWarnings = [];
+            currentAuditHistory = [];
+            $('#classList').replaceChildren();
+            $('#unmatchedList').replaceChildren();
+            $('#unmatchedSection').hidden = true;
+            $('#warningList').replaceChildren();
+            $('#warningSection').hidden = true;
+            renderRecordList(
+              $('#auditList'),
+              [],
+              'Audit history could not be loaded.',
+              auditElement
+            );
+          }
           showMessage($('#reviewMessage'), error.message);
           return false;
         } finally {
@@ -1993,8 +2025,8 @@
         return { date, classLabel, site, duration, instructor, notes, reason };
       }
 
-      function requestIdForAddition(form, addition) {
-        const fingerprint = JSON.stringify([
+      function additionFingerprint(addition) {
+        return JSON.stringify([
           addition.date,
           addition.classLabel,
           addition.site,
@@ -2003,6 +2035,10 @@
           addition.notes,
           addition.reason
         ]);
+      }
+
+      function requestIdForAddition(form, addition) {
+        const fingerprint = additionFingerprint(addition);
         if (!form.dataset.requestId || form.dataset.requestFingerprint !== fingerprint) {
           form.dataset.requestId = uniqueRequestId(addition.date);
           form.dataset.requestFingerprint = fingerprint;
@@ -2015,6 +2051,66 @@
         delete form.dataset.requestFingerprint;
       }
 
+      function resetAdditionConfirmation(form, clearStatus = true) {
+        delete form.dataset.confirmFingerprint;
+        const submit = form.querySelector('.confirm-add');
+        if (submit && !submit.disabled) submit.textContent = 'Review and add';
+        if (clearStatus) {
+          const status = form.querySelector('.add-status');
+          if (status) showMessage(status, '');
+        }
+      }
+
+      function setAdditionWorking(form, working, message = '') {
+        form.setAttribute('aria-busy', working ? 'true' : 'false');
+        Array.from(form.elements).forEach(control => { control.disabled = working; });
+        const submit = form.querySelector('.confirm-add');
+        if (submit) submit.textContent = working ? 'Adding…' : 'Review and add';
+        const status = form.querySelector('.add-status');
+        if (status && message) showMessage(status, message, working ? 'working' : 'error');
+      }
+
+      function ambiguousAdditionFailure(error) {
+        if (!error || typeof error.status !== 'number' || error.status < 500) return false;
+        const code = clean(error.data && error.data.code);
+        return /^ADMIN_ADD_[A-Z_]+$/.test(code) && code !== 'ADMIN_ADD_REJECTED';
+      }
+
+      async function requestAdditionWithReconciliation(request, onReconcile) {
+        try {
+          return { data: await requestJson(API.add, request), reconciled: false };
+        } catch (error) {
+          if (!ambiguousAdditionFailure(error)) throw error;
+          onReconcile();
+          return { data: await requestJson(API.add, request), reconciled: true };
+        }
+      }
+
+      function upsertConfirmedAddition(request, data) {
+        if (request.date !== currentDate) return;
+        const existingIndex = currentRecords.findIndex(record => record.displayId === data.linkedDisplayId);
+        if (existingIndex < 0) {
+          const source = data.linkedRecordId.startsWith('gib-admin-')
+            ? 'Admin-added'
+            : (data.linkedRecordId ? 'Kiosk' : 'Manual');
+          currentRecords = [...currentRecords, {
+            displayId: data.linkedDisplayId,
+            recordId: data.linkedRecordId,
+            timestamp: '',
+            date: request.date,
+            classLabel: request.classLabel,
+            duration: request.duration,
+            instructor: request.instructor,
+            site: request.site,
+            notes: request.notes,
+            source,
+            reviewRequired: false,
+            reviewMessage: ''
+          }];
+        }
+        renderReview();
+      }
+
       async function addInstructor(form) {
         const addition = readAdditionForm(form);
         if (!addition) {
@@ -2024,21 +2120,31 @@
         const { date, classLabel, site, duration, instructor, reason } = addition;
         const key = `${date}|${normalize(classLabel)}|${normalize(site)}|${normalize(instructor)}`;
         if (inFlightAdditions.has(key)) return;
-        const confirmed = window.confirm(
-          `Add ${instructor} to:\n\n${date}\n${classLabel}\n${site}\n${duration} hr\n\nReason: ${reason}`
-        );
-        if (!confirmed) return;
+        const fingerprint = additionFingerprint(addition);
+        if (form.dataset.confirmFingerprint !== fingerprint) {
+          form.dataset.confirmFingerprint = fingerprint;
+          const submit = form.querySelector('.confirm-add');
+          submit.textContent = 'Confirm add';
+          const review = `Review: add ${instructor} to ${classLabel} on ${date} for ${duration} hr. Select Confirm add to continue.`;
+          showMessage(form.querySelector('.add-status'), review, 'working');
+          showMessage($('#reviewMessage'), review, 'working');
+          return;
+        }
 
         inFlightAdditions.add(key);
-        const submit = form.querySelector('.confirm-add');
-        submit.disabled = true;
-        showMessage($('#reviewMessage'), '');
+        delete form.dataset.confirmFingerprint;
+        setAdditionWorking(form, true, 'Adding…');
+        showMessage($('#reviewMessage'), 'Adding…', 'working');
         try {
-          const request = {
+          const request = Object.freeze({
             requestId: requestIdForAddition(form, addition),
             ...addition
-          };
-          const data = await requestJson(API.add, request);
+          });
+          const { data, reconciled } = await requestAdditionWithReconciliation(request, () => {
+            const message = 'Adding… checking the same request for a completed result.';
+            showMessage(form.querySelector('.add-status'), message, 'working');
+            showMessage($('#reviewMessage'), message, 'working');
+          });
           if (!validAdminAdditionResponse(data, {
             requestId: request.requestId,
             adminName: currentAdminName,
@@ -2053,7 +2159,16 @@
             throw new Error('Google did not fully confirm the correction. Success is not being reported.');
           }
           clearAdditionRequestId(form);
-          const refreshed = await loadReview(date);
+          showPersistentReviewOutcome(
+            date,
+            `${instructor} is confirmed. Refreshing Daily Review…`,
+            'working'
+          );
+          upsertConfirmedAddition(request, data);
+          const refreshed = await loadReview(date, {
+            preserveOnFailure: true,
+            preserveOutcome: true
+          });
           const refreshedRecord = currentRecords.find(record => record.displayId === data.linkedDisplayId);
           const refreshedAudit = currentAuditHistory.find(audit => (
             audit.actionNumber === data.auditActionNumber
@@ -2066,6 +2181,7 @@
             && refreshedAudit
             && (data.result !== 'added' || refreshedRecord.source === 'Admin-added')
           );
+          if (!refreshVerified) upsertConfirmedAddition(request, data);
           if (refreshVerified) {
             toast(data.result === 'added'
               ? (testMode ? 'Instructor added to the TEST Sheet' : 'Instructor added to the payroll Sheet')
@@ -2076,23 +2192,26 @@
             : `The exact ${instructor} sign-in already existed; no duplicate payroll row was created.`;
           const confirmation = `${outcome} Google confirmed audit #${data.auditActionNumber}.`;
           if (!$('#appPanel').hidden) {
-            showMessage(
-              $('#reviewMessage'),
-              refreshVerified
-                ? `${confirmation} Daily Review refreshed immediately.`
-                : `${confirmation} The refreshed review did not show both the linked sign-in and audit; do not submit this correction again.`,
-              refreshVerified ? 'success' : 'error'
+            showPersistentReviewOutcome(
+              date,
+              `${confirmation}${reconciled ? ' The original unclear response was safely reconciled with the same request.' : ''} ${refreshVerified
+                ? 'Daily Review refreshed immediately.'
+                : 'The correction is confirmed and shown above; the fresh Sheet read is still pending. Do not submit it again.'}`,
+              'success'
             );
           }
         } catch (error) {
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
           } else {
-            showMessage($('#reviewMessage'), error.message);
+            const message = `${error.message} This correction is not confirmed. Its request ID was preserved for a safe retry.`;
+            showMessage(form.querySelector('.add-status'), message);
+            showPersistentReviewOutcome(date, message);
           }
         } finally {
           inFlightAdditions.delete(key);
-          submit.disabled = false;
+          setAdditionWorking(form, false);
+          resetAdditionConfirmation(form, false);
         }
       }
 
@@ -2193,11 +2312,17 @@
         const cancel = event.target.closest('.cancel-add');
         if (cancel) {
           const form = document.querySelector(`[data-add-form="${cancel.dataset.classIndex}"]`);
+          if (form.getAttribute('aria-busy') === 'true') return;
           form.reset();
+          resetAdditionConfirmation(form);
           form.classList.remove('open');
           document.querySelector(`.add-toggle[data-class-index="${cancel.dataset.classIndex}"]`).hidden = false;
           applyPendingScheduleToReview();
         }
+      });
+      $('#reviewSection').addEventListener('input', event => {
+        const form = event.target.closest('.add-form');
+        if (form && form.getAttribute('aria-busy') !== 'true') resetAdditionConfirmation(form);
       });
       $('#reviewSection').addEventListener('submit', event => {
         if (!event.target.matches('.add-form')) return;

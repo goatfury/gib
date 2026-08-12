@@ -80,7 +80,11 @@ function makeSheet(rows) {
   };
 }
 
-function receiverHarness({ withAudit = true } = {}) {
+function receiverHarness({
+  withAudit = true,
+  receiverToken = 'receiver-token',
+  adminActionToken = 'admin-token'
+} = {}) {
   const signins = makeSheet([FIXTURE.headers, ...FIXTURE.rows]);
   let audit = withAudit ? makeSheet([FIXTURE.auditHeaders, ...FIXTURE.auditRows]) : null;
   let insertedAuditSheets = 0;
@@ -117,8 +121,8 @@ function receiverHarness({ withAudit = true } = {}) {
     PropertiesService: {
       getScriptProperties: () => ({
         getProperty(name) {
-          if (name === 'GIB_M1_RECEIVER_TRANSPORT_TOKEN') return 'receiver-token';
-          if (name === 'GIB_M1_ADMIN_ACTION_TOKEN') return 'admin-token';
+          if (name === 'GIB_M1_RECEIVER_TRANSPORT_TOKEN') return receiverToken;
+          if (name === 'GIB_M1_ADMIN_ACTION_TOKEN') return adminActionToken;
           if (name === 'GIB_M1_LEGACY_KIOSK_TOKEN') return 'legacy-token';
           if (name === 'GIB_M1_RECOVERY_TOKEN') return 'recovery-token';
           return '';
@@ -517,6 +521,249 @@ test('same existing-event request reuses one audit for blank and canonical linke
     assert.equal(harness.audit.values.length, auditsBefore + 1);
     assert.deepEqual(harness.signins.values, signinsBefore);
   }
+});
+
+test('an identical client replay reconciles a lost normal second-instructor response across Netlify invocations', async () => {
+  const harness = receiverHarness({
+    receiverToken: PREVIEW_ENV.GIB_TEST_WEBHOOK_TOKEN,
+    adminActionToken: PREVIEW_ENV.GIB_TEST_ADMIN_ACTION_TOKEN
+  });
+  const classLabel = '8:00 PM QA TEST Lost Response Class';
+  const original = harness.post({
+    token: PREVIEW_ENV.GIB_TEST_WEBHOOK_TOKEN,
+    adminActionToken: PREVIEW_ENV.GIB_TEST_ADMIN_ACTION_TOKEN,
+    action: 'addMissedInstructor',
+    target: 'test',
+    requestId: 'qa-lost-response-original-a',
+    adminName: 'Andrew Smith',
+    date: FIXTURE.reviewDate,
+    classLabel,
+    duration: 1,
+    instructor: 'QA Test Lost Response A',
+    site: 'Rev',
+    notes: 'DO NOT PAY',
+    reason: 'QA lost response setup'
+  });
+  assert.equal(original.result, 'added');
+
+  const requestBody = {
+    requestId: 'qa-lost-response-second-b',
+    date: FIXTURE.reviewDate,
+    classLabel,
+    duration: 1,
+    instructor: 'QA Test Lost Response B',
+    site: 'Rev',
+    notes: 'DO NOT PAY',
+    reason: 'QA lost response reconciliation'
+  };
+  const signinsBefore = harness.signins.values.length;
+  const auditsBefore = harness.audit.values.length;
+  const outboundBodies = [];
+  const googleCompletions = [];
+  const dependencies = {
+    env: PREVIEW_ENV,
+    now: NOW,
+    dateNow: new Date(NOW),
+    fetch: async (_url, options) => {
+      const outbound = JSON.parse(options.body);
+      outboundBodies.push(outbound);
+      const completion = harness.post(outbound);
+      googleCompletions.push(completion);
+      if (outboundBodies.length === 1) {
+        throw new TypeError('Synthetic response loss after Google completed the request.');
+      }
+      return googleResponse(completion);
+    }
+  };
+  const firstResponse = await handleAdminAdd(
+    adminRequest(PREVIEW_ORIGIN, requestBody),
+    dependencies
+  );
+  const firstBody = await firstResponse.json();
+  const replayResponse = await handleAdminAdd(
+    adminRequest(PREVIEW_ORIGIN, requestBody),
+    dependencies
+  );
+  const body = await replayResponse.json();
+
+  assert.equal(firstResponse.status, 504);
+  assert.equal(firstBody.code, 'ADMIN_ADD_UNREACHABLE');
+  assert.equal(replayResponse.status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.result, 'added');
+  assert.equal(body.requestId, requestBody.requestId);
+  assert.doesNotMatch(body.message, /could not reach Google|Success is not being reported/iu);
+  assert.equal(outboundBodies.length, 2);
+  assert.deepEqual(outboundBodies[1], outboundBodies[0]);
+  assert.equal(outboundBodies[0].requestId, requestBody.requestId);
+  assert.deepEqual(googleCompletions.map(item => item.result), ['added', 'added']);
+  assert.equal(googleCompletions[1].auditActionNumber, googleCompletions[0].auditActionNumber);
+  assert.equal(harness.signins.values.length, signinsBefore + 1);
+  assert.equal(harness.audit.values.length, auditsBefore + 1);
+
+  const classRows = harness.signins.values.slice(1).filter(row => (
+    row[2] === FIXTURE.reviewDate
+    && row[3] === classLabel
+    && row[6] === 'Rev'
+    && row[10] === 'OK'
+  ));
+  assert.equal(classRows.filter(row => row[5] === 'QA Test Lost Response A').length, 1);
+  assert.equal(classRows.filter(row => row[5] === requestBody.instructor).length, 1);
+});
+
+test('an identical client replay reconciles a lost already-exists response without another sign-in or audit', async () => {
+  const harness = receiverHarness({
+    receiverToken: PREVIEW_ENV.GIB_TEST_WEBHOOK_TOKEN,
+    adminActionToken: PREVIEW_ENV.GIB_TEST_ADMIN_ACTION_TOKEN
+  });
+  const classLabel = '8:30 PM QA TEST Lost Duplicate Class';
+  const instructor = 'QA Test Lost Duplicate A';
+  const original = harness.post({
+    token: PREVIEW_ENV.GIB_TEST_WEBHOOK_TOKEN,
+    adminActionToken: PREVIEW_ENV.GIB_TEST_ADMIN_ACTION_TOKEN,
+    action: 'addMissedInstructor',
+    target: 'test',
+    requestId: 'qa-lost-duplicate-original',
+    adminName: 'Andrew Smith',
+    date: FIXTURE.reviewDate,
+    classLabel,
+    duration: 1,
+    instructor,
+    site: 'Rev',
+    notes: 'DO NOT PAY',
+    reason: 'QA lost duplicate setup'
+  });
+  assert.equal(original.result, 'added');
+
+  const requestBody = {
+    requestId: 'qa-lost-duplicate-attempt',
+    date: FIXTURE.reviewDate,
+    classLabel,
+    duration: 1,
+    instructor,
+    site: 'Rev',
+    notes: 'DO NOT PAY',
+    reason: 'QA exact duplicate verification'
+  };
+  const signinsBefore = harness.signins.values.length;
+  const auditsBefore = harness.audit.values.length;
+  const outboundBodies = [];
+  const googleCompletions = [];
+  const dependencies = {
+    env: PREVIEW_ENV,
+    now: NOW,
+    dateNow: new Date(NOW),
+    fetch: async (_url, options) => {
+      const outbound = JSON.parse(options.body);
+      outboundBodies.push(outbound);
+      const completion = harness.post(outbound);
+      googleCompletions.push(completion);
+      if (outboundBodies.length === 1) {
+        throw new TypeError('Synthetic duplicate response loss after Google completed the request.');
+      }
+      return googleResponse(completion);
+    }
+  };
+  const firstResponse = await handleAdminAdd(
+    adminRequest(PREVIEW_ORIGIN, requestBody),
+    dependencies
+  );
+  const firstBody = await firstResponse.json();
+  const replayResponse = await handleAdminAdd(
+    adminRequest(PREVIEW_ORIGIN, requestBody),
+    dependencies
+  );
+  const body = await replayResponse.json();
+
+  assert.equal(firstResponse.status, 504);
+  assert.equal(firstBody.code, 'ADMIN_ADD_UNREACHABLE');
+  assert.equal(replayResponse.status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.result, 'already exists');
+  assert.equal(body.requestId, requestBody.requestId);
+  assert.equal(body.linkedRecordId, original.linkedRecordId);
+  assert.match(body.message, /already|same class/iu);
+  assert.doesNotMatch(body.message, /could not reach Google|Success is not being reported/iu);
+  assert.equal(outboundBodies.length, 2);
+  assert.deepEqual(outboundBodies[1], outboundBodies[0]);
+  assert.equal(outboundBodies[0].requestId, requestBody.requestId);
+  assert.deepEqual(googleCompletions.map(item => item.result), ['already exists', 'already exists']);
+  assert.equal(googleCompletions[1].auditActionNumber, googleCompletions[0].auditActionNumber);
+  assert.equal(body.auditActionNumber, googleCompletions[0].auditActionNumber);
+  assert.equal(harness.signins.values.length, signinsBefore);
+  assert.equal(harness.audit.values.length, auditsBefore + 1);
+
+  const matchingSignins = harness.signins.values.slice(1).filter(row => (
+    row[2] === FIXTURE.reviewDate
+    && row[3] === classLabel
+    && row[5] === instructor
+    && row[6] === 'Rev'
+    && row[10] === 'OK'
+  ));
+  const matchingAudit = harness.audit.values.slice(1).filter(row => (
+    row[0] === body.auditActionNumber
+    && row[3] === instructor
+    && row[4] === FIXTURE.reviewDate
+    && row[5] === classLabel
+    && row[9] === 'already exists'
+    && row[10] === original.linkedRecordId
+  ));
+  assert.equal(matchingSignins.length, 1);
+  assert.equal(matchingAudit.length, 1);
+});
+
+test('two identical client attempts remain fail-closed when neither Netlify invocation proves completion', async () => {
+  const harness = receiverHarness({
+    receiverToken: PREVIEW_ENV.GIB_TEST_WEBHOOK_TOKEN,
+    adminActionToken: PREVIEW_ENV.GIB_TEST_ADMIN_ACTION_TOKEN
+  });
+  const requestBody = {
+    requestId: 'qa-two-lost-responses',
+    date: FIXTURE.reviewDate,
+    classLabel: '9:00 PM QA TEST Unproven Class',
+    duration: 1,
+    instructor: 'QA Test Unproven Instructor',
+    site: 'Rev',
+    notes: 'DO NOT PAY',
+    reason: 'QA fail closed verification'
+  };
+  const signinsBefore = structuredClone(harness.signins.values);
+  const auditsBefore = structuredClone(harness.audit.values);
+  const outboundBodies = [];
+  const dependencies = {
+    env: PREVIEW_ENV,
+    now: NOW,
+    dateNow: new Date(NOW),
+    fetch: async (_url, options) => {
+      outboundBodies.push(JSON.parse(options.body));
+      throw new TypeError('Synthetic upstream remained unreachable.');
+    }
+  };
+  const firstResponse = await handleAdminAdd(
+    adminRequest(PREVIEW_ORIGIN, requestBody),
+    dependencies
+  );
+  const firstBody = await firstResponse.json();
+  const secondResponse = await handleAdminAdd(
+    adminRequest(PREVIEW_ORIGIN, requestBody),
+    dependencies
+  );
+  const secondBody = await secondResponse.json();
+
+  for (const [response, body] of [
+    [firstResponse, firstBody],
+    [secondResponse, secondBody]
+  ]) {
+    assert.equal(response.status, 504);
+    assert.equal(body.ok, false);
+    assert.equal(body.result, 'failed');
+    assert.equal(body.code, 'ADMIN_ADD_UNREACHABLE');
+  }
+  assert.equal(outboundBodies.length, 2);
+  assert.deepEqual(outboundBodies[1], outboundBodies[0]);
+  assert.equal(outboundBodies[0].requestId, requestBody.requestId);
+  assert.deepEqual(harness.signins.values, signinsBefore);
+  assert.deepEqual(harness.audit.values, auditsBefore);
 });
 
 test('multiple exact existing-event audits fail closed without another mutation', () => {

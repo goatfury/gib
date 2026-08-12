@@ -1072,8 +1072,8 @@ test('Admin request IDs remain permanent after payload changes or VOID', () => {
   assert.equal(voided.signins.values.length, 2);
 });
 
-test('rapid double-click reaches one added result and one duplicate-safe result', async () => {
-  const events = new Set();
+test('rapid same-request replay returns the original added result and one audit', async () => {
+  const events = new Map();
   let auditNumber = 0;
   const fetchMock = async (_url, options) => {
     const body = JSON.parse(options.body);
@@ -1083,16 +1083,24 @@ test('rapid double-click reaches one added result and one duplicate-safe result'
       String(body.classLabel).toLocaleLowerCase('en-US'),
       String(body.site).toLocaleLowerCase('en-US')
     ].join('|');
-    const result = events.has(key) ? 'already exists' : 'added';
-    events.add(key);
-    auditNumber += 1;
+    let event = events.get(key);
+    if (!event) {
+      auditNumber += 1;
+      event = {
+        requestId: body.requestId,
+        linkedRecordId: `gib-admin-${body.requestId}`,
+        auditActionNumber: auditNumber
+      };
+      events.set(key, event);
+    }
+    assert.equal(body.requestId, event.requestId);
     return googleResponse({
       ok: true,
-      result,
+      result: 'added',
       requestId: body.requestId,
-      linkedRecordId: `gib-admin-${body.requestId}`,
+      linkedRecordId: event.linkedRecordId,
       linkedDisplayId: 'sheet-row-2',
-      auditActionNumber: auditNumber,
+      auditActionNumber: event.auditActionNumber,
       confirmation: {
         adminName: body.adminName,
         date: body.date,
@@ -1130,7 +1138,10 @@ test('rapid double-click reaches one added result and one duplicate-safe result'
   );
   const responses = await Promise.all([request(), request()]);
   const bodies = await Promise.all(responses.map(response => response.json()));
-  assert.deepEqual(bodies.map(body => body.result).sort(), ['added', 'already exists']);
+  assert.deepEqual(bodies.map(body => body.result), ['added', 'added']);
+  assert.equal(new Set(bodies.map(body => body.requestId)).size, 1);
+  assert.equal(new Set(bodies.map(body => body.auditActionNumber)).size, 1);
+  assert.equal(auditNumber, 1);
   assert.equal(events.size, 1);
   assert.match(adminHtml, /if \(inFlightAdditions\.has\(key\)\) return/);
 });
@@ -1208,8 +1219,12 @@ test('Admin addition UX binds fixed identity, requires duration, confirms, refre
   assert.doesNotMatch(adminHtml, /durationForClass|\bkids[^\n]*\?\s*0\.5/iu);
   assert.match(adminHtml, /Required reason/);
   assert.match(adminHtml, /Notes \(optional\)/);
-  assert.match(adminHtml, /window\.confirm\(/);
-  assert.match(adminHtml, /await loadReview\(date\)/);
+  assert.doesNotMatch(adminHtml.slice(
+    adminHtml.indexOf('async function addInstructor('),
+    adminHtml.indexOf('function renderRecordList(')
+  ), /window\.confirm\(/);
+  assert.match(adminHtml, /submit\.textContent = 'Confirm add'/);
+  assert.match(adminHtml, /await loadReview\(date, \{/);
   assert.match(adminHtml, /Admin-added/);
   assert.doesNotMatch(adminHtml, /payroll approval|dashboard|analytics|void sign-in/i);
   assert.doesNotMatch(adminHtml, /<button[^>]*>[^<]*(?:schedule|void|approve)/i);
@@ -1392,6 +1407,116 @@ test('browser correction identity is schedule-reorder safe, opaque, and stable a
   assert.doesNotMatch(addSource, /schedule\.days|durationForClass/u);
   assert.match(addSource, /requestIdForAddition\(form, addition\)/u);
   assert.match(addSource, /clearAdditionRequestId\(form\)/u);
+});
+
+test('browser reconciles one ambiguous addition with the exact frozen request and keeps outcomes visible', async () => {
+  const helperSource = adminHtml.slice(
+    adminHtml.indexOf('function ambiguousAdditionFailure('),
+    adminHtml.indexOf('function upsertConfirmedAddition(')
+  );
+  const calls = [];
+  const messages = [];
+  const request = Object.freeze({
+    requestId: 'm1-2026-08-10-000000010000000100000001',
+    date: '2026-08-10',
+    classLabel: '6:00 AM BJJ (Level 2)',
+    duration: 1,
+    instructor: 'QA Test Reconcile',
+    site: 'Rev',
+    notes: '',
+    reason: 'QA lost response'
+  });
+  const success = {
+    ok: true,
+    test: true,
+    result: 'already exists',
+    requestId: request.requestId,
+    linkedRecordId: 'gib-admin-original-a',
+    linkedDisplayId: 'sheet-row-14',
+    auditActionNumber: 3,
+    confirmation: {
+      adminName: 'Andrew Smith',
+      date: request.date,
+      classLabel: request.classLabel,
+      duration: request.duration,
+      instructor: request.instructor,
+      site: request.site,
+      reason: request.reason,
+      notes: request.notes
+    },
+    message: 'The same class already has this instructor. No second payroll row was created.'
+  };
+  const firstError = Object.assign(new Error('The correction could not reach Google.'), {
+    status: 504,
+    data: { code: 'ADMIN_ADD_UNREACHABLE' }
+  });
+  const context = vm.createContext({
+    API: { add: '/.netlify/functions/m1-admin-add' },
+    clean: value => String(value == null ? '' : value).trim(),
+    requestJson: async (_url, body) => {
+      calls.push(body);
+      if (calls.length === 1) throw firstError;
+      return success;
+    }
+  });
+  new vm.Script(`${helperSource}\nthis.helpers = { ambiguousAdditionFailure, requestAdditionWithReconciliation };`)
+    .runInContext(context);
+  const result = await context.helpers.requestAdditionWithReconciliation(
+    request,
+    () => messages.push('Adding… checking the same request for a completed result.')
+  );
+  assert.equal(result.reconciled, true);
+  assert.equal(result.data.result, 'already exists');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0], request);
+  assert.equal(calls[1], request);
+  assert.equal(calls[0].requestId, calls[1].requestId);
+  assert.equal(Object.isFrozen(calls[0]), true);
+  assert.deepEqual(messages, ['Adding… checking the same request for a completed result.']);
+
+  const rejected = Object.assign(new Error('Rejected'), {
+    status: 502,
+    data: { code: 'ADMIN_ADD_REJECTED' }
+  });
+  assert.equal(context.helpers.ambiguousAdditionFailure(rejected), false);
+  assert.equal(context.helpers.ambiguousAdditionFailure({ status: 403, data: { code: 'ADMIN_ADD_UNREACHABLE' } }), false);
+  assert.equal(context.helpers.ambiguousAdditionFailure({ status: 502, data: { code: 'WRONG_CODE' } }), false);
+  assert.equal(context.helpers.ambiguousAdditionFailure(new TypeError('Browser fetch failed before a response.')), false);
+
+  let rejectedCalls = 0;
+  context.requestJson = async () => {
+    rejectedCalls += 1;
+    throw rejected;
+  };
+  await assert.rejects(
+    context.helpers.requestAdditionWithReconciliation(request, () => messages.push('unexpected retry')),
+    /Rejected/u
+  );
+  assert.equal(rejectedCalls, 1);
+
+  let ambiguousCalls = 0;
+  context.requestJson = async () => {
+    ambiguousCalls += 1;
+    throw firstError;
+  };
+  await assert.rejects(
+    context.helpers.requestAdditionWithReconciliation(request, () => messages.push('bounded retry')),
+    /could not reach/u
+  );
+  assert.equal(ambiguousCalls, 2);
+  assert.match(adminHtml, /setAdditionWorking\(form, true, 'Adding…'\)/u);
+  assert.match(adminHtml, /Array\.from\(form\.elements\)[\s\S]*control\.disabled = working/u);
+  assert.match(adminHtml, /showPersistentReviewOutcome\([\s\S]*Google confirmed audit/u);
+  assert.match(adminHtml, /upsertConfirmedAddition\(request, data\)/u);
+  assert.match(adminHtml, /The original unclear response was safely reconciled with the same request\./u);
+  assert.match(adminHtml, /This correction is not confirmed\. Its request ID was preserved for a safe retry\./u);
+  assert.doesNotMatch(
+    adminHtml.slice(
+      adminHtml.indexOf('async function requestAdditionWithReconciliation('),
+      adminHtml.indexOf('function upsertConfirmedAddition(')
+    ),
+    /setTimeout|AbortSignal|timeout/iu
+  );
 });
 
 test('guest payload renders literally as text with no element, handler, code, or Admin call', () => {
