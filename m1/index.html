@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (M1 TEST timestamp-rollover)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-08-11 M1 TEST unified-rollout-candidate)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -186,6 +186,21 @@
   .hint.warn {
     color: #fde68a;
   }
+  .schedule-source-status {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px solid rgba(96,165,250,.3);
+    border-radius: 10px;
+    background: rgba(59,130,246,.08);
+    color: #bfdbfe;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .schedule-source-status.warn {
+    border-color: rgba(245,158,11,.38);
+    background: rgba(245,158,11,.08);
+    color: #fde68a;
+  }
   .inline {
     display:flex;
     gap:10px;
@@ -300,6 +315,7 @@
     color: var(--muted);
     margin-top: 8px;
   }
+  .statusRow.warn { color: #fde68a; }
   .kbd {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     font-size: 12px;
@@ -424,6 +440,232 @@ input, textarea, select {
 #classListWrap label { padding: 16px 12px; }
 #classListWrap input[type="checkbox"] { width: 28px; height: 28px; }
 
+/* Local Admin: status first, with infrequent controls disclosed on demand. */
+body.admin-mode header { display: none; }
+body.admin-mode .container { max-width: 1120px; }
+
+#admin.admin-shell {
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  font-size: 16px;
+}
+#admin h2 { font-size: 28px; }
+#admin h3 { font-size: 18px; }
+#admin label { font-size: 16px; }
+#admin input,
+#admin textarea,
+#admin select {
+  padding: 12px;
+  border-radius: 10px;
+  font-size: 16px;
+}
+#admin input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+}
+#admin .btn {
+  padding: 12px 15px;
+  border-radius: 10px;
+  font-size: 16px;
+}
+#admin .btn.small {
+  padding: 9px 12px;
+  font-size: 14px;
+}
+.admin-panel {
+  padding: 20px;
+  border: 1px solid var(--outline);
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+.admin-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.admin-header h2 { margin: 0; }
+.admin-header-actions,
+.admin-primary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.admin-overview {
+  margin-top: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--outline);
+}
+.admin-section-title {
+  margin: 0 0 10px;
+  color: #dbeafe;
+  font-size: 17px;
+}
+.admin-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.admin-status-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #243045;
+  border-radius: 12px;
+  background: #0b1322;
+}
+.admin-status-card.good { border-color: rgba(34,197,94,.35); }
+.admin-status-card.warn { border-color: rgba(245,158,11,.45); }
+.admin-status-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.admin-status-value {
+  margin-top: 5px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.admin-status-card.good .admin-status-value { color: #bbf7d0; }
+.admin-status-card.warn .admin-status-value { color: #fde68a; }
+.admin-actions-block {
+  margin-top: 16px;
+  padding: 15px;
+  border: 1px solid rgba(96,165,250,.28);
+  border-radius: 14px;
+  background: rgba(59,130,246,.07);
+}
+.admin-actions-block .statusRow { margin-top: 10px; }
+.admin-link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+.admin-daily-review {
+  min-height: 52px;
+  padding-inline: 20px !important;
+  font-weight: 750;
+}
+.admin-disclosure {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--outline);
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+.admin-disclosure > summary,
+.admin-subdisclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 17px 20px;
+  color: #dbeafe;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+.admin-disclosure > summary::-webkit-details-marker,
+.admin-subdisclosure > summary::-webkit-details-marker { display: none; }
+.admin-disclosure > summary:focus-visible,
+.admin-subdisclosure > summary:focus-visible {
+  outline: 3px solid rgba(59,130,246,.65);
+  outline-offset: -3px;
+}
+.admin-disclosure > summary::after,
+.admin-subdisclosure > summary::after {
+  content: '+';
+  flex: none;
+  color: var(--muted);
+  font-size: 24px;
+  font-weight: 400;
+}
+.admin-disclosure[open] > summary::after,
+.admin-subdisclosure[open] > summary::after { content: '\2212'; }
+.admin-disclosure[open] > summary { border-bottom: 1px solid var(--outline); }
+.admin-disclosure-body { padding: 18px 20px 20px; }
+.admin-disclosure .admin-organizable,
+.admin-subdisclosure .admin-organizable {
+  margin-top: 0;
+  padding: 0;
+  border: 0;
+  background: transparent !important;
+  box-shadow: none;
+}
+#advancedPinSlot > #btnAdminPinToggle { margin-top: 10px; }
+#advancedPinSlot > #adminPinPanel { margin-top: 12px; }
+.admin-subsection + .admin-subsection {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--outline);
+}
+.admin-subsection h3 { margin: 0 0 7px; }
+.admin-subdisclosure {
+  margin-top: 14px;
+  border: 1px solid #243045;
+  border-radius: 12px;
+  background: #0b1322;
+}
+.admin-subdisclosure > summary {
+  padding: 14px 16px;
+  font-size: 16px;
+}
+.admin-subdisclosure-body { padding: 0 16px 16px; }
+.admin-danger-zone {
+  border-color: rgba(239,68,68,.38);
+  background: rgba(127,29,29,.12);
+}
+.admin-danger-zone > summary { color: #fecaca; }
+.admin-danger-zone[open] > summary { border-bottom-color: rgba(239,68,68,.25); }
+.admin-danger-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+#adminTableWrap { overflow-x: auto; }
+#recentSignins { scroll-margin-top: 12px; }
+.week-day li { overflow-wrap: anywhere; }
+#scheduleStatus { min-width: 0; overflow-wrap: anywhere; }
+
+@media (min-width: 720px) {
+  .admin-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 1000px) {
+  .admin-summary-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  body.admin-mode .container { padding: 12px; }
+  .admin-panel { padding: 16px; }
+  .admin-header { align-items: flex-start; flex-direction: column; }
+  .admin-header-actions,
+  .admin-primary-actions { width: 100%; }
+  .admin-header-actions .btn,
+  .admin-primary-actions .btn,
+  .admin-primary-actions .admin-link-button {
+    flex: 1 1 138px;
+    justify-content: center;
+    text-align: center;
+  }
+  .admin-daily-review { flex-basis: 100% !important; }
+  .admin-disclosure > summary { padding: 15px 16px; }
+  .admin-disclosure-body { padding: 16px; }
+  .duration-rule-row { grid-template-columns: 1fr; }
+  .series-row { grid-template-columns: minmax(0, 1fr); }
+}
+
 </style>
 </head>
 <body>
@@ -433,7 +675,7 @@ input, textarea, select {
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-08-09 M1 TEST timestamp-rollover</span>
+        Build <span class="kbd" id="buildId">2026-08-11 M1 TEST unified-rollout-candidate</span>
       </div>
     </div>
 
@@ -445,7 +687,7 @@ input, textarea, select {
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-08-09 M1 TEST timestamp-rollover
+      Build 2026-08-11 M1 TEST unified-rollout-candidate
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -453,7 +695,6 @@ input, textarea, select {
     </div>
 
     <nav>
-      <button id="btnKiosk" class="btn brand" type="button">Instructor Sign‑In</button>
       <button id="btnAdmin" class="btn" type="button">Admin View</button>
     </nav>
   </header>
@@ -473,6 +714,7 @@ input, textarea, select {
         <button id="toggleClasses" class="btn" type="button" style="width:100%; margin-bottom:6px;">Select class(es)</button>
         <div id="classListWrap" style="display:none;"></div>
         <div class="hint" id="classesHint">Select one or more classes.</div>
+        <div class="schedule-source-status" id="kioskScheduleStatus" role="status">Website schedule checking for updates</div>
       </div>
     </div>
 
@@ -487,22 +729,111 @@ input, textarea, select {
   </section>
 
   <!-- ADMIN -->
-  <section id="admin" class="card" style="display:none;">
-    <div class="inline" style="justify-content: space-between; align-items:center;">
-      <h2 style="margin: 0;">Admin View</h2>
-      <div class="inline" style="gap:8px;">
+  <section id="admin" class="admin-shell" style="display:none;">
+    <div class="admin-panel">
+      <div class="admin-header">
+        <div>
+          <h2 id="adminHeading" tabindex="-1">M1 Admin</h2>
+          <div class="subtle">Current device status and everyday sign-in tools.</div>
+        </div>
+        <div class="admin-header-actions">
+          <button id="btnKiosk" class="btn brand" type="button">Return to Instructor Sign-In</button>
         <button id="btnAdminPinToggle" class="btn small" type="button" style="display:none;">Change PIN</button>
         <button id="btnAdminLogout" class="btn warn small" type="button">Log out Admin</button>
+        </div>
       </div>
+
+      <section class="admin-overview" aria-labelledby="adminStatusHeading">
+        <h3 id="adminStatusHeading" class="admin-section-title">Status summary</h3>
+        <div class="admin-summary-grid" role="list">
+          <div id="adminSummaryScheduleCard" class="admin-status-card" role="listitem">
+            <div class="admin-status-label">Schedule</div>
+            <div id="adminSummarySchedule" class="admin-status-value" role="status" aria-live="polite">Checking schedule…</div>
+          </div>
+          <div id="adminSummarySyncCard" class="admin-status-card" role="listitem">
+            <div class="admin-status-label">Sync</div>
+            <div id="adminSummarySync" class="admin-status-value" role="status" aria-live="polite">0 rows waiting to sync</div>
+          </div>
+          <div id="adminSummaryLastSyncCard" class="admin-status-card" role="listitem">
+            <div class="admin-status-label">Last confirmed sync</div>
+            <div id="adminSummaryLastSync" class="admin-status-value">No confirmed sync yet.</div>
+          </div>
+          <div id="adminSummaryDeviceCard" class="admin-status-card" role="listitem">
+            <div class="admin-status-label">Device</div>
+            <div id="adminSummaryDevice" class="admin-status-value">Not configured.</div>
+          </div>
+          <div id="adminSummarySigninsCard" class="admin-status-card" role="listitem">
+            <div class="admin-status-label">Sign-ins</div>
+            <div id="adminSummarySignins" class="admin-status-value">0 active sign-ins</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="admin-actions-block" aria-labelledby="adminActionsHeading">
+        <h3 id="adminActionsHeading" class="admin-section-title">Ordinary actions</h3>
+        <div id="adminPrimaryActions" class="admin-primary-actions">
+          <a id="dailyReviewLink" class="btn brand admin-link-button admin-daily-review" href="/m1/admin/">Forgotten sign-in / Daily Review</a>
+          <a id="recentSigninsLink" class="btn admin-link-button" href="#recentSignins">View recent sign-ins</a>
+        </div>
+        <div id="syncStatus" class="statusRow" role="status" aria-live="polite"></div>
+      </section>
     </div>
 
-    <div id="adminPinPanel" class="card" style="background: var(--panel); display:none;">
+    <details id="recentSignins" class="admin-disclosure" open>
+      <summary>Recent sign-ins</summary>
+      <div id="recentSigninsSlot" class="admin-disclosure-body"></div>
+    </details>
+
+    <details id="temporaryClassesSection" class="admin-disclosure">
+      <summary>Temporary classes</summary>
+      <div id="temporaryClassesSlot" class="admin-disclosure-body"></div>
+    </details>
+
+    <details id="weeklyScheduleSection" class="admin-disclosure">
+      <summary>Weekly schedule</summary>
+      <div id="weeklyScheduleSlot" class="admin-disclosure-body"></div>
+    </details>
+
+    <details id="advancedSettings" class="admin-disclosure">
+      <summary>Advanced settings</summary>
+      <div class="admin-disclosure-body">
+        <section class="admin-subsection" aria-labelledby="advancedPinHeading">
+          <h3 id="advancedPinHeading">Admin PIN</h3>
+          <div class="subtle">Set or change the PIN that protects Admin View on this device.</div>
+          <div id="advancedPinSlot"></div>
+        </section>
+        <section id="advancedDeviceSlot" class="admin-subsection"></section>
+        <section id="advancedSyncSlot" class="admin-subsection"></section>
+        <details id="manualScheduleSettings" class="admin-subdisclosure">
+          <summary>Manual schedule tools</summary>
+          <div id="advancedScheduleSlot" class="admin-subdisclosure-body"></div>
+        </details>
+        <details id="durationRulesSettings" class="admin-subdisclosure">
+          <summary>Duration rules</summary>
+          <div id="advancedDurationSlot" class="admin-subdisclosure-body"></div>
+        </details>
+        <details id="troubleshootingSettings" class="admin-subdisclosure">
+          <summary>Troubleshooting</summary>
+          <div id="advancedTroubleshootingSlot" class="admin-subdisclosure-body"></div>
+        </details>
+      </div>
+    </details>
+
+    <details id="dangerZone" class="admin-disclosure admin-danger-zone">
+      <summary>Danger zone</summary>
+      <div class="admin-disclosure-body">
+        <div class="subtle">These actions can remove settings or sign-in history from this device. You will still be asked to confirm each action.</div>
+        <div id="dangerZoneActions" class="admin-danger-actions"></div>
+      </div>
+    </details>
+
+    <div id="adminPinPanel" class="card admin-organizable" style="background: var(--panel); display:none;">
       <h3>Admin access</h3>
       <div class="subtle" id="adminPinHint">Set a PIN to lock Admin view on this device.</div>
 
       <div class="grid twoEq" style="margin-top: 12px;">
         <div>
-          <label id="adminPinLabel">Set PIN</label>
+          <label id="adminPinLabel" for="adminPinInput">Set PIN</label>
           <input id="adminPinInput" type="password" inputmode="numeric" placeholder="Enter a 4-6 digit PIN" />
           <div class="hint">Stored locally on this device.</div>
         </div>
@@ -515,24 +846,24 @@ input, textarea, select {
       </div>
     </div>
 
-    <div class="card" style="background: var(--panel);">
+    <div id="deviceSetupCard" class="card admin-organizable" style="background: var(--panel);">
       <h3>Device setup</h3>
-      <div class="subtle">This is stored <b>on this device</b> (local storage). Use it to label exports and auto-fill Site.</div>
+      <div class="subtle">Saved on this device. These details label exports and fill the Site field.</div>
 
       <div class="grid twoEq" style="margin-top: 12px;">
         <div>
-          <label>Gym name</label>
+          <label for="cfgGymName">Gym name</label>
           <input id="cfgGymName" type="text" placeholder="e.g. Revolution BJJ" />
         </div>
         <div>
-          <label>Location / device label</label>
+          <label for="cfgLocation">Location</label>
           <input id="cfgLocation" type="text" placeholder="e.g. Front Desk iPad (Rev)" />
         </div>
       </div>
 
       <div class="grid twoEq" style="margin-top: 12px;">
         <div>
-          <label>Default site code</label>
+          <label for="cfgSiteCode">Default site code</label>
           <input id="cfgSiteCode" type="text" placeholder="Rev" />
           <div class="hint">Used as the Site value for kiosk sign-ins and exports.</div>
         </div>
@@ -540,75 +871,71 @@ input, textarea, select {
           <label>Actions</label>
           <div class="inline" style="flex-wrap: wrap; gap:6px;">
             <button id="btnSaveDevice" class="btn brand" type="button">Save device</button>
-            <button id="btnResetDevice" class="btn danger" type="button">Reset device location</button>
+            <button id="btnResetDevice" class="btn danger" type="button">Reset device location and settings</button>
             <button id="btnFactoryReset" class="btn danger" type="button">Factory reset</button>
           </div>
-          <div class="hint warn">Reset device clears: gym name, location label, site code, schedule data, series classes, and duration rules (sign‑ins preserved).  Factory reset clears <em>all</em> local data (device, schedule, series classes, duration rules, sign‑ins).</div>
+          <div class="hint warn">Reset and Factory reset are kept in the closed Danger zone below.</div>
         </div>
       </div>
 
       <div class="statusRow" id="deviceStatus"></div>
     </div>
 
-    <div class="card" style="background: var(--panel);">
-      <h3>Schedule (used by “Classes Today”)</h3>
+    <div id="scheduleEditorCard" class="card admin-organizable" style="background: var(--panel);">
+      <h3>Manual schedule editing</h3>
       <div class="subtle">
-        If the kiosk list is empty, it usually means: schedule not saved, or the day key didn’t match.
-        This build fixes that by using one shared schedule source.
+        M1 normally follows the Revolution website. Saving here uses this device's local schedule until you return to the website schedule.
       </div>
 
-      <div class="grid twoEq" style="margin-top: 12px; display: none;">
+      <div class="grid twoEq" style="margin-top: 12px;">
   <div>
-    <label>Schedule URL (optional)</label>
+    <label for="cfgScheduleUrl">Import from a web address (optional)</label>
     <input id="cfgScheduleUrl" type="url" placeholder="https://example.com/schedule.json" />
-    <div class="hint">Paste a JSON schedule URL here to import classes automatically.</div>
+    <div class="hint">This is a one-time import. It does not keep checking that address.</div>
   </div>
   <div>
-    <label>&nbsp;</label>
     <div class="inline">
       <button id="btnLoadScheduleUrl" class="btn" type="button">Load from URL</button>
     </div>
-    <div class="hint">Fetches a remote JSON schedule and saves it.</div>
+    <div class="hint">Website updates pause while an imported schedule is in use.</div>
   </div>
 </div>
 <div style="margin-top: 12px;">
-  <label>Day</label>
+  <label for="schedDay">Day</label>
   <select id="schedDay"></select>
 </div>
 <div style="margin-top: 12px;">
   <label>Schedule actions</label>
   <div class="inline">
     <button id="btnSaveSchedule" class="btn brand" type="button">Save schedule</button>
-    <button id="btnLoadDefaultSchedule" class="btn" type="button">Load default Rev schedule</button>
-    <button id="btnLoadRichSchedule" class="btn" type="button">Load Richmond BJJ schedule</button>
-    <button id="btnClearSchedule" class="btn" type="button">Revert to default</button>
+    <button id="btnLoadDefaultSchedule" class="btn" type="button">Load Revolution schedule as local</button>
+    <button id="btnLoadRichSchedule" class="btn" type="button">Load Richmond schedule (legacy / other school)</button>
+    <button id="btnClearSchedule" class="btn" type="button">Revert to website schedule</button>
     <button id="btnDisableSchedule" class="btn warn" type="button">Disable schedule</button>
   </div>
 </div>
 
       <div style="margin-top: 12px;">
-        <label>Classes for selected day (one per line)</label>
+        <label for="schedText">Classes for selected day (one per line)</label>
         <textarea id="schedText" placeholder="6:00 AM BJJ (Level 2)
 12:00 PM BJJ (Level 2)
 ..."></textarea>
         <div class="hint" id="scheduleHint"></div>
       </div>
 
-      <div class="statusRow" id="scheduleStatus"></div>
     </div>
 
-    <div class="card" style="background: var(--panel);">
-      <h3>Week at a glance</h3>
-      <div class="subtle">Read-only view of the saved weekly schedule.</div>
+    <div id="weeklyScheduleCard" class="card admin-organizable" style="background: var(--panel);">
+      <div class="subtle">Read-only view of the active seven-day schedule, including temporary classes.</div>
+      <div class="statusRow" id="scheduleStatus" role="status" aria-live="polite"></div>
       <div id="weekAtGlance" class="week-glance" style="margin-top: 12px;"></div>
     </div>
 
-    <div class="card" style="background: var(--panel);">
-      <h3>Series classes</h3>
-      <div class="subtle">Add limited-run recurring classes that appear in Classes Today only within their date range.</div>
+    <div id="temporaryClassesCard" class="card admin-organizable" style="background: var(--panel);">
+      <div class="subtle">Add a recurring class for a limited number of weeks. It appears in Classes Today only during that date range.</div>
       <div class="grid twoEq" style="margin-top: 12px;">
         <div>
-          <label>Label</label>
+          <label for="seriesLabel">Class name</label>
           <input id="seriesLabel" type="text" placeholder="Intro" />
         </div>
         <div>
@@ -631,27 +958,26 @@ input, textarea, select {
       </div>
       <div class="grid twoEq" style="margin-top: 12px;">
         <div>
-          <label>Start date</label>
+          <label for="seriesStart">Start date</label>
           <input id="seriesStart" type="date" />
         </div>
         <div>
-          <label>Weeks</label>
+          <label for="seriesWeeks">Number of weeks</label>
           <input id="seriesWeeks" type="number" min="1" step="1" value="8" />
         </div>
       </div>
       <input id="seriesEnd" type="hidden" />
       <div class="subtle" id="seriesEndDisplay" style="margin-top: 6px;">Ends: —</div>
       <div class="inline" style="margin-top: 12px;">
-        <button id="btnAddSeries" class="btn brand" type="button">Add series</button>
+        <button id="btnAddSeries" class="btn brand" type="button">Add temporary class</button>
         <button id="btnClearSeriesForm" class="btn" type="button">Clear</button>
       </div>
       <div class="hint" id="seriesHint"></div>
       <div id="seriesList" class="series-list" style="margin-top: 12px;"></div>
     </div>
 
-    <div class="card" style="background: var(--panel);">
-      <h3>Duration rules</h3>
-      <div class="subtle">Match text → duration (first match wins, case-insensitive “contains”).</div>
+    <div id="durationRulesCard" class="card admin-organizable" style="background: var(--panel);">
+      <div class="subtle">Set how many hours a class name counts toward payroll. The first matching rule is used.</div>
       <div id="durationRulesWrap" class="duration-rule-list" style="margin-top: 10px;"></div>
       <div class="inline" style="margin-top: 10px;">
         <button id="btnAddDurationRule" class="btn" type="button">Add rule</button>
@@ -660,12 +986,12 @@ input, textarea, select {
       <div class="statusRow" id="durationRulesStatus"></div>
     </div>
 
-    <div class="card" style="background: var(--panel);">
-      <h3>Sign-ins</h3>
-      <div class="subtle">Export CSV compatible with payroll. Columns: Timestamp, Date, Class Label, Duration (hr), Instructor, Site, Notes.</div>
+    <div id="signinsCard" class="card admin-organizable" style="background: var(--panel);">
+      <!-- Export CSV compatible with payroll; the visible label emphasizes its backup purpose. -->
+      <div class="subtle">Records stay in order and keep their current status labels. The backup includes active rows in the usual payroll-ready columns.</div>
 
       <div class="inline" style="margin:12px 0 12px 0;">
-        <button id="btnExport" class="btn brand" type="button">Export CSV</button>
+        <button id="btnExport" class="btn brand" type="button">Export backup CSV</button>
         <button id="btnCopy" class="btn" type="button">Copy CSV</button>
         <button id="btnVoidLast" class="btn warn" type="button">Void last sign‑in</button>
         <button id="btnClearSignins" class="btn danger" type="button">Clear All Sign‑ins</button>
@@ -679,28 +1005,25 @@ input, textarea, select {
       </div>
     </div>
 
-    <!-- Google Sheets sync configuration -->
-    <div class="card" style="background: var(--panel);">
-      <h3>Google Sheets Sync</h3>
-      <div class="subtle">Sync sends only queued rows to this site's protected same-origin endpoint.</div>
-      <div class="subtle" style="margin-top:12px;">On the production kiosk origin, device authorization is held in a secure host-only cookie and is never displayed here.</div>
+    <div id="syncSettingsCard" class="card admin-organizable" style="background: var(--panel);">
+      <h3>Sign-in backup and syncing</h3>
+      <!-- Production authorization remains a secure host-only cookie and is never displayed here. -->
+      <div class="subtle">Choose the device label saved with waiting sign-ins and whether M1 should try to sync automatically after sign-in.</div>
       <div style="margin-top:12px;">
         <label for="cfgDeviceLabel" style="display:block; margin-bottom:4px;">Device label</label>
         <input id="cfgDeviceLabel" type="text" placeholder="Front Desk iPad" style="width:100%;">
       </div>
       <div style="margin-top:12px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
         <label style="display:flex; align-items:center; gap:6px;"><input id="cfgAutoSync" type="checkbox">Auto‑sync after sign‑in</label>
-        <button id="btnSyncNow" class="btn" type="button">Sync now</button>
+        <button id="btnSyncNow" class="btn brand" type="button">Sync now</button>
       </div>
-      <div id="syncStatus" class="statusRow" style="margin-top:8px;"></div>
     </div>
 
-    <div class="card" style="background: rgba(148,163,184,.06); border-color: rgba(148,163,184,.18);">
-      <h3>Quick debug</h3>
-      <div class="subtle">If something feels “stuck”, copy this into chat and I’ll patch fast.</div>
+    <div id="troubleshootingCard" class="card admin-organizable" style="background: rgba(148,163,184,.06); border-color: rgba(148,163,184,.18);">
+      <div class="subtle">Open this only when diagnosing a problem. These details help explain what this device currently sees.</div>
       <div class="inline" style="margin-top:10px;">
-        <button id="btnCopyDebug" class="btn" type="button">Copy debug snapshot</button>
-        <button id="btnSelectDebug" class="btn" type="button">Select debug text</button>
+        <button id="btnCopyDebug" class="btn" type="button">Copy troubleshooting details</button>
+        <button id="btnSelectDebug" class="btn" type="button">Select troubleshooting text</button>
       </div>
       <!-- render debug output in a textarea for reliable selection on tablets -->
       <textarea id="debugBox" readonly style="margin-top:10px; white-space:pre-wrap; color:#e2e8f0; font-size:12px; background:#0b1322; border:1px solid #243045; border-radius:10px; padding:12px; width:100%; min-height:160px;"></textarea>
@@ -753,18 +1076,27 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs';
+} from './sync-core.mjs?v=2026-08-11-unified-r3';
+
+// Bump this revision whenever index.html or sync-core.mjs changes.
+const OFFLINE_SHELL_REVISION = '2026-08-11-unified-r3';
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register(
+    `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
+    { scope: '/m1/', updateViaCache: 'none' }
+  ).catch(() => {});
+}
 
 (() => {
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
   const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
   const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
-  const TEST_BUILD = '2026-08-09 M1 TEST timestamp-rollover';
-  const PRODUCTION_BUILD = '2026-08-09 M1 PRODUCTION timestamp-rollover';
+  const TEST_BUILD = '2026-08-11 M1 TEST unified-rollout-candidate';
+  const PRODUCTION_BUILD = '2026-08-16 M1 PRODUCTION unified-rollout';
   const BUILD = IS_PRODUCTION_ORIGIN ? PRODUCTION_BUILD : TEST_BUILD;
   if (IS_PRODUCTION_ORIGIN) {
-    document.title = 'GiB · Module 1 · Instructor Sign-In → Payroll (M1 PRODUCTION timestamp-rollover)';
+    document.title = 'GiB · Module 1 · Instructor Sign-In → Payroll (2026-08-16 M1 PRODUCTION unified-rollout)';
     document.getElementById('buildId').textContent = PRODUCTION_BUILD;
     document.getElementById('buildStampLarge').textContent = `Build ${PRODUCTION_BUILD}`;
   }
@@ -842,10 +1174,22 @@ function refreshNameDatalist() {
   const ADMIN_PIN_KEY = 'gib_m1_admin_pin_v1';
   const DURATION_RULES_KEY = 'gib_m1_duration_rules_v1';
   const SERIES_KEY = 'gib_m1_series_v1';
-// New keys: store the schedule source URL and mode. These are kept separate from
-// SCHEDULE_KEY so that a remote schedule can be recalled after reset or refresh.
-const SCHEDULE_URL_KEY  = 'gib_m1_schedule_url_v1';
-const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
+  // Existing local schedule keys are overrides. The shared website cache stays
+  // separate so an old manual, URL, or disabled override is never overwritten.
+  const SCHEDULE_URL_KEY  = 'gib_m1_schedule_url_v1';
+  const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
+  const CANONICAL_SCHEDULE_CACHE_KEY = 'gib_m1_canonical_schedule_cache_v1';
+  const CANONICAL_SCHEDULE_ENDPOINT = '/api/m1-schedule';
+  const CANONICAL_SCHEDULE_SOURCE_URL = 'https://revolutionbjj.com/schedule/';
+  const CANONICAL_SCHEDULE_UPSTREAM_URL = 'https://revolutionbjj.com/wp-json/wp/v2/pages?slug=schedule&status=publish&_fields=id,type,slug,status,link,title,modified,modified_gmt,content';
+  const CHECKED_IN_SCHEDULE_VERSION = '2026-08-11';
+  const SCHEDULE_FETCH_TIMEOUT_MS = 10_000;
+  const CANONICAL_SCHEDULE_REFRESH_INTERVAL_MS = 10 * 60 * 1_000;
+  const MAX_SCHEDULE_RESPONSE_CHARS = 100_000;
+  const MAX_CLASS_LABEL_LENGTH = 200;
+  const MAX_CLASSES_PER_DAY = 24;
+  const MIN_TOTAL_CLASSES = 30;
+  const MAX_TOTAL_CLASSES = 100;
 
   // Sync keys
   const LOCAL_STATE_KEY  = 'gib_m1_local_state_v2';
@@ -858,22 +1202,31 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   const OLD_SIGNINS_KEYS = ['rbjj_signins_v2', 'rbjj_signins_roster_mode_v1'];
 
   const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  const MIN_CLASSES_BY_DAY = Object.freeze({
+    Monday: 5,
+    Tuesday: 5,
+    Wednesday: 5,
+    Thursday: 5,
+    Friday: 2,
+    Saturday: 2,
+    Sunday: 1
+  });
 
   // Default schedule snapshot (Rev)
   const DEFAULT_SCHEDULE = {
     'Monday': [
-      '6:00 AM BJJ (Level 2)', '12:00 PM BJJ (Level 2)', '4:30 PM Yoga (Core)', '4:30 PM Kids’ BJJ',
-      '4:30 PM BJJ (Level 1)', '5:30 PM BJJ (Level 2)', '5:30 PM Lapel Guard Class (Level 4)',
+      '6:00 AM BJJ (Level 2)', '12:00 PM BJJ Kimuras (Level 2)', '4:30 PM Kids’ BJJ',
+      '4:30 PM BJJ (Level 1)', '5:30 PM BJJ (Level 2)', '5:30 PM Muay Thai Drills', '5:30 PM Focus Class (Level 4) – tripod passing (changes every quarter)',
       '6:30 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)',
       '6:30 PM Muay Thai (Fundamentals/Intermediate, and intros when scheduled)',
       '6:30 PM Leglock Fundamentals (No-Gi, Level 3)', '7:00 PM BJJ (Level 2)',
       '7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ'
     ],
     'Tuesday': [
-      '6:00 AM BJJ (Level 4) / Gi BJJ Intro Class', '6:00 AM No-Gi BJJ (Level 2)', '7:15 AM Conditioning',
-      '12:00 PM BJJ (Level 2)', '4:30 PM Yoga (Flow)', '4:30 PM Kids’ BJJ', '5:30 PM BJJ (Level 2)',
-      '5:30 PM Gi BJJ Intro Class / Level 1', '5:30 PM BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)',
-      '6:30 PM Guard Passing Class (Level 3)', '6:30 PM Judo', '7:00 PM BJJ Competition Class (Level 2, gi)'
+      '6:00 AM BJJ (Level 4)/Gi BJJ Intro Class', '6:00 AM No-Gi BJJ (Level 2)', '12:00 PM BJJ (Level 2)',
+      '4:30 PM Kids’ BJJ', '5:30 PM BJJ (Level 2)', '5:30 PM Gi BJJ Intro Class/Level 1',
+      '5:30 PM BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)', '6:30 PM BJJ Sweeps Class (Level 3)',
+      '6:30 PM Judo', '7:00 PM BJJ Competition Class (Level 2, gi)'
     ],
     'Wednesday': [
       '6:00 AM BJJ (Level 2)', '12:00 PM No-Gi BJJ (Level 2)', '4:30 PM Kids’ BJJ', '4:30 PM BJJ (Level 1)',
@@ -882,13 +1235,13 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       '6:30 PM BJJ Drills (Level 3)', '7:00 PM BJJ (Level 4)', '7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ'
     ],
     'Thursday': [
-      '6:00 AM No-Gi BJJ (Level 4)', '6:00 AM No-Gi BJJ (Level 2) / Gi BJJ Intro Class', '7:15 AM Conditioning',
-      '12:00 PM BJJ (Level 2)', '4:30 PM Kids’ BJJ', '5:00 PM Get Warm', '5:30 PM BJJ (Level 2)',
-      '5:30 PM Gi BJJ Intro Class / Level 1', '5:30 PM No-Gi BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)',
+      '6:00 AM No-Gi BJJ (Level 4)', '6:00 AM No-Gi BJJ (Level 2)/Gi BJJ Intro Class',
+      '12:00 PM BJJ (Level 2)', '4:30 PM Kids’ BJJ', '5:30 PM BJJ (Level 2)',
+      '5:30 PM Gi BJJ Intro Class/Level 1', '5:30 PM No-Gi BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)',
       '6:30 PM Advanced Leglocks (No-Gi, Level 3)', '6:30 PM Judo', '7:00 PM BJJ Competition Class (Level 2, no-gi)'
     ],
     'Friday': [
-      '6:00 AM Drill/Roll Class – BJJ', '12:00 PM Drill/Roll Class – BJJ', '4:30 PM Yoga (Flow)',
+      '6:00 AM Drill/Roll Class – BJJ', '12:00 PM Drill/Roll Class – BJJ',
       '5:00 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)', '5:30 PM BJJ (Level 2)',
       '6:00 PM Muay Thai (Fundamentals/Intermediate)'
     ],
@@ -896,7 +1249,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       '10:00 AM Kids’ BJJ', '10:00 AM Wrestling', '11:00 AM BJJ (Level 2)', '12:00 PM Conditioning'
     ],
     'Sunday': [
-      '12:00 PM BJJ Competition Class (Level 4, gi and no-gi)', '12:30 PM Get Warm', '1:00 PM BJJ Open Mat'
+      '12:00 PM BJJ Competition Class (Level 4, gi and no-gi)', '1:00 PM BJJ Open Mat'
     ]
   };
 
@@ -1112,6 +1465,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         if (
           (k.startsWith('gib_') || k.startsWith('rbjj_'))
           && k !== SIGNINS_KEY
+          && !OLD_SIGNINS_KEYS.includes(k)
           && k !== SYNC_QUEUE_KEY
           && k !== LOCAL_STATE_KEY
         ) {
@@ -1210,9 +1564,299 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   // Schedule
-  function loadSchedule() {
+  let canonicalScheduleMemory = null;
+  let canonicalScheduleMemoryOrigin = null;
+  let canonicalScheduleRuntime = {
+    phase: 'idle',
+    error: '',
+    attemptedAt: null,
+    receivedAt: null
+  };
+  let canonicalScheduleRefreshPromise = null;
+
+  function isPlainObject(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function normalizeCanonicalLabel(value) {
+    return String(value == null ? '' : value)
+      .normalize('NFC')
+      .replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/gu, ' ')
+      .replace(/[\t\r\n ]+/gu, ' ')
+      .trim();
+  }
+
+  function canonicalComparisonLabel(value) {
+    return normalizeCanonicalLabel(value)
+      .normalize('NFKC')
+      .toLocaleLowerCase('en-US')
+      .replace(/[‘’`´]/gu, "'")
+      .replace(/[‐‑‒–—―−]/gu, '-')
+      .replace(/\s*\/\s*/gu, '/')
+      .replace(/\s+/gu, ' ');
+  }
+
+  function validateCanonicalDays(days) {
+    if (!isPlainObject(days)) throw new Error('Invalid schedule days.');
+    const keys = Object.keys(days);
+    if (keys.length !== DAYS.length || keys.some(key => !DAYS.includes(key))) {
+      throw new Error('Schedule must contain exactly seven weekdays.');
+    }
+
+    let total = 0;
+    const normalized = {};
+    DAYS.forEach(day => {
+      const values = days[day];
+      if (
+        !Array.isArray(values)
+        || values.length < MIN_CLASSES_BY_DAY[day]
+        || values.length > MAX_CLASSES_PER_DAY
+      ) {
+        throw new Error(`Schedule day ${day} is empty, partial, or oversized.`);
+      }
+      const seen = new Set();
+      const clean = values.map((value, index) => {
+        if (typeof value !== 'string') throw new Error('Schedule labels must be text.');
+        const label = normalizeCanonicalLabel(value);
+        if (
+          !label
+          || label.length > MAX_CLASS_LABEL_LENGTH
+          || /[\u0000-\u001f\u007f-\u009f<>]/u.test(label)
+          || /\p{Cf}/u.test(label)
+          || /\b(?:javascript|data)\s*:/iu.test(label)
+          || /\bon[a-z]+\s*=/iu.test(label)
+          || !/^(?:1[0-2]|[1-9]):[0-5]\d\s+(?:AM|PM)\b/u.test(label)
+        ) {
+          throw new Error('Schedule contains an unsafe or oversized class label.');
+        }
+        const duplicateKey = canonicalComparisonLabel(label);
+        if (seen.has(duplicateKey)) throw new Error(`Schedule contains a duplicate ${day} class.`);
+        seen.add(duplicateKey);
+        return { label, index, minutes: parseStartMinutes(label) };
+      });
+      clean.sort((left, right) => (
+        left.minutes === right.minutes ? left.index - right.index : left.minutes - right.minutes
+      ));
+      normalized[day] = clean.map(item => item.label);
+      total += normalized[day].length;
+    });
+    if (total < MIN_TOTAL_CLASSES || total > MAX_TOTAL_CLASSES) {
+      throw new Error('Schedule class count is implausible.');
+    }
+    return normalized;
+  }
+
+  function boundedMetadata(value, maximum = 240) {
+    return typeof value === 'string' && value.length > 0 && value.length <= maximum;
+  }
+
+  function validFullIsoDate(value) {
+    if (
+      typeof value !== 'string'
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)
+    ) return false;
+    const parsed = new Date(value);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
+  }
+
+  function validWordPressModifiedDate(value) {
+    if (
+      typeof value !== 'string'
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u.test(value)
+    ) return false;
+    const parsed = new Date(value);
+    return Number.isFinite(parsed.getTime())
+      && parsed.toISOString() === value.replace(/Z$/u, '.000Z');
+  }
+
+  function validDateOnly(value) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  }
+
+  function validReasonCode(value) {
+    return value == null
+      || (boundedMetadata(value, 80) && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value));
+  }
+
+  async function canonicalDaysHash(days) {
+    if (!globalThis.crypto?.subtle || typeof TextEncoder !== 'function') {
+      throw new Error('Secure schedule verification is unavailable.');
+    }
+    const bytes = new TextEncoder().encode(JSON.stringify(days));
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function validateCanonicalSchedule(payload) {
+    if (!isPlainObject(payload)) throw new Error('Schedule response is not an object.');
+    if (payload.timezone !== TZ || payload.site !== 'Rev') {
+      throw new Error('Schedule response is for the wrong site or timezone.');
+    }
+    if (!/^revbjj-[a-f0-9]{16}$/u.test(payload.version || '')) {
+      throw new Error('Schedule version is invalid.');
+    }
+    if (!/^[a-f0-9]{64}$/u.test(payload.contentHash || '')) {
+      throw new Error('Schedule content hash is invalid.');
+    }
+    if (payload.version !== `revbjj-${payload.contentHash.slice(0, 16)}`) {
+      throw new Error('Schedule version does not match its content hash.');
+    }
+    const days = validateCanonicalDays(payload.days);
+    if (await canonicalDaysHash(days) !== payload.contentHash) {
+      throw new Error('Schedule content hash does not match its classes.');
+    }
+    const sourceType = payload.source?.type;
+    const wordpressSource = sourceType === 'wordpress-rest';
+    const bootstrapSource = sourceType === 'checked-in-bootstrap';
+    const sourceMetadataValid = wordpressSource
+      ? (
+          Number.isInteger(payload.source?.pageId)
+          && payload.source.pageId > 0
+          && validWordPressModifiedDate(payload.source.modifiedAt)
+        )
+      : (
+          bootstrapSource
+          && validDateOnly(payload.source?.modifiedAt)
+          && payload.source?.pageId === null
+        );
+    const sourceFallbackCombinationValid = payload.current
+      ? (payload.fallback === 'none' && wordpressSource)
+      : (
+          (payload.fallback === 'last-known-good' && wordpressSource)
+          || (payload.fallback === 'bootstrap' && bootstrapSource)
+        );
+    if (
+      !isPlainObject(payload.source)
+      || payload.source.url !== CANONICAL_SCHEDULE_SOURCE_URL
+      || payload.source.upstreamUrl !== CANONICAL_SCHEDULE_UPSTREAM_URL
+      || (!wordpressSource && !bootstrapSource)
+      || !sourceMetadataValid
+      || !validFullIsoDate(payload.fetchedAt)
+      || typeof payload.current !== 'boolean'
+      || !['none', 'last-known-good', 'bootstrap'].includes(payload.fallback)
+      || !sourceFallbackCombinationValid
+      || !isPlainObject(payload.status)
+      || payload.status.current !== payload.current
+      || payload.status.fallback !== payload.fallback
+      || payload.status.state !== (payload.current ? 'current' : 'fallback')
+      || !validFullIsoDate(payload.status.servedAt)
+      || Date.parse(payload.status.servedAt) < Date.parse(payload.fetchedAt)
+      || !validReasonCode(payload.status.reason)
+      || !validReasonCode(payload.status.storageWarning)
+      || !isPlainObject(payload.cache)
+      || !Number.isInteger(payload.cache.refreshIntervalSeconds)
+      || payload.cache.refreshIntervalSeconds < 60
+      || payload.cache.refreshIntervalSeconds > 3600
+    ) {
+      throw new Error('Schedule metadata is invalid.');
+    }
+
+    return {
+      timezone: payload.timezone,
+      site: payload.site,
+      version: payload.version,
+      contentHash: payload.contentHash,
+      days,
+      source: {
+        url: payload.source.url,
+        upstreamUrl: payload.source.upstreamUrl,
+        type: payload.source.type,
+        modifiedAt: payload.source.modifiedAt,
+        pageId: wordpressSource ? payload.source.pageId : null
+      },
+      fetchedAt: payload.fetchedAt,
+      current: payload.current,
+      fallback: payload.fallback,
+      status: {
+        state: payload.status.state,
+        current: payload.status.current,
+        fallback: payload.status.fallback,
+        reason: payload.status.reason || null,
+        storageWarning: payload.status.storageWarning || null,
+        servedAt: payload.status.servedAt
+      },
+      cache: {
+        refreshIntervalSeconds: payload.cache.refreshIntervalSeconds
+      }
+    };
+  }
+
+  async function loadCanonicalScheduleCache() {
+    const stored = safeParse(CANONICAL_SCHEDULE_CACHE_KEY, null);
+    if (!stored) return null;
+    try {
+      return await validateCanonicalSchedule(stored);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function compareCanonicalScheduleFreshness(candidate, existing) {
+    if (!existing) return 1;
+    if (candidate.contentHash === existing.contentHash) {
+      if (
+        existing.source.type === 'wordpress-rest'
+        && candidate.source.type === 'checked-in-bootstrap'
+      ) return -1;
+      return 0;
+    }
+    const candidateModified = Date.parse(candidate.source.modifiedAt);
+    const existingModified = Date.parse(existing.source.modifiedAt);
+    if (candidateModified > existingModified) return 1;
+    if (candidateModified < existingModified) return -1;
+    return null;
+  }
+
+  async function checkedInBootstrapSchedule(reason = 'schedule-service-unavailable') {
+    const days = validateCanonicalDays(DEFAULT_SCHEDULE);
+    const contentHash = await canonicalDaysHash(days);
+    const servedAt = new Date().toISOString();
+    return validateCanonicalSchedule({
+      timezone: TZ,
+      site: 'Rev',
+      version: `revbjj-${contentHash.slice(0, 16)}`,
+      contentHash,
+      days,
+      source: {
+        url: CANONICAL_SCHEDULE_SOURCE_URL,
+        upstreamUrl: CANONICAL_SCHEDULE_UPSTREAM_URL,
+        type: 'checked-in-bootstrap',
+        pageId: null,
+        modifiedAt: CHECKED_IN_SCHEDULE_VERSION
+      },
+      fetchedAt: servedAt,
+      current: false,
+      fallback: 'bootstrap',
+      status: {
+        state: 'fallback',
+        current: false,
+        fallback: 'bootstrap',
+        reason,
+        storageWarning: null,
+        servedAt
+      },
+      cache: { refreshIntervalSeconds: 300 }
+    });
+  }
+
+  function loadLocalScheduleOverride() {
     const saved = safeParse(SCHEDULE_KEY, null);
-    if (saved && saved.days && typeof saved.days === 'object') {
+    return saved && isPlainObject(saved.days) ? saved : null;
+  }
+
+  function localOverrideMode(saved) {
+    const source = String(saved?.source || '').trim().toLowerCase();
+    if (source === 'url' || source === 'disabled' || source === 'manual') return source;
+    const legacyMode = String(localStorage.getItem(SCHEDULE_MODE_KEY) || '').trim().toLowerCase();
+    if (legacyMode === 'url' || legacyMode === 'disabled' || legacyMode === 'manual') return legacyMode;
+    return 'manual';
+  }
+
+  function loadSchedule() {
+    const saved = loadLocalScheduleOverride();
+    if (saved) {
       // Canonicalize keys if needed
       const out = {};
       for (const [k, v] of Object.entries(saved.days)) {
@@ -1226,16 +1870,40 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       return {
         days: out,
         source: saved.source || 'saved',
-        updatedAt: saved.updatedAt || null
+        updatedAt: saved.updatedAt || null,
+        override: true,
+        mode: localOverrideMode(saved),
+        canonical: null,
+        cacheOrigin: null
       };
     }
-    // fallback default
+
+    const canonical = canonicalScheduleMemory;
+    if (canonical) {
+      const days = {};
+      DAYS.forEach(day => { days[day] = canonical.days[day].slice(); });
+      return {
+        days,
+        source: 'website',
+        updatedAt: canonical.fetchedAt,
+        override: false,
+        mode: 'website',
+        canonical,
+        cacheOrigin: canonicalScheduleMemoryOrigin || 'network'
+      };
+    }
+
+    // Validated checked-in bootstrap copied below as the final offline fallback.
     const def = {};
     for (const d of DAYS) def[d] = (DEFAULT_SCHEDULE[d] || []).slice();
     return {
       days: def,
-      source: 'default',
-      updatedAt: null
+      source: 'website-bootstrap',
+      updatedAt: null,
+      override: false,
+      mode: 'website',
+      canonical: null,
+      cacheOrigin: 'built-in-bootstrap'
     };
   }
 
@@ -1251,6 +1919,193 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       source,
       updatedAt: new Date().toISOString()
     });
+  }
+
+  function formatScheduleTimestamp(value) {
+    if (!value || !Number.isFinite(Date.parse(value))) return 'date unavailable';
+    return new Date(value).toLocaleString();
+  }
+
+  function readableScheduleStatusCode(value) {
+    return String(value || '').replace(/-/gu, ' ');
+  }
+
+  function scheduleStatusMessage(schedule) {
+    if (schedule.override) {
+      const mode = schedule.mode === 'url' ? 'URL' : schedule.mode;
+      const saved = formatScheduleTimestamp(schedule.updatedAt);
+      const url = schedule.mode === 'url'
+        ? String(localStorage.getItem(SCHEDULE_URL_KEY) || '').trim().slice(0, 240)
+        : '';
+      const sourceDetail = url ? ` from ${url}` : '';
+      return `Local schedule override active · ${mode}${sourceDetail} · saved ${saved} · Website updates are paused on this device.`;
+    }
+
+    const canonical = schedule.canonical;
+    if (canonical) {
+      const fetched = formatScheduleTimestamp(canonical.fetchedAt);
+      const version = canonical.version;
+      const statusDetails = [canonical.status.reason, canonical.status.storageWarning]
+        .filter((value, index, values) => value && values.indexOf(value) === index)
+        .map(readableScheduleStatusCode);
+      const detail = statusDetails.length ? ` · attention: ${statusDetails.join('; ')}` : '';
+      if (canonicalScheduleRuntime.phase === 'loading') {
+        const loadingSource = canonical.current
+          ? (schedule.cacheOrigin === 'local-cache' ? 'local cache' : 'schedule')
+          : `${canonical.fallback} fallback cache`;
+        return `Website schedule checking for updates · using validated ${loadingSource} ${version}${detail}.`;
+      }
+      if (canonicalScheduleRuntime.phase === 'error') {
+        const retainedSource = canonical.fallback === 'bootstrap'
+          ? 'emergency schedule'
+          : 'last good schedule';
+        return `Website unavailable — using ${retainedSource} · ${version} · validated ${fetched}${detail}.`;
+      }
+      if (!canonical.current) {
+        const retainedSource = canonical.fallback === 'bootstrap'
+          ? 'emergency schedule'
+          : 'last good schedule';
+        return `Website unavailable — using ${retainedSource} · ${version} · validated ${fetched}${detail}.`;
+      }
+      if (schedule.cacheOrigin === 'local-cache') {
+        return `Website schedule current · validated local cache ${version} from ${fetched}${detail}.`;
+      }
+      return `Website schedule current · ${version} · fetched ${fetched}${detail}.`;
+    }
+
+    if (canonicalScheduleRuntime.phase === 'loading') {
+      return 'Website schedule checking for updates · using the validated emergency schedule.';
+    }
+    if (canonicalScheduleRuntime.phase === 'error') {
+      return 'Website unavailable — using emergency schedule.';
+    }
+    return 'Website schedule checking for updates · using the validated emergency schedule.';
+  }
+
+  function renderScheduleStatuses(schedule = loadSchedule()) {
+    const message = scheduleStatusMessage(schedule);
+    const warning = schedule.override
+      || canonicalScheduleRuntime.phase === 'error'
+      || !schedule.canonical
+      || schedule.canonical.current === false
+      || Boolean(schedule.canonical?.status?.reason)
+      || Boolean(schedule.canonical?.status?.storageWarning);
+    const kioskStatus = $('#kioskScheduleStatus');
+    if (kioskStatus) {
+      kioskStatus.textContent = message;
+      kioskStatus.classList.toggle('warn', warning);
+    }
+    const adminStatus = $('#scheduleStatus');
+    if (adminStatus) {
+      adminStatus.textContent = message;
+      adminStatus.classList.toggle('warn', warning);
+    }
+    renderAdminSummary(schedule);
+  }
+
+  function adminScheduleSummary(schedule = loadSchedule()) {
+    if (schedule.override) {
+      const source = schedule.mode === 'url'
+        ? 'URL'
+        : (schedule.mode === 'disabled' ? 'disabled' : 'manual');
+      const savedAt = schedule.updatedAt && Number.isFinite(Date.parse(schedule.updatedAt))
+        ? new Date(schedule.updatedAt).toLocaleString()
+        : 'date unavailable';
+      return {
+        text: `Local ${source} schedule · saved ${savedAt} · website updates paused`,
+        tone: 'warn'
+      };
+    }
+    const canonical = schedule.canonical;
+    if (canonical?.current === true && canonicalScheduleRuntime.phase !== 'error') {
+      const needsAttention = Boolean(canonical.status?.reason)
+        || Boolean(canonical.status?.storageWarning);
+      return {
+        text: needsAttention ? 'Website schedule current; attention needed' : 'Website schedule current',
+        tone: needsAttention ? 'warn' : 'good'
+      };
+    }
+    if (canonical?.current === true && canonicalScheduleRuntime.phase === 'error') {
+      return { text: 'Website schedule refresh unavailable', tone: 'warn' };
+    }
+    if (canonicalScheduleRuntime.phase === 'loading' && !canonical) {
+      return { text: 'Checking website schedule', tone: '' };
+    }
+    return { text: 'Using a safe fallback schedule', tone: 'warn' };
+  }
+
+  function readAdminLocalStateSnapshot() {
+    const state = safeParse(LOCAL_STATE_KEY, null);
+    if (state && Array.isArray(state.ledger) && Array.isArray(state.queue)) {
+      return { ledger: state.ledger, queue: state.queue };
+    }
+    let legacyLedger = safeParse(SIGNINS_KEY, null);
+    if (!Array.isArray(legacyLedger)) {
+      legacyLedger = [];
+      for (const key of OLD_SIGNINS_KEYS) {
+        const candidate = safeParse(key, null);
+        if (Array.isArray(candidate) && candidate.length) {
+          legacyLedger = candidate;
+          break;
+        }
+      }
+    }
+    const legacyQueue = safeParse(SYNC_QUEUE_KEY, []);
+    return {
+      ledger: Array.isArray(legacyLedger) ? legacyLedger : [],
+      queue: Array.isArray(legacyQueue) ? legacyQueue : []
+    };
+  }
+
+  function setAdminSummaryValue(valueId, cardId, text, tone = '') {
+    const value = $(valueId);
+    const card = $(cardId);
+    if (value) value.textContent = text;
+    if (card) {
+      card.classList.remove('good', 'warn');
+      if (tone) card.classList.add(tone);
+    }
+  }
+
+  function renderAdminSummary(schedule = loadSchedule()) {
+    const admin = $('#admin');
+    if (!admin || admin.style.display === 'none') return;
+    const localState = readAdminLocalStateSnapshot();
+    const scheduleSummary = adminScheduleSummary(schedule);
+    setAdminSummaryValue('#adminSummarySchedule', '#adminSummaryScheduleCard', scheduleSummary.text, scheduleSummary.tone);
+
+    const waiting = localState.queue.length;
+    setAdminSummaryValue(
+      '#adminSummarySync',
+      '#adminSummarySyncCard',
+      `${waiting} row${waiting === 1 ? '' : 's'} waiting to sync`,
+      waiting ? 'warn' : 'good'
+    );
+
+    const last = localStorage.getItem('gib_m1_sync_last') || '';
+    const lastDate = last ? new Date(last) : null;
+    const hasValidLastSync = Boolean(lastDate && Number.isFinite(lastDate.getTime()));
+    const lastText = hasValidLastSync
+      ? lastDate.toLocaleString()
+      : 'No confirmed sync yet.';
+    setAdminSummaryValue('#adminSummaryLastSync', '#adminSummaryLastSyncCard', lastText, hasValidLastSync ? 'good' : '');
+
+    const cfg = loadDevice();
+    const deviceLabel = (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim()
+      || (cfg?.location || '').trim();
+    setAdminSummaryValue(
+      '#adminSummaryDevice',
+      '#adminSummaryDeviceCard',
+      deviceLabel || 'Not configured.',
+      deviceLabel ? 'good' : 'warn'
+    );
+
+    const activeSignins = localState.ledger.filter(row => (row.Status || 'OK') !== 'VOID').length;
+    setAdminSummaryValue(
+      '#adminSummarySignins',
+      '#adminSummarySigninsCard',
+      `${activeSignins} active sign-in${activeSignins === 1 ? '' : 's'}`
+    );
   }
 
   const DAY_ABBREV = {
@@ -1453,7 +2308,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const series = loadSeries();
     wrap.innerHTML = '';
     if (!series.length) {
-      wrap.innerHTML = '<div class="subtle">No series yet. Add one above.</div>';
+      wrap.innerHTML = '<div class="subtle">No temporary classes yet. Add one above.</div>';
       return;
     }
 
@@ -1464,6 +2319,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       const toggle = document.createElement('input');
       toggle.type = 'checkbox';
       toggle.checked = item.enabled !== false;
+      toggle.setAttribute('aria-label', `Enable ${seriesLabel(item) || 'temporary class'}`);
       toggle.addEventListener('change', () => {
         item.enabled = toggle.checked;
         saveSeries(series);
@@ -1473,7 +2329,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
 
       const body = document.createElement('div');
       const title = document.createElement('div');
-      title.textContent = seriesLabel(item) || 'Untitled series';
+      title.textContent = seriesLabel(item) || 'Untitled temporary class';
       const meta = document.createElement('div');
       meta.className = 'meta';
       meta.textContent = `${seriesDaysLabel(item.days)} · ${item.startDate} → ${item.endDate}`;
@@ -1484,13 +2340,14 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       remove.type = 'button';
       remove.className = 'btn small';
       remove.textContent = 'Delete';
+      remove.setAttribute('aria-label', `Delete ${seriesLabel(item) || 'temporary class'}`);
       remove.addEventListener('click', () => {
-        if (!confirm('Delete this series?')) return;
+        if (!confirm('Delete this temporary class?')) return;
         const next = series.filter(s => s.id !== item.id);
         saveSeries(next);
         renderSeriesList();
         populateClassesForToday();
-        showToast('Series deleted');
+        showToast('Temporary class deleted');
       });
 
       row.appendChild(toggle);
@@ -1503,7 +2360,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   function addSeriesFromForm() {
     const data = readSeriesForm();
     if (!data.label) {
-      updateSeriesHint('Enter a label for the series.', true);
+      updateSeriesHint('Enter a name for the temporary class.', true);
       return;
     }
     const timeMinutes = parseStartMinutes(data.time);
@@ -1548,8 +2405,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     renderSeriesList();
     clearSeriesForm();
     populateClassesForToday();
-    updateSeriesHint('Series saved.');
-    showToast('Series saved');
+    updateSeriesHint('Temporary class saved.');
+    showToast('Temporary class saved');
   }
 
   function defaultDurationRules() {
@@ -1590,6 +2447,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   // Admin schedule editor state
   let scheduleDraft = null;
   let activeDay = null;
+  let scheduleDraftDirty = false;
 
   function initScheduleEditor() {
     const sel = $('#schedDay');
@@ -1606,6 +2464,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       renderScheduleDay();
     });
     $('#schedText').addEventListener('input', () => {
+      scheduleDraftDirty = true;
       $('#scheduleHint').textContent = 'Unsaved changes…';
     });
   }
@@ -1624,9 +2483,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     $('#schedDay').value = activeDay;
     renderScheduleDay();
     renderWeekAtGlance();
-
-    const upd = sch.updatedAt ? new Date(sch.updatedAt).toLocaleString() : '(default schedule)';
-    $('#scheduleStatus').innerHTML = `Source: <span class="kbd">${sch.source}</span> · Updated: <span class="kbd">${upd}</span>`;
+    scheduleDraftDirty = false;
+    renderScheduleStatuses(sch);
     $('#scheduleHint').textContent = '';
   }
 
@@ -1685,6 +2543,15 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     if (hour === 24 && minutes === 0) hour = 0;
     if (hour < 0 || hour > 23) return Infinity;
     return (hour * 60) + minutes;
+  }
+
+  function sortClassesChronologically(classes) {
+    return (classes || [])
+      .map((label, index) => ({ label, index, minutes: parseStartMinutes(label) }))
+      .sort((left, right) => (
+        left.minutes === right.minutes ? left.index - right.index : left.minutes - right.minutes
+      ))
+      .map(item => item.label);
   }
 
   function renderDurationRules() {
@@ -1756,10 +2623,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       title.textContent = day;
       card.appendChild(title);
       const classes = (sch.days[day] || []).concat(seriesClasses);
-      const sortedClasses = classes
-        .map((label, index) => ({ label, index, minutes: parseStartMinutes(label) }))
-        .sort((a, b) => (a.minutes === b.minutes ? a.index - b.index : a.minutes - b.minutes))
-        .map(item => item.label);
+      const sortedClasses = sortClassesChronologically(classes);
       if (!classes.length) {
         const empty = document.createElement('div');
         empty.className = 'subtle';
@@ -1812,7 +2676,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const sch = loadSchedule();
     const scheduled = sch.days[dn] || [];
     const series = seriesClassesForDate(dn, dateKey);
-    const combined = mergeUniqueClasses(scheduled, series);
+    const combined = sortClassesChronologically(mergeUniqueClasses(scheduled, series));
     return { day: dn, classes: combined, meta: sch };
   }
 
@@ -1842,12 +2706,167 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
         wrap.appendChild(label);
       });
     }
+    renderScheduleStatuses(meta);
   }
 
   function populateClassesForToday() {
     if (dayRolloverController) return dayRolloverController.requestRefresh();
     renderClassesForDateKey(fmtDate(new Date()));
     return Object.freeze({ changed: false, deferred: false });
+  }
+
+  function refreshScheduleViews() {
+    const schedule = loadSchedule();
+    renderScheduleStatuses(schedule);
+    const rollover = dayRolloverController
+      ? dayRolloverController.requestRefresh()
+      : (renderClassesForDateKey(fmtDate(new Date())), Object.freeze({ changed: false, deferred: false }));
+    if (scheduleDraftDirty) {
+      renderWeekAtGlance();
+      renderScheduleStatuses(schedule);
+    } else {
+      loadScheduleIntoAdmin();
+    }
+    return !rollover.deferred;
+  }
+
+  function applyPendingScheduleViewIfSafe() {
+    if (!kioskFormInProgress()) dayRolloverController?.flushPending();
+  }
+
+  function refreshCanonicalSchedule() {
+    if (!canonicalScheduleRefreshPromise) {
+      canonicalScheduleRefreshPromise = refreshCanonicalScheduleNow()
+        .finally(() => { canonicalScheduleRefreshPromise = null; });
+    }
+    return canonicalScheduleRefreshPromise;
+  }
+
+  async function refreshCanonicalScheduleNow() {
+    if (loadLocalScheduleOverride()) {
+      canonicalScheduleRuntime = {
+        phase: 'override',
+        error: '',
+        attemptedAt: null,
+        receivedAt: null
+      };
+      renderScheduleStatuses(loadSchedule());
+      return false;
+    }
+
+    canonicalScheduleRuntime = {
+      phase: 'loading',
+      error: '',
+      attemptedAt: new Date().toISOString(),
+      receivedAt: null
+    };
+    renderScheduleStatuses(loadSchedule());
+
+    if (!canonicalScheduleMemory) {
+      const cached = await loadCanonicalScheduleCache();
+      if (cached) {
+        canonicalScheduleMemory = cached;
+        canonicalScheduleMemoryOrigin = 'local-cache';
+        refreshScheduleViews({ preserveSelections: true });
+      }
+    }
+
+    let controller = null;
+    let timeout = 0;
+    try {
+      controller = new AbortController();
+      timeout = window.setTimeout(() => controller.abort(), SCHEDULE_FETCH_TIMEOUT_MS);
+      const response = await fetch(CANONICAL_SCHEDULE_ENDPOINT, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        signal: controller.signal
+      });
+      if (!response.ok) throw new Error(`Schedule request failed (HTTP ${response.status}).`);
+      if (!/^application\/json(?:;|$)/iu.test(response.headers.get('content-type') || '')) {
+        throw new Error('Schedule response has the wrong content type.');
+      }
+      const declaredLength = Number(response.headers.get('content-length'));
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_SCHEDULE_RESPONSE_CHARS) {
+        throw new Error('Schedule response is oversized.');
+      }
+      const raw = await response.text();
+      if (!raw || raw.length > MAX_SCHEDULE_RESPONSE_CHARS) {
+        throw new Error('Schedule response is empty or oversized.');
+      }
+      const validated = await validateCanonicalSchedule(JSON.parse(raw));
+      const freshness = compareCanonicalScheduleFreshness(validated, canonicalScheduleMemory);
+      if (freshness == null || freshness < 0) {
+        throw new Error('Schedule service returned an older or conflicting fallback.');
+      }
+
+      let memorySchedule = validated;
+      try {
+        // This is the only persistent write performed by automatic schedule refresh.
+        localStorage.setItem(CANONICAL_SCHEDULE_CACHE_KEY, JSON.stringify(validated));
+      } catch (storageError) {
+        memorySchedule = {
+          ...validated,
+          status: {
+            ...validated.status,
+            storageWarning: 'browser-cache-not-updated'
+          }
+        };
+        console.warn(
+          'M1 schedule is current in memory, but its browser cache was not updated.',
+          String(storageError?.message || 'storage unavailable')
+        );
+      }
+      canonicalScheduleMemory = memorySchedule;
+      canonicalScheduleMemoryOrigin = 'network';
+      canonicalScheduleRuntime = {
+        phase: 'ready',
+        error: '',
+        attemptedAt: canonicalScheduleRuntime.attemptedAt,
+        receivedAt: new Date().toISOString()
+      };
+      refreshScheduleViews({ preserveSelections: true });
+      return true;
+    } catch (error) {
+      if (!canonicalScheduleMemory) {
+        try {
+          canonicalScheduleMemory = await checkedInBootstrapSchedule();
+          canonicalScheduleMemoryOrigin = 'built-in-bootstrap';
+        } catch {}
+      }
+      canonicalScheduleRuntime = {
+        phase: 'error',
+        error: error?.name === 'AbortError' ? 'timeout' : String(error?.message || 'refresh failed'),
+        attemptedAt: canonicalScheduleRuntime.attemptedAt,
+        receivedAt: null
+      };
+      console.warn('M1 schedule refresh unavailable; retaining validated local schedule.', canonicalScheduleRuntime.error);
+      refreshScheduleViews({ preserveSelections: true });
+      return false;
+    } finally {
+      if (timeout) window.clearTimeout(timeout);
+    }
+  }
+
+  function refreshCanonicalScheduleIfDue() {
+    const attemptedAt = Date.parse(canonicalScheduleRuntime.attemptedAt || '');
+    if (
+      !Number.isFinite(attemptedAt)
+      || Date.now() - attemptedAt >= CANONICAL_SCHEDULE_REFRESH_INTERVAL_MS
+    ) {
+      refreshCanonicalSchedule();
+    }
+  }
+
+  function startCanonicalScheduleRefresh() {
+    window.setInterval(refreshCanonicalSchedule, CANONICAL_SCHEDULE_REFRESH_INTERVAL_MS);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refreshCanonicalScheduleIfDue();
+    });
+    document.addEventListener('resume', refreshCanonicalScheduleIfDue);
+    window.addEventListener('focus', refreshCanonicalScheduleIfDue);
+    window.addEventListener('pageshow', refreshCanonicalScheduleIfDue);
+    refreshCanonicalSchedule();
   }
 
   // Sign-ins
@@ -1918,6 +2937,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     document.querySelectorAll('#classListWrap input[type="checkbox"]').forEach(cb => cb.checked = false);
     $('#classListWrap').style.display = 'none';
     dayRolloverController?.checkNow();
+    applyPendingScheduleViewIfSafe();
   }
 
   function restoreKioskForm(snapshot) {
@@ -2087,13 +3107,14 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   }
 
   function renderAdminTable() {
-    const rows = loadSignins();
+    const rows = readAdminLocalStateSnapshot().ledger;
     if (!rows.length) {
       $('#adminTableWrap').innerHTML = '<div class="subtle">No sign-ins yet.</div>';
+      renderAdminSummary();
       return;
     }
-    let html = '<div style="overflow:auto; max-height:420px;"><table><thead><tr>' +
-      '<th>#</th><th>Status</th><th>Timestamp</th><th>Date</th><th>Class</th><th>Duration (hr)</th><th>Instructor</th><th>Site</th><th>Notes</th>' +
+    let html = '<div role="region" aria-label="Recent sign-ins table" tabindex="0" style="overflow:auto; max-height:420px;"><table><thead><tr>' +
+      '<th scope="col">#</th><th scope="col">Status</th><th scope="col">Timestamp</th><th scope="col">Date</th><th scope="col">Class</th><th scope="col">Duration (hr)</th><th scope="col">Instructor</th><th scope="col">Site</th><th scope="col">Notes</th>' +
       '</tr></thead><tbody>';
     rows.forEach((r,i) => {
       const status = r.Status || 'OK';
@@ -2116,6 +3137,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     });
     html += '</tbody></table></div>';
     $('#adminTableWrap').innerHTML = html;
+    renderAdminSummary();
   }
 
   function buildCSV() {
@@ -2186,6 +3208,45 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       area.focus(); area.select();
       alert('Clipboard not available. CSV shown for copy.');
     }
+  }
+
+  let adminViewOrganized = false;
+  function moveAdminElement(elementId, targetId) {
+    const element = $(`#${elementId}`);
+    const target = $(`#${targetId}`);
+    if (element && target && element.parentElement !== target) {
+      target.appendChild(element);
+    }
+  }
+
+  function organizeAdminView() {
+    if (adminViewOrganized) return;
+
+    const primaryActions = $('#adminPrimaryActions');
+    const recentSigninsLink = $('#recentSigninsLink');
+    if (primaryActions && recentSigninsLink) {
+      ['btnSyncNow', 'btnExport', 'btnVoidLast'].forEach(id => {
+        const action = $(`#${id}`);
+        if (action) primaryActions.insertBefore(action, recentSigninsLink);
+      });
+    }
+
+    moveAdminElement('signinsCard', 'recentSigninsSlot');
+    moveAdminElement('temporaryClassesCard', 'temporaryClassesSlot');
+    moveAdminElement('weeklyScheduleCard', 'weeklyScheduleSlot');
+    moveAdminElement('btnAdminPinToggle', 'advancedPinSlot');
+    moveAdminElement('adminPinPanel', 'advancedPinSlot');
+    moveAdminElement('deviceSetupCard', 'advancedDeviceSlot');
+    moveAdminElement('syncSettingsCard', 'advancedSyncSlot');
+    moveAdminElement('scheduleEditorCard', 'advancedScheduleSlot');
+    moveAdminElement('durationRulesCard', 'advancedDurationSlot');
+    moveAdminElement('troubleshootingCard', 'advancedTroubleshootingSlot');
+
+    ['btnResetDevice', 'btnFactoryReset', 'btnClearSignins', 'btnDisableSchedule'].forEach(id => {
+      moveAdminElement(id, 'dangerZoneActions');
+    });
+
+    adminViewOrganized = true;
   }
 
   // UI helpers
@@ -2303,7 +3364,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       alert('All sign-ins are already voided.');
       return;
     }
-    const reason = prompt('Optional void reason (leave blank if none):') || '';
+    const reason = prompt('Optional void reason (leave blank if none):');
+    if (reason === null) return;
     rows[idx].Status = 'VOID';
     rows[idx].void_reason = reason.trim();
     rows[idx].voided_at = fmtTS(new Date());
@@ -2314,6 +3376,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       queue: state.queue.filter(row => row && row.RowID !== voidedRowId)
     });
     renderAdminTable();
+    updateSyncStatus();
     showToast('Last sign-in voided');
   }
 
@@ -2332,14 +3395,20 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     updateSyncStatus();
   }
   function updateSyncStatus() {
-    const q = loadSyncQueue();
+    const q = readAdminLocalStateSnapshot().queue;
     const last = localStorage.getItem('gib_m1_sync_last') || '';
     const err = localStorage.getItem('gib_m1_sync_error') || '';
     const parts = [];
-    parts.push(`Waiting: ${q.length}`);
-    if (last) parts.push(`Last confirmed: ${new Date(last).toLocaleString()}`);
-    if (err) parts.push(`Status: ${err}`);
-    $('#syncStatus').textContent = parts.join(' | ');
+    parts.push(`${q.length} row${q.length === 1 ? '' : 's'} waiting to sync`);
+    if (last) {
+      const lastDate = new Date(last);
+      parts.push(Number.isFinite(lastDate.getTime())
+        ? `Last confirmed sync: ${lastDate.toLocaleString()}`
+        : 'No confirmed sync yet.');
+    }
+    if (err) parts.push(`Latest attempt: ${err}`);
+    $('#syncStatus').textContent = parts.join(' · ');
+    renderAdminSummary();
   }
   async function syncNow() {
     if (syncInFlight) return;
@@ -2415,7 +3484,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const cls = (sch.days[today] || []);
     const series = loadSeries();
     const activeSeriesToday = seriesClassesForToday();
-    const signins = loadSignins();
+    const signins = readAdminLocalStateSnapshot().ledger;
     return {
       build: BUILD,
       url: location.href,
@@ -2448,9 +3517,12 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     }
   }
 
+  organizeAdminView();
+
   // Wire events
   function showKiosk() {
     document.body.classList.add('kiosk-mode');
+    document.body.classList.remove('admin-mode');
     $('#kiosk').style.display = 'block';
     $('#admin').style.display = 'none';
     adminAuthenticated = false;
@@ -2459,10 +3531,13 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     populateClassesForToday();
     // Hide list by default so it doesn't appear "stuck open"
     $('#classListWrap').style.display = 'none';
+    window.setTimeout(() => $('#btnAdmin')?.focus(), 0);
   }
 
   function showAdmin() {
+    organizeAdminView();
     document.body.classList.remove('kiosk-mode');
+    document.body.classList.add('admin-mode');
     $('#kiosk').style.display = 'none';
     $('#admin').style.display = 'block';
 
@@ -2486,9 +3561,17 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     // the current queue count and last sync information are visible.
     loadSyncSettings();
     updateSyncStatus();
+    renderAdminSummary();
 
     // Debug box
     $('#debugBox').value = JSON.stringify(debugSnapshot(), null, 2);
+    window.setTimeout(() => $('#adminHeading')?.focus(), 0);
+  }
+
+  function openAdminWithGate() {
+    if (!requestAdminAccess()) return false;
+    showAdmin();
+    return true;
   }
 
   // Toggle class list
@@ -2498,13 +3581,18 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     if (!wrap.hasChildNodes()) populateClassesForToday();
     wrap.style.display = (wrap.style.display === 'none' || wrap.style.display === '') ? 'block' : 'none';
   });
+  $('#classListWrap').addEventListener('change', () => {
+    applyPendingScheduleViewIfSafe();
+  });
+  $('#nameInput').addEventListener('input', applyPendingScheduleViewIfSafe);
+  $('#notesInput').addEventListener('input', applyPendingScheduleViewIfSafe);
 
   $('#btnKiosk').addEventListener('click', showKiosk);
-  $('#btnAdmin').addEventListener('click', () => {
-    if (!requestAdminAccess()) return;
-    showAdmin();
-  });
+  $('#btnAdmin').addEventListener('click', openAdminWithGate);
   $('#btnAdminLogout').addEventListener('click', showKiosk);
+  $('#recentSigninsLink').addEventListener('click', () => {
+    $('#recentSignins').open = true;
+  });
   $('#btnSignIn').addEventListener('click', signIn);
   $('#btnConfirmSignInUndo').addEventListener('click', undoLastSigninBatch);
   $('#btnConfirmSignInDone').addEventListener('click', confirmSigninDone);
@@ -2532,13 +3620,16 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     saveDevice(cfg);
     applyDeviceToUI();
     $('#deviceStatus').innerHTML = `Saved: <span class="kbd">${cfg.gymName}</span> · <span class="kbd">${cfg.location}</span> · Site <span class="kbd">${cfg.siteCode}</span>`;
+    renderAdminSummary();
     showToast('Device saved');
   });
 
   $('#btnResetDevice').addEventListener('click', () => {
-    if (!confirm('Reset this device location + schedule data + duration rules? (Sign-ins are NOT deleted)')) return;
+    if (!confirm('Reset this device? This clears the device label/location/site/setup, Admin PIN, instructor roster, auto-sync and sync status, schedule, temporary classes, website schedule cache/local overrides, and duration rules. Sign-ins and rows waiting to sync are NOT deleted.')) return;
     resetDevice();
     $('#deviceStatus').innerHTML = 'Device reset. Configure again above.';
+    loadSyncSettings();
+    updateSyncStatus();
   });
 
   $('#btnFactoryReset').addEventListener('click', () => {
@@ -2550,6 +3641,8 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     }
     factoryReset();
     $('#deviceStatus').innerHTML = 'Factory reset complete. Configure again above.';
+    loadSyncSettings();
+    updateSyncStatus();
   });
 
   // Admin PIN actions
@@ -2562,6 +3655,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     setAdminPin(nextPin);
     adminAuthenticated = true;
     updateAdminPinUI();
+    $('#btnAdminPinToggle')?.focus();
     showToast('Admin PIN saved');
   });
 
@@ -2593,9 +3687,11 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   $('#btnSaveSchedule').addEventListener('click', () => {
     persistActiveDayText();
     saveSchedule(scheduleDraft, 'manual');
-    const sch = loadSchedule();
-    const upd = sch.updatedAt ? new Date(sch.updatedAt).toLocaleString() : '';
-    $('#scheduleStatus').innerHTML = `Source: <span class="kbd">${sch.source}</span> · Updated: <span class="kbd">${upd}</span>`;
+    localStorage.removeItem(SCHEDULE_URL_KEY);
+    localStorage.setItem(SCHEDULE_MODE_KEY, 'manual');
+    canonicalScheduleRuntime.phase = 'override';
+    scheduleDraftDirty = false;
+    renderScheduleStatuses(loadSchedule());
     $('#scheduleHint').textContent = 'Saved.';
     showToast('Schedule saved');
     renderWeekAtGlance();
@@ -2626,6 +3722,9 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     // Persisting old draft values here would override the newly loaded data for the
     // current day; therefore do not call persistActiveDayText() before saving.
     saveSchedule(scheduleDraft, 'manual');
+    localStorage.removeItem(SCHEDULE_URL_KEY);
+    localStorage.setItem(SCHEDULE_MODE_KEY, 'manual');
+    canonicalScheduleRuntime.phase = 'override';
     loadScheduleIntoAdmin();
     populateClassesForToday();
     $('#scheduleHint').textContent = 'Default schedule loaded and saved.';
@@ -2639,6 +3738,9 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     scheduleDraft = JSON.parse(JSON.stringify(DEFAULT_SCHEDULE_RICHMOND));
     // Do not persist current draft here; it would overwrite the new data for the current day.
     saveSchedule(scheduleDraft, 'manual');
+    localStorage.removeItem(SCHEDULE_URL_KEY);
+    localStorage.setItem(SCHEDULE_MODE_KEY, 'manual');
+    canonicalScheduleRuntime.phase = 'override';
     loadScheduleIntoAdmin();
     populateClassesForToday();
     $('#scheduleHint').textContent = 'Richmond schedule loaded and saved.';
@@ -2646,11 +3748,15 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   });
 
   $('#btnClearSchedule').addEventListener('click', () => {
-    if (!confirm('Revert to the default schedule? This will remove all saved overrides.')) return;
+    if (!confirm('Revert this device to the shared Revolution BJJ website schedule? This removes only the local schedule override.')) return;
     localStorage.removeItem(SCHEDULE_KEY);
-    loadScheduleIntoAdmin();
-    populateClassesForToday();
-    showToast('Default schedule restored');
+    localStorage.removeItem(SCHEDULE_URL_KEY);
+    localStorage.removeItem(SCHEDULE_MODE_KEY);
+    canonicalScheduleRuntime.phase = 'idle';
+    scheduleDraftDirty = false;
+    refreshScheduleViews();
+    refreshCanonicalSchedule();
+    showToast('Website schedule restored');
   });
 
   $('#btnDisableSchedule').addEventListener('click', () => {
@@ -2658,6 +3764,9 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
     const empty = {};
     DAYS.forEach(d => { empty[d] = []; });
     saveSchedule(empty, 'disabled');
+    localStorage.removeItem(SCHEDULE_URL_KEY);
+    localStorage.setItem(SCHEDULE_MODE_KEY, 'disabled');
+    canonicalScheduleRuntime.phase = 'override';
     loadScheduleIntoAdmin();
     populateClassesForToday();
     showToast('Schedule disabled');
@@ -2696,7 +3805,7 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       alert('Please enter a URL to load the schedule.');
       return;
     }
-    $('#scheduleStatus').innerHTML = 'Loading schedule from URL…';
+    $('#scheduleStatus').textContent = 'Loading one-time local schedule override from URL…';
     try {
       const resp = await fetch(url);
       if (!resp.ok) {
@@ -2706,19 +3815,20 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
       if (!data || typeof data !== 'object' || !data.days) {
         throw new Error('Invalid JSON format; expected an object with a `days` property');
       }
-      // Save remote days into schedule and tag source
-      saveSchedule(data.days, 'url');
+      // A direct URL is a one-time local override, not an automatic website source.
+      saveSchedule(validateCanonicalDays(data.days), 'url');
       // Persist URL and mode for later reference
       localStorage.setItem(SCHEDULE_URL_KEY, url);
       localStorage.setItem(SCHEDULE_MODE_KEY, 'url');
+      canonicalScheduleRuntime.phase = 'override';
       // Reload admin editor and kiosk
       loadScheduleIntoAdmin();
       populateClassesForToday();
-      $('#scheduleStatus').innerHTML = 'Schedule loaded from URL';
-      showToast('Schedule loaded');
+      renderScheduleStatuses(loadSchedule());
+      showToast('Local URL override saved');
     } catch (err) {
       console.error(err);
-      $('#scheduleStatus').innerHTML = 'Failed to load schedule';
+      $('#scheduleStatus').textContent = 'Failed to load one-time local URL override';
       alert('Failed to load schedule: ' + (err?.message || err));
     }
   });
@@ -2776,6 +3886,9 @@ const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   loadSyncSettings();
   updateSyncStatus();
   refreshNameDatalist();
+  startCanonicalScheduleRefresh();
+  const requestedInitialView = new URLSearchParams(window.location.search).get('view');
+  if (requestedInitialView === 'admin') openAdminWithGate();
 
 })();
 </script>

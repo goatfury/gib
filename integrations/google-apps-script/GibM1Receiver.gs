@@ -33,6 +33,13 @@ var GIB_M1_AUDIT_HEADERS_ = [
 var GIB_M1_ADMIN_NAMES_ = ['Andrew Smith', 'Stuart Turner'];
 var GIB_M1_MAX_KIOSK_ROWS_ = 50;
 var GIB_M1_MAX_RECOVERY_ROWS_ = 250;
+var GIB_M1_RECORD_ID_MAX_ = 240;
+var GIB_M1_CLASS_LABEL_MAX_ = 200;
+var GIB_M1_INSTRUCTOR_MAX_ = 100;
+var GIB_M1_SITE_MAX_ = 80;
+var GIB_M1_REVIEW_NOTES_MAX_ = 800;
+var GIB_M1_AUDIT_REASON_MAX_ = 240;
+var GIB_M1_MAX_SAFE_INTEGER_ = 9007199254740991;
 var GIB_M1_RECEIVER_PROPERTY_ = 'GIB_M1_RECEIVER_TRANSPORT_TOKEN';
 var GIB_M1_LEGACY_KIOSK_PROPERTY_ = 'GIB_M1_LEGACY_KIOSK_TOKEN';
 var GIB_M1_ADMIN_ACTION_PROPERTY_ = 'GIB_M1_ADMIN_ACTION_TOKEN';
@@ -483,19 +490,34 @@ function firstHeaderIndex_(map, names, fallback) {
   return typeof fallback === 'number' ? fallback : -1;
 }
 
-function readSignins_(sheet) {
+function readSignins_(sheet, options) {
+  options = options || {};
   var values = sheet.getDataRange().getValues();
   if (!values.length) throw new Error('Signins headings are missing.');
   var headers = values[0].map(cleanText_);
   var requiresExactSchema = typeof GIB_M1_REQUIRE_EXACT_SIGNINS_SCHEMA !== 'undefined'
     && GIB_M1_REQUIRE_EXACT_SIGNINS_SCHEMA === true;
   if (requiresExactSchema) {
-    if (headers.length !== GIB_M1_SIGNINS_HEADERS_.length) {
+    var tolerantReview = options.tolerantReview === true;
+    if (
+      headers.length < GIB_M1_SIGNINS_HEADERS_.length
+      || (!tolerantReview && headers.length !== GIB_M1_SIGNINS_HEADERS_.length)
+    ) {
       throw new Error('Signins headings do not match the production schema.');
     }
     for (var headerIndex = 0; headerIndex < GIB_M1_SIGNINS_HEADERS_.length; headerIndex += 1) {
       if (headers[headerIndex] !== GIB_M1_SIGNINS_HEADERS_[headerIndex]) {
         throw new Error('Signins headings do not match the production schema.');
+      }
+    }
+    // A human-entered value in a trailing, otherwise-unheaded cell must not
+    // collapse read-only Daily Review. Named extra columns remain a schema
+    // conflict, and every write path continues to require exactly 11 columns.
+    if (tolerantReview) {
+      for (var extraHeader = GIB_M1_SIGNINS_HEADERS_.length; extraHeader < headers.length; extraHeader += 1) {
+        if (headers[extraHeader]) {
+          throw new Error('Signins headings do not match the production schema.');
+        }
       }
     }
   }
@@ -640,6 +662,7 @@ function appendSignin_(sheet, state, record) {
   sheet.getRange(nextRow, state.indexes.timestamp + 1, 1, 1).setNumberFormat('@');
   sheet.getRange(nextRow, state.indexes.date + 1, 1, 1).setNumberFormat('@');
   sheet.getRange(nextRow, 1, 1, row.length).setValues([row]);
+  record.sheetRow = nextRow;
   state.records.push(record);
 }
 
@@ -1049,20 +1072,66 @@ function rollbackRecoveredSigninsAction_(body) {
   }
 }
 
+function reviewDisplayId_(record) {
+  var sheetRow = Number(record && record.sheetRow);
+  if (!isFinite(sheetRow) || sheetRow < 2 || Math.floor(sheetRow) !== sheetRow) {
+    throw new Error('Review row identity is unavailable.');
+  }
+  return 'sheet-row-' + sheetRow;
+}
+
+function manualRecord_(record) {
+  return !exactText_(record && record.rowId)
+    || !canonicalTimestamp_(record && record.timestamp)
+    || !cleanText_(record && record.device)
+    || !cleanText_(record && record.build)
+    || !cleanText_(record && record.status);
+}
+
+function reviewRecordIssue_(record) {
+  if (!validCalendarDate_(displayDate_(record && record.date))) return 'date';
+  var classLabel = exactText_(record && record.classLabel);
+  if (!classLabel || classLabel.length > GIB_M1_CLASS_LABEL_MAX_) return 'class';
+  var duration = Number(record && record.duration);
+  if (!isFinite(duration) || duration <= 0 || duration > 8) return 'duration';
+  var instructor = exactText_(record && record.instructor);
+  if (!instructor || instructor.length > GIB_M1_INSTRUCTOR_MAX_) return 'instructor';
+  var site = exactText_(record && record.site);
+  if (!site || site.length > GIB_M1_SITE_MAX_) return 'site';
+  return '';
+}
+
+function unreadableWarning_(record) {
+  return {
+    displayId: reviewDisplayId_(record),
+    code: 'UNREADABLE_SIGNIN',
+    message: 'One Sheet row for this date is incomplete and was not included.'
+  };
+}
+
+function unreadableDateWarning_(record) {
+  return {
+    displayId: reviewDisplayId_(record),
+    code: 'UNREADABLE_SIGNIN_DATE',
+    message: 'One Sheet row has an unreadable date and was not included.'
+  };
+}
+
 function publicRecord_(record) {
   var reviewRequired = collisionReviewRecord_(record);
   return {
-    recordId: record.rowId,
+    displayId: reviewDisplayId_(record),
+    recordId: exactText_(record.rowId).slice(0, GIB_M1_RECORD_ID_MAX_),
     timestamp: record.timestamp,
     date: record.date,
     classLabel: record.classLabel,
     duration: record.duration,
     instructor: record.instructor,
     site: record.site,
-    notes: record.notes,
+    notes: exactText_(record.notes).slice(0, GIB_M1_REVIEW_NOTES_MAX_),
     source: reviewRequired
       ? 'Collision review'
-      : (adminAddedRecord_(record) ? 'Admin-added' : 'Kiosk'),
+      : (adminAddedRecord_(record) ? 'Admin-added' : (manualRecord_(record) ? 'Manual' : 'Kiosk')),
     reviewRequired: reviewRequired,
     reviewMessage: reviewRequired ? 'Possible Admin/kiosk duplicate — review before payroll.' : ''
   };
@@ -1074,11 +1143,31 @@ function dailyReviewAction_(body) {
     return jsonResult_({ ok: false, result: 'rejected', message: 'Choose a non-future date.' });
   }
   var spreadsheet = openExpectedSpreadsheet_(body);
-  var state = readSignins_(signinsSheet_(spreadsheet));
-  var records = state.records
-    .filter(function(record) { return activeRecord_(record) && record.date === date; })
-    .map(publicRecord_);
-  return jsonResult_({ ok: true, date: date, records: records });
+  var state = readSignins_(signinsSheet_(spreadsheet), { tolerantReview: true });
+  var records = [];
+  var warnings = [];
+  state.records.forEach(function(record) {
+    if (!activeRecord_(record)) return;
+    if (!validCalendarDate_(record.date)) {
+      warnings.push(unreadableDateWarning_(record));
+      return;
+    }
+    if (record.date !== date) return;
+    if (reviewRecordIssue_(record)) {
+      warnings.push(unreadableWarning_(record));
+      return;
+    }
+    records.push(publicRecord_(record));
+  });
+  var audit = readAdminAuditHistory_(spreadsheet, date);
+  warnings = warnings.concat(audit.warnings);
+  return jsonResult_({
+    ok: true,
+    date: date,
+    records: records,
+    warnings: warnings,
+    auditHistory: audit.history
+  });
 }
 
 function instructorSearchAction_(body) {
@@ -1091,10 +1180,13 @@ function instructorSearchAction_(body) {
     return jsonResult_({ ok: false, result: 'rejected', message: 'Use fake TEST instructor information.' });
   }
   var spreadsheet = openExpectedSpreadsheet_(body);
-  var state = readSignins_(signinsSheet_(spreadsheet));
+  var state = readSignins_(signinsSheet_(spreadsheet), { tolerantReview: true });
   var key = normalizeEventText_(instructor);
   var matches = state.records.filter(function(record) {
-    return activeRecord_(record) && normalizeEventText_(record.instructor) === key;
+    return activeRecord_(record)
+      && !reviewRecordIssue_(record)
+      && record.date <= todayNewYork_()
+      && normalizeEventText_(record.instructor) === key;
   });
   var selectedDateRecords = matches
     .filter(function(record) { return record.date === date; })
@@ -1115,6 +1207,98 @@ function obviousTestValue_(value) {
   return /\b(test|fake|demo|qa)\b|do not pay/i.test(cleanText_(value));
 }
 
+function adminAuditValues_(sheet) {
+  var values = sheet.getDataRange().getValues();
+  if (!values.length) throw new Error('Admin Audit headings are missing.');
+  var headings = values[0].map(cleanText_);
+  if (headings.length < GIB_M1_AUDIT_HEADERS_.length) {
+    throw new Error('Admin Audit headings do not match.');
+  }
+  for (var headingIndex = 0; headingIndex < GIB_M1_AUDIT_HEADERS_.length; headingIndex += 1) {
+    if (headings[headingIndex] !== GIB_M1_AUDIT_HEADERS_[headingIndex]) {
+      throw new Error('Admin Audit headings do not match.');
+    }
+  }
+  for (var extraHeading = GIB_M1_AUDIT_HEADERS_.length; extraHeading < headings.length; extraHeading += 1) {
+    if (headings[extraHeading]) throw new Error('Admin Audit headings do not match.');
+  }
+  return values;
+}
+
+function readAdminAuditHistory_(spreadsheet, date) {
+  var sheet = spreadsheet.getSheetByName(GIB_M1_AUDIT_SHEET_);
+  if (!sheet) return { history: [], warnings: [] };
+  try {
+    var values = adminAuditValues_(sheet);
+
+    var history = [];
+    var warnings = [];
+    values.slice(1).forEach(function(row, offset) {
+      var classDate = displayDate_(row[4]);
+      if (classDate !== date) return;
+      var actionNumber = Number(row[0]);
+      var actionTime = canonicalTimestamp_(row[2]);
+      var duration = Number(row[7]);
+      var result = cleanText_(row[9]).toLowerCase();
+      var auditId = 'audit-row-' + (offset + 2);
+      if (
+        !isFinite(actionNumber)
+        || actionNumber < 1
+        || Math.floor(actionNumber) !== actionNumber
+        || actionNumber > GIB_M1_MAX_SAFE_INTEGER_
+        || GIB_M1_ADMIN_NAMES_.indexOf(cleanText_(row[1])) === -1
+        || !actionTime
+        || !exactText_(row[3])
+        || exactText_(row[3]).length > GIB_M1_INSTRUCTOR_MAX_
+        || !exactText_(row[5])
+        || exactText_(row[5]).length > GIB_M1_CLASS_LABEL_MAX_
+        || !exactText_(row[6])
+        || exactText_(row[6]).length > GIB_M1_SITE_MAX_
+        || !isFinite(duration)
+        || duration <= 0
+        || duration > 8
+        || !exactText_(row[8])
+        || exactText_(row[8]).length > GIB_M1_AUDIT_REASON_MAX_
+        || (result !== 'added' && result !== 'already exists')
+        || exactText_(row[10]).length > GIB_M1_RECORD_ID_MAX_
+        || (result === 'added' && exactText_(row[10]).indexOf('gib-admin-') !== 0)
+      ) {
+        warnings.push({
+          displayId: auditId,
+          code: 'UNREADABLE_AUDIT',
+          message: 'One Daily Review audit row for this date is incomplete and was not included.'
+        });
+        return;
+      }
+      history.push({
+        auditId: auditId,
+        actionNumber: actionNumber,
+        adminName: cleanText_(row[1]),
+        actionTime: actionTime,
+        instructor: exactText_(row[3]),
+        classDate: classDate,
+        classLabel: exactText_(row[5]),
+        site: exactText_(row[6]),
+        duration: duration,
+        reason: exactText_(row[8]),
+        result: result,
+        linkedRecordId: exactText_(row[10])
+      });
+    });
+    history.sort(function(left, right) { return right.actionNumber - left.actionNumber; });
+    return { history: history, warnings: warnings };
+  } catch (error) {
+    return {
+      history: [],
+      warnings: [{
+        displayId: 'audit-history',
+        code: 'AUDIT_UNAVAILABLE',
+        message: 'Daily Review audit history could not be read.'
+      }]
+    };
+  }
+}
+
 function adminAuditSheet_(spreadsheet) {
   var sheet = spreadsheet.getSheetByName(GIB_M1_AUDIT_SHEET_);
   if (!sheet) {
@@ -1122,12 +1306,7 @@ function adminAuditSheet_(spreadsheet) {
     sheet.getRange(1, 1, 1, GIB_M1_AUDIT_HEADERS_.length).setValues([GIB_M1_AUDIT_HEADERS_]);
     sheet.setFrozenRows(1);
   } else {
-    var headings = sheet.getRange(1, 1, 1, GIB_M1_AUDIT_HEADERS_.length).getValues()[0].map(cleanText_);
-    for (var i = 0; i < GIB_M1_AUDIT_HEADERS_.length; i += 1) {
-      if (headings[i] !== GIB_M1_AUDIT_HEADERS_[i]) {
-        throw new Error('Admin Audit headings do not match.');
-      }
-    }
+    adminAuditValues_(sheet);
   }
   return sheet;
 }
@@ -1139,12 +1318,26 @@ function nextAuditActionNumber_(sheet) {
   var highest = 0;
   values.forEach(function(row) {
     var value = Number(row[0]);
-    if (isFinite(value) && value > highest) highest = value;
+    if (
+      !isFinite(value)
+      || value < 1
+      || Math.floor(value) !== value
+      || value > GIB_M1_MAX_SAFE_INTEGER_
+    ) throw new Error('Admin Audit action number is invalid.');
+    if (value > highest) highest = value;
   });
+  if (highest >= GIB_M1_MAX_SAFE_INTEGER_) throw new Error('Admin Audit action number is exhausted.');
   return highest + 1;
 }
 
 function appendAdminAudit_(sheet, value, result, linkedRecordId) {
+  var linkedId = boundedAdminLinkedRecordId_(linkedRecordId);
+  if (
+    (result !== 'added' && result !== 'already exists')
+    || linkedId !== exactText_(linkedRecordId)
+  ) {
+    throw new Error('Admin Audit result is invalid.');
+  }
   var actionNumber = nextAuditActionNumber_(sheet);
   sheet.appendRow([
     actionNumber,
@@ -1157,12 +1350,113 @@ function appendAdminAudit_(sheet, value, result, linkedRecordId) {
     value.duration,
     value.reason,
     result,
-    linkedRecordId || ''
+    linkedId
   ]);
   return actionNumber;
 }
 
+function boundedAdminLinkedRecordId_(value) {
+  return safeExactText_(value, GIB_M1_RECORD_ID_MAX_, true);
+}
+
+function sameExactAdminAudit_(row, value, result, linkedRecordId) {
+  return Boolean(canonicalTimestamp_(row[2]))
+    && exactText_(row[1]) === value.adminName
+    && exactText_(row[3]) === value.instructor
+    && displayDate_(row[4]) === value.date
+    && exactText_(row[5]) === value.classLabel
+    && exactText_(row[6]) === value.site
+    && canonicalDuration_(row[7]) === canonicalDuration_(value.duration)
+    && exactText_(row[8]) === value.reason
+    && cleanText_(row[9]).toLowerCase() === result
+    && exactText_(row[10]) === linkedRecordId;
+}
+
+function existingExactAdminAuditNumber_(sheet, value, result, linkedRecordId) {
+  var values = adminAuditValues_(sheet);
+  var matches = [];
+  values.slice(1).forEach(function(row) {
+    if (sameExactAdminAudit_(row, value, result, linkedRecordId)) {
+      matches.push(Number(row[0]));
+    }
+  });
+  if (
+    matches.length > 1
+    || (
+      matches.length === 1
+      && (
+        !isFinite(matches[0])
+        || matches[0] < 1
+        || Math.floor(matches[0]) !== matches[0]
+        || matches[0] > GIB_M1_MAX_SAFE_INTEGER_
+      )
+    )
+  ) {
+    throw new Error('Admin Audit replay state is ambiguous.');
+  }
+  return matches.length ? matches[0] : 0;
+}
+
+function ensureAdminAudit_(sheet, value, result, linkedRecordId) {
+  var linkedId = boundedAdminLinkedRecordId_(linkedRecordId);
+  if (linkedId !== exactText_(linkedRecordId)) {
+    throw new Error('Admin Audit linked record is invalid.');
+  }
+  return existingExactAdminAuditNumber_(sheet, value, result, linkedId)
+    || appendAdminAudit_(sheet, value, result, linkedId);
+}
+
+function adminAdditionConfirmation_(value) {
+  return {
+    adminName: value.adminName,
+    date: value.date,
+    classLabel: value.classLabel,
+    duration: value.duration,
+    instructor: value.instructor,
+    site: value.site,
+    reason: value.reason,
+    notes: value.notes
+  };
+}
+
+function adminAttributedNotes_(value) {
+  var notes = 'Admin-added | Admin: ' + value.adminName
+    + ' | Reason: ' + value.reason
+    + (value.notes ? ' | Notes: ' + value.notes : '');
+  if (notes.length > GIB_M1_REVIEW_NOTES_MAX_) {
+    throw new Error('Admin note attribution exceeds the review limit.');
+  }
+  return notes;
+}
+
+function completedAdminAddition_(result, value, record, linkedRecordId, auditActionNumber) {
+  var linkedId = boundedAdminLinkedRecordId_(linkedRecordId);
+  if (linkedId !== exactText_(linkedRecordId)) {
+    throw new Error('Admin addition linked record is invalid.');
+  }
+  return jsonResult_({
+    ok: true,
+    result: result,
+    requestId: value.requestId,
+    linkedRecordId: linkedId,
+    linkedDisplayId: reviewDisplayId_(record),
+    auditActionNumber: auditActionNumber,
+    confirmation: adminAdditionConfirmation_(value)
+  });
+}
+
 function validateAdminAddition_(body, spreadsheet) {
+  if (
+    typeof body.requestId !== 'string'
+    || typeof body.adminName !== 'string'
+    || typeof body.date !== 'string'
+    || typeof body.classLabel !== 'string'
+    || typeof body.duration !== 'number'
+    || typeof body.instructor !== 'string'
+    || typeof body.site !== 'string'
+    || typeof body.notes !== 'string'
+    || typeof body.reason !== 'string'
+  ) return null;
   var value = {
     requestId: safeText_(body.requestId, 160, false),
     adminName: safeText_(body.adminName, 80, false),
@@ -1234,10 +1528,8 @@ function addMissedInstructorAction_(body) {
       instructor: value.instructor,
       site: value.site,
       device: 'Admin Daily Review',
-      build: 'm1-admin-only-couch-rollout',
-      notes: 'Admin-added | Admin: ' + value.adminName
-        + ' | Reason: ' + value.reason
-        + (value.notes ? ' | Notes: ' + value.notes : ''),
+      build: 'm1-unified-august-rollout-2026',
+      notes: adminAttributedNotes_(value),
       status: 'OK'
     };
     var permanentRequest = findPermanentAdminRequest_(state.records, candidate);
@@ -1248,34 +1540,42 @@ function addMissedInstructorAction_(body) {
         message: 'The Admin request ID conflicts with an existing record.'
       });
     }
-    var existing = permanentRequest || findExistingEvent_(state.records, candidate);
+    var duplicateEligibleRecords = state.records.filter(function(record) {
+      return !reviewRecordIssue_(record);
+    });
+    var existing = permanentRequest || findExistingEvent_(duplicateEligibleRecords, candidate);
     var auditSheet = adminAuditSheet_(spreadsheet);
 
+    if (permanentRequest) {
+      var permanentLinkedId = boundedAdminLinkedRecordId_(permanentRequest.rowId);
+      var permanentAuditNumber = ensureAdminAudit_(auditSheet, value, 'added', permanentLinkedId);
+      SpreadsheetApp.flush();
+      return completedAdminAddition_('added', value, permanentRequest, permanentLinkedId, permanentAuditNumber);
+    }
+
     if (existing) {
-      var existingAuditNumber = appendAdminAudit_(
+      var existingLinkedId = boundedAdminLinkedRecordId_(existing.rowId);
+      var existingAuditNumber = ensureAdminAudit_(
         auditSheet,
         value,
         'already exists',
-        existing.rowId
+        existingLinkedId
       );
       SpreadsheetApp.flush();
-      return jsonResult_({
-        ok: true,
-        result: 'already exists',
-        linkedRecordId: existing.rowId,
-        auditActionNumber: existingAuditNumber
-      });
+      return completedAdminAddition_(
+        'already exists',
+        value,
+        existing,
+        existingLinkedId,
+        existingAuditNumber
+      );
     }
 
     appendSignin_(sheet, state, candidate);
-    var actionNumber = appendAdminAudit_(auditSheet, value, 'added', candidate.rowId);
+    var candidateLinkedId = boundedAdminLinkedRecordId_(candidate.rowId);
+    var actionNumber = ensureAdminAudit_(auditSheet, value, 'added', candidateLinkedId);
     SpreadsheetApp.flush();
-    return jsonResult_({
-      ok: true,
-      result: 'added',
-      linkedRecordId: candidate.rowId,
-      auditActionNumber: actionNumber
-    });
+    return completedAdminAddition_('added', value, candidate, candidateLinkedId, actionNumber);
   } catch (error) {
     return jsonResult_({
       ok: false,

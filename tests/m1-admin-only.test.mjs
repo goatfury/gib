@@ -36,17 +36,37 @@ const fixedRequestToken = Buffer.alloc(32, 9).toString('base64url');
 const RECOVERY_INCIDENT_ID = 'M1-2026-08-03_04';
 
 const previewUrl = 'https://deploy-preview-99--gib-live.netlify.app';
+const immutablePreviewUrl = 'https://1234567890abcdef12345678--gib-live.netlify.app';
+const productionUrl = 'https://gib-live.netlify.app';
 const previewEnv = Object.freeze({
   GIB_TEST_WEBHOOK_URL: 'https://script.google.com/macros/s/TEST_ID/exec',
   GIB_TEST_WEBHOOK_TOKEN: 'test-receiver-token-long-enough',
   GIB_TEST_ADMIN_ACTION_TOKEN: 'test-admin-action-token-long-enough'
 });
 const productionEnv = Object.freeze({
-  GIB_M1_WEBHOOK_URL: 'https://script.google.com/macros/s/PROD_ID/exec',
-  GIB_M1_WEBHOOK_TOKEN: 'production-receiver-token-long-enough',
+  GIB_M1_PRODUCTION_WEBHOOK_URL: 'https://script.google.com/macros/s/PROD_ID/exec',
+  GIB_M1_PRODUCTION_WEBHOOK_TOKEN: 'production-receiver-token-long-enough',
   GIB_M1_ADMIN_ACTION_TOKEN: 'production-admin-action-token-long-enough',
   GIB_M1_ADMIN_PASSPHRASE: 'four memorable private words'
 });
+
+function reviewRecord(overrides = {}) {
+  return {
+    displayId: 'sheet-row-2',
+    recordId: 'one',
+    timestamp: '2026-07-25 10:00:09',
+    date: '2026-07-25',
+    classLabel: '10:00 AM Kids\u2019 BJJ',
+    duration: 0.5,
+    instructor: 'QA Test Instructor',
+    site: 'Rev',
+    notes: '',
+    source: 'Kiosk',
+    reviewRequired: false,
+    reviewMessage: '',
+    ...overrides
+  };
+}
 
 function jsonRequest(url, body, cookie = '', extraHeaders = {}) {
   return new Request(url, {
@@ -711,42 +731,44 @@ test('Netlify pins both backend credentials, action, and target', async () => {
 });
 
 test('production Admin configuration fails closed without every private value', () => {
-  assert.equal(runtimeConfig({}, { admin: true, requestUrl: 'https://bjjsite.com/m1/admin/' }), null);
+  assert.equal(runtimeConfig({}, { admin: true, requestUrl: `${productionUrl}/m1/admin/` }), null);
   assert.equal(runtimeConfig({
     ...productionEnv,
     GIB_M1_ADMIN_ACTION_TOKEN: ''
-  }, { admin: true, requestUrl: 'https://bjjsite.com/m1/admin/' }), null);
+  }, { admin: true, requestUrl: `${productionUrl}/m1/admin/` }), null);
   assert.equal(runtimeConfig({
     ...productionEnv,
     GIB_M1_ADMIN_PASSPHRASE: 'three weak words'
-  }, { admin: true, requestUrl: 'https://bjjsite.com/m1/admin/' }), null);
+  }, { admin: true, requestUrl: `${productionUrl}/m1/admin/` }), null);
   assert.equal(runtimeConfig(productionEnv, {
     admin: true,
-    requestUrl: 'https://bjjsite.com/m1/admin/'
+    requestUrl: `${productionUrl}/m1/admin/`
   }).adminActionToken, productionEnv.GIB_M1_ADMIN_ACTION_TOKEN);
 });
 
-test('production preserves a short non-empty legacy webhook credential', () => {
-  const legacyEnv = {
+test('production requires the scoped transport credential and never falls back to legacy', () => {
+  const shortProductionEnv = {
     ...productionEnv,
-    GIB_M1_WEBHOOK_TOKEN: 'legacy'
+    GIB_M1_PRODUCTION_WEBHOOK_TOKEN: 'short'
   };
-  assert.equal(runtimeConfig(legacyEnv, {
+  assert.equal(runtimeConfig(shortProductionEnv, {
     admin: true,
-    requestUrl: 'https://bjjsite.com/m1/admin/'
-  }).webhookToken, legacyEnv.GIB_M1_WEBHOOK_TOKEN);
+    requestUrl: `${productionUrl}/m1/admin/`
+  }), null);
   assert.equal(runtimeConfig({
-    ...legacyEnv,
-    GIB_M1_WEBHOOK_TOKEN: ''
-  }, { admin: true, requestUrl: 'https://bjjsite.com/m1/admin/' }), null);
+    GIB_M1_WEBHOOK_URL: 'https://script.google.com/macros/s/LEGACY_ID/exec',
+    GIB_M1_WEBHOOK_TOKEN: 'legacy-receiver-token-long-enough',
+    GIB_M1_ADMIN_ACTION_TOKEN: productionEnv.GIB_M1_ADMIN_ACTION_TOKEN,
+    GIB_M1_ADMIN_PASSPHRASE: productionEnv.GIB_M1_ADMIN_PASSPHRASE
+  }, { admin: true, requestUrl: `${productionUrl}/m1/admin/` }), null);
   assert.equal(runtimeConfig({
     ...previewEnv,
     GIB_TEST_WEBHOOK_TOKEN: 'short'
   }, { admin: true, requestUrl: `${previewUrl}/m1/admin/` }), null);
   assert.equal(runtimeConfig({
-    ...legacyEnv,
+    ...productionEnv,
     GIB_M1_ADMIN_ACTION_TOKEN: 'short'
-  }, { admin: true, requestUrl: 'https://bjjsite.com/m1/admin/' }), null);
+  }, { admin: true, requestUrl: `${productionUrl}/m1/admin/` }), null);
 });
 
 test('Admin passphrase policy and production login are enforced', async () => {
@@ -758,7 +780,7 @@ test('Admin passphrase policy and production login are enforced', async () => {
   assert.equal(validAdminPassphrase('alpha beta gamma ' + 'd'.repeat(240)), false);
 
   const valid = await handleAdminLogin(
-    jsonRequest('https://bjjsite.com/.netlify/functions/m1-admin-login', {
+    jsonRequest(`${productionUrl}/.netlify/functions/m1-admin-login`, {
       adminName: 'Andrew Smith',
       passphrase: productionEnv.GIB_M1_ADMIN_PASSPHRASE,
       testShortcut: false
@@ -775,6 +797,7 @@ test('Admin passphrase policy and production login are enforced', async () => {
 
 test('TEST login shortcut is limited to the exact Deploy Preview host pattern', async () => {
   assert.equal(isDeployPreview({}, `${previewUrl}/m1/admin/`), true);
+  assert.equal(isDeployPreview({}, `${immutablePreviewUrl}/m1/admin/`), true);
   assert.equal(isDeployPreview({}, 'https://bjjsite.com/m1/admin/'), false);
   assert.equal(isDeployPreview({}, 'https://deploy-preview-99--other.netlify.app/m1/admin/'), false);
   const preview = await handleAdminLogin(
@@ -786,7 +809,7 @@ test('TEST login shortcut is limited to the exact Deploy Preview host pattern', 
   );
   assert.equal(preview.status, 200);
   const production = await handleAdminLogin(
-    jsonRequest('https://bjjsite.com/.netlify/functions/m1-admin-login', {
+    jsonRequest(`${productionUrl}/.netlify/functions/m1-admin-login`, {
       adminName: 'Stuart Turner',
       testShortcut: true
     }),
@@ -854,7 +877,10 @@ test('valid session can review, search, add, and logout with no-store responses'
       ...common,
       fetch: async () => googleResponse({
         ok: true,
-        records: [{ recordId: 'one', instructor: 'QA Test Instructor' }]
+        date: '2026-07-25',
+        records: [reviewRecord()],
+        warnings: [],
+        auditHistory: []
       })
     }
   );
@@ -873,8 +899,13 @@ test('valid session can review, search, add, and logout with no-store responses'
       ...common,
       fetch: async () => googleResponse({
         ok: true,
-        selectedDateRecords: [{ recordId: 'one' }],
-        recentRecords: Array.from({ length: 8 }, (_, index) => ({ recordId: String(index) }))
+        instructor: 'QA Test Instructor',
+        date: '2026-07-25',
+        selectedDateRecords: [reviewRecord()],
+        recentRecords: Array.from({ length: 5 }, (_, index) => reviewRecord({
+          displayId: `sheet-row-${index + 2}`,
+          recordId: String(index)
+        }))
       })
     }
   );
@@ -904,8 +935,20 @@ test('valid session can review, search, add, and logout with no-store responses'
       fetch: async () => googleResponse({
         ok: true,
         result: 'added',
+        requestId: 'qa-add',
         linkedRecordId: 'gib-admin-qa-add',
-        auditActionNumber: 1
+        linkedDisplayId: 'sheet-row-2',
+        auditActionNumber: 1,
+        confirmation: {
+          adminName: 'Stuart Turner',
+          date: '2026-07-25',
+          classLabel: '10:00 AM Kids\u2019 BJJ',
+          duration: 0.5,
+          instructor: 'QA Test Instructor',
+          site: 'Rev',
+          reason: 'Missed tablet sign-in',
+          notes: ''
+        }
       })
     }
   );
@@ -996,16 +1039,17 @@ test('Daily Review browser visibly labels possible Admin and kiosk duplicates', 
   assert.match(adminHtml, /reviewRequired/);
 });
 
-test('rapid Admin retry creates one payroll event and readable results', () => {
+test('exact Admin request replay returns the original result and one audit entry', () => {
   const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
   const first = harness.post(adminAddition());
   const retry = harness.post(adminAddition());
   assert.equal(first.result, 'added');
-  assert.equal(retry.result, 'already exists');
-  assert.equal(harness.signins.values.length, 2);
-  assert.equal(harness.audit.values.length, 3);
+  assert.equal(retry.result, 'added');
+  assert.equal(retry.requestId, first.requestId);
+  assert.equal(harness.signins.values.length - 1, 1, 'One logical request may create at most one sign-in row.');
+  assert.equal(harness.audit.values.length - 1, 1, 'One logical request may create at most one audit action.');
   assert.ok(first.auditActionNumber > 0);
-  assert.ok(retry.auditActionNumber > first.auditActionNumber);
+  assert.equal(retry.auditActionNumber, first.auditActionNumber);
 });
 
 test('Admin request IDs remain permanent after payload changes or VOID', () => {
@@ -1028,8 +1072,8 @@ test('Admin request IDs remain permanent after payload changes or VOID', () => {
   assert.equal(voided.signins.values.length, 2);
 });
 
-test('rapid double-click reaches one added result and one duplicate-safe result', async () => {
-  const events = new Set();
+test('rapid same-request replay returns the original added result and one audit', async () => {
+  const events = new Map();
   let auditNumber = 0;
   const fetchMock = async (_url, options) => {
     const body = JSON.parse(options.body);
@@ -1039,14 +1083,34 @@ test('rapid double-click reaches one added result and one duplicate-safe result'
       String(body.classLabel).toLocaleLowerCase('en-US'),
       String(body.site).toLocaleLowerCase('en-US')
     ].join('|');
-    const result = events.has(key) ? 'already exists' : 'added';
-    events.add(key);
-    auditNumber += 1;
+    let event = events.get(key);
+    if (!event) {
+      auditNumber += 1;
+      event = {
+        requestId: body.requestId,
+        linkedRecordId: `gib-admin-${body.requestId}`,
+        auditActionNumber: auditNumber
+      };
+      events.set(key, event);
+    }
+    assert.equal(body.requestId, event.requestId);
     return googleResponse({
       ok: true,
-      result,
-      linkedRecordId: 'one-google-payroll-event',
-      auditActionNumber: auditNumber
+      result: 'added',
+      requestId: body.requestId,
+      linkedRecordId: event.linkedRecordId,
+      linkedDisplayId: 'sheet-row-2',
+      auditActionNumber: event.auditActionNumber,
+      confirmation: {
+        adminName: body.adminName,
+        date: body.date,
+        classLabel: body.classLabel,
+        duration: body.duration,
+        instructor: body.instructor,
+        site: body.site,
+        reason: body.reason,
+        notes: body.notes
+      }
     });
   };
   const request = () => handleAdminAdd(
@@ -1074,7 +1138,10 @@ test('rapid double-click reaches one added result and one duplicate-safe result'
   );
   const responses = await Promise.all([request(), request()]);
   const bodies = await Promise.all(responses.map(response => response.json()));
-  assert.deepEqual(bodies.map(body => body.result).sort(), ['added', 'already exists']);
+  assert.deepEqual(bodies.map(body => body.result), ['added', 'added']);
+  assert.equal(new Set(bodies.map(body => body.requestId)).size, 1);
+  assert.equal(new Set(bodies.map(body => body.auditActionNumber)).size, 1);
+  assert.equal(auditNumber, 1);
   assert.equal(events.size, 1);
   assert.match(adminHtml, /if \(inFlightAdditions\.has\(key\)\) return/);
 });
@@ -1126,24 +1193,770 @@ test('Daily Review workflow is yesterday-first, date-selectable, complete, and e
   assert.match(adminHtml, /Five recent active sign-ins/);
   assert.match(
     adminHtml,
-    /Daily Review uses the shared Rev schedule\. Local schedule edits and Series classes must also be added to the shared schedule or they will not appear as blanks\./
+    /Daily Review uses the current canonical regular weekly schedule from the Revolution BJJ website\. Recorded sign-ins with historical, local-override, or Series labels remain visible as unmatched rather than being hidden\./
   );
+  assert.match(adminHtml, /schedule:\s*'\/api\/m1-schedule'/);
+  assert.match(adminHtml, /function validateScheduleResponse\(value\)/);
+  assert.match(adminHtml, /id="scheduleSource"[^>]*role="status"/);
+  assert.match(adminHtml, /Version: \$\{schedule\.version\}/);
+  assert.match(adminHtml, /scheduleBootstrap:\s*'\/m1\/shared-schedule\.json'/);
+  assert.match(adminHtml, /function loadCheckedInScheduleBootstrap\(reason/);
+  assert.match(adminHtml, /const SCHEDULE_REFRESH_INTERVAL_MS = 10 \* 60 \* 1_000;/);
+  assert.match(adminHtml, /window\.setInterval\(refreshCanonicalSchedule, SCHEDULE_REFRESH_INTERVAL_MS\)/);
+  assert.match(adminHtml, /visibilitychange[\s\S]*resume[\s\S]*focus[\s\S]*pageshow/);
+  assert.match(adminHtml, /function reviewFormInProgress\(\)[\s\S]*\.add-form\.open/);
+  assert.match(adminHtml, /scheduleRenderPending = true/);
   assert.equal(validNonFutureDate('2025-01-10', fixedDateNow), true);
   assert.equal(validNonFutureDate('2026-07-27', fixedDateNow), false);
 });
 
-test('Admin addition UX has fixed fields, reason, confirmation, refresh, and Admin label', () => {
+test('Admin addition UX binds fixed identity, requires duration, starts immediately, refreshes, and labels Admin rows', () => {
   assert.match(adminHtml, /fixedValue\('Date'/);
   assert.match(adminHtml, /fixedValue\('Class'/);
   assert.match(adminHtml, /fixedValue\('Site'/);
-  assert.match(adminHtml, /fixedValue\('Duration'/);
+  assert.match(adminHtml, /inputField\('Duration \(choose explicitly\)', durationSelect\)/);
+  assert.match(adminHtml, /const ADMIN_DURATION_OPTIONS = Object\.freeze\(\[1, 0\.5\]\)/);
+  assert.doesNotMatch(adminHtml, /durationForClass|\bkids[^\n]*\?\s*0\.5/iu);
   assert.match(adminHtml, /Required reason/);
   assert.match(adminHtml, /Notes \(optional\)/);
-  assert.match(adminHtml, /window\.confirm\(/);
-  assert.match(adminHtml, /await loadReview\(currentDate\)/);
+  assert.doesNotMatch(adminHtml.slice(
+    adminHtml.indexOf('async function addInstructor('),
+    adminHtml.indexOf('function renderRecordList(')
+  ), /window\.confirm\(/);
+  assert.doesNotMatch(adminHtml, /submit\.textContent = 'Confirm add'/);
+  assert.match(adminHtml, /setAdditionWorking\(form, true, `Adding \$\{instructor\}…`\)/u);
+  assert.match(adminHtml, /refreshConfirmedAddition\([\s\S]*loadReview\(request\.date, \{/);
   assert.match(adminHtml, /Admin-added/);
   assert.doesNotMatch(adminHtml, /payroll approval|dashboard|analytics|void sign-in/i);
   assert.doesNotMatch(adminHtml, /<button[^>]*>[^<]*(?:schedule|void|approve)/i);
+});
+
+test('Daily Review keeps every correction path visible and renders strict manual, warning, and audit contracts', () => {
+  assert.match(adminHtml, /href="\/m1\/\?view=admin"[^>]*>Local M1 Admin<\/a>/);
+  assert.match(adminHtml, /href="\/m1\/"[^>]*>Instructor Sign-In<\/a>/);
+  assert.doesNotMatch(adminHtml, /href="\/m1\/(?:\?view=admin)?"[^>]*(?:target=|onclick=)/);
+
+  const classRowSource = adminHtml.slice(
+    adminHtml.indexOf('function classRow('),
+    adminHtml.indexOf('function renderReview(')
+  );
+  assert.match(classRowSource, /instructors\.join\(' \+ '\)/);
+  assert.match(classRowSource, /Add forgotten instructor/);
+  assert.match(classRowSource, /record\.source === 'Manual'[\s\S]*Manual Sheet row/);
+  assert.match(classRowSource, /row\.append\(main\)[\s\S]*row\.append\(buildAddForm\(label, index\)\)/);
+  assert.equal((classRowSource.match(/return row;/g) || []).length, 1);
+  assert.match(adminHtml, /\.forgotten-action\s*\{[\s\S]*min-height:\s*44px/);
+
+  assert.match(adminHtml, /matchedDisplayIds\.add\(record\.displayId\)/);
+  assert.doesNotMatch(adminHtml, /matchedRecordIds\.add\(record\.recordId\)/);
+  assert.match(adminHtml, /Manual Sheet row/);
+  assert.match(adminHtml, /id="warningSection"[\s\S]*Sheet rows needing attention/);
+  assert.match(adminHtml, /id="auditSection"[\s\S]*Forgotten sign-in audit history/);
+  assert.match(adminHtml, /function warningElement\(/);
+  assert.match(adminHtml, /function auditElement\(/);
+  assert.match(adminHtml, /function validDailyReviewResponse\(/);
+  assert.match(adminHtml, /function validAdminAdditionResponse\(/);
+  assert.match(adminHtml, /Could not confirm the sign-in\. Nothing else should be submitted yet\. Try again later or use the Sheet\./);
+  assert.doesNotMatch(adminHtml, /Google did not fully confirm the correction\. Success is not being reported\./);
+  assert.match(adminHtml, /const generation = \+\+reviewLoadGeneration/);
+  assert.match(adminHtml, /generation !== reviewLoadGeneration/);
+  assert.match(adminHtml, /record\.displayId === data\.linkedDisplayId/);
+  assert.match(adminHtml, /audit\.actionNumber === data\.auditActionNumber/);
+  assert.match(adminHtml, /validInstructorSearchResponse\(data, instructor, date\)/);
+});
+
+test('Daily Review rejects duplicate audit action numbers before any success state is rendered', async () => {
+  const validatorsSource = adminHtml.slice(
+    adminHtml.indexOf('function exactObjectKeys('),
+    adminHtml.indexOf('function validAdminAdditionResponse(')
+  );
+  const context = vm.createContext({ REVIEW_NOTES_MAX_LENGTH: 800 });
+  new vm.Script(`${validatorsSource}\nthis.validDailyReviewResponse = validDailyReviewResponse;`)
+    .runInContext(context);
+
+  const audit = {
+    auditId: 'audit-row-2',
+    actionNumber: 7,
+    adminName: 'Andrew Smith',
+    actionTime: '2026-07-25 10:00:00',
+    instructor: 'QA Test Instructor',
+    classDate: '2026-07-25',
+    classLabel: '10:00 AM Kids\u2019 BJJ',
+    site: 'Rev',
+    duration: 0.5,
+    reason: 'QA forgotten sign-in',
+    result: 'added',
+    linkedRecordId: 'gib-admin-qa-audit-identity'
+  };
+  const mutatedResponse = {
+    ok: true,
+    test: true,
+    adminName: 'Stuart Turner',
+    date: '2026-07-25',
+    records: [reviewRecord()],
+    warnings: [],
+    auditHistory: [audit, { ...audit, auditId: 'audit-row-3' }]
+  };
+  assert.equal(context.validDailyReviewResponse(mutatedResponse, mutatedResponse.date), false);
+
+  const loadReviewSource = adminHtml.slice(
+    adminHtml.indexOf('async function loadReview('),
+    adminHtml.indexOf('function uniqueRequestId(')
+  );
+  const messages = [];
+  let successStateCalls = 0;
+  const element = () => ({
+    value: '',
+    textContent: '',
+    disabled: false,
+    hidden: false,
+    classList: { add() {}, remove() {} },
+    replaceChildren() {}
+  });
+  const elements = new Map();
+  Object.assign(context, {
+    schedule: {},
+    reviewLoadGeneration: 0,
+    currentDate: '',
+    currentRecords: [],
+    currentWarnings: [],
+    currentAuditHistory: [],
+    API: { review: '/.netlify/functions/m1-admin-review' },
+    $: selector => {
+      if (!elements.has(selector)) elements.set(selector, element());
+      return elements.get(selector);
+    },
+    nyDate: () => '2026-07-26',
+    defaultYesterday: () => '2026-07-25',
+    formatDateHeading: value => value,
+    showMessage: (_target, message) => messages.push(message),
+    requestJson: async () => mutatedResponse,
+    setLoggedIn: () => { successStateCalls += 1; },
+    renderReview: () => { successStateCalls += 1; },
+    setLoggedOut: () => {},
+    renderRecordList: () => {},
+    auditElement: () => {}
+  });
+  new vm.Script(`${loadReviewSource}\nthis.loadReview = loadReview;`).runInContext(context);
+  assert.equal(await context.loadReview(mutatedResponse.date), false);
+  assert.equal(successStateCalls, 0);
+  assert.equal(messages.at(-1), 'Daily Review returned an incomplete response. Nothing on the Sheet was changed.');
+});
+
+test('browser correction identity is schedule-reorder safe, opaque, and stable across indeterminate retries', () => {
+  const helpersSource = adminHtml.slice(
+    adminHtml.indexOf('function uniqueRequestId('),
+    adminHtml.indexOf('async function addInstructor(')
+  );
+  let randomCalls = 0;
+  const context = vm.createContext({
+    ADMIN_DURATION_OPTIONS: [1, 0.5],
+    Uint32Array,
+    JSON,
+    String,
+    Number,
+    clean: value => String(value == null ? '' : value).trim().replace(/\s+/gu, ' '),
+    crypto: {
+      getRandomValues(values) {
+        randomCalls += 1;
+        values.fill(randomCalls);
+        return values;
+      }
+    }
+  });
+  new vm.Script(`${helpersSource}\nthis.helpers = { readAdditionForm, requestIdForAddition, clearAdditionRequestId };`)
+    .runInContext(context);
+
+  const originalClass = `6:00 AM ${'C'.repeat(191)}`.slice(0, 200);
+  const form = {
+    dataset: {
+      reviewDate: '2026-08-10',
+      classLabel: originalClass,
+      site: 'Rev'
+    },
+    elements: {
+      duration: { value: '0.5' },
+      instructor: { value: 'QA Test First' },
+      reason: { value: 'QA forgotten sign-in' },
+      notes: { value: '' }
+    }
+  };
+  const firstAddition = context.helpers.readAdditionForm(form);
+  assert.equal(firstAddition.classLabel, originalClass);
+  assert.equal(firstAddition.duration, 0.5);
+  const firstId = context.helpers.requestIdForAddition(form, firstAddition);
+  assert.match(firstId, /^m1-2026-08-10-[a-f0-9]{24}$/u);
+  assert.equal(context.helpers.requestIdForAddition(form, firstAddition), firstId);
+  assert.equal(randomCalls, 1, 'An unchanged retry must reuse its original request ID.');
+
+  // A background schedule reorder cannot affect the class bound into the open form.
+  context.schedule = { days: { Monday: ['A different reordered class'] } };
+  assert.equal(context.helpers.readAdditionForm(form).classLabel, originalClass);
+
+  form.elements.instructor.value = 'QA Test Second';
+  const secondAddition = context.helpers.readAdditionForm(form);
+  const secondId = context.helpers.requestIdForAddition(form, secondAddition);
+  assert.notEqual(secondId, firstId);
+  assert.equal(randomCalls, 2);
+  context.helpers.clearAdditionRequestId(form);
+  assert.equal(form.dataset.requestId, undefined);
+
+  const addSource = adminHtml.slice(
+    adminHtml.indexOf('async function addInstructor('),
+    adminHtml.indexOf('function renderRecordList(')
+  );
+  assert.doesNotMatch(addSource, /schedule\.days|durationForClass/u);
+  assert.match(addSource, /requestIdForAddition\(form, addition\)/u);
+  assert.match(addSource, /clearAdditionRequestId\(form\)/u);
+});
+
+test('browser reconciles one ambiguous addition with the exact frozen request and keeps outcomes visible', async () => {
+  const helperSource = adminHtml.slice(
+    adminHtml.indexOf('function ambiguousAdditionFailure('),
+    adminHtml.indexOf('function upsertConfirmedAddition(')
+  );
+  const calls = [];
+  const messages = [];
+  const request = Object.freeze({
+    requestId: 'm1-2026-08-10-000000010000000100000001',
+    date: '2026-08-10',
+    classLabel: '6:00 AM BJJ (Level 2)',
+    duration: 1,
+    instructor: 'QA Test Reconcile',
+    site: 'Rev',
+    notes: '',
+    reason: 'QA lost response'
+  });
+  const success = {
+    ok: true,
+    test: true,
+    result: 'already exists',
+    requestId: request.requestId,
+    linkedRecordId: 'gib-admin-original-a',
+    linkedDisplayId: 'sheet-row-14',
+    auditActionNumber: 3,
+    confirmation: {
+      adminName: 'Andrew Smith',
+      date: request.date,
+      classLabel: request.classLabel,
+      duration: request.duration,
+      instructor: request.instructor,
+      site: request.site,
+      reason: request.reason,
+      notes: request.notes
+    },
+    message: 'The same class already has this instructor. No second payroll row was created.'
+  };
+  const firstError = Object.assign(new Error('The correction could not reach Google.'), {
+    status: 504,
+    data: { code: 'ADMIN_ADD_UNREACHABLE' }
+  });
+  const context = vm.createContext({
+    API: { add: '/.netlify/functions/m1-admin-add' },
+    clean: value => String(value == null ? '' : value).trim(),
+    requestJson: async (_url, body) => {
+      calls.push(body);
+      if (calls.length === 1) throw firstError;
+      return success;
+    }
+  });
+  new vm.Script(`${helperSource}\nthis.helpers = { ambiguousAdditionFailure, requestAdditionWithReconciliation };`)
+    .runInContext(context);
+  const result = await context.helpers.requestAdditionWithReconciliation(
+    request,
+    () => messages.push('Adding… checking the same request for a completed result.')
+  );
+  assert.equal(result.reconciled, true);
+  assert.equal(result.data.result, 'already exists');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0], request);
+  assert.equal(calls[1], request);
+  assert.equal(calls[0].requestId, calls[1].requestId);
+  assert.equal(Object.isFrozen(calls[0]), true);
+  assert.deepEqual(messages, ['Adding… checking the same request for a completed result.']);
+
+  const rejected = Object.assign(new Error('Rejected'), {
+    status: 502,
+    data: { code: 'ADMIN_ADD_REJECTED' }
+  });
+  assert.equal(context.helpers.ambiguousAdditionFailure(rejected), false);
+  assert.equal(context.helpers.ambiguousAdditionFailure({ status: 403, data: { code: 'ADMIN_ADD_UNREACHABLE' } }), false);
+  assert.equal(context.helpers.ambiguousAdditionFailure({ status: 502, data: { code: 'WRONG_CODE' } }), false);
+  assert.equal(context.helpers.ambiguousAdditionFailure(new TypeError('Browser fetch failed before a response.')), false);
+
+  let rejectedCalls = 0;
+  context.requestJson = async () => {
+    rejectedCalls += 1;
+    throw rejected;
+  };
+  await assert.rejects(
+    context.helpers.requestAdditionWithReconciliation(request, () => messages.push('unexpected retry')),
+    /Rejected/u
+  );
+  assert.equal(rejectedCalls, 1);
+
+  let ambiguousCalls = 0;
+  context.requestJson = async () => {
+    ambiguousCalls += 1;
+    throw firstError;
+  };
+  await assert.rejects(
+    context.helpers.requestAdditionWithReconciliation(request, () => messages.push('bounded retry')),
+    /could not reach/u
+  );
+  assert.equal(ambiguousCalls, 2);
+  assert.match(adminHtml, /Array\.from\(form\.elements\)[\s\S]*control\.disabled = working/u);
+  assert.match(adminHtml, /upsertConfirmedAddition\(request, data\)/u);
+  assert.doesNotMatch(
+    adminHtml.slice(
+      adminHtml.indexOf('async function requestAdditionWithReconciliation('),
+      adminHtml.indexOf('function upsertConfirmedAddition(')
+    ),
+    /setTimeout|AbortSignal|timeout/iu
+  );
+});
+
+function deferredPromise() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function additionResponse(result, overrides = {}) {
+  return {
+    ok: true,
+    test: true,
+    result,
+    requestId: 'm1-2026-08-10-111111112222222233333333',
+    linkedRecordId: result === 'added' ? 'gib-admin-qa-visible' : 'gib-admin-existing',
+    linkedDisplayId: result === 'added' ? 'sheet-row-99' : 'sheet-row-14',
+    auditActionNumber: result === 'added' ? 4 : 5,
+    ...overrides
+  };
+}
+
+function additionUiHarness({ responseQueue, initialRecords = [] }) {
+  const instructor = { value: 'QA Test Forgotten Instructor C', disabled: false };
+  const duration = { value: '1', disabled: false };
+  const reason = { value: 'QA TEST missed sign-in', disabled: false };
+  const notes = { value: 'DO NOT PAY', disabled: false };
+  const submit = { textContent: 'Review and add', disabled: false };
+  const cancel = { textContent: 'Cancel', disabled: false };
+  const controls = [instructor, duration, reason, notes, submit, cancel];
+  Object.assign(controls, { instructor, duration, reason, notes });
+  const status = {
+    textContent: '',
+    tone: '',
+    style: {},
+    classList: { toggle() {} }
+  };
+  const attributes = new Map();
+  const formClasses = new Set(['add-form', 'open']);
+  let resetCalls = 0;
+  const form = {
+    dataset: {
+      reviewDate: '2026-08-10',
+      classLabel: '6:00 AM BJJ (Level 2)',
+      site: 'Rev',
+      classIndex: '3'
+    },
+    elements: controls,
+    setAttribute(name, value) { attributes.set(name, value); },
+    getAttribute(name) { return attributes.get(name) || null; },
+    querySelector(selector) {
+      if (selector === '.confirm-add') return submit;
+      if (selector === '.add-status') return status;
+      return null;
+    },
+    classList: {
+      add(name) { formClasses.add(name); },
+      remove(name) { formClasses.delete(name); },
+      contains(name) { return formClasses.has(name); }
+    },
+    reset() { resetCalls += 1; }
+  };
+  const timers = [];
+  const clearedTimers = [];
+  const requests = [];
+  const outcomes = [];
+  const focusCalls = [];
+  let renders = 0;
+  let scheduleApplications = 0;
+  const card = {
+    focus(options) { focusCalls.push(['focus', options]); },
+    scrollIntoView(options) { focusCalls.push(['scroll', options]); }
+  };
+  const queue = [...responseQueue];
+  const context = vm.createContext({
+    ADMIN_DURATION_OPTIONS: [1, 0.5],
+    Array,
+    JSON,
+    Object,
+    String,
+    Number,
+    currentDate: '2026-08-10',
+    currentRecords: initialRecords.map(record => ({ ...record })),
+    currentAuditHistory: [],
+    currentAdminName: 'Stuart Turner',
+    additionInteractionGeneration: 0,
+    inFlightAdditions: new Set(),
+    clean: value => String(value == null ? '' : value).trim().replace(/\s+/gu, ' '),
+    normalize: value => String(value == null ? '' : value).trim().toLocaleLowerCase('en-US'),
+    uniqueRequestId: () => 'm1-2026-08-10-111111112222222233333333',
+    clearClassOutcome() { outcomes.length = 0; },
+    setClassOutcome(date, classLabel, instructorName, result) {
+      outcomes.push({ date, classLabel, instructor: instructorName, result });
+    },
+    showMessage(element, message, tone = 'error') {
+      element.textContent = message || '';
+      element.tone = tone;
+      element.style.display = message ? 'block' : 'none';
+    },
+    requestAdditionWithReconciliation(request) {
+      requests.push(request);
+      const next = queue.shift();
+      if (!next) throw new Error('Unexpected addition request.');
+      return typeof next === 'function' ? next(request) : next;
+    },
+    validAdminAdditionResponse: () => true,
+    renderReview() { renders += 1; },
+    loadReview: async () => false,
+    applyPendingScheduleToReview() { scheduleApplications += 1; },
+    setLoggedOut() {},
+    document: { querySelector: () => card },
+    window: {
+      setTimeout(callback, milliseconds) {
+        timers.push({ callback, milliseconds });
+        return timers.length;
+      },
+      clearTimeout(timerId) { clearedTimers.push(timerId); }
+    }
+  });
+  const helpersSource = adminHtml.slice(
+    adminHtml.indexOf('function readAdditionForm('),
+    adminHtml.indexOf('function ambiguousAdditionFailure(')
+  );
+  const upsertSource = adminHtml.slice(
+    adminHtml.indexOf('function upsertConfirmedAddition('),
+    adminHtml.indexOf('async function addInstructor(')
+  );
+  const addSource = adminHtml.slice(
+    adminHtml.indexOf('async function addInstructor('),
+    adminHtml.indexOf('function renderRecordList(')
+  );
+  new vm.Script(`${helpersSource}\n${upsertSource}\n${addSource}\nthis.addInstructor = addInstructor;`)
+    .runInContext(context);
+  return {
+    context,
+    form,
+    controls,
+    instructor,
+    duration,
+    reason,
+    notes,
+    submit,
+    status,
+    attributes,
+    timers,
+    clearedTimers,
+    requests,
+    outcomes,
+    focusCalls,
+    get resetCalls() { return resetCalls; },
+    get renders() { return renders; },
+    get scheduleApplications() { return scheduleApplications; }
+  };
+}
+
+function fakeAdminElement(tagName) {
+  let ownText = '';
+  return {
+    tagName: String(tagName).toUpperCase(),
+    className: '',
+    dataset: {},
+    childNodes: [],
+    attributes: new Map(),
+    append(...children) { this.childNodes.push(...children); },
+    appendChild(child) { this.childNodes.push(child); return child; },
+    setAttribute(name, value) { this.attributes.set(name, value); },
+    get textContent() {
+      return ownText + this.childNodes.map(child => child.textContent || '').join('');
+    },
+    set textContent(value) {
+      ownText = String(value);
+      this.childNodes = [];
+    }
+  };
+}
+
+function renderClassOutcome(result, records) {
+  const classRowSource = adminHtml.slice(
+    adminHtml.indexOf('function classRow('),
+    adminHtml.indexOf('function renderReview(')
+  );
+  const makeElement = (tagName, className = '', text = '') => {
+    const element = fakeAdminElement(tagName);
+    element.className = className;
+    if (text) element.textContent = text;
+    return element;
+  };
+  const context = vm.createContext({
+    currentDate: '2026-08-10',
+    persistentReviewOutcome: {
+      date: '2026-08-10',
+      classLabel: '6:00 AM BJJ (Level 2)',
+      instructor: 'QA Test Forgotten Instructor C',
+      result
+    },
+    clean: value => String(value == null ? '' : value).trim(),
+    normalize: value => String(value == null ? '' : value).trim().toLocaleLowerCase('en-US'),
+    makeElement,
+    buildAddForm: () => makeElement('form', 'add-form'),
+    document: { createElement: fakeAdminElement }
+  });
+  new vm.Script(`${classRowSource}\nthis.classRow = classRow;`).runInContext(context);
+  const row = context.classRow('6:00 AM BJJ (Level 2)', 3, records);
+  return {
+    row,
+    outcome: row.childNodes.find(child => child.className === 'class-outcome')
+  };
+}
+
+test('forgotten sign-in starts immediately, disables the form, preserves it, and shows the three-second update', async () => {
+  const deferred = deferredPromise();
+  const harness = additionUiHarness({ responseQueue: [() => deferred.promise] });
+  const addition = harness.context.addInstructor(harness.form);
+
+  assert.equal(harness.requests.length, 1, 'The first Review and add submit must start the request.');
+  assert.equal(harness.attributes.get('aria-busy'), 'true');
+  assert.equal(harness.submit.textContent, 'Adding…');
+  assert.equal(harness.status.textContent, 'Adding QA Test Forgotten Instructor C…');
+  assert.equal(harness.status.tone, 'working');
+  assert.ok(harness.controls.every(control => control.disabled));
+  assert.equal(harness.form.classList.contains('open'), true);
+  assert.deepEqual(
+    [harness.instructor.value, harness.duration.value, harness.reason.value, harness.notes.value],
+    ['QA Test Forgotten Instructor C', '1', 'QA TEST missed sign-in', 'DO NOT PAY']
+  );
+  assert.equal(harness.timers.length, 1);
+  assert.equal(harness.timers[0].milliseconds, 3_000);
+
+  harness.timers[0].callback();
+  assert.equal(harness.status.textContent, 'Still adding — do not submit again.');
+  assert.equal(harness.submit.disabled, true);
+  assert.equal(harness.form.classList.contains('open'), true);
+
+  deferred.resolve({ data: additionResponse('added') });
+  await addition;
+});
+
+test('confirmed add closes the form, keeps names dominant, and renders a persistent class-card result', async () => {
+  const harness = additionUiHarness({
+    responseQueue: [Promise.resolve({ data: additionResponse('added') })],
+    initialRecords: [{
+      displayId: 'sheet-row-14',
+      recordId: 'existing',
+      instructor: 'QA Test Existing Instructor',
+      classLabel: '6:00 AM BJJ (Level 2)',
+      site: 'Rev',
+      source: 'Kiosk',
+      reviewRequired: false
+    }]
+  });
+  await harness.context.addInstructor(harness.form);
+
+  assert.equal(harness.form.classList.contains('open'), false);
+  assert.equal(harness.resetCalls, 1);
+  assert.equal(harness.submit.disabled, false);
+  assert.equal(harness.submit.textContent, 'Review and add');
+  assert.equal(harness.outcomes.length, 1);
+  assert.equal(harness.outcomes[0].result, 'added');
+  assert.deepEqual(
+    Array.from(harness.context.currentRecords, record => record.instructor),
+    ['QA Test Existing Instructor', 'QA Test Forgotten Instructor C']
+  );
+  assert.ok(harness.focusCalls.some(([action]) => action === 'focus'));
+  assert.ok(harness.focusCalls.some(([action]) => action === 'scroll'));
+
+  const firstRender = renderClassOutcome('added', harness.context.currentRecords);
+  const secondRender = renderClassOutcome('added', harness.context.currentRecords);
+  assert.ok(firstRender.outcome);
+  assert.equal(firstRender.outcome.childNodes[0].textContent, 'Added');
+  assert.equal(
+    firstRender.outcome.childNodes[1].textContent,
+    'QA Test Forgotten Instructor C is now signed in for this class.'
+  );
+  assert.match(firstRender.row.textContent, /QA Test Existing Instructor/);
+  assert.match(firstRender.row.textContent, /QA Test Forgotten Instructor C/);
+  assert.equal(secondRender.outcome.textContent, firstRender.outcome.textContent);
+});
+
+test('already-recorded result closes the form, preserves existing names, and is not styled as an error', async () => {
+  const existing = {
+    displayId: 'sheet-row-14',
+    recordId: 'gib-admin-existing',
+    instructor: 'QA Test Forgotten Instructor C',
+    classLabel: '6:00 AM BJJ (Level 2)',
+    site: 'Rev',
+    source: 'Admin-added',
+    reviewRequired: false
+  };
+  const harness = additionUiHarness({
+    responseQueue: [Promise.resolve({ data: additionResponse('already exists') })],
+    initialRecords: [existing]
+  });
+  await harness.context.addInstructor(harness.form);
+
+  assert.equal(harness.form.classList.contains('open'), false);
+  assert.equal(harness.context.currentRecords.length, 1);
+  assert.equal(harness.context.currentRecords[0].instructor, existing.instructor);
+  const rendered = renderClassOutcome('already exists', harness.context.currentRecords);
+  assert.equal(rendered.outcome.childNodes[0].textContent, 'Already recorded');
+  assert.equal(
+    rendered.outcome.childNodes[1].textContent,
+    'QA Test Forgotten Instructor C is already signed in for this class. Nothing else was added.'
+  );
+  assert.equal(rendered.outcome.className, 'class-outcome');
+  assert.doesNotMatch(rendered.outcome.className, /error|danger|red/i);
+  assert.match(rendered.row.textContent, /QA Test Forgotten Instructor C/);
+  assert.match(adminHtml, /\.class-outcome\s*\{[\s\S]*rgba\(64, 215, 160/);
+});
+
+test('true failure preserves the form and request ID, then permits a same-ID retry', async () => {
+  const harness = additionUiHarness({
+    responseQueue: [
+      Promise.reject(new Error('Unproven completion')),
+      Promise.resolve({ data: additionResponse('added') })
+    ]
+  });
+  await harness.context.addInstructor(harness.form);
+
+  assert.equal(harness.form.classList.contains('open'), true);
+  assert.equal(harness.resetCalls, 0);
+  assert.equal(harness.submit.disabled, false);
+  assert.equal(harness.submit.textContent, 'Review and add');
+  assert.equal(
+    harness.status.textContent,
+    'Could not confirm the sign-in. Nothing else should be submitted yet. Try again later or use the Sheet.'
+  );
+  assert.equal(harness.status.tone, 'error');
+  assert.deepEqual(
+    [harness.instructor.value, harness.duration.value, harness.reason.value, harness.notes.value],
+    ['QA Test Forgotten Instructor C', '1', 'QA TEST missed sign-in', 'DO NOT PAY']
+  );
+  const preservedRequestId = harness.form.dataset.requestId;
+  assert.equal(preservedRequestId, 'm1-2026-08-10-111111112222222233333333');
+
+  await harness.context.addInstructor(harness.form);
+  assert.equal(harness.requests.length, 2);
+  assert.equal(harness.requests[0].requestId, preservedRequestId);
+  assert.equal(harness.requests[1].requestId, preservedRequestId);
+  assert.equal(harness.form.classList.contains('open'), false);
+});
+
+test('a newer add-form interaction invalidates an older confirmed-addition readback', async () => {
+  const readback = deferredPromise();
+  let upserts = 0;
+  let focusCalls = 0;
+  const source = adminHtml.slice(
+    adminHtml.indexOf('async function refreshConfirmedAddition('),
+    adminHtml.indexOf('async function addInstructor(')
+  );
+  const context = vm.createContext({
+    additionInteractionGeneration: 7,
+    currentDate: '2026-08-10',
+    currentRecords: [{ displayId: 'sheet-row-99', source: 'Admin-added' }],
+    currentAuditHistory: [{
+      actionNumber: 4,
+      result: 'added',
+      linkedRecordId: 'gib-admin-qa-visible'
+    }],
+    loadReview: () => readback.promise,
+    upsertConfirmedAddition: () => { upserts += 1; },
+    focusClassCard: () => { focusCalls += 1; }
+  });
+  new vm.Script(`${source}\nthis.refreshConfirmedAddition = refreshConfirmedAddition;`)
+    .runInContext(context);
+  const refresh = context.refreshConfirmedAddition(
+    { date: '2026-08-10' },
+    {
+      linkedDisplayId: 'sheet-row-99',
+      linkedRecordId: 'gib-admin-qa-visible',
+      auditActionNumber: 4,
+      result: 'added'
+    },
+    '3',
+    7
+  );
+  context.additionInteractionGeneration = 8;
+  readback.resolve(true);
+  await refresh;
+
+  assert.equal(upserts, 0);
+  assert.equal(focusCalls, 0);
+  assert.match(adminHtml, /additionInteractionGeneration \+= 1;[\s\S]*clearClassOutcome\(\)/);
+  assert.match(
+    adminHtml,
+    /expectedAdditionInteraction !== additionInteractionGeneration[\s\S]*return false;/
+  );
+});
+
+test('a newer add-form interaction survives when an older add response arrives late', async () => {
+  const olderResponse = deferredPromise();
+  const harness = additionUiHarness({ responseQueue: [() => olderResponse.promise] });
+  const olderAddition = harness.context.addInstructor(harness.form);
+
+  harness.context.additionInteractionGeneration += 1;
+  const newerForm = {
+    open: true,
+    instructor: 'QA Test Forgotten Instructor D',
+    reason: 'QA TEST second correction still being reviewed',
+    notes: 'PRESERVE THIS FORM'
+  };
+  olderResponse.resolve({ data: additionResponse('added') });
+  await olderAddition;
+
+  assert.deepEqual(
+    newerForm,
+    {
+      open: true,
+      instructor: 'QA Test Forgotten Instructor D',
+      reason: 'QA TEST second correction still being reviewed',
+      notes: 'PRESERVE THIS FORM'
+    }
+  );
+  assert.equal(harness.outcomes.length, 0);
+  assert.equal(harness.renders, 0);
+  assert.equal(harness.focusCalls.length, 0);
+  assert.match(
+    adminHtml,
+    /const interactionGeneration = additionInteractionGeneration;[\s\S]*interactionGeneration !== additionInteractionGeneration[\s\S]*return;/
+  );
+});
+
+test('forgotten sign-in result copy contains no internal implementation language', () => {
+  const added = renderClassOutcome('added', []).outcome.textContent;
+  const duplicate = renderClassOutcome('already exists', [{
+    displayId: 'sheet-row-14',
+    instructor: 'QA Test Forgotten Instructor C',
+    source: 'Admin-added',
+    reviewRequired: false
+  }]).outcome.textContent;
+  const failure = 'Could not confirm the sign-in. Nothing else should be submitted yet. Try again later or use the Sheet.';
+  const userFacingResults = [added, duplicate, failure].join('\n');
+  assert.doesNotMatch(
+    userFacingResults,
+    /Google|audit|payroll row|linked record|fresh Sheet read|pending|reconciliation|success is not being reported/i
+  );
+  const addFlowSource = adminHtml.slice(
+    adminHtml.indexOf('async function addInstructor('),
+    adminHtml.indexOf('function renderRecordList(')
+  );
+  assert.doesNotMatch(addFlowSource, /#reviewMessage/);
 });
 
 test('guest payload renders literally as text with no element, handler, code, or Admin call', () => {

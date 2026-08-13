@@ -63,7 +63,7 @@ jobs:
       - name: Install pinned dependencies
         run: npm ci
 
-      - name: Run proven TEST regression suite against candidate
+      - name: Run immutable TEST regression gate against candidate
         env:
           PROVEN_TEST_COMMIT: a0273e4d154cc0289a0a3e10169135fca53b1b23
         run: |
@@ -71,7 +71,7 @@ jobs:
           trap 'rm -rf "$baseline_suite"' EXIT
           git archive "$PROVEN_TEST_COMMIT" tests |
             tar -x --strip-components=1 -C "$baseline_suite"
-          node --test "$baseline_suite"/m1-*.test.mjs
+          node tools/m1-proven-regression-gate.mjs "$baseline_suite"
 
       - name: Run all candidate M1 tests
         run: node --test tests/m1-*.test.mjs

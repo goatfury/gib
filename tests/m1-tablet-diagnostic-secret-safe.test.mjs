@@ -7,7 +7,8 @@ import vm from 'node:vm';
 import {
   ADMIN_COOKIE,
   ADMIN_REQUEST_HEADER,
-  createAdminSession
+  createAdminSession,
+  runtimeConfig
 } from '../netlify/functions/_lib/m1-common.mjs';
 import {
   CAPABILITY_COOKIE,
@@ -34,6 +35,7 @@ const runbook = read('docs/m1-kiosk-sync-incident-runbook.md');
 
 const PROD_ORIGIN = 'https://gib-live.netlify.app';
 const PREVIEW_ORIGIN = 'https://deploy-preview-47--gib-live.netlify.app';
+const IMMUTABLE_ORIGIN = 'https://1234567890abcdef12345678--gib-live.netlify.app';
 const DIAGNOSTIC_PATH = '/m1/tablet-diagnostic.html';
 const VERIFIER_PATH = '/api/m1-tablet-diagnostic-verifier';
 const REQUEST_TYPE = 'gib:m1:diagnostic-request:v1';
@@ -49,23 +51,24 @@ const PREVIEW_TRANSPORT_CANARY = Buffer.alloc(24, 13).toString('base64url');
 const PROD_WEBHOOK_CANARY = ['https://script.google.com/macros/s/', 'SYNTHETIC_PROD_TARGET', '/exec'].join('');
 const PREVIEW_WEBHOOK_CANARY = ['https://script.google.com/macros/s/', 'SYNTHETIC_PREVIEW_TARGET', '/exec'].join('');
 const PROD_ENV = Object.freeze({
-  GIB_M1_WEBHOOK_URL: PROD_WEBHOOK_CANARY,
-  GIB_M1_WEBHOOK_TOKEN: PROD_TRANSPORT_CANARY,
-  GIB_M1_ADMIN_ACTION_TOKEN: 'synthetic-admin-action-token',
+  GIB_M1_PRODUCTION_WEBHOOK_URL: PROD_WEBHOOK_CANARY,
+  GIB_M1_PRODUCTION_WEBHOOK_TOKEN: PROD_TRANSPORT_CANARY,
+  GIB_M1_ADMIN_ACTION_TOKEN: 'synthetic-production-admin-action-token',
   GIB_M1_ADMIN_PASSPHRASE: 'synthetic private admin access phrase'
 });
 const PREVIEW_ENV = Object.freeze({
   ...PROD_ENV,
   GIB_TEST_WEBHOOK_URL: PREVIEW_WEBHOOK_CANARY,
   GIB_TEST_WEBHOOK_TOKEN: PREVIEW_TRANSPORT_CANARY,
-  GIB_TEST_ADMIN_ACTION_TOKEN: 'synthetic-preview-admin-token'
+  GIB_TEST_ADMIN_ACTION_TOKEN: 'synthetic-preview-admin-action-token-long'
 });
 
 const json = async response => JSON.parse(await response.text());
 const cookiePair = response => (response.headers.get('set-cookie') || '').split(';', 1)[0];
-const secretFor = (origin, env) => origin === PROD_ORIGIN
-  ? env.GIB_M1_ADMIN_PASSPHRASE
-  : env.GIB_TEST_WEBHOOK_TOKEN;
+const secretFor = (origin, env) => runtimeConfig(env, {
+  admin: true,
+  requestUrl: `${origin}/m1/admin/`
+}).sessionSecret;
 
 function adminCookie(origin = PROD_ORIGIN, env = PROD_ENV, token = ADMIN_TOKEN) {
   const value = createAdminSession('Andrew Smith', secretFor(origin, env), NOW, token);
@@ -358,12 +361,29 @@ test('invalid host, origin, path, and extra issue fields fail closed', async () 
     adminHeader: ADMIN_TOKEN
   }), { env: PROD_ENV, now: NOW });
   assert.equal(extra.status, 400);
+
+  for (const origin of [
+    'https://1234567890abcdef1234567--gib-live.netlify.app',
+    'https://1234567890abcdef123456789--gib-live.netlify.app',
+    'https://1234567890abcdef1234567g--gib-live.netlify.app',
+    'https://1234567890abcdef12345678--gib-live.netlify.app.example.com'
+  ]) {
+    const malformedImmutable = await handleAdminTabletDiagnostic(actionRequest({
+      origin,
+      body: { action: 'issue', runId: RUN_A },
+      adminCookieValue: '',
+      adminHeader: ADMIN_TOKEN
+    }), { env: PREVIEW_ENV, now: NOW });
+    assert.equal(malformedImmutable.status, 403, origin);
+    assertCapabilityCleared(malformedImmutable);
+  }
 });
 
-test('production and Deploy Preview diagnostics never return server transport values', async () => {
+test('production, Deploy Preview, and immutable diagnostics issue and verify without returning server transport values', async () => {
   for (const [origin, env, seed] of [
     [PROD_ORIGIN, PROD_ENV, 31],
-    [PREVIEW_ORIGIN, PREVIEW_ENV, 41]
+    [PREVIEW_ORIGIN, PREVIEW_ENV, 41],
+    [IMMUTABLE_ORIGIN, PREVIEW_ENV, 51]
   ]) {
     const issued = await issue({ origin, env, seed });
     assert.equal(issued.response.status, 200);

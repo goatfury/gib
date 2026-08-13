@@ -645,12 +645,17 @@ test('actual rollover renderer leaves every protected local-data byte and device
     localStorage,
     document: documentTarget,
     SCHEDULE_KEY: 'gib_m1_schedule_v1',
+    SCHEDULE_MODE_KEY: 'gib_m1_schedule_mode_v1',
     SERIES_KEY: 'gib_m1_series_v1',
     DAYS: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
     DEFAULT_SCHEDULE: {},
+    canonicalScheduleMemory: null,
+    canonicalScheduleMemoryOrigin: null,
+    isPlainObject: value => Boolean(value) && typeof value === 'object' && !Array.isArray(value),
     normalizeDayKey: value => value,
     normalizeSeriesItem: value => value,
     seriesLabel: value => value.label,
+    renderScheduleStatuses() {},
     $: selector => ({
       '#todayName': dayLabel,
       '#classListWrap': classWrap,
@@ -661,11 +666,15 @@ test('actual rollover renderer leaves every protected local-data byte and device
     'safeParse',
     'dayNameForDateKey',
     'updateDisplayedDay',
+    'loadLocalScheduleOverride',
+    'localOverrideMode',
     'loadSchedule',
     'loadSeries',
     'seriesIsActiveForDate',
     'seriesClassesForDate',
     'mergeUniqueClasses',
+    'parseStartMinutes',
+    'sortClassesChronologically',
     'classesForDateKey',
     'renderClassesForDateKey'
   ].map(kioskFunctionSource).join('\n');
@@ -836,7 +845,11 @@ test('kiosk wires guarded New York day rollover without a refresh or storage mut
     rolloverInit,
     /persistLocalState|safeSet|removeItem|syncNow|requestAcknowledgements|fetch\(/u
   );
-  assert.equal((kioskHtml.match(/renderClassesForDateKey\(/gu) || []).length, 3);
+  assert.match(
+    kioskFunctionSource('refreshScheduleViews'),
+    /dayRolloverController\s*\?\s*dayRolloverController\.requestRefresh\(\)/u
+  );
+  assert.match(rolloverInit, /replaceClasses: renderClassesForDateKey/u);
 
   const actualRolloverPath = [
     'updateDisplayedDay',
@@ -862,7 +875,7 @@ test('kiosk selects production only from the exact canonical origin', () => {
     [...kioskHtml.matchAll(/\{ productionOrigin: IS_PRODUCTION_ORIGIN \}/gu)].length,
     2
   );
-  assert.match(kioskHtml, /2026-08-09 M1 TEST timestamp-rollover/u);
+  assert.match(kioskHtml, /2026-08-11 M1 TEST unified-rollout-candidate/u);
   assert.match(kioskHtml, /secure host-only cookie/u);
 });
 

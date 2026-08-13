@@ -52,7 +52,8 @@ function validSameOriginRequest(request) {
   }
   const host = url.hostname.toLocaleLowerCase('en-US');
   const allowedHost = host === 'gib-live.netlify.app'
-    || /^deploy-preview-\d+--gib-live\.netlify\.app$/u.test(host);
+    || /^deploy-preview-\d+--gib-live\.netlify\.app$/u.test(host)
+    || /^[0-9a-f]{24}--gib-live\.netlify\.app$/u.test(host);
   if (
     url.protocol !== 'https:'
     || url.port

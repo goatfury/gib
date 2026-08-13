@@ -10,6 +10,10 @@ export const ADMIN_COOKIE = 'gib_m1_admin_session';
 export const ADMIN_REQUEST_HEADER = 'X-GIB-M1-Admin-Request-Token';
 export const ADMIN_SESSION_SECONDS = 30 * 60;
 export const TIME_ZONE = 'America/New_York';
+export const M1_PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
+
+const M1_DEPLOY_PREVIEW_HOST = /^deploy-preview-\d+--gib-live\.netlify\.app$/i;
+const M1_IMMUTABLE_DEPLOY_HOST = /^[0-9a-f]{24}--gib-live\.netlify\.app$/i;
 
 export function clean(value) {
   return String(value == null ? '' : value)
@@ -18,14 +22,28 @@ export function clean(value) {
     .replace(/\s+/g, ' ');
 }
 
-export function isDeployPreview(_env = process.env, requestUrl = '') {
+export function runtimeTarget(requestUrl = '') {
   try {
     const url = new URL(requestUrl);
-    return url.protocol === 'https:'
-      && /^deploy-preview-\d+--gib-live\.netlify\.app$/i.test(url.hostname);
+    if (
+      url.protocol !== 'https:'
+      || url.port
+      || url.username
+      || url.password
+    ) return '';
+    if (url.origin === M1_PRODUCTION_ORIGIN) return 'production';
+    if (
+      M1_DEPLOY_PREVIEW_HOST.test(url.hostname)
+      || M1_IMMUTABLE_DEPLOY_HOST.test(url.hostname)
+    ) return 'test';
+    return '';
   } catch {
-    return false;
+    return '';
   }
+}
+
+export function isDeployPreview(_env = process.env, requestUrl = '') {
+  return runtimeTarget(requestUrl) === 'test';
 }
 
 export function validAdminPassphrase(value) {
@@ -63,26 +81,94 @@ function validGoogleWebhook(value) {
   return url.toString();
 }
 
+function equalsAnySecret(value, candidates) {
+  return Boolean(value) && candidates.some(candidate => (
+    Boolean(candidate) && constantTimeSecretEqual(value, candidate)
+  ));
+}
+
+function configuredSecretsArePairwiseDistinct(values) {
+  const configured = values.map(clean).filter(Boolean);
+  for (let left = 0; left < configured.length; left += 1) {
+    for (let right = left + 1; right < configured.length; right += 1) {
+      if (constantTimeSecretEqual(configured[left], configured[right])) return false;
+    }
+  }
+  return true;
+}
+
+function derivedPreviewSessionSecret(adminActionToken) {
+  return createHmac('sha256', adminActionToken)
+    .update('gib-m1-admin-session:test:v1', 'utf8')
+    .digest('base64url');
+}
+
 export function runtimeConfig(env = process.env, options = {}) {
-  const preview = isDeployPreview(env, options.requestUrl);
+  const target = runtimeTarget(options.requestUrl);
+  if (!target) return null;
+  const preview = target === 'test';
   const webhookUrl = validGoogleWebhook(
-    preview ? env.GIB_TEST_WEBHOOK_URL : env.GIB_M1_WEBHOOK_URL
+    preview ? env.GIB_TEST_WEBHOOK_URL : env.GIB_M1_PRODUCTION_WEBHOOK_URL
   );
   const webhookToken = clean(
-    preview ? env.GIB_TEST_WEBHOOK_TOKEN : env.GIB_M1_WEBHOOK_TOKEN
+    preview ? env.GIB_TEST_WEBHOOK_TOKEN : env.GIB_M1_PRODUCTION_WEBHOOK_TOKEN
   );
   const adminActionToken = clean(
     preview ? env.GIB_TEST_ADMIN_ACTION_TOKEN : env.GIB_M1_ADMIN_ACTION_TOKEN
   );
   const adminPassphrase = clean(env.GIB_M1_ADMIN_PASSPHRASE);
+  const testWebhookUrl = validGoogleWebhook(env.GIB_TEST_WEBHOOK_URL);
+  const productionWebhookUrl = validGoogleWebhook(env.GIB_M1_PRODUCTION_WEBHOOK_URL);
+  const legacyWebhookUrl = validGoogleWebhook(env.GIB_M1_WEBHOOK_URL);
+  const sensitiveSecrets = [
+    env.GIB_TEST_WEBHOOK_TOKEN,
+    env.GIB_TEST_ADMIN_ACTION_TOKEN,
+    env.GIB_TEST_LEGACY_KIOSK_TOKEN,
+    env.GIB_M1_PRODUCTION_WEBHOOK_TOKEN,
+    env.GIB_M1_ADMIN_ACTION_TOKEN,
+    env.GIB_M1_ADMIN_PASSPHRASE,
+    env.GIB_M1_LEGACY_KIOSK_TOKEN,
+    env.GIB_M1_WEBHOOK_TOKEN,
+    env.GIB_M1_RECOVERY_TOKEN,
+    env.GIB_M1_PRODUCTION_DEVICE_TOKEN,
+    env.GIB_M1_PRODUCTION_INSTALL_CAPABILITY_SECRET
+  ];
+  const crossScopeSecrets = (preview
+    ? [
+      env.GIB_M1_PRODUCTION_WEBHOOK_TOKEN,
+      env.GIB_M1_ADMIN_ACTION_TOKEN,
+      env.GIB_TEST_LEGACY_KIOSK_TOKEN,
+      env.GIB_M1_LEGACY_KIOSK_TOKEN,
+      env.GIB_M1_WEBHOOK_TOKEN,
+      env.GIB_M1_RECOVERY_TOKEN,
+      env.GIB_M1_PRODUCTION_DEVICE_TOKEN,
+      env.GIB_M1_PRODUCTION_INSTALL_CAPABILITY_SECRET,
+      env.GIB_M1_ADMIN_PASSPHRASE
+    ]
+    : [
+      env.GIB_TEST_WEBHOOK_TOKEN,
+      env.GIB_TEST_ADMIN_ACTION_TOKEN,
+      env.GIB_TEST_LEGACY_KIOSK_TOKEN,
+      env.GIB_M1_LEGACY_KIOSK_TOKEN,
+      env.GIB_M1_WEBHOOK_TOKEN,
+      env.GIB_M1_RECOVERY_TOKEN,
+      env.GIB_M1_PRODUCTION_DEVICE_TOKEN,
+      env.GIB_M1_PRODUCTION_INSTALL_CAPABILITY_SECRET
+    ]).map(clean).filter(Boolean);
 
-  // Production preserves the existing kiosk credential, whose historical
-  // contract requires exact equality but never imposed a length floor.
+  // Both TEST and the canonical production receiver use scoped server-only
+  // transport credentials. Legacy GIB_M1_WEBHOOK_* settings are deliberately
+  // not an Admin fallback.
   if (
     !webhookUrl
     || !webhookToken
     || webhookToken.length > 512
-    || (preview && webhookToken.length < 12)
+    || (preview ? webhookToken.length < 12 : webhookToken.length < 32)
+    || (preview && productionWebhookUrl && webhookUrl === productionWebhookUrl)
+    || (!preview && testWebhookUrl && webhookUrl === testWebhookUrl)
+    || (legacyWebhookUrl && webhookUrl === legacyWebhookUrl)
+    || !configuredSecretsArePairwiseDistinct(sensitiveSecrets)
+    || equalsAnySecret(webhookToken, crossScopeSecrets)
   ) {
     return null;
   }
@@ -91,17 +177,28 @@ export function runtimeConfig(env = process.env, options = {}) {
   }
   if (
     options.admin === true
-    && (adminActionToken.length < 12 || adminActionToken.length > 512)
+    && (
+      adminActionToken.length < 32
+      || adminActionToken.length > 512
+      || constantTimeSecretEqual(webhookToken, adminActionToken)
+      || equalsAnySecret(adminActionToken, crossScopeSecrets)
+      || (!preview && constantTimeSecretEqual(webhookToken, adminPassphrase))
+      || (!preview && constantTimeSecretEqual(adminActionToken, adminPassphrase))
+      || (!preview && equalsAnySecret(adminPassphrase, crossScopeSecrets))
+    )
   ) {
     return null;
   }
   return Object.freeze({
+    target,
     preview,
     webhookUrl,
     webhookToken,
     adminActionToken,
-    adminPassphrase,
-    sessionSecret: preview ? webhookToken : adminPassphrase
+    adminPassphrase: preview ? '' : adminPassphrase,
+    sessionSecret: options.admin === true
+      ? (preview ? derivedPreviewSessionSecret(adminActionToken) : adminPassphrase)
+      : ''
   });
 }
 
@@ -128,6 +225,16 @@ export async function readJson(request, maxBytes = 32_768) {
   if (!/^application\/json(?:;|$)/i.test(contentType)) {
     return { response: jsonResponse(415, { ok: false, message: 'Use JSON for this request.' }) };
   }
+  const declaredLength = request.headers.get('content-length');
+  if (
+    declaredLength != null
+    && (!/^\d+$/u.test(declaredLength) || Number(declaredLength) > maxBytes)
+  ) {
+    return { response: jsonResponse(400, { ok: false, message: 'The submitted data was empty or too large.' }) };
+  }
+  // Fetch exposes the full body through text(); reject a trustworthy declared
+  // oversize before buffering, then retain the byte-length check for chunked or
+  // missing-length requests.
   const text = await request.text();
   if (!text || Buffer.byteLength(text, 'utf8') > maxBytes) {
     return { response: jsonResponse(400, { ok: false, message: 'The submitted data was empty or too large.' }) };
@@ -174,7 +281,7 @@ export async function postGoogle(config, action, data, fetchImpl = fetch) {
       ...data,
       token: config.webhookToken,
       action,
-      target: config.preview ? 'test' : 'production'
+      target: config.target || (config.preview ? 'test' : 'production')
     };
     // Preserve the proven TEST wire contract (including its empty Admin field)
     // and production Admin actions, while the production kiosk forwards only
@@ -193,27 +300,62 @@ export async function postGoogle(config, action, data, fetchImpl = fetch) {
       signal: AbortSignal.timeout(25_000)
     });
   } catch {
-    return { readable: false, status: 0 };
+    return { readable: false, status: 0, failureClass: 'UNREACHABLE' };
   }
 
+  const declaredLength = response.headers.get('content-length');
+  if (
+    declaredLength != null
+    && (!/^\d+$/u.test(declaredLength) || Number(declaredLength) > 256_000)
+  ) {
+    return { readable: false, status: response.status, failureClass: 'OVERSIZE' };
+  }
+  // Apps Script may omit Content-Length. Keep the post-read byte cap as the
+  // fail-closed fallback for chunked/missing-length responses.
   let text;
   try {
     text = (await response.text()).trim();
   } catch {
-    return { readable: false, status: response.status };
+    return { readable: false, status: response.status, failureClass: 'READ_FAILED' };
   }
-  if (!response.ok || !text || text.length > 256_000 || /<(?:!doctype|html|body)\b/i.test(text)) {
-    return { readable: false, status: response.status };
+  if (!response.ok) {
+    return { readable: false, status: response.status, failureClass: 'HTTP_FAILURE' };
+  }
+  if (!text) {
+    return { readable: false, status: response.status, failureClass: 'EMPTY' };
+  }
+  if (Buffer.byteLength(text, 'utf8') > 256_000) {
+    return { readable: false, status: response.status, failureClass: 'OVERSIZE' };
+  }
+  if (/<(?:!doctype|html|body)\b/i.test(text)) {
+    return { readable: false, status: response.status, failureClass: 'HTML' };
   }
   try {
     const value = JSON.parse(text);
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      return { readable: false, status: response.status };
+      return { readable: false, status: response.status, failureClass: 'UNSUPPORTED_JSON' };
     }
     return { readable: true, status: response.status, value };
   } catch {
-    return { readable: false, status: response.status };
+    return { readable: false, status: response.status, failureClass: 'MALFORMED_JSON' };
   }
+}
+
+export function googleFailureClass(google) {
+  if (!google || google.readable !== true) {
+    return typeof google?.failureClass === 'string' && google.failureClass
+      ? google.failureClass
+      : 'UNREADABLE';
+  }
+  if (!google.value || typeof google.value !== 'object' || Array.isArray(google.value)) {
+    return 'UNSUPPORTED_JSON';
+  }
+  if (google.value.ok !== true) {
+    return clean(google.value.result).toLowerCase() === 'rejected'
+      ? 'REJECTED'
+      : 'FAILED';
+  }
+  return 'CONTRACT_MISMATCH';
 }
 
 function base64UrlJson(value) {
@@ -295,7 +437,11 @@ export function cookieValue(request, name) {
     const separator = part.indexOf('=');
     if (separator === -1) continue;
     if (part.slice(0, separator).trim() === name) {
-      return decodeURIComponent(part.slice(separator + 1).trim());
+      try {
+        return decodeURIComponent(part.slice(separator + 1).trim());
+      } catch {
+        return '';
+      }
     }
   }
   return '';

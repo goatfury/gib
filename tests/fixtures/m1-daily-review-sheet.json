@@ -1,0 +1,48 @@
+{
+  "reviewDate": "2026-08-10",
+  "boundaryLengths": {
+    "recordId": 300,
+    "classLabel": 201,
+    "instructor": 101,
+    "site": 81,
+    "note": 900,
+    "auditReason": 241
+  },
+  "headers": [
+    "RowID",
+    "Timestamp",
+    "Date",
+    "Class Label",
+    "Duration (hr)",
+    "Instructor",
+    "Site",
+    "Device",
+    "Build",
+    "Notes",
+    "Status"
+  ],
+  "rows": [
+    ["gib-m1-11111111-1111-4111-8111-111111111111", "2026-08-10 05:58:07", "2026-08-10", "6:00 AM BJJ (Level 2)", 1, "QA Test Alpha", "Rev", "TEST tablet", "test-build", "DO NOT PAY", "OK"],
+    ["gib-m1-22222222-2222-4222-8222-222222222222", "2026-08-10 05:59:08", "2026-08-10", "6:00 AM BJJ (Level 2)", 1, "QA Test Bravo", "Rev", "TEST tablet", "test-build", "DO NOT PAY", "OK"],
+    ["gib-m1-33333333-3333-4333-8333-333333333333", "2026-08-10 8:00:9", "2026-08-10", "8:00 AM QA TEST Unscheduled Class", 1, "QA Test Unmatched", "Rev", "TEST tablet", "test-build", "DO NOT PAY", "OK"],
+    ["gib-admin-qa-fixture-admin-1", "2026-08-10 12:01:09", "2026-08-10", "12:00 PM BJJ Kimuras (Level 2)", 1, "QA Test Admin One", "Rev", "Admin Daily Review", "test-build", "Admin-added | Admin: Andrew Smith | Reason: QA forgotten sign-in", "OK"],
+    ["", "", "2026-08-10", "5:30 PM BJJ (Level 2)", 1, "QA Test Manual", "Rev", "", "", "Manual payroll correction — DO NOT PAY", ""],
+    ["", "not-a-timestamp", "2026-08-10", "", 0, "QA Test Partial", "", "", "", "Incomplete TEST fixture", ""]
+  ],
+  "auditHeaders": [
+    "Action Number",
+    "Admin Name",
+    "Action Time",
+    "Instructor",
+    "Class Date",
+    "Class",
+    "Site",
+    "Duration",
+    "Required Reason",
+    "Final Result",
+    "Linked Sign-in Record ID"
+  ],
+  "auditRows": [
+    [1, "Andrew Smith", "2026-08-10 12:01:09", "QA Test Admin One", "2026-08-10", "12:00 PM BJJ Kimuras (Level 2)", "Rev", 1, "QA forgotten sign-in", "added", "gib-admin-qa-fixture-admin-1"]
+  ]
+}

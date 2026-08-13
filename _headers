@@ -32,6 +32,12 @@
   Referrer-Policy: no-referrer
   Permissions-Policy: camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=()
 
+/m1/service-worker.js
+  Cache-Control: no-store, max-age=0
+  Service-Worker-Allowed: /m1/
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+
 /.netlify/functions/m1-admin-*
   Cache-Control: no-store, max-age=0
   X-Content-Type-Options: nosniff
