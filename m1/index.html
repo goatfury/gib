@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="data:," />
 <title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-08-18 M1B TEST staff-clock-operational-candidate)</title>
 <style>
   :root {
@@ -1297,10 +1298,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-18-m1b-staff-clock-operational-r3';
+} from './sync-core.mjs?v=2026-08-18-m1b-staff-clock-operational-r4';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-08-18-m1b-staff-clock-operational-r3';
+const OFFLINE_SHELL_REVISION = '2026-08-18-m1b-staff-clock-operational-r4';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -4118,6 +4119,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-08-18-m1b-staff-clock-operational-r3"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-08-18-m1b-staff-clock-operational-r4"></script>
 </body>
 </html>

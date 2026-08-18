@@ -8,7 +8,7 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-08-18-m1b-staff-clock-operational-r3';
+} from './staff-clock-core.mjs?v=2026-08-18-m1b-staff-clock-operational-r4';
 
 const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
 const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
