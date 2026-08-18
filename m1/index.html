@@ -538,16 +538,15 @@ body.admin-mode #staffClock { display: none; }
 .staff-time-admin-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 18px;
 }
 .staff-time-block {
   min-width: 0;
-  padding: 12px;
-  border: 1px solid #243045;
-  border-radius: 12px;
-  background: #0b1322;
 }
-.staff-time-block h3 { margin: 0 0 8px; }
+#admin #staffTimeSlot h3 {
+  margin: 0 0 7px;
+  font-size: 15px;
+}
 .staff-time-list {
   display: grid;
   gap: 6px;
@@ -555,8 +554,35 @@ body.admin-mode #staffClock { display: none; }
   font-size: 14px;
   line-height: 1.35;
 }
+.staff-time-punches {
+  max-height: 120px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.staff-time-disclosure {
+  box-shadow: none;
+}
+.staff-time-disclosure > summary {
+  padding: 13px 16px;
+  font-size: 17px;
+}
+.staff-time-disclosure > .admin-disclosure-body {
+  padding: 14px 16px 16px;
+}
+.staff-time-empty {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.35;
+}
+.staff-time-attention {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(245,158,11,.38);
+  border-radius: 10px;
+  background: rgba(245,158,11,.07);
+}
 .staff-time-placeholder {
-  margin-top: 14px;
+  margin-top: 12px;
   opacity: .72;
 }
 
@@ -927,6 +953,11 @@ body.admin-mode .container { max-width: 1120px; }
         </div>
       </section>
 
+      <details id="staffTimeSection" class="admin-disclosure staff-time-disclosure" open>
+        <summary>Staff time</summary>
+        <div id="staffTimeSlot" class="admin-disclosure-body"></div>
+      </details>
+
       <section class="admin-actions-block" aria-labelledby="adminActionsHeading">
         <h3 id="adminActionsHeading" class="admin-section-title">Ordinary actions</h3>
         <div id="adminPrimaryActions" class="admin-primary-actions">
@@ -940,11 +971,6 @@ body.admin-mode .container { max-width: 1120px; }
     <details id="recentSignins" class="admin-disclosure" open>
       <summary>Recent sign-ins</summary>
       <div id="recentSigninsSlot" class="admin-disclosure-body"></div>
-    </details>
-
-    <details id="staffTimeSection" class="admin-disclosure">
-      <summary>Staff time</summary>
-      <div id="staffTimeSlot" class="admin-disclosure-body"></div>
     </details>
 
     <details id="temporaryClassesSection" class="admin-disclosure">
@@ -1239,10 +1265,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-18-m1b-staff-clock-preview-r1';
+} from './sync-core.mjs?v=2026-08-18-m1b-staff-clock-preview-r2';
 
 // Bump this revision whenever index.html or sync-core.mjs changes.
-const OFFLINE_SHELL_REVISION = '2026-08-18-m1b-staff-clock-preview-r1';
+const OFFLINE_SHELL_REVISION = '2026-08-18-m1b-staff-clock-preview-r2';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -1749,52 +1775,64 @@ function refreshNameDatalist() {
     const missing = active.filter(item => fmtDate(new Date(item.status.clockInAt)) < today);
 
     slot.replaceChildren();
-    const grid = document.createElement('div');
-    grid.className = 'staff-time-admin-grid';
-
-    const activeBlock = document.createElement('section');
-    activeBlock.className = 'staff-time-block';
-    const activeHeading = document.createElement('h3');
-    activeHeading.textContent = 'Who is clocked in now';
-    const activeList = document.createElement('div');
-    activeList.className = 'staff-time-list';
-    if (!active.length) {
-      activeList.textContent = 'No one is clocked in.';
+    if (!active.length && !todayPunches.length) {
+      const empty = document.createElement('div');
+      empty.className = 'staff-time-empty';
+      empty.textContent = 'No staff punches yet today.';
+      slot.appendChild(empty);
     } else {
-      active.forEach(item => {
-        const row = document.createElement('div');
-        row.textContent = `${item.person.name} · since ${formatStaffClockTime(item.status.clockInAt)}`;
-        activeList.appendChild(row);
-      });
-    }
-    activeBlock.append(activeHeading, activeList);
+      const grid = document.createElement('div');
+      grid.className = 'staff-time-admin-grid';
 
-    const punchesBlock = document.createElement('section');
-    punchesBlock.className = 'staff-time-block';
-    const punchesHeading = document.createElement('h3');
-    punchesHeading.textContent = 'Today’s punches';
-    const punchesList = document.createElement('div');
-    punchesList.className = 'staff-time-list';
-    if (!todayPunches.length) {
-      punchesList.textContent = 'No staff punches today.';
-    } else {
-      todayPunches.forEach(punch => {
-        const person = STAFF_CLOCK_PEOPLE.find(item => item.id === punch.staffId);
-        const row = document.createElement('div');
-        row.textContent = `${person.name} · Clocked ${punch.type === 'in' ? 'in' : 'out'} · ${formatStaffClockTime(punch.at)}`;
-        punchesList.appendChild(row);
-      });
-    }
-    punchesBlock.append(punchesHeading, punchesList);
-    grid.append(activeBlock, punchesBlock);
-    slot.appendChild(grid);
+      const activeBlock = document.createElement('section');
+      activeBlock.className = 'staff-time-block';
+      const activeHeading = document.createElement('h3');
+      activeHeading.textContent = 'Clocked in now';
+      const activeList = document.createElement('div');
+      activeList.className = 'staff-time-list';
+      if (!active.length) {
+        activeList.textContent = 'No one is clocked in.';
+      } else {
+        active.forEach(item => {
+          const row = document.createElement('div');
+          row.textContent = `${item.person.name} · since ${formatStaffClockTime(item.status.clockInAt)}`;
+          activeList.appendChild(row);
+        });
+      }
+      activeBlock.append(activeHeading, activeList);
 
-    const warning = document.createElement('div');
-    warning.className = missing.length ? 'statusRow warn' : 'statusRow';
-    warning.textContent = missing.length
-      ? `Possible missing clock-out: ${missing.map(item => item.person.name).join(', ')}`
-      : 'No obvious missing clock-out warning.';
-    slot.appendChild(warning);
+      const punchesBlock = document.createElement('section');
+      punchesBlock.className = 'staff-time-block';
+      const punchesHeading = document.createElement('h3');
+      punchesHeading.textContent = 'Today’s punches';
+      const punchesList = document.createElement('div');
+      punchesList.className = 'staff-time-list staff-time-punches';
+      if (!todayPunches.length) {
+        punchesList.textContent = 'No staff punches yet today.';
+      } else {
+        todayPunches.forEach(punch => {
+          const person = STAFF_CLOCK_PEOPLE.find(item => item.id === punch.staffId);
+          const row = document.createElement('div');
+          row.textContent = `${person.name} · Clocked ${punch.type === 'in' ? 'in' : 'out'} · ${formatStaffClockTime(punch.at)}`;
+          punchesList.appendChild(row);
+        });
+      }
+      punchesBlock.append(punchesHeading, punchesList);
+      grid.append(activeBlock, punchesBlock);
+      slot.appendChild(grid);
+    }
+
+    if (missing.length) {
+      const attention = document.createElement('section');
+      attention.className = 'staff-time-attention';
+      const attentionHeading = document.createElement('h3');
+      attentionHeading.textContent = 'Needs attention';
+      const warning = document.createElement('div');
+      warning.className = 'staff-time-list';
+      warning.textContent = `Possible missing clock-out: ${missing.map(item => item.person.name).join(', ')}`;
+      attention.append(attentionHeading, warning);
+      slot.appendChild(attention);
+    }
 
     const planned = document.createElement('button');
     planned.type = 'button';

@@ -146,9 +146,9 @@ test('default Admin document is status-first with the required calm disclosures'
   const admin = sourceBetween(kiosk, '<!-- ADMIN -->', '<div id="toast"');
   const orderedIds = [
     'adminStatusHeading',
+    'staffTimeSection',
     'adminActionsHeading',
     'recentSignins',
-    'staffTimeSection',
     'temporaryClassesSection',
     'weeklyScheduleSection',
     'advancedSettings',
@@ -166,8 +166,8 @@ test('default Admin document is status-first with the required calm disclosures'
   assert.doesNotMatch(kiosk, /window\.open\s*\(/u);
 
   assert.match(openingTag('recentSignins'), /\sopen(?:\s|=|>)/u);
+  assert.match(openingTag('staffTimeSection'), /\sopen(?:\s|=|>)/u);
   for (const id of [
-    'staffTimeSection',
     'temporaryClassesSection',
     'weeklyScheduleSection',
     'advancedSettings',
@@ -507,7 +507,7 @@ test('opening Admin and toggling disclosures preserve current local state', () =
   const elements = new Map(ids.map(id => [id, {
     id,
     value: '',
-    open: id === 'recentSignins',
+    open: id === 'recentSignins' || id === 'staffTimeSection',
     style: { display: id === 'admin' ? 'none' : 'block' },
     focus() { this.focused = true; }
   }]));

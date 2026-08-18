@@ -546,7 +546,102 @@ test('real Staff Clock actions clock in and out once, survive reload, and reset 
   }
 });
 
-test('real Staff time rendering is read-only and shows active staff, punches, and warnings', () => {
+test('empty Staff time rendering is compact, quiet, and read-only', () => {
+  const storageKey = staffStorageKey();
+  const protectedEntries = protectedStorageEntries();
+  const runtime = createStaffClockRuntime({
+    storageEntries: protectedEntries,
+    now: '2026-08-19T02:00:00.000Z'
+  });
+  const before = runtime.storage.snapshot();
+
+  runtime.context.hooks.renderStaffTimeAdmin();
+  const slot = runtime.elements.get('staffTimeSlot');
+  const text = renderedText(slot);
+  assert.equal(
+    text,
+    'No staff punches yet today.\nFix missed punch — planned for the operational build'
+  );
+  assert.ok(slot.children.length <= 2, 'empty Staff time must stay to one short state plus the placeholder');
+  assert.doesNotMatch(text, /Clocked in now|Today’s punches|Needs attention/iu);
+  assert.equal(slot.children.at(-1).tagName, 'BUTTON');
+  assert.equal(slot.children.at(-1).disabled, true);
+  assert.equal(runtime.storage.snapshot(), before);
+  assert.deepEqual(runtime.storage.writes, []);
+  assert.deepEqual(runtime.storage.removals, []);
+  assert.deepEqual(runtime.storage.reads, [storageKey]);
+  assert.equal(runtime.networkCalls, 0);
+});
+
+test('ordinary Staff time rendering shows the current worker and today’s punches without warning clutter', () => {
+  const storageKey = staffStorageKey();
+  const protectedEntries = protectedStorageEntries();
+  const staffState = {
+    version: 1,
+    punches: [{
+      id: 'm1b-preview-punch-mandy-in',
+      staffId: 'mandy-test',
+      type: 'in',
+      at: '2026-08-18T21:27:00.000Z'
+    }]
+  };
+  const runtime = createStaffClockRuntime({
+    storageEntries: {
+      ...protectedEntries,
+      [storageKey]: JSON.stringify(staffState)
+    },
+    now: '2026-08-19T02:00:00.000Z'
+  });
+  const before = runtime.storage.snapshot();
+
+  runtime.context.hooks.renderStaffTimeAdmin();
+  const text = renderedText(runtime.elements.get('staffTimeSlot'));
+  assert.match(text, /Clocked in now/u);
+  assert.match(text, /Mandy Test · since 5:27 PM/u);
+  assert.match(text, /Today’s punches/u);
+  assert.match(text, /Mandy Test · Clocked in · 5:27 PM/u);
+  assert.doesNotMatch(text, /Needs attention|missing clock-out|No obvious/iu);
+  assert.match(text, /Fix missed punch — planned for the operational build/u);
+  assert.equal(runtime.storage.snapshot(), before);
+  assert.deepEqual(runtime.storage.writes, []);
+  assert.deepEqual(runtime.storage.removals, []);
+  assert.equal(runtime.networkCalls, 0);
+});
+
+test('a busy day keeps every punch inside the compact scrolling history region', () => {
+  const storageKey = staffStorageKey();
+  const start = Date.parse('2026-08-18T20:00:00.000Z');
+  const punches = Array.from({ length: 60 }, (_, index) => ({
+    id: `m1b-preview-punch-busy-${index}`,
+    staffId: 'mandy-test',
+    type: index % 2 === 0 ? 'in' : 'out',
+    at: new Date(start + (index * 60_000)).toISOString()
+  }));
+  const runtime = createStaffClockRuntime({
+    storageEntries: {
+      ...protectedStorageEntries(),
+      [storageKey]: JSON.stringify({ version: 1, punches })
+    },
+    now: '2026-08-19T02:00:00.000Z'
+  });
+  const before = runtime.storage.snapshot();
+
+  runtime.context.hooks.renderStaffTimeAdmin();
+  const grid = runtime.elements.get('staffTimeSlot').children[0];
+  const punchList = grid.children[1].children[1];
+  assert.equal(punchList.className, 'staff-time-list staff-time-punches');
+  assert.equal(punchList.children.length, punches.length, 'the compact region must retain every visible punch');
+  assert.match(
+    kiosk,
+    /\.staff-time-punches\s*\{[^}]*max-height:\s*120px;[^}]*overflow-y:\s*auto;/u
+  );
+  assert.equal(runtime.storage.snapshot(), before);
+  assert.deepEqual(runtime.storage.writes, []);
+  assert.deepEqual(runtime.storage.removals, []);
+  assert.equal(runtime.networkCalls, 0);
+});
+
+test('Staff time shows Needs attention only for an actual missing clock-out', () => {
   const storageKey = staffStorageKey();
   const protectedEntries = protectedStorageEntries();
   const staffState = {
@@ -584,11 +679,12 @@ test('real Staff time rendering is read-only and shows active staff, punches, an
   runtime.context.hooks.renderStaffTimeAdmin();
   const slot = runtime.elements.get('staffTimeSlot');
   const text = renderedText(slot);
-  assert.match(text, /Who is clocked in now/u);
+  assert.match(text, /Clocked in now/u);
   assert.match(text, /Front Desk Test Two · since 5:00 PM/u);
   assert.match(text, /Today’s punches/u);
   assert.match(text, /Mandy Test · Clocked in · 5:27 PM/u);
   assert.match(text, /Mandy Test · Clocked out · 9:04 PM/u);
+  assert.match(text, /Needs attention/u);
   assert.match(text, /Possible missing clock-out: Front Desk Test Two/u);
   assert.match(text, /Fix missed punch — planned for the operational build/u);
   assert.equal(slot.children.at(-1).tagName, 'BUTTON');
@@ -597,6 +693,88 @@ test('real Staff time rendering is read-only and shows active staff, punches, an
   assert.deepEqual(runtime.storage.writes, []);
   assert.deepEqual(runtime.storage.removals, []);
   assert.deepEqual(runtime.storage.reads, [storageKey]);
+  assert.equal(runtime.networkCalls, 0);
+});
+
+test('opening Admin preserves punches and instructor data while Staff time stays manually collapsible', () => {
+  const storageKey = staffStorageKey();
+  const storageEntries = {
+    ...protectedStorageEntries(),
+    [storageKey]: JSON.stringify({
+      version: 1,
+      punches: [{
+        id: 'm1b-preview-punch-admin-open',
+        staffId: 'mandy-test',
+        type: 'in',
+        at: '2026-08-18T21:27:00.000Z'
+      }]
+    })
+  };
+  const runtime = createStaffClockRuntime({
+    storageEntries,
+    now: '2026-08-19T02:00:00.000Z'
+  });
+  const before = runtime.storage.snapshot();
+
+  for (const id of [
+    'kiosk',
+    'admin',
+    'cfgGymName',
+    'cfgLocation',
+    'cfgSiteCode',
+    'debugBox',
+    'adminHeading',
+    'staffTimeSection',
+    'advancedSettings',
+    'dangerZone'
+  ]) {
+    if (!runtime.elements.has(id)) runtime.elements.set(id, new FakeElement());
+    runtime.elements.get(id).id = id;
+  }
+  runtime.elements.get('kiosk').style = { display: 'block' };
+  runtime.elements.get('admin').style = { display: 'none' };
+  runtime.elements.get('staffTimeSection').open = true;
+  runtime.elements.get('advancedSettings').open = false;
+  runtime.elements.get('dangerZone').open = false;
+  runtime.context.document.body = { classList: classList('kiosk-mode') };
+
+  const noOp = () => {};
+  Object.assign(runtime.context, {
+    organizeAdminView: noOp,
+    loadDevice: () => ({ gymName: 'QA Gym', location: 'QA tablet', siteCode: 'TEST' }),
+    updateAdminPinUI: noOp,
+    loadScheduleIntoAdmin: noOp,
+    renderDurationRules: noOp,
+    renderSeriesList: noOp,
+    clearSeriesForm: noOp,
+    renderAdminTable: noOp,
+    renderStaffTimeAdmin: runtime.context.hooks.renderStaffTimeAdmin,
+    loadSyncSettings: noOp,
+    updateSyncStatus: noOp,
+    renderAdminSummary: noOp,
+    debugSnapshot: () => ({ safe: true })
+  });
+  const showAdminSource = sourceBetween(kiosk, 'function showAdmin()', 'function openAdminWithGate()');
+  new vm.Script(`${showAdminSource}\nglobalThis.showAdmin = showAdmin;`, {
+    filename: 'm1-staff-time-admin-open.js'
+  }).runInContext(runtime.context);
+
+  runtime.context.showAdmin();
+  assert.equal(runtime.elements.get('staffTimeSection').open, true, 'Staff time starts open');
+  assert.equal(runtime.elements.get('advancedSettings').open, false);
+  assert.equal(runtime.elements.get('dangerZone').open, false);
+
+  runtime.elements.get('staffTimeSection').open = false;
+  runtime.context.showAdmin();
+  assert.equal(runtime.elements.get('staffTimeSection').open, false, 'manual close survives Admin rendering');
+
+  runtime.elements.get('staffTimeSection').open = true;
+  runtime.context.showAdmin();
+  assert.equal(runtime.elements.get('staffTimeSection').open, true, 'manual reopen survives Admin rendering');
+
+  assert.equal(runtime.storage.snapshot(), before);
+  assert.deepEqual(runtime.storage.writes, []);
+  assert.deepEqual(runtime.storage.removals, []);
   assert.equal(runtime.networkCalls, 0);
 });
 
@@ -642,24 +820,54 @@ test('pruning retains an older unmatched clock-in behind more than 200 newer sta
   }
 });
 
-test('Admin adds exactly one closed, read-only Staff time disclosure without summary clutter', () => {
+test('Admin places one open-by-default, read-only Staff time disclosure directly after Status summary', () => {
   const admin = sourceBetween(kiosk, '<!-- ADMIN -->', '<div id="toast"');
   assert.equal(countId('staffTimeSection'), 1);
   assert.equal(countId('staffTimeSlot'), 1);
-  assert.match(admin, /<details id="staffTimeSection"[^>]*>\s*<summary>Staff time<\/summary>/u);
-  assert.doesNotMatch(openingTag('staffTimeSection'), /\sopen(?:\s|=|>)/u);
+  assert.match(admin, /<details id="staffTimeSection"[^>]*\bopen\b[^>]*>\s*<summary>Staff time<\/summary>/u);
+  assert.match(openingTag('staffTimeSection'), /\sopen(?:\s|=|>)/u);
+  assert.match(
+    admin,
+    /<section class="admin-overview"[^>]*>[\s\S]*?<\/section>\s*<details id="staffTimeSection"[^>]*\bopen\b[^>]*>[\s\S]*?<\/details>\s*<section class="admin-actions-block"/u,
+    'Staff time must be the next Admin section after Status summary, with Ordinary actions directly below it'
+  );
 
-  const recentPosition = admin.indexOf('id="recentSignins"');
-  const staffTimePosition = admin.indexOf('id="staffTimeSection"');
-  const temporaryClassesPosition = admin.indexOf('id="temporaryClassesSection"');
-  assert.ok(recentPosition >= 0 && staffTimePosition > recentPosition);
-  assert.ok(temporaryClassesPosition > staffTimePosition);
+  const orderedIds = [
+    'adminStatusHeading',
+    'staffTimeSection',
+    'adminActionsHeading',
+    'recentSignins',
+    'temporaryClassesSection',
+    'weeklyScheduleSection',
+    'advancedSettings',
+    'dangerZone'
+  ];
+  const positions = orderedIds.map(id => admin.indexOf(`id="${id}"`));
+  assert.equal(positions.every(position => position >= 0), true);
+  assert.deepEqual([...positions].sort((left, right) => left - right), positions);
 
-  assert.match(kiosk, /Who is clocked in now/u);
+  assert.match(kiosk, /Clocked in now/u);
   assert.match(kiosk, /Today(?:'s|’s) punches/u);
+  assert.match(kiosk, /Needs attention/u);
   assert.match(kiosk, /missing clock-out/iu);
+  assert.match(kiosk, /No staff punches yet today\./u);
   assert.match(kiosk, /Fix missed punch — planned for the operational build/u);
   assert.equal(admin.includes('adminSummaryStaff'), false);
+  assert.doesNotMatch(openingTag('advancedSettings'), /\sopen(?:\s|=|>)/u);
+  assert.doesNotMatch(openingTag('dangerZone'), /\sopen(?:\s|=|>)/u);
+  assert.doesNotMatch(kiosk, /\$\('#staffTimeSection'\)\.addEventListener\(['"]toggle['"]/u);
+  assert.doesNotMatch(
+    kiosk,
+    /gib_[^'"\s]*staff[^'"\s]*(?:open|closed|collapsed|expanded)/iu,
+    'manual disclosure state must not create a saved preference'
+  );
+
+  const showAdminSource = sourceBetween(kiosk, 'function showAdmin()', 'function openAdminWithGate()');
+  assert.equal(
+    showAdminSource.includes('staffTimeSection'),
+    false,
+    'reopening Admin must not override a manual Staff time close or reopen'
+  );
 
   const renderStart = kiosk.indexOf('function renderStaffTimeAdmin(');
   const nextFunction = kiosk.indexOf('\n  function ', renderStart + 12);
