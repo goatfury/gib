@@ -8,7 +8,7 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-08-18-m1b-staff-clock-operational-r1';
+} from './staff-clock-core.mjs?v=2026-08-18-m1b-staff-clock-operational-r2';
 
 const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
 const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
@@ -58,6 +58,7 @@ function fmtDate(value) {
   let staffClockConfirmationContext = null;
   let staffClockDoneTimer = null;
   let staffClockSyncPromise = null;
+  let staffClockSyncRequested = false;
   let staffClockSnapshotPromise = null;
   let staffClockTotalsSelection = 'current';
 
@@ -644,7 +645,10 @@ function fmtDate(value) {
   }
 
   async function syncStaffClockQueue() {
-    if (staffClockSyncPromise) return staffClockSyncPromise;
+    if (staffClockSyncPromise) {
+      staffClockSyncRequested = true;
+      return staffClockSyncPromise;
+    }
     if (navigator.onLine === false) return null;
     staffClockSyncPromise = (async () => {
       try {
@@ -680,6 +684,10 @@ function fmtDate(value) {
         // The exact queue remains durable. Lifecycle and timer retries are automatic.
       } finally {
         staffClockSyncPromise = null;
+        if (staffClockSyncRequested) {
+          staffClockSyncRequested = false;
+          void syncStaffClockQueue();
+        }
       }
       return null;
     })();

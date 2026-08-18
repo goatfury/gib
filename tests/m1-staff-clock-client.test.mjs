@@ -42,7 +42,7 @@ test('Staff Clock is isolated from the inherited inline kiosk client', () => {
   const inlineModule = kioskHtml.match(/<script type="module">([\s\S]*?)<\/script>/u)?.[1] || '';
   assert.match(
     kioskHtml,
-    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-08-18-m1b-staff-clock-operational-r1"><\/script>/u
+    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-08-18-m1b-staff-clock-operational-r2"><\/script>/u
   );
   assert.doesNotMatch(inlineModule, /staff-clock-core|staffClockSyncPunch|syncStaffClockQueue|renderStaffTimeAdmin/u);
 });
@@ -156,4 +156,11 @@ test('the offline shell precaches and serves both Staff Clock modules', () => {
   assert.match(serviceWorkerSource, /staff-clock-core\.mjs\?v=/u);
   assert.match(serviceWorkerSource, /staff-clock-client\.mjs\?v=/u);
   assert.match(serviceWorkerSource, /STAFF_CLOCK_CLIENT_URL/u);
+});
+
+test('a punch queued during startup sync triggers an immediate coalesced second pass', () => {
+  const syncSource = namedFunctionSource(clientSource, 'syncStaffClockQueue');
+  assert.match(clientSource, /let staffClockSyncRequested = false;/u);
+  assert.match(syncSource, /if \(staffClockSyncPromise\) \{\s*staffClockSyncRequested = true;\s*return staffClockSyncPromise;/u);
+  assert.match(syncSource, /staffClockSyncPromise = null;\s*if \(staffClockSyncRequested\) \{\s*staffClockSyncRequested = false;\s*void syncStaffClockQueue\(\);/u);
 });
