@@ -169,7 +169,9 @@ test('Staff time reuses the existing secured Admin request path and loads only a
   const loadSource = sourceBetween(adminHtml, 'async function loadStaffTime(', 'async function submitStaffCorrection(');
   assert.match(loadSource, /requestJson\(API\.staffTime, \{ operation: 'review' \}\)/u);
   assert.match(loadSource, /validStaffTimeReviewResponse\(data\)/u);
-  assert.doesNotMatch(sourceBetween(adminHtml, 'async function initialize(', "$('#loginButton')"), /loadStaffTime/u);
+  const initializeSource = sourceBetween(adminHtml, 'async function initialize(', "$('#loginButton')");
+  assert.doesNotMatch(initializeSource, /loadReview|loadStaffTime/u);
+  assert.match(initializeSource, /setLoggedOut\(\)/u);
   assert.doesNotMatch(adminHtml, /localStorage|sessionStorage/u);
   assert.equal((adminHtml.match(/id="loginAdminName"/gu) || []).length, 1);
 });

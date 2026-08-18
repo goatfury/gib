@@ -3160,7 +3160,9 @@
           if (!await refreshCanonicalSchedule({ bootstrapWhenUnavailable: true })) {
             throw new Error('Canonical schedule unavailable.');
           }
-          await loadReview(defaultYesterday());
+          // A fresh page has no memory-only Admin request token, even if an old
+          // session cookie exists. Wait for the explicit login before Admin API calls.
+          setLoggedOut();
           startCanonicalScheduleRefresh();
         } catch {
           schedule = null;
