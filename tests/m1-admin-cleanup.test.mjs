@@ -12,6 +12,8 @@ const BASELINE_BUTTON_IDS = Object.freeze([
   'btnAdmin',
   'toggleClasses',
   'btnSignIn',
+  'btnStaffClockAction',
+  'btnStaffClockDone',
   'btnKiosk',
   'btnAdminPinToggle',
   'btnAdminLogout',
@@ -46,6 +48,7 @@ const BASELINE_FIELD_IDS = Object.freeze([
   'nameInput',
   'nameDatalist',
   'notesInput',
+  'staffClockName',
   'adminPinInput',
   'cfgGymName',
   'cfgLocation',
@@ -145,6 +148,7 @@ test('default Admin document is status-first with the required calm disclosures'
     'adminStatusHeading',
     'adminActionsHeading',
     'recentSignins',
+    'staffTimeSection',
     'temporaryClassesSection',
     'weeklyScheduleSection',
     'advancedSettings',
@@ -163,6 +167,7 @@ test('default Admin document is status-first with the required calm disclosures'
 
   assert.match(openingTag('recentSignins'), /\sopen(?:\s|=|>)/u);
   for (const id of [
+    'staffTimeSection',
     'temporaryClassesSection',
     'weeklyScheduleSection',
     'advancedSettings',
@@ -190,6 +195,8 @@ test('every inherited control remains unique and connected after organization', 
     ['btnAdmin', 'openAdminWithGate'],
     ['btnAdminLogout', 'showKiosk'],
     ['btnSignIn', 'signIn'],
+    ['btnStaffClockAction', 'performStaffClockAction'],
+    ['btnStaffClockDone', 'resetStaffClockCard'],
     ['btnConfirmSignInUndo', 'undoLastSigninBatch'],
     ['btnConfirmSignInDone', 'confirmSigninDone'],
     ['btnExport', 'exportCSV'],
@@ -495,7 +502,7 @@ test('opening Admin and toggling disclosures preserve current local state', () =
   const before = storage.snapshot();
   const ids = [
     'kiosk', 'admin', 'cfgGymName', 'cfgLocation', 'cfgSiteCode', 'debugBox', 'adminHeading',
-    'recentSignins', 'temporaryClassesSection', 'weeklyScheduleSection', 'advancedSettings', 'dangerZone'
+    'recentSignins', 'staffTimeSection', 'temporaryClassesSection', 'weeklyScheduleSection', 'advancedSettings', 'dangerZone'
   ];
   const elements = new Map(ids.map(id => [id, {
     id,
@@ -520,6 +527,7 @@ test('opening Admin and toggling disclosures preserve current local state', () =
     renderSeriesList: () => calls.push('renderSeriesList'),
     clearSeriesForm: () => calls.push('clearSeriesForm'),
     renderAdminTable: () => calls.push('renderAdminTable'),
+    renderStaffTimeAdmin: () => calls.push('renderStaffTimeAdmin'),
     loadSyncSettings: () => calls.push('loadSyncSettings'),
     updateSyncStatus: () => calls.push('updateSyncStatus'),
     renderAdminSummary: () => calls.push('renderAdminSummary'),
@@ -536,11 +544,11 @@ test('opening Admin and toggling disclosures preserve current local state', () =
   assert.equal(elements.get('adminHeading').focused, true);
   assert.deepEqual(calls, [
     'organizeAdminView', 'updateAdminPinUI', 'loadScheduleIntoAdmin', 'renderDurationRules',
-    'renderSeriesList', 'clearSeriesForm', 'renderAdminTable', 'loadSyncSettings',
+    'renderSeriesList', 'clearSeriesForm', 'renderAdminTable', 'renderStaffTimeAdmin', 'loadSyncSettings',
     'updateSyncStatus', 'renderAdminSummary'
   ]);
 
-  for (const id of ['recentSignins', 'temporaryClassesSection', 'weeklyScheduleSection', 'advancedSettings', 'dangerZone']) {
+  for (const id of ['recentSignins', 'staffTimeSection', 'temporaryClassesSection', 'weeklyScheduleSection', 'advancedSettings', 'dangerZone']) {
     elements.get(id).open = !elements.get(id).open;
   }
   assert.equal(storage.snapshot(), before);
