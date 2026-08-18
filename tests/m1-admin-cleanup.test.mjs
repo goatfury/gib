@@ -7,6 +7,10 @@ import * as syncCore from '../m1/sync-core.mjs';
 
 const kiosk = readFileSync(new URL('../m1/index.html', import.meta.url), 'utf8')
   .replace(/\r\n?/gu, '\n');
+const staffClockClient = readFileSync(
+  new URL('../m1/staff-clock-client.mjs', import.meta.url),
+  'utf8'
+).replace(/\r\n?/gu, '\n');
 
 const BASELINE_BUTTON_IDS = Object.freeze([
   'btnAdmin',
@@ -195,8 +199,6 @@ test('every inherited control remains unique and connected after organization', 
     ['btnAdmin', 'openAdminWithGate'],
     ['btnAdminLogout', 'showKiosk'],
     ['btnSignIn', 'signIn'],
-    ['btnStaffClockAction', 'performStaffClockAction'],
-    ['btnStaffClockDone', 'resetStaffClockCard'],
     ['btnConfirmSignInUndo', 'undoLastSigninBatch'],
     ['btnConfirmSignInDone', 'confirmSigninDone'],
     ['btnExport', 'exportCSV'],
@@ -208,6 +210,17 @@ test('every inherited control remains unique and connected after organization', 
     assert.match(
       kiosk,
       new RegExp(`\\$\\('#${id}'\\)\\.addEventListener\\('click', ${action}\\);`, 'u'),
+      `${id} must remain connected to ${action}`
+    );
+  }
+
+  for (const [id, action] of [
+    ['btnStaffClockAction', 'performStaffClockAction'],
+    ['btnStaffClockDone', 'resetStaffClockCard']
+  ]) {
+    assert.match(
+      staffClockClient,
+      new RegExp(`\\$\\('#${id}'\\)\\?\\.addEventListener\\('click', ${action}\\);`, 'u'),
       `${id} must remain connected to ${action}`
     );
   }
@@ -527,7 +540,6 @@ test('opening Admin and toggling disclosures preserve current local state', () =
     renderSeriesList: () => calls.push('renderSeriesList'),
     clearSeriesForm: () => calls.push('clearSeriesForm'),
     renderAdminTable: () => calls.push('renderAdminTable'),
-    renderStaffTimeAdmin: () => calls.push('renderStaffTimeAdmin'),
     loadSyncSettings: () => calls.push('loadSyncSettings'),
     updateSyncStatus: () => calls.push('updateSyncStatus'),
     renderAdminSummary: () => calls.push('renderAdminSummary'),
@@ -544,7 +556,7 @@ test('opening Admin and toggling disclosures preserve current local state', () =
   assert.equal(elements.get('adminHeading').focused, true);
   assert.deepEqual(calls, [
     'organizeAdminView', 'updateAdminPinUI', 'loadScheduleIntoAdmin', 'renderDurationRules',
-    'renderSeriesList', 'clearSeriesForm', 'renderAdminTable', 'renderStaffTimeAdmin', 'loadSyncSettings',
+    'renderSeriesList', 'clearSeriesForm', 'renderAdminTable', 'loadSyncSettings',
     'updateSyncStatus', 'renderAdminSummary'
   ]);
 
@@ -871,7 +883,7 @@ test('Reset discloses its full scope, cancel mutates nothing, and confirm preser
     /auto-sync and sync status/u,
     /schedule, temporary classes, website schedule cache\/local overrides/u,
     /duration rules/u,
-    /Sign-ins and rows waiting to sync are NOT deleted/u
+    /Sign-ins and rows waiting to sync are NOT deleted\. Staff Clock punches and its waiting list are also NOT deleted\./u
   ]) assert.match(confirmation, expected);
 
   confirmResult = true;

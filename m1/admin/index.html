@@ -300,6 +300,91 @@
       font-size: .78rem;
       line-height: 1.45;
     }
+    .staff-time-panel { margin-top: 16px; overflow: hidden; }
+    .staff-time-panel > summary {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 17px 18px;
+      cursor: pointer;
+      font-weight: 800;
+      list-style-position: inside;
+    }
+    .staff-time-panel[open] > summary { border-bottom: 1px solid var(--line); }
+    .staff-time-body { display: grid; gap: 15px; padding: 18px; }
+    .staff-time-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .staff-time-block {
+      min-width: 0;
+      border: 1px solid #2b425e;
+      border-radius: 12px;
+      background: rgba(8, 21, 35, .58);
+      padding: 12px;
+    }
+    .staff-time-block h3 { margin-bottom: 9px; }
+    .staff-time-list { display: grid; gap: 7px; }
+    .staff-time-row {
+      border-top: 1px solid rgba(56, 81, 112, .65);
+      padding-top: 7px;
+      color: #dce8f5;
+      font-size: .84rem;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .staff-time-row:first-child { border-top: 0; padding-top: 0; }
+    .staff-time-row .record-detail { margin-top: 2px; }
+    .staff-time-badge {
+      display: inline-flex;
+      margin: 3px 5px 0 0;
+      border: 1px solid #426180;
+      border-radius: 999px;
+      padding: 2px 7px;
+      color: #dbeaff;
+      font-size: .69rem;
+      font-weight: 800;
+    }
+    .staff-time-badge.admin { border-color: #4d8a74; color: #c8fae8; }
+    .staff-time-badge.void { border-color: #a35b57; color: #ffd0cd; }
+    .staff-time-attention { border-color: #705b2c; background: rgba(83, 61, 18, .2); }
+    .staff-time-attention h3 { color: #ffe09d; }
+    .staff-time-details {
+      border: 1px solid #344e6c;
+      border-radius: 12px;
+      background: rgba(8, 21, 35, .42);
+      padding: 12px;
+    }
+    .staff-time-details > summary { cursor: pointer; font-weight: 800; }
+    .staff-time-details > .staff-time-list,
+    .staff-time-details > .staff-period-grid { margin-top: 10px; }
+    #staffTimeRecords, #staffTimeAudit { max-height: 360px; overflow-y: auto; padding-right: 4px; }
+    .staff-period-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .staff-fix-form {
+      border: 1px solid #376b5a;
+      border-radius: 12px;
+      background: rgba(15, 95, 72, .12);
+      padding: 13px;
+    }
+    .staff-fix-form h3 { margin-bottom: 4px; }
+    .staff-fix-grid {
+      display: grid;
+      grid-template-columns: 1.35fr .8fr .8fr .8fr;
+      gap: 9px;
+      margin-top: 11px;
+    }
+    .staff-fix-reason { margin-top: 10px; }
+    .staff-void-form {
+      display: grid;
+      grid-template-columns: minmax(150px, 1fr) auto;
+      gap: 7px;
+      align-items: end;
+      margin-top: 8px;
+    }
+    .staff-void-form .field { gap: 4px; }
+    .staff-void-form input { padding: 8px 10px; }
     .loading { opacity: .62; pointer-events: none; }
     .toast {
       position: fixed;
@@ -324,6 +409,8 @@
       .date-summary { text-align: left; order: -1; }
       .calendar { width: 100%; }
       .content-grid { grid-template-columns: 1fr; }
+      .staff-time-grid { grid-template-columns: 1fr; }
+      .staff-fix-grid { grid-template-columns: 1fr 1fr; }
     }
     @media (max-width: 560px) {
       .shell { width: min(100% - 18px, 1120px); padding-top: 16px; }
@@ -335,6 +422,7 @@
       .class-main { grid-template-columns: 1fr; }
       .class-main .btn { width: 100%; }
       .mini-grid, .fixed { grid-template-columns: 1fr 1fr; }
+      .staff-period-grid, .staff-fix-grid, .staff-void-form { grid-template-columns: 1fr; }
       .fixed div:nth-child(2) { grid-column: 1 / -1; }
     }
   </style>
@@ -459,6 +547,81 @@
           </div>
         </aside>
       </div>
+
+      <details id="staff-time" class="panel staff-time-panel" open tabindex="-1">
+        <summary>
+          <span>Staff time</span>
+          <span id="staffTimeSummary" class="count">Loading…</span>
+        </summary>
+        <div class="staff-time-body">
+          <div id="staffTimeMessage" class="message" role="alert"></div>
+
+          <div class="staff-time-grid">
+            <section class="staff-time-block" aria-labelledby="staffClockedInHeading">
+              <h3 id="staffClockedInHeading">Clocked in now</h3>
+              <div id="staffClockedInNow" class="staff-time-list"></div>
+            </section>
+            <section class="staff-time-block" aria-labelledby="staffTodayHeading">
+              <h3 id="staffTodayHeading">Today’s punches</h3>
+              <div id="staffTodayPunches" class="staff-time-list"></div>
+            </section>
+            <section id="staffNeedsAttentionSection" class="staff-time-block staff-time-attention" aria-labelledby="staffAttentionHeading" hidden>
+              <h3 id="staffAttentionHeading">Needs attention</h3>
+              <div id="staffNeedsAttention" class="staff-time-list"></div>
+            </section>
+          </div>
+
+          <details id="staffPayPeriods" class="staff-time-details">
+            <summary>Pay-period totals</summary>
+            <div id="staffPeriodTotals" class="staff-period-grid"></div>
+          </details>
+
+          <form id="staffCorrectionForm" class="staff-fix-form" novalidate>
+            <h3>Fix missed punch</h3>
+            <p class="muted" style="font-size:.8rem">Adds an Admin-labeled punch and keeps the original record history.</p>
+            <div class="staff-fix-grid">
+              <div class="field">
+                <label for="staffCorrectionName">Staff member</label>
+                <select id="staffCorrectionName" name="staffId" required>
+                  <option value="">Choose staff</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="staffCorrectionAction">Punch</label>
+                <select id="staffCorrectionAction" name="punchAction" required>
+                  <option value="clockIn">Clock In</option>
+                  <option value="clockOut">Clock Out</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="staffCorrectionDate">Date</label>
+                <input id="staffCorrectionDate" name="date" type="date" required>
+              </div>
+              <div class="field">
+                <label for="staffCorrectionTime">Time</label>
+                <input id="staffCorrectionTime" name="time" type="time" step="60" required>
+              </div>
+            </div>
+            <div class="field staff-fix-reason">
+              <label for="staffCorrectionReason">Required reason</label>
+              <input id="staffCorrectionReason" name="reason" maxlength="240" required placeholder="Why this punch is being added">
+            </div>
+            <div class="form-actions">
+              <button id="staffCorrectionSubmit" class="btn primary" type="submit">Confirm correction</button>
+            </div>
+            <div id="staffCorrectionStatus" class="message" role="status"></div>
+          </form>
+
+          <details class="staff-time-details">
+            <summary>Staff Time records</summary>
+            <div id="staffTimeRecords" class="staff-time-list"></div>
+          </details>
+          <details class="staff-time-details">
+            <summary>Staff time audit</summary>
+            <div id="staffTimeAudit" class="staff-time-list"></div>
+          </details>
+        </div>
+      </details>
     </section>
   </main>
 
@@ -474,6 +637,7 @@
         review: '/.netlify/functions/m1-admin-review',
         search: '/.netlify/functions/m1-admin-search',
         add: '/.netlify/functions/m1-admin-add',
+        staffTime: '/.netlify/functions/m1-admin-staff-time',
         schedule: '/api/m1-schedule',
         scheduleBootstrap: '/m1/shared-schedule.json',
         tabletDiagnostic: '/api/m1-tablet-diagnostic-verifier'
@@ -515,6 +679,9 @@
       const MIN_TOTAL_CLASSES = 30;
       const MAX_TOTAL_CLASSES = 100;
       const MAX_CLASS_LABEL_LENGTH = 200;
+      const STAFF_PUNCH_ID_PATTERN = /^gib-m1-staff-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+      const STAFF_REQUEST_ID_PATTERN = /^gib-m1-staff-request-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+      const STAFF_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}-(?:04|05):00$/;
       const MIN_CLASSES_BY_DAY = Object.freeze({
         Monday: 5,
         Tuesday: 5,
@@ -539,6 +706,8 @@
       let currentAdminName = '';
       let testMode = false;
       let adminRequestToken = '';
+      let currentStaffTime = null;
+      let staffTimeLoadGeneration = 0;
       let diagnosticWindow = null;
       let diagnosticRunId = '';
       let diagnosticPurpose = '';
@@ -1265,6 +1434,228 @@
         return true;
       }
 
+      function validStaffId(value) {
+        return typeof value === 'string' && /^[a-z0-9][a-z0-9_-]{0,79}$/.test(value);
+      }
+
+      function validStaffName(value) {
+        return typeof value === 'string'
+          && value.length >= 1
+          && value.length <= 100
+          && value === clean(value);
+      }
+
+      function validStaffTimestamp(value) {
+        return typeof value === 'string'
+          && STAFF_TIMESTAMP_PATTERN.test(value)
+          && Number.isFinite(Date.parse(value));
+      }
+
+      function validStaffPerson(value) {
+        return exactObjectKeys(value, ['staffId', 'staffName'])
+          && validStaffId(value.staffId)
+          && validStaffName(value.staffName);
+      }
+
+      function validStaffRecord(value) {
+        const requiredKeys = [
+          'punchId', 'timestamp', 'date', 'staffId', 'staffName', 'punchAction',
+          'site', 'device', 'build', 'note', 'status', 'source'
+        ];
+        const optionalKeys = ['adminName', 'linkedPunchId'];
+        if (!isObject(value)) return false;
+        const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);
+        if (
+          !requiredKeys.every(key => Object.hasOwn(value, key))
+          || Object.keys(value).some(key => !allowedKeys.has(key))
+        ) return false;
+        const hasAdminName = Object.hasOwn(value, 'adminName');
+        const hasLinkedPunchId = Object.hasOwn(value, 'linkedPunchId');
+        return STAFF_PUNCH_ID_PATTERN.test(value.punchId)
+          && validStaffTimestamp(value.timestamp)
+          && validReviewDate(value.date)
+          && value.timestamp.slice(0, 10) === value.date
+          && validStaffId(value.staffId)
+          && validStaffName(value.staffName)
+          && ['clockIn', 'clockOut'].includes(value.punchAction)
+          && typeof value.site === 'string' && value.site.length >= 1 && value.site.length <= 80
+          && typeof value.device === 'string' && value.device.length >= 1 && value.device.length <= 120
+          && typeof value.build === 'string' && value.build.length >= 1 && value.build.length <= 120
+          && typeof value.note === 'string' && value.note.length <= 400
+          && ['ACTIVE', 'VOID'].includes(value.status)
+          && ['Tablet', 'Admin-added'].includes(value.source)
+          && (
+            (value.source === 'Tablet' && !hasAdminName)
+            || (
+              value.source === 'Admin-added'
+              && hasAdminName
+              && ['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
+            )
+          )
+          && (!hasLinkedPunchId || STAFF_PUNCH_ID_PATTERN.test(value.linkedPunchId));
+      }
+
+      function validStaffClockedIn(value) {
+        return exactObjectKeys(value, ['punchId', 'staffId', 'staffName', 'clockInAt'])
+          && validStaffId(value.staffId)
+          && validStaffName(value.staffName)
+          && validStaffTimestamp(value.clockInAt)
+          && STAFF_PUNCH_ID_PATTERN.test(value.punchId);
+      }
+
+      function validStaffAttention(value) {
+        return exactObjectKeys(value, ['staffId', 'staffName', 'code', 'message', 'linkedPunchIds'])
+          && validStaffId(value.staffId)
+          && validStaffName(value.staffName)
+          && typeof value.code === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(value.code)
+          && typeof value.message === 'string' && value.message.length >= 1 && value.message.length <= 240
+          && Array.isArray(value.linkedPunchIds)
+          && value.linkedPunchIds.length <= 20
+          && value.linkedPunchIds.every(punchId => STAFF_PUNCH_ID_PATTERN.test(punchId));
+      }
+
+      function validStaffTotal(value) {
+        return exactObjectKeys(value, [
+          'staffId', 'staffName', 'completedShifts', 'totalSeconds', 'needsAttention'
+        ])
+          && validStaffId(value.staffId)
+          && validStaffName(value.staffName)
+          && Number.isSafeInteger(value.completedShifts)
+          && value.completedShifts >= 0
+          && Number.isSafeInteger(value.totalSeconds)
+          && value.totalSeconds >= 0
+          && value.totalSeconds <= 14 * 24 * 60 * 60
+          && typeof value.needsAttention === 'boolean';
+      }
+
+      function validStaffPeriod(value) {
+        return exactObjectKeys(value, ['startDate', 'endDate', 'totals'])
+          && validReviewDate(value.startDate)
+          && validReviewDate(value.endDate)
+          && Array.isArray(value.totals)
+          && value.totals.length <= 500
+          && value.totals.every(validStaffTotal);
+      }
+
+      function validStaffAudit(value) {
+        return exactObjectKeys(value, [
+          'requestId', 'actionTime', 'adminName', 'operation', 'staffId', 'staffName',
+          'punchTimestamp', 'punchAction', 'reason', 'result', 'linkedPunchId'
+        ])
+          && STAFF_REQUEST_ID_PATTERN.test(value.requestId)
+          && validStaffTimestamp(value.actionTime)
+          && ['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
+          && validStaffId(value.staffId)
+          && validStaffName(value.staffName)
+          && validStaffTimestamp(value.punchTimestamp)
+          && ['correct', 'void'].includes(value.operation)
+          && ['clockIn', 'clockOut'].includes(value.punchAction)
+          && typeof value.reason === 'string' && value.reason.length >= 1 && value.reason.length <= 240
+          && typeof value.result === 'string' && value.result.length >= 1 && value.result.length <= 40
+          && STAFF_PUNCH_ID_PATTERN.test(value.linkedPunchId);
+      }
+
+      function validStaffTimeReviewResponse(value) {
+        if (!exactObjectKeys(value, [
+          'ok', 'test', 'adminName', 'staff', 'records', 'clockedInNow',
+          'todayPunches', 'needsAttention', 'periods', 'audit'
+        ])) return false;
+        if (
+          value.ok !== true
+          || typeof value.test !== 'boolean'
+          || value.test !== testMode
+          || value.adminName !== currentAdminName
+          || !Array.isArray(value.staff)
+          || !Array.isArray(value.records)
+          || !Array.isArray(value.clockedInNow)
+          || !Array.isArray(value.todayPunches)
+          || !Array.isArray(value.needsAttention)
+          || !Array.isArray(value.audit)
+          || !exactObjectKeys(value.periods, ['current', 'previous'])
+          || value.staff.length > 500
+          || value.records.length > 5_000
+          || value.clockedInNow.length > 500
+          || value.todayPunches.length > 2_000
+          || value.needsAttention.length > 2_000
+          || value.audit.length > 5_000
+        ) return false;
+        const staffIds = new Set();
+        const punchIds = new Set();
+        const requestIds = new Set();
+        for (const person of value.staff) {
+          if (!validStaffPerson(person) || staffIds.has(person.staffId)) return false;
+          staffIds.add(person.staffId);
+        }
+        for (const record of value.records) {
+          if (!validStaffRecord(record) || punchIds.has(record.punchId)) return false;
+          punchIds.add(record.punchId);
+        }
+        if (!value.clockedInNow.every(validStaffClockedIn)) return false;
+        if (!value.todayPunches.every(item => (
+          exactObjectKeys(item, [
+            'punchId', 'staffId', 'staffName', 'punchAction', 'timestamp', 'source', 'status'
+          ])
+          && STAFF_PUNCH_ID_PATTERN.test(item.punchId)
+          && validStaffId(item.staffId)
+          && validStaffName(item.staffName)
+          && ['clockIn', 'clockOut'].includes(item.punchAction)
+          && validStaffTimestamp(item.timestamp)
+          && ['Tablet', 'Admin-added'].includes(item.source)
+          && ['ACTIVE', 'VOID'].includes(item.status)
+        ))) return false;
+        if (!value.needsAttention.every(validStaffAttention)) return false;
+        if (!validStaffPeriod(value.periods.current) || !validStaffPeriod(value.periods.previous)) return false;
+        for (const audit of value.audit) {
+          if (!validStaffAudit(audit) || requestIds.has(audit.requestId)) return false;
+          requestIds.add(audit.requestId);
+        }
+        return true;
+      }
+
+      function validStaffMutationResponse(value, expected) {
+        if (!exactObjectKeys(value, [
+          'ok', 'test', 'adminName', 'operation', 'requestId', 'result',
+          'linkedPunchId', 'auditActionNumber', 'confirmation'
+        ]) || value.ok !== true || value.test !== testMode) return false;
+        if (value.adminName !== currentAdminName || value.operation !== expected.operation) return false;
+        if (value.requestId !== expected.requestId || value.linkedPunchId !== expected.punchId) return false;
+        if (!Number.isSafeInteger(value.auditActionNumber) || value.auditActionNumber < 1) return false;
+        if (expected.operation === 'correct') {
+          return ['added', 'already exists'].includes(value.result)
+            && exactObjectKeys(value.confirmation, [
+              'adminName', 'punchId', 'staffId', 'staffName', 'timestamp', 'date',
+              'punchAction', 'reason', 'site', 'device', 'build'
+            ])
+            && value.confirmation.adminName === currentAdminName
+            && value.confirmation.punchId === expected.punchId
+            && value.confirmation.staffId === expected.staffId
+            && value.confirmation.staffName === expected.staffName
+            && value.confirmation.timestamp === expected.timestamp
+            && value.confirmation.date === expected.date
+            && value.confirmation.punchAction === expected.punchAction
+            && value.confirmation.reason === expected.reason
+            && value.confirmation.site === SITE
+            && value.confirmation.device === 'Admin Staff Time'
+            && value.confirmation.build === 'm1b-staff-clock';
+        }
+        return expected.operation === 'void'
+          && ['voided', 'already voided'].includes(value.result)
+          && exactObjectKeys(value.confirmation, [
+            'adminName', 'punchId', 'staffId', 'staffName', 'timestamp', 'date',
+            'punchAction', 'reason', 'status'
+          ])
+          && value.confirmation.adminName === currentAdminName
+          && value.confirmation.punchId === expected.punchId
+          && validStaffId(value.confirmation.staffId)
+          && validStaffName(value.confirmation.staffName)
+          && validStaffTimestamp(value.confirmation.timestamp)
+          && validReviewDate(value.confirmation.date)
+          && value.confirmation.timestamp.slice(0, 10) === value.confirmation.date
+          && ['clockIn', 'clockOut'].includes(value.confirmation.punchAction)
+          && value.confirmation.reason === expected.reason
+          && value.confirmation.status === 'VOID';
+      }
+
       function validDiagnosticIssueResponse(value, runId, purpose) {
         const expectedKeys = purpose === 'install'
           ? ['ok', 'runId', 'proofKey', 'installEnvelope', 'expiresInSeconds']
@@ -1648,10 +2039,12 @@
       function setLoggedOut(message = '') {
         clearDiagnosticRun(true);
         reviewLoadGeneration += 1;
+        staffTimeLoadGeneration += 1;
         currentRecords = [];
         currentWarnings = [];
         currentAuditHistory = [];
         persistentReviewOutcome = null;
+        currentStaffTime = null;
         currentAdminName = '';
         adminRequestToken = '';
         $('#appPanel').hidden = true;
@@ -1663,6 +2056,18 @@
         $('#warningSection').hidden = true;
         $('#auditList').replaceChildren();
         $('#searchResults').hidden = true;
+        $('#staffTimeSummary').textContent = 'Not loaded';
+        $('#staffClockedInNow').replaceChildren();
+        $('#staffTodayPunches').replaceChildren();
+        $('#staffNeedsAttention').replaceChildren();
+        $('#staffNeedsAttentionSection').hidden = true;
+        $('#staffPeriodTotals').replaceChildren();
+        $('#staffTimeRecords').replaceChildren();
+        $('#staffTimeAudit').replaceChildren();
+        $('#staffCorrectionName').replaceChildren(makeElement('option', '', 'Choose staff'));
+        clearStaffCorrectionIdentity($('#staffCorrectionForm'));
+        showMessage($('#staffTimeMessage'), '');
+        showMessage($('#staffCorrectionStatus'), '');
         showMessage($('#loginMessage'), message);
       }
 
@@ -1696,6 +2101,8 @@
           $('#loginPassphrase').value = '';
           setLoggedIn(data);
           await loadReview(defaultYesterday());
+          await loadStaffTime();
+          focusStaffTimeHash();
         } catch (error) {
           showMessage($('#loginMessage'), error.message);
         } finally {
@@ -1731,6 +2138,253 @@
         if (className) element.className = className;
         if (text) element.textContent = text;
         return element;
+      }
+
+      function staffActionLabel(value) {
+        return value === 'clockIn' ? 'Clock In' : value === 'clockOut' ? 'Clock Out' : '';
+      }
+
+      function staffTimestampLabel(value) {
+        const date = new Date(value);
+        if (!Number.isFinite(date.getTime())) return '';
+        return new Intl.DateTimeFormat('en-US', {
+          timeZone: TIME_ZONE,
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit'
+        }).format(date);
+      }
+
+      function staffEmpty(message) {
+        return makeElement('div', 'empty', message);
+      }
+
+      function staffBadge(text, tone = '') {
+        return makeElement('span', `staff-time-badge${tone ? ` ${tone}` : ''}`, text);
+      }
+
+      function staffTimeRow(title, detail = '') {
+        const row = makeElement('div', 'staff-time-row');
+        row.appendChild(makeElement('strong', '', title));
+        if (detail) row.appendChild(makeElement('div', 'record-detail', detail));
+        return row;
+      }
+
+      function staffRecordElement(record, allowVoid = false) {
+        const row = staffTimeRow(
+          `${record.staffName} · ${staffActionLabel(record.punchAction)} · ${staffTimestampLabel(record.timestamp)}`,
+          `${record.site} · ${record.device}`
+        );
+        if (record.source === 'Admin-added') row.appendChild(staffBadge('Admin-added', 'admin'));
+        if (record.status === 'VOID') row.appendChild(staffBadge('VOID', 'void'));
+        if (record.note) row.appendChild(makeElement('div', 'record-detail', record.note));
+        if (allowVoid && record.status === 'ACTIVE') {
+          const form = makeElement('form', 'staff-void-form');
+          form.dataset.staffVoidForm = record.punchId;
+          const input = document.createElement('input');
+          input.name = 'reason';
+          input.required = true;
+          input.maxLength = 240;
+          input.placeholder = 'Required reason';
+          input.setAttribute('aria-label', `Required reason to mark ${record.staffName} punch as wrong`);
+          const field = inputField('Mark wrong punch as VOID', input);
+          const submit = makeElement('button', 'btn warn small', 'Mark as wrong');
+          submit.type = 'submit';
+          form.append(field, submit);
+          row.appendChild(form);
+          const status = makeElement('div', 'message staff-void-status');
+          status.setAttribute('role', 'status');
+          status.setAttribute('aria-live', 'polite');
+          row.appendChild(status);
+        }
+        return row;
+      }
+
+      function staffPeriodElement(label, period) {
+        const block = makeElement('section', 'staff-time-block');
+        block.appendChild(makeElement('h3', '', label));
+        block.appendChild(makeElement('div', 'record-detail', `${period.startDate} through ${period.endDate}`));
+        const list = makeElement('div', 'staff-time-list');
+        for (const total of period.totals) {
+          const hours = Math.floor(total.totalSeconds / 3_600);
+          const minutes = Math.floor((total.totalSeconds % 3_600) / 60);
+          const row = staffTimeRow(
+            `${total.staffName} · ${hours} hr ${minutes} min`,
+            `${total.completedShifts} completed ${total.completedShifts === 1 ? 'shift' : 'shifts'}`
+          );
+          if (total.needsAttention) row.appendChild(staffBadge('Needs attention'));
+          list.appendChild(row);
+        }
+        if (!period.totals.length) list.appendChild(staffEmpty('No completed shifts in this pay period.'));
+        block.appendChild(list);
+        return block;
+      }
+
+      function populateStaffCorrectionNames(staff) {
+        const select = $('#staffCorrectionName');
+        const selected = select.value;
+        const options = [makeElement('option', '', 'Choose staff')];
+        options[0].value = '';
+        for (const person of staff) {
+          const option = makeElement('option', '', person.staffName);
+          option.value = person.staffId;
+          option.dataset.staffName = person.staffName;
+          options.push(option);
+        }
+        select.replaceChildren(...options);
+        if (staff.some(person => person.staffId === selected)) select.value = selected;
+      }
+
+      function renderStaffTime(data) {
+        currentStaffTime = data;
+        populateStaffCorrectionNames(data.staff);
+        $('#staffTimeSummary').textContent = `${data.clockedInNow.length} clocked in · ${data.todayPunches.length} today`;
+
+        const clockedIn = $('#staffClockedInNow');
+        clockedIn.replaceChildren(...data.clockedInNow.map(item => staffTimeRow(
+          item.staffName,
+          `Since ${staffTimestampLabel(item.clockInAt)}`
+        )));
+        if (!data.clockedInNow.length) clockedIn.appendChild(staffEmpty('No one is clocked in.'));
+
+        const today = $('#staffTodayPunches');
+        today.replaceChildren(...data.todayPunches.map(item => {
+          const row = staffTimeRow(
+            `${item.staffName} · ${staffActionLabel(item.punchAction)}`,
+            staffTimestampLabel(item.timestamp)
+          );
+          if (item.source === 'Admin-added') row.appendChild(staffBadge('Admin-added', 'admin'));
+          if (item.status === 'VOID') row.appendChild(staffBadge('VOID', 'void'));
+          return row;
+        }));
+        if (!data.todayPunches.length) today.appendChild(staffEmpty('No punches today.'));
+
+        const attentionSection = $('#staffNeedsAttentionSection');
+        const attention = $('#staffNeedsAttention');
+        attention.replaceChildren(...data.needsAttention.map(item => staffTimeRow(item.staffName, item.message)));
+        attentionSection.hidden = data.needsAttention.length === 0;
+
+        $('#staffPeriodTotals').replaceChildren(
+          staffPeriodElement('Current pay period', data.periods.current),
+          staffPeriodElement('Previous pay period', data.periods.previous)
+        );
+
+        const records = [...data.records].sort((left, right) => (
+          Date.parse(right.timestamp) - Date.parse(left.timestamp)
+        ));
+        const recordList = $('#staffTimeRecords');
+        recordList.replaceChildren(...records.map(record => staffRecordElement(record, true)));
+        if (!records.length) recordList.appendChild(staffEmpty('No Staff Time records yet.'));
+
+        const audit = $('#staffTimeAudit');
+        audit.replaceChildren(...data.audit.map(item => {
+          const operation = item.operation === 'void'
+            ? 'Marked wrong punch as VOID'
+            : `Added missed ${staffActionLabel(item.punchAction)}`;
+          return staffTimeRow(
+            `${item.adminName} · ${operation}`,
+            `${item.staffName} · ${staffTimestampLabel(item.punchTimestamp)} · ${item.reason} · ${item.result}`
+          );
+        }));
+        if (!data.audit.length) audit.appendChild(staffEmpty('No Staff time corrections yet.'));
+      }
+
+      function newStaffUuid() {
+        if (!globalThis.crypto || typeof globalThis.crypto.randomUUID !== 'function') {
+          throw new Error('This browser cannot create a safe permanent Staff time ID.');
+        }
+        const uuid = globalThis.crypto.randomUUID().toLowerCase();
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(uuid)) {
+          throw new Error('This browser could not create a safe permanent Staff time ID.');
+        }
+        return uuid;
+      }
+
+      function newStaffPunchId() {
+        return `gib-m1-staff-${newStaffUuid()}`;
+      }
+
+      function newStaffRequestId() {
+        return `gib-m1-staff-request-${newStaffUuid()}`;
+      }
+
+      function staffTimestampForInputs(dateString, timeString) {
+        if (!validReviewDate(dateString) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(timeString)) return '';
+        const [year, month, day] = dateString.split('-').map(Number);
+        const [hour, minute] = timeString.split(':').map(Number);
+        const wantedWallTime = Date.UTC(year, month - 1, day, hour, minute, 0);
+        let instant = wantedWallTime;
+        const formatter = new Intl.DateTimeFormat('en-US', {
+          timeZone: TIME_ZONE,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hourCycle: 'h23'
+        });
+        const wallTimeAt = value => {
+          const parts = Object.fromEntries(formatter.formatToParts(new Date(value))
+            .filter(part => part.type !== 'literal')
+            .map(part => [part.type, Number(part.value)]));
+          return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+        };
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          const difference = wantedWallTime - wallTimeAt(instant);
+          if (difference === 0) break;
+          instant += difference;
+        }
+        if (wallTimeAt(instant) !== wantedWallTime) return '';
+        const offsetMinutes = (wantedWallTime - instant) / 60_000;
+        if (offsetMinutes !== -240 && offsetMinutes !== -300) return '';
+        const offsetHours = String(Math.abs(offsetMinutes) / 60).padStart(2, '0');
+        return `${dateString}T${timeString}:00-${offsetHours}:00`;
+      }
+
+      function staffCorrectionFingerprint(value) {
+        return JSON.stringify([
+          value.staffId,
+          value.staffName,
+          value.punchAction,
+          value.timestamp,
+          value.date,
+          value.reason
+        ]);
+      }
+
+      function staffCorrectionIdentityFor(form, value) {
+        const fingerprint = staffCorrectionFingerprint(value);
+        if (
+          form.dataset.staffFingerprint !== fingerprint
+          || !STAFF_REQUEST_ID_PATTERN.test(form.dataset.staffRequestId || '')
+          || !STAFF_PUNCH_ID_PATTERN.test(form.dataset.staffPunchId || '')
+        ) {
+          form.dataset.staffFingerprint = fingerprint;
+          form.dataset.staffRequestId = newStaffRequestId();
+          form.dataset.staffPunchId = newStaffPunchId();
+        }
+        return Object.freeze({
+          requestId: form.dataset.staffRequestId,
+          punchId: form.dataset.staffPunchId
+        });
+      }
+
+      function staffVoidFingerprint(punchId, reason) {
+        return JSON.stringify([punchId, reason]);
+      }
+
+      function staffVoidRequestIdFor(form, punchId, reason) {
+        const fingerprint = staffVoidFingerprint(punchId, reason);
+        if (
+          form.dataset.staffFingerprint !== fingerprint
+          || !STAFF_REQUEST_ID_PATTERN.test(form.dataset.staffRequestId || '')
+        ) {
+          form.dataset.staffFingerprint = fingerprint;
+          form.dataset.staffRequestId = newStaffRequestId();
+        }
+        return form.dataset.staffRequestId;
       }
 
       function recordElement(record) {
@@ -2026,6 +2680,199 @@
           if (generation === reviewLoadGeneration) {
             if (options.quiet !== true) $('#reviewSection').classList.remove('loading');
           }
+        }
+      }
+
+      function setStaffCorrectionDefaults() {
+        const dateInput = $('#staffCorrectionDate');
+        const timeInput = $('#staffCorrectionTime');
+        const now = new Date();
+        const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+          timeZone: TIME_ZONE,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hourCycle: 'h23'
+        }).formatToParts(now).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+        const today = `${parts.year}-${parts.month}-${parts.day}`;
+        dateInput.max = today;
+        if (!dateInput.value) dateInput.value = today;
+        if (!timeInput.value) timeInput.value = `${parts.hour}:${parts.minute}`;
+      }
+
+      function clearStaffCorrectionIdentity(form) {
+        delete form.dataset.staffFingerprint;
+        delete form.dataset.staffRequestId;
+        delete form.dataset.staffPunchId;
+      }
+
+      function readStaffCorrection(form) {
+        const staffId = String(form.elements.staffId.value || '');
+        const person = currentStaffTime?.staff.find(item => item.staffId === staffId);
+        const punchAction = String(form.elements.punchAction.value || '');
+        const date = String(form.elements.date.value || '');
+        const time = String(form.elements.time.value || '');
+        const reason = clean(form.elements.reason.value);
+        const timestamp = staffTimestampForInputs(date, time);
+        if (
+          !person
+          || !['clockIn', 'clockOut'].includes(punchAction)
+          || !timestamp
+          || Date.parse(timestamp) > Date.now()
+          || reason.length < 3
+        ) return null;
+        return Object.freeze({
+          staffId: person.staffId,
+          staffName: person.staffName,
+          punchAction,
+          timestamp,
+          date,
+          reason
+        });
+      }
+
+      function setStaffFormWorking(form, working, label) {
+        form.setAttribute('aria-busy', working ? 'true' : 'false');
+        Array.from(form.elements).forEach(control => { control.disabled = working; });
+        const submit = form.querySelector('button[type="submit"]');
+        if (submit) submit.textContent = working ? 'Saving…' : label;
+      }
+
+      function focusStaffTimeHash() {
+        if (location.hash !== '#staff-time' || $('#appPanel').hidden) return;
+        const panel = $('#staff-time');
+        panel.open = true;
+        window.requestAnimationFrame(() => {
+          panel.focus({ preventScroll: true });
+          panel.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        });
+      }
+
+      async function loadStaffTime(options = {}) {
+        const generation = ++staffTimeLoadGeneration;
+        if (options.quiet !== true) {
+          $('#staff-time').classList.add('loading');
+          showMessage($('#staffTimeMessage'), 'Loading Staff time…', 'working');
+        }
+        try {
+          const data = await requestJson(API.staffTime, { operation: 'review' });
+          if (generation !== staffTimeLoadGeneration) return false;
+          if (!validStaffTimeReviewResponse(data)) {
+            throw new Error('Staff time returned an incomplete response. Nothing was changed.');
+          }
+          renderStaffTime(data);
+          showMessage($('#staffTimeMessage'), '');
+          setStaffCorrectionDefaults();
+          return true;
+        } catch (error) {
+          if (generation !== staffTimeLoadGeneration) return false;
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Admin login required.');
+          } else {
+            showMessage($('#staffTimeMessage'), error.message);
+          }
+          return false;
+        } finally {
+          if (generation === staffTimeLoadGeneration) $('#staff-time').classList.remove('loading');
+        }
+      }
+
+      async function submitStaffCorrection(form) {
+        if (form.getAttribute('aria-busy') === 'true') return;
+        const correction = readStaffCorrection(form);
+        const status = $('#staffCorrectionStatus');
+        if (!correction) {
+          showMessage(status, 'Choose a staff member, a past date and time, and enter a reason of at least three characters.');
+          return;
+        }
+        let identity;
+        try {
+          identity = staffCorrectionIdentityFor(form, correction);
+        } catch (error) {
+          showMessage(status, error.message);
+          return;
+        }
+        const request = Object.freeze({
+          operation: 'correct',
+          requestId: identity.requestId,
+          punchId: identity.punchId,
+          ...correction
+        });
+        const confirmed = window.confirm(
+          `Add ${staffActionLabel(request.punchAction)} for ${request.staffName} at ${staffTimestampLabel(request.timestamp)}?\n\nReason: ${request.reason}`
+        );
+        if (!confirmed) return;
+        setStaffFormWorking(form, true, 'Confirm correction');
+        showMessage(status, 'Saving correction…', 'working');
+        try {
+          const data = await requestJson(API.staffTime, request);
+          if (!validStaffMutationResponse(data, request)) {
+            throw new Error('Staff time did not confirm the exact correction. Retry will use the same permanent IDs.');
+          }
+          clearStaffCorrectionIdentity(form);
+          form.reset();
+          setStaffCorrectionDefaults();
+          showMessage(status, data.result === 'added' ? 'Missed punch added.' : 'This correction was already recorded.', 'success');
+          toast(data.result === 'added' ? 'Staff punch added' : 'Correction already recorded');
+          await loadStaffTime({ quiet: true });
+        } catch (error) {
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Admin login required.');
+          } else {
+            showMessage(status, `${error.message} Retry keeps the same permanent correction IDs.`);
+          }
+        } finally {
+          setStaffFormWorking(form, false, 'Confirm correction');
+        }
+      }
+
+      async function submitStaffVoid(form) {
+        if (form.getAttribute('aria-busy') === 'true') return;
+        const punchId = String(form.dataset.staffVoidForm || '');
+        const reason = clean(form.elements.reason.value);
+        const status = form.parentElement.querySelector('.staff-void-status');
+        if (!STAFF_PUNCH_ID_PATTERN.test(punchId) || reason.length < 3) {
+          showMessage(status, 'Enter a reason of at least three characters.');
+          return;
+        }
+        let requestId;
+        try {
+          requestId = staffVoidRequestIdFor(form, punchId, reason);
+        } catch (error) {
+          showMessage(status, error.message);
+          return;
+        }
+        const request = Object.freeze({ operation: 'void', requestId, punchId, reason });
+        const record = currentStaffTime?.records.find(item => item.punchId === punchId);
+        if (!record) {
+          showMessage(status, 'This punch is no longer in the current Staff Time review. Refresh and try again.');
+          return;
+        }
+        const confirmation = [
+          `Mark ${record.staffName}’s ${staffActionLabel(record.punchAction)} at ${staffTimestampLabel(record.timestamp)} as VOID?`,
+          `Reason: ${reason}`,
+          'The original punch will remain in Staff Time and the audit history.'
+        ].join('\n\n');
+        if (!window.confirm(confirmation)) return;
+        setStaffFormWorking(form, true, 'Mark as wrong');
+        showMessage(status, 'Saving VOID…', 'working');
+        try {
+          const data = await requestJson(API.staffTime, request);
+          if (!validStaffMutationResponse(data, request)) {
+            throw new Error('Staff time did not confirm the exact VOID action.');
+          }
+          toast(data.result === 'voided' ? 'Punch marked VOID' : 'Punch was already VOID');
+          await loadStaffTime({ quiet: true });
+        } catch (error) {
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Admin login required.');
+          } else {
+            showMessage(status, `${error.message} Retry keeps the same permanent request ID.`);
+          }
+        } finally {
+          setStaffFormWorking(form, false, 'Mark as wrong');
         }
       }
 
@@ -2340,6 +3187,19 @@
         if (event.target.value && event.target.value <= nyDate()) loadReview(event.target.value);
       });
       $('#searchButton').addEventListener('click', searchInstructor);
+      $('#staffCorrectionForm').addEventListener('input', () => {
+        showMessage($('#staffCorrectionStatus'), '');
+      });
+      $('#staffCorrectionForm').addEventListener('submit', event => {
+        event.preventDefault();
+        submitStaffCorrection(event.currentTarget);
+      });
+      $('#staffTimeRecords').addEventListener('submit', event => {
+        const form = event.target.closest('[data-staff-void-form]');
+        if (!form) return;
+        event.preventDefault();
+        submitStaffVoid(form);
+      });
       $('#reviewSection').addEventListener('click', event => {
         const toggle = event.target.closest('.add-toggle');
         if (toggle) {
@@ -2372,8 +3232,12 @@
         addInstructor(event.target);
       });
       window.addEventListener('pageshow', event => {
-        if (event.persisted && !$('#appPanel').hidden && schedule) loadReview(currentDate || defaultYesterday());
+        if (event.persisted && !$('#appPanel').hidden && schedule) {
+          loadReview(currentDate || defaultYesterday());
+          loadStaffTime();
+        }
       });
+      window.addEventListener('hashchange', focusStaffTimeHash);
       window.addEventListener('message', receiveSyncInstallationReady);
       window.addEventListener('message', receiveTabletDiagnosticProofs);
       window.addEventListener('message', receiveSyncInstallationResult);

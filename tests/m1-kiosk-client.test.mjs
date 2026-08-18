@@ -875,7 +875,7 @@ test('kiosk selects production only from the exact canonical origin', () => {
     [...kioskHtml.matchAll(/\{ productionOrigin: IS_PRODUCTION_ORIGIN \}/gu)].length,
     2
   );
-  assert.match(kioskHtml, /2026-08-18 M1B TEST staff-clock-ux-preview/u);
+  assert.match(kioskHtml, /2026-08-18 M1B TEST staff-clock-operational-candidate/u);
   assert.match(kioskHtml, /secure host-only cookie/u);
 });
 

@@ -188,7 +188,9 @@ test('install atomically precaches only the revision-matched shell and activatio
     harness.addAllCalls[0].requests.map(value => value.url),
     [
       `${ORIGIN}/m1/index.html`,
-      `${ORIGIN}/m1/sync-core.mjs?v=${harness.revision}`
+      `${ORIGIN}/m1/sync-core.mjs?v=${harness.revision}`,
+      `${ORIGIN}/m1/staff-clock-core.mjs?v=${harness.revision}`,
+      `${ORIGIN}/m1/staff-clock-client.mjs?v=${harness.revision}`
     ]
   );
   for (const value of harness.addAllCalls[0].requests) {
@@ -231,9 +233,17 @@ test('network wins online while current-revision navigation and module reload fr
   const offlineCore = await harness.dispatchFetch(request(
     `${ORIGIN}/m1/sync-core.mjs?v=${harness.revision}`
   ));
+  const offlineStaffCore = await harness.dispatchFetch(request(
+    `${ORIGIN}/m1/staff-clock-core.mjs?v=${harness.revision}`
+  ));
+  const offlineStaffClient = await harness.dispatchFetch(request(
+    `${ORIGIN}/m1/staff-clock-client.mjs?v=${harness.revision}`
+  ));
   assert.equal(offlineRoot.url, `${ORIGIN}/m1/index.html`);
   assert.equal(offlineIndex.url, `${ORIGIN}/m1/index.html`);
   assert.equal(offlineCore.url, `${ORIGIN}/m1/sync-core.mjs?v=${harness.revision}`);
+  assert.equal(offlineStaffCore.url, `${ORIGIN}/m1/staff-clock-core.mjs?v=${harness.revision}`);
+  assert.equal(offlineStaffClient.url, `${ORIGIN}/m1/staff-clock-client.mjs?v=${harness.revision}`);
 
   const serverFailure = { kind: 'network', ok: false, status: 503 };
   harness.setFetch(async () => serverFailure);
@@ -255,6 +265,8 @@ test('API, Admin, auxiliary, stale-version, cross-origin, and non-GET traffic by
     request(`${ORIGIN}/m1/production-diagnostic.html`, { mode: 'navigate' }),
     request(`${ORIGIN}/m1/shared-schedule.json`),
     request(`${ORIGIN}/m1/sync-core.mjs?v=older-revision`),
+    request(`${ORIGIN}/m1/staff-clock-core.mjs?v=older-revision`),
+    request(`${ORIGIN}/m1/staff-clock-client.mjs?v=older-revision`),
     request(`${ORIGIN}/m1/sync-core.mjs?v=${harness.revision}`, { method: 'POST' }),
     request(`https://revolutionbjj.com/m1/sync-core.mjs?v=${harness.revision}`)
   ];

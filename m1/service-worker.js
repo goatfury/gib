@@ -18,7 +18,20 @@ const SYNC_CORE_URL = new URL(
   `sync-core.mjs?v=${encodeURIComponent(SHELL_REVISION)}`,
   SCOPE_URL
 ).href;
-const SHELL_REQUESTS = Object.freeze([INDEX_URL, SYNC_CORE_URL].map(url => new Request(url, {
+const STAFF_CLOCK_CORE_URL = new URL(
+  `staff-clock-core.mjs?v=${encodeURIComponent(SHELL_REVISION)}`,
+  SCOPE_URL
+).href;
+const STAFF_CLOCK_CLIENT_URL = new URL(
+  `staff-clock-client.mjs?v=${encodeURIComponent(SHELL_REVISION)}`,
+  SCOPE_URL
+).href;
+const SHELL_REQUESTS = Object.freeze([
+  INDEX_URL,
+  SYNC_CORE_URL,
+  STAFF_CLOCK_CORE_URL,
+  STAFF_CLOCK_CLIENT_URL
+].map(url => new Request(url, {
   cache: 'reload',
   credentials: 'same-origin'
 })));
@@ -54,7 +67,11 @@ function shellCacheKey(request) {
     return INDEX_URL;
   }
 
-  return url.href === SYNC_CORE_URL ? SYNC_CORE_URL : '';
+  return url.href === SYNC_CORE_URL
+    || url.href === STAFF_CLOCK_CORE_URL
+    || url.href === STAFF_CLOCK_CLIENT_URL
+    ? url.href
+    : '';
 }
 
 async function networkFirst(request, cacheKey) {

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-08-18 M1B TEST staff-clock-ux-preview)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-08-18 M1B TEST staff-clock-operational-candidate)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -440,7 +440,7 @@ input, textarea, select {
 #classListWrap label { padding: 16px 12px; }
 #classListWrap input[type="checkbox"] { width: 28px; height: 28px; }
 
-/* M1B preview: a deliberately compact secondary task below Instructor Sign-In. */
+/* M1B: a deliberately compact secondary task below Instructor Sign-In. */
 .staff-clock {
   margin-top: 12px;
   padding: 14px 18px 16px;
@@ -531,6 +531,13 @@ input, textarea, select {
   line-height: 1.4;
   white-space: pre-line;
 }
+.staff-clock-confirmation.waiting {
+  border-color: rgba(245,158,11,.4);
+  background: rgba(245,158,11,.08);
+}
+.staff-clock-confirmation.waiting .staff-clock-confirmation-title {
+  color: #fde68a;
+}
 .staff-clock-controls[hidden],
 .staff-clock-confirmation[hidden] { display: none; }
 body.admin-mode #staffClock { display: none; }
@@ -583,7 +590,35 @@ body.admin-mode #staffClock { display: none; }
 }
 .staff-time-placeholder {
   margin-top: 12px;
-  opacity: .72;
+}
+.staff-time-totals {
+  margin-top: 12px;
+  border-top: 1px solid rgba(148,163,184,.2);
+  padding-top: 10px;
+}
+.staff-time-totals > summary {
+  cursor: pointer;
+  color: #dbeafe;
+  font-size: 14px;
+  font-weight: 750;
+}
+.staff-time-total-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+.staff-time-total-controls .btn[aria-pressed="true"] {
+  border-color: rgba(34,197,94,.55);
+  color: #bbf7d0;
+}
+.staff-time-total-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.staff-time-total-row + .staff-time-total-row {
+  margin-top: 6px;
 }
 
 @media (max-width: 680px) {
@@ -829,7 +864,7 @@ body.admin-mode .container { max-width: 1120px; }
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-08-18 M1B TEST staff-clock-ux-preview</span>
+        Build <span class="kbd" id="buildId">2026-08-18 M1B TEST staff-clock-operational-candidate</span>
       </div>
     </div>
 
@@ -841,7 +876,7 @@ body.admin-mode .container { max-width: 1120px; }
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-08-18 M1B TEST staff-clock-ux-preview
+      Build 2026-08-18 M1B TEST staff-clock-operational-candidate
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -892,9 +927,6 @@ body.admin-mode .container { max-width: 1120px; }
         <label for="staffClockName">Staff name</label>
         <select id="staffClockName" aria-describedby="staffClockStatus">
           <option value="">Select staff member</option>
-          <option value="mandy-test">Mandy Test</option>
-          <option value="front-desk-test-two">Front Desk Test Two</option>
-          <option value="front-desk-test-three">Front Desk Test Three</option>
         </select>
       </div>
       <div>
@@ -1265,10 +1297,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-18-m1b-staff-clock-preview-r3';
+} from './sync-core.mjs?v=2026-08-18-m1b-staff-clock-operational-r1';
 
-// Bump this revision whenever index.html or sync-core.mjs changes.
-const OFFLINE_SHELL_REVISION = '2026-08-18-m1b-staff-clock-preview-r3';
+// Bump this revision whenever an offline shell asset changes.
+const OFFLINE_SHELL_REVISION = '2026-08-18-m1b-staff-clock-operational-r1';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -1281,7 +1313,7 @@ if ('serviceWorker' in navigator) {
   // NOTE: bump this whenever you make changes to the kiosk or admin.
   const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
   const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
-  const TEST_BUILD = '2026-08-18 M1B TEST staff-clock-ux-preview';
+  const TEST_BUILD = '2026-08-18 M1B TEST staff-clock-operational-candidate';
   const PRODUCTION_BUILD = '2026-08-16 M1 PRODUCTION unified-rollout';
   const BUILD = IS_PRODUCTION_ORIGIN ? PRODUCTION_BUILD : TEST_BUILD;
   if (IS_PRODUCTION_ORIGIN) {
@@ -1368,12 +1400,6 @@ function refreshNameDatalist() {
   const SCHEDULE_URL_KEY  = 'gib_m1_schedule_url_v1';
   const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
   const CANONICAL_SCHEDULE_CACHE_KEY = 'gib_m1_canonical_schedule_cache_v1';
-  const STAFF_CLOCK_STORAGE_KEY = 'gib_m1b_staff_clock_preview_v1';
-  const STAFF_CLOCK_PEOPLE = Object.freeze([
-    Object.freeze({ id: 'mandy-test', name: 'Mandy Test' }),
-    Object.freeze({ id: 'front-desk-test-two', name: 'Front Desk Test Two' }),
-    Object.freeze({ id: 'front-desk-test-three', name: 'Front Desk Test Three' })
-  ]);
   const CANONICAL_SCHEDULE_ENDPOINT = '/api/m1-schedule';
   const CANONICAL_SCHEDULE_SOURCE_URL = 'https://revolutionbjj.com/schedule/';
   const CANONICAL_SCHEDULE_UPSTREAM_URL = 'https://revolutionbjj.com/wp-json/wp/v2/pages?slug=schedule&status=publish&_fields=id,type,slug,status,link,title,modified,modified_gmt,content';
@@ -1538,309 +1564,6 @@ function refreshNameDatalist() {
     localStorage.setItem(key, JSON.stringify(value));
   }
 
-  // M1B preview-only state. This path never reads or writes any M1 sign-in key.
-  let staffClockActionLocked = false;
-  let staffClockConfirmationActive = false;
-  let staffClockDoneTimer = null;
-
-  function blankStaffClockState() {
-    return { version: 1, punches: [] };
-  }
-
-  function validStaffClockPunch(punch) {
-    return Boolean(
-      punch
-      && typeof punch === 'object'
-      && STAFF_CLOCK_PEOPLE.some(person => person.id === punch.staffId)
-      && (punch.type === 'in' || punch.type === 'out')
-      && typeof punch.at === 'string'
-      && Number.isFinite(Date.parse(punch.at))
-      && typeof punch.id === 'string'
-      && /^m1b-preview-punch-/u.test(punch.id)
-    );
-  }
-
-  function trimStaffClockPunches(punches) {
-    const recent = punches.slice(-200);
-    const retainedIds = new Set(recent.map(punch => punch.id));
-    STAFF_CLOCK_PEOPLE.forEach(person => {
-      const latest = punches
-        .filter(punch => punch.staffId === person.id)
-        .reduce((current, punch) => {
-          if (!current) return punch;
-          return Date.parse(punch.at) >= Date.parse(current.at) ? punch : current;
-        }, null);
-      if (latest?.type === 'in' && !retainedIds.has(latest.id)) {
-        recent.unshift(latest);
-        retainedIds.add(latest.id);
-      }
-    });
-    return recent;
-  }
-
-  function loadStaffClockState() {
-    try {
-      const raw = localStorage.getItem(STAFF_CLOCK_STORAGE_KEY);
-      if (!raw) return blankStaffClockState();
-      const parsed = JSON.parse(raw);
-      if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.punches)) {
-        return blankStaffClockState();
-      }
-      return {
-        version: 1,
-        punches: trimStaffClockPunches(parsed.punches.filter(validStaffClockPunch))
-      };
-    } catch (error) {
-      return blankStaffClockState();
-    }
-  }
-
-  function saveStaffClockState(state) {
-    if (
-      !state
-      || state.version !== 1
-      || !Array.isArray(state.punches)
-      || !state.punches.every(validStaffClockPunch)
-    ) {
-      throw new Error('Preview staff-clock state is invalid.');
-    }
-    localStorage.setItem(STAFF_CLOCK_STORAGE_KEY, JSON.stringify({
-      version: 1,
-      punches: trimStaffClockPunches(state.punches)
-    }));
-  }
-
-  function selectedStaffClockPerson() {
-    const selectedId = $('#staffClockName')?.value || '';
-    return STAFF_CLOCK_PEOPLE.find(person => person.id === selectedId) || null;
-  }
-
-  function staffClockStatusFor(staffId, state = loadStaffClockState()) {
-    const latest = state.punches
-      .filter(punch => punch.staffId === staffId)
-      .reduce((current, punch) => {
-        if (!current) return punch;
-        return Date.parse(punch.at) >= Date.parse(current.at) ? punch : current;
-      }, null);
-    return {
-      clockedIn: latest?.type === 'in',
-      clockInAt: latest?.type === 'in' ? latest.at : null,
-      latest
-    };
-  }
-
-  function formatStaffClockTime(isoTimestamp) {
-    const date = new Date(isoTimestamp);
-    if (!Number.isFinite(date.getTime())) return 'Unknown time';
-    return new Intl.DateTimeFormat('en-US', {
-      timeZone: TZ,
-      hour: 'numeric',
-      minute: '2-digit'
-    }).format(date);
-  }
-
-  function formatStaffClockShift(startIso, endIso) {
-    const elapsed = Date.parse(endIso) - Date.parse(startIso);
-    const totalMinutes = Math.max(0, Math.floor(elapsed / 60_000));
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    return `${hours} hr ${minutes} min`;
-  }
-
-  function newStaffClockPunchId() {
-    const suffix = globalThis.crypto?.randomUUID?.()
-      || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    return `m1b-preview-punch-${suffix}`;
-  }
-
-  function showStaffClockConfirmation(person, punch, clockInAt = null) {
-    staffClockConfirmationActive = true;
-    $('#staffClockControls').hidden = true;
-    const confirmation = $('#staffClockConfirmation');
-    confirmation.hidden = false;
-    $('#staffClockConfirmationTitle').textContent = punch.type === 'in' ? 'Clocked in' : 'Clocked out';
-    const lines = [`${person.name} · ${formatStaffClockTime(punch.at)}`];
-    if (punch.type === 'out' && clockInAt) {
-      lines.push(`Shift: ${formatStaffClockShift(clockInAt, punch.at)}`);
-    }
-    $('#staffClockConfirmationDetail').textContent = lines.join('\n');
-    const done = $('#btnStaffClockDone');
-    done.disabled = true;
-    if (staffClockDoneTimer) window.clearTimeout(staffClockDoneTimer);
-    staffClockDoneTimer = window.setTimeout(() => {
-      staffClockDoneTimer = null;
-      done.disabled = false;
-      done.focus();
-    }, 800);
-  }
-
-  function renderStaffClock() {
-    if (staffClockConfirmationActive) return;
-    const person = selectedStaffClockPerson();
-    const statusElement = $('#staffClockStatus');
-    const action = $('#btnStaffClockAction');
-    statusElement.classList.remove('warn');
-    if (!person) {
-      statusElement.textContent = 'Select your name to see your status.';
-      action.textContent = 'Clock in';
-      action.dataset.action = 'in';
-      action.disabled = true;
-      return;
-    }
-    const current = staffClockStatusFor(person.id);
-    if (current.clockedIn) {
-      statusElement.textContent = `Clocked in at ${formatStaffClockTime(current.clockInAt)}`;
-      action.textContent = 'Clock out';
-      action.dataset.action = 'out';
-    } else {
-      statusElement.textContent = 'Not clocked in';
-      action.textContent = 'Clock in';
-      action.dataset.action = 'in';
-    }
-    action.disabled = false;
-  }
-
-  function performStaffClockAction() {
-    if (staffClockActionLocked || staffClockConfirmationActive) return;
-    const person = selectedStaffClockPerson();
-    if (!person) return;
-    const action = $('#btnStaffClockAction');
-    const requestedAction = action.dataset.action;
-    const state = loadStaffClockState();
-    const current = staffClockStatusFor(person.id, state);
-    const expectedAction = current.clockedIn ? 'out' : 'in';
-    const statusElement = $('#staffClockStatus');
-
-    if (requestedAction !== expectedAction) {
-      statusElement.textContent = current.clockedIn
-        ? `${person.name} is already clocked in.`
-        : `${person.name} is not currently clocked in.`;
-      statusElement.classList.add('warn');
-      action.dataset.action = expectedAction;
-      action.textContent = current.clockedIn ? 'Clock out' : 'Clock in';
-      return;
-    }
-
-    staffClockActionLocked = true;
-    action.disabled = true;
-    const punch = {
-      id: newStaffClockPunchId(),
-      staffId: person.id,
-      type: expectedAction,
-      at: new Date().toISOString()
-    };
-    try {
-      saveStaffClockState({
-        version: 1,
-        punches: [...state.punches, punch]
-      });
-    } catch (error) {
-      staffClockActionLocked = false;
-      action.disabled = false;
-      statusElement.textContent = 'This preview punch could not be saved. Please try again.';
-      statusElement.classList.add('warn');
-      return;
-    }
-
-    showStaffClockConfirmation(person, punch, current.clockInAt);
-    renderStaffTimeAdmin();
-  }
-
-  function resetStaffClockCard() {
-    const done = $('#btnStaffClockDone');
-    if (done.disabled) return;
-    if (staffClockDoneTimer) window.clearTimeout(staffClockDoneTimer);
-    staffClockDoneTimer = null;
-    staffClockConfirmationActive = false;
-    staffClockActionLocked = false;
-    $('#staffClockConfirmation').hidden = true;
-    $('#staffClockControls').hidden = false;
-    $('#staffClockName').value = '';
-    done.disabled = false;
-    renderStaffClock();
-    $('#staffClockName').focus();
-  }
-
-  function renderStaffTimeAdmin() {
-    const slot = $('#staffTimeSlot');
-    if (!slot) return;
-    const state = loadStaffClockState();
-    const today = fmtDate(new Date());
-    const active = STAFF_CLOCK_PEOPLE
-      .map(person => ({ person, status: staffClockStatusFor(person.id, state) }))
-      .filter(item => item.status.clockedIn);
-    const todayPunches = state.punches
-      .filter(punch => fmtDate(new Date(punch.at)) === today)
-      .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
-    const missing = active.filter(item => fmtDate(new Date(item.status.clockInAt)) < today);
-
-    slot.replaceChildren();
-    if (!active.length && !todayPunches.length) {
-      const empty = document.createElement('div');
-      empty.className = 'staff-time-empty';
-      empty.textContent = 'No staff punches yet today.';
-      slot.appendChild(empty);
-    } else {
-      const grid = document.createElement('div');
-      grid.className = 'staff-time-admin-grid';
-
-      const activeBlock = document.createElement('section');
-      activeBlock.className = 'staff-time-block';
-      const activeHeading = document.createElement('h3');
-      activeHeading.textContent = 'Clocked in now';
-      const activeList = document.createElement('div');
-      activeList.className = 'staff-time-list';
-      if (!active.length) {
-        activeList.textContent = 'No one is clocked in.';
-      } else {
-        active.forEach(item => {
-          const row = document.createElement('div');
-          row.textContent = `${item.person.name} · since ${formatStaffClockTime(item.status.clockInAt)}`;
-          activeList.appendChild(row);
-        });
-      }
-      activeBlock.append(activeHeading, activeList);
-
-      const punchesBlock = document.createElement('section');
-      punchesBlock.className = 'staff-time-block';
-      const punchesHeading = document.createElement('h3');
-      punchesHeading.textContent = 'Today’s punches';
-      const punchesList = document.createElement('div');
-      punchesList.className = 'staff-time-list staff-time-punches';
-      if (!todayPunches.length) {
-        punchesList.textContent = 'No staff punches yet today.';
-      } else {
-        todayPunches.forEach(punch => {
-          const person = STAFF_CLOCK_PEOPLE.find(item => item.id === punch.staffId);
-          const row = document.createElement('div');
-          row.textContent = `${person.name} · Clocked ${punch.type === 'in' ? 'in' : 'out'} · ${formatStaffClockTime(punch.at)}`;
-          punchesList.appendChild(row);
-        });
-      }
-      punchesBlock.append(punchesHeading, punchesList);
-      grid.append(activeBlock, punchesBlock);
-      slot.appendChild(grid);
-    }
-
-    if (missing.length) {
-      const attention = document.createElement('section');
-      attention.className = 'staff-time-attention';
-      const attentionHeading = document.createElement('h3');
-      attentionHeading.textContent = 'Needs attention';
-      const warning = document.createElement('div');
-      warning.className = 'staff-time-list';
-      warning.textContent = `Possible missing clock-out: ${missing.map(item => item.person.name).join(', ')}`;
-      attention.append(attentionHeading, warning);
-      slot.appendChild(attention);
-    }
-
-    const planned = document.createElement('button');
-    planned.type = 'button';
-    planned.className = 'btn small secondary staff-time-placeholder';
-    planned.disabled = true;
-    planned.textContent = 'Fix missed punch — planned for the operational build';
-    slot.appendChild(planned);
-  }
 
   function legacyEventKey(row) {
     return JSON.stringify([
@@ -1967,6 +1690,7 @@ function refreshNameDatalist() {
           && !OLD_SIGNINS_KEYS.includes(k)
           && k !== SYNC_QUEUE_KEY
           && k !== LOCAL_STATE_KEY
+          && !k.startsWith('gib_m1b_')
         ) {
           localStorage.removeItem(k);
         }
@@ -1992,7 +1716,10 @@ function refreshNameDatalist() {
   function factoryReset() {
     try {
       Object.keys(localStorage).forEach(k => {
-        if (k.startsWith('gib_') || k.startsWith('rbjj_')) {
+        if (
+          (k.startsWith('gib_') || k.startsWith('rbjj_'))
+          && !k.startsWith('gib_m1b_')
+        ) {
           localStorage.removeItem(k);
         }
       });
@@ -4055,7 +3782,6 @@ function refreshNameDatalist() {
 
     // Sign-ins
     renderAdminTable();
-    renderStaffTimeAdmin();
 
     // Load sync settings into admin controls and refresh status so that
     // the current queue count and last sync information are visible.
@@ -4096,9 +3822,6 @@ function refreshNameDatalist() {
   $('#btnSignIn').addEventListener('click', signIn);
   $('#btnConfirmSignInUndo').addEventListener('click', undoLastSigninBatch);
   $('#btnConfirmSignInDone').addEventListener('click', confirmSigninDone);
-  $('#staffClockName').addEventListener('change', renderStaffClock);
-  $('#btnStaffClockAction').addEventListener('click', performStaffClockAction);
-  $('#btnStaffClockDone').addEventListener('click', resetStaffClockCard);
 
   $('#btnAdminPinToggle').addEventListener('click', () => {
     const panel = $('#adminPinPanel');
@@ -4128,7 +3851,7 @@ function refreshNameDatalist() {
   });
 
   $('#btnResetDevice').addEventListener('click', () => {
-    if (!confirm('Reset this device? This clears the device label/location/site/setup, Admin PIN, instructor roster, auto-sync and sync status, schedule, temporary classes, website schedule cache/local overrides, and duration rules. Sign-ins and rows waiting to sync are NOT deleted.')) return;
+    if (!confirm('Reset this device? This clears the device label/location/site/setup, Admin PIN, instructor roster, auto-sync and sync status, schedule, temporary classes, website schedule cache/local overrides, and duration rules. Sign-ins and rows waiting to sync are NOT deleted. Staff Clock punches and its waiting list are also NOT deleted.')) return;
     resetDevice();
     $('#deviceStatus').innerHTML = 'Device reset. Configure again above.';
     loadSyncSettings();
@@ -4137,7 +3860,7 @@ function refreshNameDatalist() {
 
   $('#btnFactoryReset').addEventListener('click', () => {
     // Use a prompt to ask the user to type RESET as a safeguard against accidental clicks.
-    const answer = prompt('Factory reset will DELETE all device info, schedule data and sign‑ins on this device.\n\nType “RESET” (all caps) to proceed.');
+    const answer = prompt('Factory reset will DELETE Instructor Sign-In device info, schedule data, and instructor sign-ins on this device. Staff Clock punches and its waiting list are kept separate and are not deleted.\n\nType “RESET” (all caps) to proceed.');
     if (!answer || answer.trim().toUpperCase() !== 'RESET') {
       alert('Factory reset cancelled');
       return;
@@ -4389,13 +4112,12 @@ function refreshNameDatalist() {
   loadSyncSettings();
   updateSyncStatus();
   refreshNameDatalist();
-  renderStaffClock();
-  renderStaffTimeAdmin();
   startCanonicalScheduleRefresh();
   const requestedInitialView = new URLSearchParams(window.location.search).get('view');
   if (requestedInitialView === 'admin') openAdminWithGate();
 
 })();
 </script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-08-18-m1b-staff-clock-operational-r1"></script>
 </body>
 </html>
