@@ -146,9 +146,9 @@ test('default Admin document is status-first with the required calm disclosures'
   const admin = sourceBetween(kiosk, '<!-- ADMIN -->', '<div id="toast"');
   const orderedIds = [
     'adminStatusHeading',
-    'staffTimeSection',
     'adminActionsHeading',
     'recentSignins',
+    'staffTimeSection',
     'temporaryClassesSection',
     'weeklyScheduleSection',
     'advancedSettings',

@@ -953,11 +953,6 @@ body.admin-mode .container { max-width: 1120px; }
         </div>
       </section>
 
-      <details id="staffTimeSection" class="admin-disclosure staff-time-disclosure" open>
-        <summary>Staff time</summary>
-        <div id="staffTimeSlot" class="admin-disclosure-body"></div>
-      </details>
-
       <section class="admin-actions-block" aria-labelledby="adminActionsHeading">
         <h3 id="adminActionsHeading" class="admin-section-title">Ordinary actions</h3>
         <div id="adminPrimaryActions" class="admin-primary-actions">
@@ -971,6 +966,11 @@ body.admin-mode .container { max-width: 1120px; }
     <details id="recentSignins" class="admin-disclosure" open>
       <summary>Recent sign-ins</summary>
       <div id="recentSigninsSlot" class="admin-disclosure-body"></div>
+    </details>
+
+    <details id="staffTimeSection" class="admin-disclosure staff-time-disclosure" open>
+      <summary>Staff time</summary>
+      <div id="staffTimeSlot" class="admin-disclosure-body"></div>
     </details>
 
     <details id="temporaryClassesSection" class="admin-disclosure">
@@ -1265,10 +1265,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-18-m1b-staff-clock-preview-r2';
+} from './sync-core.mjs?v=2026-08-18-m1b-staff-clock-preview-r3';
 
 // Bump this revision whenever index.html or sync-core.mjs changes.
-const OFFLINE_SHELL_REVISION = '2026-08-18-m1b-staff-clock-preview-r2';
+const OFFLINE_SHELL_REVISION = '2026-08-18-m1b-staff-clock-preview-r3';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,

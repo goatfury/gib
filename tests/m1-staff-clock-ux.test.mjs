@@ -696,7 +696,7 @@ test('Staff time shows Needs attention only for an actual missing clock-out', ()
   assert.equal(runtime.networkCalls, 0);
 });
 
-test('opening Admin preserves punches and instructor data while Staff time stays manually collapsible', () => {
+test('opening Admin preserves punches and instructor data while Recent sign-ins and Staff time stay manually collapsible', () => {
   const storageKey = staffStorageKey();
   const storageEntries = {
     ...protectedStorageEntries(),
@@ -724,6 +724,7 @@ test('opening Admin preserves punches and instructor data while Staff time stays
     'cfgSiteCode',
     'debugBox',
     'adminHeading',
+    'recentSignins',
     'staffTimeSection',
     'advancedSettings',
     'dangerZone'
@@ -733,6 +734,7 @@ test('opening Admin preserves punches and instructor data while Staff time stays
   }
   runtime.elements.get('kiosk').style = { display: 'block' };
   runtime.elements.get('admin').style = { display: 'none' };
+  runtime.elements.get('recentSignins').open = true;
   runtime.elements.get('staffTimeSection').open = true;
   runtime.elements.get('advancedSettings').open = false;
   runtime.elements.get('dangerZone').open = false;
@@ -760,16 +762,21 @@ test('opening Admin preserves punches and instructor data while Staff time stays
   }).runInContext(runtime.context);
 
   runtime.context.showAdmin();
+  assert.equal(runtime.elements.get('recentSignins').open, true, 'Recent sign-ins starts open');
   assert.equal(runtime.elements.get('staffTimeSection').open, true, 'Staff time starts open');
   assert.equal(runtime.elements.get('advancedSettings').open, false);
   assert.equal(runtime.elements.get('dangerZone').open, false);
 
+  runtime.elements.get('recentSignins').open = false;
   runtime.elements.get('staffTimeSection').open = false;
   runtime.context.showAdmin();
+  assert.equal(runtime.elements.get('recentSignins').open, false, 'manual Recent sign-ins close survives Admin rendering');
   assert.equal(runtime.elements.get('staffTimeSection').open, false, 'manual close survives Admin rendering');
 
+  runtime.elements.get('recentSignins').open = true;
   runtime.elements.get('staffTimeSection').open = true;
   runtime.context.showAdmin();
+  assert.equal(runtime.elements.get('recentSignins').open, true, 'manual Recent sign-ins reopen survives Admin rendering');
   assert.equal(runtime.elements.get('staffTimeSection').open, true, 'manual reopen survives Admin rendering');
 
   assert.equal(runtime.storage.snapshot(), before);
@@ -820,23 +827,36 @@ test('pruning retains an older unmatched clock-in behind more than 200 newer sta
   }
 });
 
-test('Admin places one open-by-default, read-only Staff time disclosure directly after Status summary', () => {
+test('Admin prioritizes instructor review before an open-by-default, read-only Staff time disclosure', () => {
   const admin = sourceBetween(kiosk, '<!-- ADMIN -->', '<div id="toast"');
+  assert.equal(countId('recentSignins'), 1);
   assert.equal(countId('staffTimeSection'), 1);
   assert.equal(countId('staffTimeSlot'), 1);
+  assert.match(admin, /<details id="recentSignins"[^>]*\bopen\b[^>]*>\s*<summary>Recent sign-ins<\/summary>/u);
   assert.match(admin, /<details id="staffTimeSection"[^>]*\bopen\b[^>]*>\s*<summary>Staff time<\/summary>/u);
+  assert.match(openingTag('recentSignins'), /\sopen(?:\s|=|>)/u);
   assert.match(openingTag('staffTimeSection'), /\sopen(?:\s|=|>)/u);
   assert.match(
     admin,
-    /<section class="admin-overview"[^>]*>[\s\S]*?<\/section>\s*<details id="staffTimeSection"[^>]*\bopen\b[^>]*>[\s\S]*?<\/details>\s*<section class="admin-actions-block"/u,
-    'Staff time must be the next Admin section after Status summary, with Ordinary actions directly below it'
+    /<section class="admin-overview"[^>]*>[\s\S]*?<\/section>\s*<section class="admin-actions-block"/u,
+    'Instructor ordinary actions must sit directly below Status summary'
+  );
+  assert.match(
+    admin,
+    /<section class="admin-actions-block"[^>]*>[\s\S]*?<\/section>\s*<\/div>\s*<details id="recentSignins"[^>]*\bopen\b[^>]*>/u,
+    'Recent instructor sign-ins must sit directly below the instructor tools'
+  );
+  assert.match(
+    admin,
+    /<details id="recentSignins"[^>]*\bopen\b[^>]*>[\s\S]*?<\/details>\s*<details id="staffTimeSection"[^>]*\bopen\b[^>]*>/u,
+    'Staff time must sit directly below Recent instructor sign-ins'
   );
 
   const orderedIds = [
     'adminStatusHeading',
-    'staffTimeSection',
     'adminActionsHeading',
     'recentSignins',
+    'staffTimeSection',
     'temporaryClassesSection',
     'weeklyScheduleSection',
     'advancedSettings',
@@ -845,6 +865,31 @@ test('Admin places one open-by-default, read-only Staff time disclosure directly
   const positions = orderedIds.map(id => admin.indexOf(`id="${id}"`));
   assert.equal(positions.every(position => position >= 0), true);
   assert.deepEqual([...positions].sort((left, right) => left - right), positions);
+
+  assert.match(
+    admin,
+    /id="dailyReviewLink"[^>]*class="[^"]*\bbrand\b[^"]*\badmin-daily-review\b[^"]*"[^>]*>Forgotten sign-in \/ Daily Review<\/a>/u,
+    'Forgotten sign-in / Daily Review must remain the prominent instructor action'
+  );
+  assert.match(admin, /id="recentSigninsLink"[^>]*href="#recentSignins"[^>]*>View recent sign-ins<\/a>/u);
+  for (const [id, label] of [
+    ['btnSyncNow', /Sync now/u],
+    ['btnExport', /Export backup CSV/u],
+    ['btnVoidLast', /Void last sign[^<]*in/u]
+  ]) {
+    assert.match(kiosk, new RegExp(`<button[^>]*\\bid="${id}"[^>]*>[^<]*${label.source}[^<]*<\\/button>`, 'u'), id);
+  }
+
+  const organizeSource = kioskFunctionSource('organizeAdminView');
+  assert.match(organizeSource, /\['btnSyncNow', 'btnExport', 'btnVoidLast'\]/u);
+  assert.match(organizeSource, /primaryActions\.insertBefore\(action, recentSigninsLink\)/u);
+  for (const [id, handler] of [
+    ['btnSyncNow', 'syncNow'],
+    ['btnExport', 'exportCSV'],
+    ['btnVoidLast', 'voidLastSignin']
+  ]) {
+    assert.match(kiosk, new RegExp(`\\$\\('#${id}'\\)\\.addEventListener\\('click', ${handler}\\);`, 'u'), id);
+  }
 
   assert.match(kiosk, /Clocked in now/u);
   assert.match(kiosk, /Today(?:'s|’s) punches/u);
@@ -863,11 +908,13 @@ test('Admin places one open-by-default, read-only Staff time disclosure directly
   );
 
   const showAdminSource = sourceBetween(kiosk, 'function showAdmin()', 'function openAdminWithGate()');
-  assert.equal(
-    showAdminSource.includes('staffTimeSection'),
-    false,
-    'reopening Admin must not override a manual Staff time close or reopen'
-  );
+  for (const id of ['recentSignins', 'staffTimeSection']) {
+    assert.equal(
+      showAdminSource.includes(id),
+      false,
+      `reopening Admin must not override a manual ${id} close or reopen`
+    );
+  }
 
   const renderStart = kiosk.indexOf('function renderStaffTimeAdmin(');
   const nextFunction = kiosk.indexOf('\n  function ', renderStart + 12);
