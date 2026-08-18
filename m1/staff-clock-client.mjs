@@ -8,7 +8,7 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-08-18-m1b-staff-clock-operational-r2';
+} from './staff-clock-core.mjs?v=2026-08-18-m1b-staff-clock-operational-r3';
 
 const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
 const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
@@ -651,6 +651,9 @@ function fmtDate(value) {
     }
     if (navigator.onLine === false) return null;
     staffClockSyncPromise = (async () => {
+      // Yield once so the promise lock is assigned before an empty startup run
+      // can reach `finally` and clear it.
+      await Promise.resolve();
       try {
         while (navigator.onLine !== false) {
           const before = loadStaffClockState();
