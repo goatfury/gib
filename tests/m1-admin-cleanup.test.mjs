@@ -7,11 +7,17 @@ import * as syncCore from '../m1/sync-core.mjs';
 
 const kiosk = readFileSync(new URL('../m1/index.html', import.meta.url), 'utf8')
   .replace(/\r\n?/gu, '\n');
+const staffClockClient = readFileSync(
+  new URL('../m1/staff-clock-client.mjs', import.meta.url),
+  'utf8'
+).replace(/\r\n?/gu, '\n');
 
 const BASELINE_BUTTON_IDS = Object.freeze([
   'btnAdmin',
   'toggleClasses',
   'btnSignIn',
+  'btnStaffClockAction',
+  'btnStaffClockDone',
   'btnKiosk',
   'btnAdminPinToggle',
   'btnAdminLogout',
@@ -46,6 +52,7 @@ const BASELINE_FIELD_IDS = Object.freeze([
   'nameInput',
   'nameDatalist',
   'notesInput',
+  'staffClockName',
   'adminPinInput',
   'cfgGymName',
   'cfgLocation',
@@ -145,6 +152,7 @@ test('default Admin document is status-first with the required calm disclosures'
     'adminStatusHeading',
     'adminActionsHeading',
     'recentSignins',
+    'staffTimeSection',
     'temporaryClassesSection',
     'weeklyScheduleSection',
     'advancedSettings',
@@ -162,6 +170,7 @@ test('default Admin document is status-first with the required calm disclosures'
   assert.doesNotMatch(kiosk, /window\.open\s*\(/u);
 
   assert.match(openingTag('recentSignins'), /\sopen(?:\s|=|>)/u);
+  assert.match(openingTag('staffTimeSection'), /\sopen(?:\s|=|>)/u);
   for (const id of [
     'temporaryClassesSection',
     'weeklyScheduleSection',
@@ -201,6 +210,17 @@ test('every inherited control remains unique and connected after organization', 
     assert.match(
       kiosk,
       new RegExp(`\\$\\('#${id}'\\)\\.addEventListener\\('click', ${action}\\);`, 'u'),
+      `${id} must remain connected to ${action}`
+    );
+  }
+
+  for (const [id, action] of [
+    ['btnStaffClockAction', 'performStaffClockAction'],
+    ['btnStaffClockDone', 'resetStaffClockCard']
+  ]) {
+    assert.match(
+      staffClockClient,
+      new RegExp(`\\$\\('#${id}'\\)\\?\\.addEventListener\\('click', ${action}\\);`, 'u'),
       `${id} must remain connected to ${action}`
     );
   }
@@ -495,12 +515,12 @@ test('opening Admin and toggling disclosures preserve current local state', () =
   const before = storage.snapshot();
   const ids = [
     'kiosk', 'admin', 'cfgGymName', 'cfgLocation', 'cfgSiteCode', 'debugBox', 'adminHeading',
-    'recentSignins', 'temporaryClassesSection', 'weeklyScheduleSection', 'advancedSettings', 'dangerZone'
+    'recentSignins', 'staffTimeSection', 'temporaryClassesSection', 'weeklyScheduleSection', 'advancedSettings', 'dangerZone'
   ];
   const elements = new Map(ids.map(id => [id, {
     id,
     value: '',
-    open: id === 'recentSignins',
+    open: id === 'recentSignins' || id === 'staffTimeSection',
     style: { display: id === 'admin' ? 'none' : 'block' },
     focus() { this.focused = true; }
   }]));
@@ -540,7 +560,7 @@ test('opening Admin and toggling disclosures preserve current local state', () =
     'updateSyncStatus', 'renderAdminSummary'
   ]);
 
-  for (const id of ['recentSignins', 'temporaryClassesSection', 'weeklyScheduleSection', 'advancedSettings', 'dangerZone']) {
+  for (const id of ['recentSignins', 'staffTimeSection', 'temporaryClassesSection', 'weeklyScheduleSection', 'advancedSettings', 'dangerZone']) {
     elements.get(id).open = !elements.get(id).open;
   }
   assert.equal(storage.snapshot(), before);
@@ -863,7 +883,7 @@ test('Reset discloses its full scope, cancel mutates nothing, and confirm preser
     /auto-sync and sync status/u,
     /schedule, temporary classes, website schedule cache\/local overrides/u,
     /duration rules/u,
-    /Sign-ins and rows waiting to sync are NOT deleted/u
+    /Sign-ins and rows waiting to sync are NOT deleted\. Staff Clock punches and its waiting list are also NOT deleted\./u
   ]) assert.match(confirmation, expected);
 
   confirmResult = true;

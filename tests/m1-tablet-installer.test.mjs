@@ -285,7 +285,7 @@ test('production diagnostic returns only the six safe fields and never mutates s
     harness.elements.get('historyCountResult').textContent,
     harness.elements.get('waitingCountResult').textContent,
     harness.elements.get('buildResult').textContent
-  ], ['YES', 'YES', 'OFF', '3', '2', '2026-08-16 M1 PRODUCTION unified-rollout']);
+  ], ['YES', 'YES', 'OFF', '3', '2', '2026-08-19 M1B PRODUCTION staff-clock']);
   assert.equal(harness.calls.some(call => call.operation !== 'get'), false);
   assert.equal(harness.data.get('gib_m1_local_state_v2'), canonicalState);
   assert.equal(harness.data.get('unrelated'), 'unchanged');
@@ -296,8 +296,8 @@ test('production diagnostic returns only the six safe fields and never mutates s
     'Correct production origin',
     'Device authorized',
     'Auto-sync',
-    'Local sign-in count',
-    'Waiting count',
+    'Instructor sign-in rows',
+    'Instructor waiting rows',
     'Build/version'
   ]);
   const productionBuild = kioskHtml.match(/const PRODUCTION_BUILD = '([^']+)'/u);
