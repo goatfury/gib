@@ -34,15 +34,17 @@ jobs:
           grep -q "no daily interpolation" oil-atlas/public/index.html
           node --test oil-atlas/tests/gulf-model.test.mjs
 
-      - name: Wait for Netlify preview
+      - name: Wait for audited Netlify preview
         run: |
           for attempt in $(seq 1 48); do
             if curl --fail --silent --show-error --location "$PREVIEW_URL/" -o /tmp/oil-atlas.html; then
-              exit 0
+              if grep -q "Gulf oil evidence" /tmp/oil-atlas.html && grep -q "Audited Gulf export evidence" /tmp/oil-atlas.html; then
+                exit 0
+              fi
             fi
             sleep 5
           done
-          echo "Netlify preview did not become reachable" >&2
+          echo "Audited Netlify preview did not become reachable" >&2
           exit 1
 
       - name: Verify page and live data endpoint
