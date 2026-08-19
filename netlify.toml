@@ -1,9 +1,24 @@
 [build]
-  publish = "."
+  base = "oil-atlas"
+  command = "node build.mjs"
+  publish = "public"
   functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "22"
 
 [functions]
   node_bundler = "esbuild"
 
-[functions."m1-schedule"]
-  included_files = ["m1/shared-schedule.json"]
+[functions."warm-oil-data"]
+  schedule = "17 10 * * *"
+
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/data/fallback.json"
+  [headers.values]
+    Cache-Control = "public, max-age=300, must-revalidate"
