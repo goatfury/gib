@@ -13,6 +13,12 @@ import {
   sanitizeStaffClockSnapshot,
   sanitizeStaffClockSyncResults
 } from './_lib/m1-staff-clock-contracts.mjs';
+import {
+  productionDeviceAuthorization,
+  productionDeviceCookieHeader,
+  productionRuntimeConfig,
+  validExactProductionRequest
+} from './_lib/m1-production-runtime.mjs';
 
 export const STAFF_CLOCK_PATH = '/api/m1-staff-clock';
 
@@ -89,21 +95,44 @@ function duplicatePunchIds(punches) {
 }
 
 export async function handleStaffClock(request, dependencies = {}) {
-  // M1B is an operational TEST candidate. Production is deliberately absent
-  // until the separately approved production-release run.
-  const target = validPreviewSameOriginRequest(request) ? 'test' : '';
+  const target = validPreviewSameOriginRequest(request)
+    ? 'test'
+    : validExactProductionRequest(request, STAFF_CLOCK_PATH)
+      ? 'production'
+      : '';
   if (!target) {
     return jsonResponse(403, { ok: false, message: 'Same-origin Staff Clock request required.' });
   }
 
   const env = dependencies.env || process.env;
+  let runtime = null;
+  let productionDeviceCredential = '';
+  if (target === 'production') {
+    runtime = productionRuntimeConfig(env);
+    if (!runtime) {
+      return jsonResponse(403, { ok: false, message: 'Production Staff Clock is not configured.' });
+    }
+    const device = productionDeviceAuthorization(
+      request,
+      runtime,
+      dependencies.now ?? Date.now()
+    );
+    if (!device.authorized) {
+      return jsonResponse(401, {
+        ok: false,
+        message: 'Production device authorization required.'
+      });
+    }
+    productionDeviceCredential = device.credential;
+  }
+
   const parsed = await readJson(request, MAX_REQUEST_BYTES);
   if (parsed.response) return parsed.response;
   const operation = parsed.value.operation;
   if (operation !== 'snapshot' && operation !== 'sync') {
     return jsonResponse(400, { ok: false, message: 'Staff Clock request was rejected.' });
   }
-  const runtime = previewRuntimeConfig(env, request.url);
+  if (target === 'test') runtime = previewRuntimeConfig(env, request.url);
   if (!runtime) {
     return jsonResponse(503, {
       ok: false,
@@ -132,7 +161,9 @@ export async function handleStaffClock(request, dependencies = {}) {
     return jsonResponse(200, successBody(target, {
       staff: snapshot.staff,
       records: snapshot.records
-    }));
+    }), target === 'production'
+      ? { 'Set-Cookie': productionDeviceCookieHeader(productionDeviceCredential) }
+      : {});
   }
 
   if (
@@ -157,7 +188,9 @@ export async function handleStaffClock(request, dependencies = {}) {
     punch ? null : rejectedPunchResult(parsed.value.punches[index])
   ));
   if (!forwarded.length) {
-    return jsonResponse(200, successBody(target, { results: localResults }));
+    return jsonResponse(200, successBody(target, { results: localResults }), target === 'production'
+      ? { 'Set-Cookie': productionDeviceCookieHeader(productionDeviceCredential) }
+      : {});
   }
 
   const google = await postGoogle(
@@ -175,7 +208,9 @@ export async function handleStaffClock(request, dependencies = {}) {
     results: validated.map((punch, index) => (
       punch ? byPunchId.get(punch.punchId) : localResults[index]
     ))
-  }));
+  }), target === 'production'
+    ? { 'Set-Cookie': productionDeviceCookieHeader(productionDeviceCredential) }
+    : {});
 }
 
 export default request => handleStaffClock(request);

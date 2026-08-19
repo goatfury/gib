@@ -21,15 +21,15 @@
 <body>
   <main>
     <h1>M1 production tablet diagnostic</h1>
-    <p class="notice">This read-only check reports only safe tablet state. It does not change local records, the waiting queue, auto-sync, or device authorization.</p>
+    <p class="notice">This read-only check reports only safe tablet state. It does not change instructor records, the instructor waiting queue, auto-sync, or device authorization.</p>
     <p id="statusMessage" class="status" role="status" aria-live="polite">Checking safe tablet state...</p>
     <dl id="diagnosticResults" aria-live="polite">
       <dt>Correct production origin</dt><dd id="originResult">NO</dd>
       <dt>Device authorized</dt><dd id="authorizationResult">NO</dd>
       <dt>Auto-sync</dt><dd id="autoSyncResult">OFF</dd>
-      <dt>Local sign-in count</dt><dd id="historyCountResult">0</dd>
-      <dt>Waiting count</dt><dd id="waitingCountResult">0</dd>
-      <dt>Build/version</dt><dd id="buildResult">2026-08-16 M1 PRODUCTION unified-rollout</dd>
+      <dt>Instructor sign-in rows</dt><dd id="historyCountResult">0</dd>
+      <dt>Instructor waiting rows</dt><dd id="waitingCountResult">0</dd>
+      <dt>Build/version</dt><dd id="buildResult">2026-08-19 M1B PRODUCTION staff-clock</dd>
     </dl>
   </main>
   <script>
@@ -39,7 +39,7 @@
       const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
       const EXPECTED_PATH = '/m1/production-diagnostic.html';
       const STATUS_ENDPOINT = '/api/m1-tablet-status';
-      const BUILD_VERSION = '2026-08-16 M1 PRODUCTION unified-rollout';
+      const BUILD_VERSION = '2026-08-19 M1B PRODUCTION staff-clock';
       const LOCAL_STATE_KEY = 'gib_m1_local_state_v2';
       const AUTO_SYNC_KEY = 'gib_m1_sync_auto_v1';
       const LEGACY_QUEUE_KEY = 'gib_m1_sync_queue_v1';

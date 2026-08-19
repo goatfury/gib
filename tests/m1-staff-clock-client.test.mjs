@@ -42,7 +42,7 @@ test('Staff Clock is isolated from the inherited inline kiosk client', () => {
   const inlineModule = kioskHtml.match(/<script type="module">([\s\S]*?)<\/script>/u)?.[1] || '';
   assert.match(
     kioskHtml,
-    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-08-18-m1b-staff-clock-operational-r4"><\/script>/u
+    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-08-19-m1b-staff-clock-production-r1"><\/script>/u
   );
   assert.doesNotMatch(inlineModule, /staff-clock-core|staffClockSyncPunch|syncStaffClockQueue|renderStaffTimeAdmin/u);
 });
@@ -150,6 +150,44 @@ test('snapshot and sync confirmations reject added envelope fields', () => {
     }],
     extra: true
   }, [fullRecord]));
+});
+
+test('production origin accepts only production-target snapshot and sync envelopes', () => {
+  const validateSnapshot = Function(`
+    const IS_PRODUCTION_ORIGIN = true;
+    const normalizeStaffClockPerson = value => value;
+    const normalizeStaffClockRecord = value => value;
+    ${namedFunctionSource(clientSource, 'exactStaffClockKeys')}
+    return (${namedFunctionSource(clientSource, 'validatedStaffClockSnapshot')});
+  `)();
+  const productionSnapshot = {
+    ok: true,
+    target: 'production',
+    staff: [{ staffId: 'mandy', staffName: 'Mandy' }],
+    records: []
+  };
+  assert.deepEqual(validateSnapshot(productionSnapshot), {
+    staff: productionSnapshot.staff,
+    records: productionSnapshot.records
+  });
+  assert.equal(validateSnapshot({ ...productionSnapshot, target: 'test' }), null);
+
+  const evaluate = Function(`
+    const IS_PRODUCTION_ORIGIN = true;
+    ${namedFunctionSource(clientSource, 'exactStaffClockKeys')}
+    return (${namedFunctionSource(clientSource, 'acceptedStaffClockSyncIds')});
+  `)();
+  const productionConfirmation = {
+    ok: true,
+    target: 'production',
+    results: [{
+      punchId: fullRecord.punchId,
+      result: 'added',
+      linkedPunchId: fullRecord.punchId
+    }]
+  };
+  assert.deepEqual([...evaluate(productionConfirmation, [fullRecord])], [fullRecord.punchId]);
+  assert.throws(() => evaluate({ ...productionConfirmation, target: 'test' }, [fullRecord]));
 });
 
 test('the offline shell precaches and serves both Staff Clock modules', () => {

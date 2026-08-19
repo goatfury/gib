@@ -9,6 +9,8 @@ import {
   runtimeConfig
 } from '../netlify/functions/_lib/m1-common.mjs';
 import {
+  PRODUCTION_DEVICE_COOKIE,
+  createProductionDeviceCredential,
   PRODUCTION_ORIGIN
 } from '../netlify/functions/_lib/m1-production-runtime.mjs';
 import {
@@ -50,6 +52,16 @@ const ADMIN_REQUEST_TOKEN = 'A'.repeat(43);
 const PUNCH_ID = 'gib-m1-staff-12345678-1234-4123-8123-123456789abc';
 const SECOND_PUNCH_ID = 'gib-m1-staff-abcdef12-3456-4789-8abc-def012345678';
 const REQUEST_ID = 'gib-m1-staff-request-87654321-4321-4321-8321-cba987654321';
+const PRODUCTION_DEVICE_CREDENTIAL = createProductionDeviceCredential(
+  PRODUCTION_DEVICE_TOKEN,
+  () => Buffer.alloc(32, 7),
+  NOW_MS
+);
+const TEST_SCOPED_DEVICE_CREDENTIAL = createProductionDeviceCredential(
+  TEST_WEBHOOK_TOKEN,
+  () => Buffer.alloc(32, 8),
+  NOW_MS
+);
 const STAFF_CLOCK_CLIENT_SOURCE = readFileSync(
   new URL('../m1/staff-clock-client.mjs', import.meta.url),
   'utf8'
@@ -93,6 +105,24 @@ function record(overrides = {}) {
     linkedPunchId: '',
     ...overrides
   };
+}
+
+function productionPunch(overrides = {}) {
+  return punch({
+    staffId: 'mandy',
+    staffName: 'Mandy',
+    site: 'Rev',
+    ...overrides
+  });
+}
+
+function productionRecord(overrides = {}) {
+  return record({
+    staffId: 'mandy',
+    staffName: 'Mandy',
+    site: 'Rev',
+    ...overrides
+  });
 }
 
 function extractedClientFunction(name) {
@@ -154,6 +184,7 @@ function adminRequest({
   body = { operation: 'review' },
   adminName = 'Andrew Smith',
   env = ENV,
+  sessionOrigin = origin,
   requestToken = ADMIN_REQUEST_TOKEN,
   headerToken = requestToken,
   includeAuth = true
@@ -165,7 +196,7 @@ function adminRequest({
     'Sec-Fetch-Site': fetchSite
   };
   if (includeAuth) {
-    const runtime = runtimeConfig(env, { admin: true, requestUrl: `${origin}${path}` });
+    const runtime = runtimeConfig(env, { admin: true, requestUrl: `${sessionOrigin}${path}` });
     assert.ok(runtime, 'test setup requires valid Admin runtime');
     const session = createAdminSession(adminName, runtime.sessionSecret, NOW_MS, requestToken);
     headers.Cookie = `${ADMIN_COOKIE}=${encodeURIComponent(session)}`;
@@ -197,6 +228,14 @@ function snapshot(target = 'test', overrides = {}) {
     records: [record()],
     ...overrides
   };
+}
+
+function productionSnapshot(overrides = {}) {
+  return snapshot('production', {
+    staff: [{ staffId: 'mandy', staffName: 'Mandy' }],
+    records: [productionRecord()],
+    ...overrides
+  });
 }
 
 function period(startDate, endDate, overrides = {}) {
@@ -240,6 +279,53 @@ function reviewPayload(target = 'test', overrides = {}) {
     },
     ...overrides
   };
+}
+
+function productionReviewPayload(overrides = {}) {
+  return reviewPayload('production', {
+    staff: [{ staffId: 'mandy', staffName: 'Mandy' }],
+    records: [productionRecord()],
+    clockedInNow: [{
+      punchId: PUNCH_ID,
+      staffId: 'mandy',
+      staffName: 'Mandy',
+      clockInAt: '2026-08-18T16:30:00-04:00'
+    }],
+    todayPunches: [{
+      punchId: PUNCH_ID,
+      staffId: 'mandy',
+      staffName: 'Mandy',
+      punchAction: 'clockIn',
+      timestamp: '2026-08-18T16:30:00-04:00',
+      source: 'Tablet',
+      status: 'ACTIVE'
+    }],
+    periods: {
+      current: period('2026-08-10', '2026-08-23', {
+        totals: [{
+          staffId: 'mandy',
+          staffName: 'Mandy',
+          completedShifts: 0,
+          totalSeconds: 0,
+          needsAttention: false
+        }]
+      }),
+      previous: period('2026-07-27', '2026-08-09', {
+        totals: [{
+          staffId: 'mandy',
+          staffName: 'Mandy',
+          completedShifts: 0,
+          totalSeconds: 0,
+          needsAttention: false
+        }]
+      })
+    },
+    ...overrides
+  });
+}
+
+function productionDeviceCookie(credential = PRODUCTION_DEVICE_CREDENTIAL) {
+  return `${PRODUCTION_DEVICE_COOKIE}=${encodeURIComponent(credential)}`;
 }
 
 test('Staff Clock contract uses separate permanent IDs and exact New York timestamps', () => {
@@ -329,6 +415,36 @@ test('tablet route is exact, rate-limited, same-origin, and pins TEST transport'
       records: [publicRecord()]
     });
   }
+});
+
+test('production credentials cannot authorize or replace the TEST Staff Clock transport', async () => {
+  let call;
+  const response = await handleStaffClock(staffClockRequest({
+    cookie: productionDeviceCookie()
+  }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async (url, options) => {
+      call = { url, body: JSON.parse(options.body) };
+      return googleResponse(snapshot());
+    }
+  });
+  assert.equal(response.status, 200);
+  assert.equal(call.url, TEST_WEBHOOK_URL);
+  assert.equal(call.body.token, TEST_WEBHOOK_TOKEN);
+  assert.equal(call.body.target, 'test');
+  assert.equal(response.headers.has('set-cookie'), false);
+
+  let called = false;
+  const collided = await handleStaffClock(staffClockRequest(), {
+    env: { ...ENV, GIB_TEST_WEBHOOK_TOKEN: PRODUCTION_WEBHOOK_TOKEN },
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async () => { called = true; throw new Error('cross-scoped TEST transport called Google'); }
+  });
+  assert.equal(collided.status, 503);
+  assert.equal(called, false);
 });
 
 test('tablet sync saves only the exact frontend wire projection and accepts complete ID-bound acknowledgments', async () => {
@@ -438,20 +554,175 @@ test('Staff Clock endpoints enforce bounded rates, batches, and JSON bodies befo
   assert.equal(called, false);
 });
 
-test('canonical production tablet path is hard-disabled before runtime, authorization, or Google', async () => {
-  let called = false;
+test('canonical production tablet path requires exact runtime and device authorization before Google', async () => {
+  const cases = [
+    {
+      request: staffClockRequest({
+        origin: PRODUCTION_ORIGIN,
+        requestOrigin: 'https://evil.example',
+        cookie: productionDeviceCookie()
+      }),
+      env: ENV,
+      expectedStatus: 403
+    },
+    {
+      request: staffClockRequest({
+        origin: PRODUCTION_ORIGIN,
+        fetchSite: 'cross-site',
+        cookie: productionDeviceCookie()
+      }),
+      env: ENV,
+      expectedStatus: 403
+    },
+    {
+      request: staffClockRequest({
+        origin: PRODUCTION_ORIGIN,
+        host: 'www.gib-live.netlify.app',
+        cookie: productionDeviceCookie()
+      }),
+      env: ENV,
+      expectedStatus: 403
+    },
+    {
+      request: staffClockRequest({
+        origin: PRODUCTION_ORIGIN,
+        path: `${STAFF_CLOCK_PATH}?target=production`,
+        cookie: productionDeviceCookie()
+      }),
+      env: ENV,
+      expectedStatus: 403
+    },
+    {
+      request: staffClockRequest({ origin: PRODUCTION_ORIGIN }),
+      env: ENV,
+      expectedStatus: 401
+    },
+    {
+      request: staffClockRequest({
+        origin: PRODUCTION_ORIGIN,
+        cookie: productionDeviceCookie(TEST_SCOPED_DEVICE_CREDENTIAL)
+      }),
+      env: ENV,
+      expectedStatus: 401
+    },
+    {
+      request: staffClockRequest({
+        origin: PRODUCTION_ORIGIN,
+        cookie: productionDeviceCookie()
+      }),
+      env: { ...ENV, GIB_M1_PRODUCTION_SYNC_ENABLED: 'false' },
+      expectedStatus: 403
+    },
+    {
+      request: staffClockRequest({
+        origin: PRODUCTION_ORIGIN,
+        cookie: productionDeviceCookie()
+      }),
+      env: { ...ENV, GIB_M1_PRODUCTION_WEBHOOK_TOKEN: TEST_WEBHOOK_TOKEN },
+      expectedStatus: 403
+    }
+  ];
+
+  for (const item of cases) {
+    let called = false;
+    const response = await handleStaffClock(item.request, {
+      env: item.env,
+      now: NOW_MS,
+      dateNow: NOW,
+      fetch: async () => { called = true; throw new Error('unauthorized production called Google'); }
+    });
+    assert.equal(response.status, item.expectedStatus);
+    assert.equal(called, false);
+  }
+});
+
+test('production tablet route pins private transport and refreshes only the signed HttpOnly cookie', async () => {
+  let call;
   const response = await handleStaffClock(staffClockRequest({
     origin: PRODUCTION_ORIGIN,
-    cookie: '',
-    body: { operation: 'snapshot' }
+    cookie: productionDeviceCookie()
   }), {
     env: ENV,
     now: NOW_MS,
     dateNow: NOW,
-    fetch: async () => { called = true; throw new Error('production must not call Google'); }
+    fetch: async (url, options) => {
+      call = { url, body: JSON.parse(options.body) };
+      return googleResponse(productionSnapshot());
+    }
   });
-  assert.equal(response.status, 403);
-  assert.equal(called, false);
+
+  assert.equal(response.status, 200);
+  assert.equal(call.url, PRODUCTION_WEBHOOK_URL);
+  assert.deepEqual(call.body, {
+    token: PRODUCTION_WEBHOOK_TOKEN,
+    action: 'staffClockSnapshot',
+    target: 'production'
+  });
+  assert.equal(Object.hasOwn(call.body, 'adminActionToken'), false);
+  assert.equal(JSON.stringify(call.body).includes(PRODUCTION_DEVICE_TOKEN), false);
+  assert.deepEqual(await responseBody(response), {
+    ok: true,
+    target: 'production',
+    staff: [{ staffId: 'mandy', staffName: 'Mandy' }],
+    records: [publicRecord(productionRecord())]
+  });
+  const setCookie = response.headers.get('set-cookie') || '';
+  assert.match(setCookie, new RegExp(`^${PRODUCTION_DEVICE_COOKIE}=`, 'u'));
+  assert.match(setCookie, /; Secure; HttpOnly; SameSite=Strict$/u);
+  assert.equal(setCookie.includes(PRODUCTION_DEVICE_TOKEN), false);
+});
+
+test('production punch retry preserves one permanent ID and accepts only an exact replay confirmation', async () => {
+  const wirePunch = productionPunch();
+  const upstreamBodies = [];
+  let attempt = 0;
+  const dependencies = {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async (_url, options) => {
+      upstreamBodies.push(JSON.parse(options.body));
+      attempt += 1;
+      if (attempt === 1) throw new Error('synthetic lost confirmation');
+      return googleResponse({
+        ok: true,
+        target: 'production',
+        results: [{ punchId: PUNCH_ID, result: 'already exists', linkedPunchId: PUNCH_ID }]
+      });
+    }
+  };
+  const request = () => staffClockRequest({
+    origin: PRODUCTION_ORIGIN,
+    cookie: productionDeviceCookie(),
+    body: { operation: 'sync', punches: [wirePunch] }
+  });
+
+  const ambiguous = await handleStaffClock(request(), dependencies);
+  const replay = await handleStaffClock(request(), dependencies);
+  assert.equal(ambiguous.status, 504);
+  assert.equal(replay.status, 200);
+  assert.deepEqual(upstreamBodies[0], upstreamBodies[1]);
+  assert.deepEqual(upstreamBodies[1], {
+    punches: [wirePunch],
+    token: PRODUCTION_WEBHOOK_TOKEN,
+    action: 'staffClockPunch',
+    target: 'production'
+  });
+  assert.deepEqual((await responseBody(replay)).results, [{
+    punchId: PUNCH_ID,
+    result: 'already exists',
+    linkedPunchId: PUNCH_ID
+  }]);
+
+  const wrongTarget = await handleStaffClock(request(), {
+    ...dependencies,
+    fetch: async () => googleResponse({
+      ok: true,
+      target: 'test',
+      results: [{ punchId: PUNCH_ID, result: 'already exists', linkedPunchId: PUNCH_ID }]
+    })
+  });
+  assert.equal(wrongTarget.status, 502);
 });
 
 test('Admin review requires the existing cookie plus request token and returns a strict computed view', async () => {
@@ -677,20 +948,196 @@ test('Admin void uses a separate permanent request, preserves linked punch ident
   assert.equal(data.confirmation.status, 'VOID');
 });
 
-test('canonical production Admin path is hard-disabled before auth, runtime, or Google', async () => {
-  let called = false;
+test('canonical production Admin path requires the existing production session and exact origin', async () => {
+  const cases = [
+    {
+      request: adminRequest({ origin: PRODUCTION_ORIGIN, includeAuth: false }),
+      env: ENV,
+      expectedStatus: 401
+    },
+    {
+      request: adminRequest({
+        origin: PRODUCTION_ORIGIN,
+        sessionOrigin: PREVIEW_ORIGIN
+      }),
+      env: ENV,
+      expectedStatus: 401
+    },
+    {
+      request: adminRequest({
+        origin: PRODUCTION_ORIGIN,
+        requestOrigin: 'https://evil.example',
+        includeAuth: false
+      }),
+      env: ENV,
+      expectedStatus: 403
+    },
+    {
+      request: adminRequest({
+        origin: PRODUCTION_ORIGIN,
+        fetchSite: 'cross-site',
+        includeAuth: false
+      }),
+      env: ENV,
+      expectedStatus: 403
+    },
+    {
+      request: adminRequest({
+        origin: PRODUCTION_ORIGIN,
+        path: `${ADMIN_STAFF_TIME_PATH}?target=production`,
+        includeAuth: false
+      }),
+      env: ENV,
+      expectedStatus: 403
+    },
+    {
+      request: adminRequest({ origin: PRODUCTION_ORIGIN, includeAuth: false }),
+      env: { ...ENV, GIB_M1_ADMIN_ACTION_TOKEN: TEST_ADMIN_TOKEN },
+      expectedStatus: 503
+    }
+  ];
+
+  for (const item of cases) {
+    let called = false;
+    const response = await handleAdminStaffTime(item.request, {
+      env: item.env,
+      now: NOW_MS,
+      dateNow: NOW,
+      fetch: async () => { called = true; throw new Error('unauthorized production Admin called Google'); }
+    });
+    assert.equal(response.status, item.expectedStatus);
+    assert.equal(called, false);
+  }
+});
+
+test('authenticated production Admin review pins private production transport and returns Mandy only', async () => {
+  let upstream;
   const response = await handleAdminStaffTime(adminRequest({
-    origin: PRODUCTION_ORIGIN,
-    body: { operation: 'review' },
-    includeAuth: false
+    origin: PRODUCTION_ORIGIN
   }), {
     env: ENV,
     now: NOW_MS,
     dateNow: NOW,
-    fetch: async () => { called = true; throw new Error('production must not call Google'); }
+    fetch: async (url, options) => {
+      upstream = { url, body: JSON.parse(options.body) };
+      return googleResponse(productionReviewPayload());
+    }
   });
-  assert.equal(response.status, 403);
-  assert.equal(called, false);
+
+  assert.equal(response.status, 200);
+  assert.equal(upstream.url, PRODUCTION_WEBHOOK_URL);
+  assert.deepEqual(upstream.body, {
+    token: PRODUCTION_WEBHOOK_TOKEN,
+    action: 'staffTimeReview',
+    target: 'production',
+    adminActionToken: PRODUCTION_ADMIN_TOKEN
+  });
+  const data = await responseBody(response);
+  assert.equal(data.test, false);
+  assert.equal(data.adminName, 'Andrew Smith');
+  assert.deepEqual(data.staff, [{ staffId: 'mandy', staffName: 'Mandy' }]);
+  assert.deepEqual(data.records, [publicRecord(productionRecord())]);
+});
+
+test('authenticated production Admin corrections and voids accept real staff and exact confirmations', async () => {
+  const correctionInput = {
+    operation: 'correct',
+    requestId: REQUEST_ID,
+    punchId: SECOND_PUNCH_ID,
+    staffId: 'mandy',
+    staffName: 'Mandy',
+    punchAction: 'clockOut',
+    timestamp: '2026-08-18T16:45:00-04:00',
+    date: '2026-08-18',
+    reason: 'Missed clock out'
+  };
+  let correctionUpstream;
+  const correctionResponse = await handleAdminStaffTime(adminRequest({
+    origin: PRODUCTION_ORIGIN,
+    body: correctionInput
+  }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async (url, options) => {
+      correctionUpstream = { url, body: JSON.parse(options.body) };
+      return googleResponse({
+        ok: true,
+        target: 'production',
+        requestId: REQUEST_ID,
+        result: 'added',
+        linkedPunchId: SECOND_PUNCH_ID,
+        auditActionNumber: 1,
+        confirmation: {
+          adminName: 'Andrew Smith',
+          punchId: SECOND_PUNCH_ID,
+          staffId: 'mandy',
+          staffName: 'Mandy',
+          timestamp: correctionInput.timestamp,
+          date: correctionInput.date,
+          punchAction: correctionInput.punchAction,
+          reason: correctionInput.reason,
+          site: ADMIN_STAFF_TIME_SITE,
+          device: ADMIN_STAFF_TIME_DEVICE,
+          build: ADMIN_STAFF_TIME_BUILD
+        }
+      });
+    }
+  });
+  assert.equal(correctionResponse.status, 200);
+  assert.equal(correctionUpstream.url, PRODUCTION_WEBHOOK_URL);
+  assert.equal(correctionUpstream.body.token, PRODUCTION_WEBHOOK_TOKEN);
+  assert.equal(correctionUpstream.body.adminActionToken, PRODUCTION_ADMIN_TOKEN);
+  assert.equal(correctionUpstream.body.target, 'production');
+  assert.equal((await responseBody(correctionResponse)).test, false);
+
+  const voidInput = {
+    operation: 'void',
+    requestId: REQUEST_ID,
+    punchId: PUNCH_ID,
+    reason: 'Wrong punch selected'
+  };
+  let voidUpstream;
+  const voidResponse = await handleAdminStaffTime(adminRequest({
+    origin: PRODUCTION_ORIGIN,
+    body: voidInput,
+    adminName: 'Stuart Turner'
+  }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async (url, options) => {
+      voidUpstream = { url, body: JSON.parse(options.body) };
+      return googleResponse({
+        ok: true,
+        target: 'production',
+        requestId: REQUEST_ID,
+        result: 'voided',
+        linkedPunchId: PUNCH_ID,
+        auditActionNumber: 2,
+        confirmation: {
+          adminName: 'Stuart Turner',
+          punchId: PUNCH_ID,
+          staffId: 'mandy',
+          staffName: 'Mandy',
+          timestamp: '2026-08-18T16:30:00-04:00',
+          date: '2026-08-18',
+          punchAction: 'clockIn',
+          reason: voidInput.reason,
+          status: 'VOID'
+        }
+      });
+    }
+  });
+  assert.equal(voidResponse.status, 200);
+  assert.equal(voidUpstream.url, PRODUCTION_WEBHOOK_URL);
+  assert.equal(voidUpstream.body.token, PRODUCTION_WEBHOOK_TOKEN);
+  assert.equal(voidUpstream.body.adminActionToken, PRODUCTION_ADMIN_TOKEN);
+  assert.equal(voidUpstream.body.target, 'production');
+  const voidData = await responseBody(voidResponse);
+  assert.equal(voidData.test, false);
+  assert.equal(voidData.adminName, 'Stuart Turner');
+  assert.equal(voidData.confirmation.status, 'VOID');
 });
 
 test('Staff Clock browser responses never reflect configured or upstream secrets', async () => {
@@ -714,6 +1161,29 @@ test('Staff Clock browser responses never reflect configured or upstream secrets
         target: 'test',
         message: `${upstreamCanary}:${TEST_ADMIN_TOKEN}`
       })
+    }),
+    await handleStaffClock(staffClockRequest({
+      origin: PRODUCTION_ORIGIN,
+      cookie: productionDeviceCookie()
+    }), {
+      env: ENV,
+      now: NOW_MS,
+      dateNow: NOW,
+      fetch: async () => googleResponse({
+        ok: false,
+        target: 'production',
+        message: `${upstreamCanary}:${PRODUCTION_WEBHOOK_TOKEN}:${PRODUCTION_DEVICE_TOKEN}`
+      })
+    }),
+    await handleAdminStaffTime(adminRequest({ origin: PRODUCTION_ORIGIN }), {
+      env: ENV,
+      now: NOW_MS,
+      dateNow: NOW,
+      fetch: async () => googleResponse({
+        ok: false,
+        target: 'production',
+        message: `${upstreamCanary}:${PRODUCTION_ADMIN_TOKEN}:${PRODUCTION_PASSPHRASE}`
+      })
     })
   ];
   const forbidden = [
@@ -723,7 +1193,9 @@ test('Staff Clock browser responses never reflect configured or upstream secrets
     PRODUCTION_WEBHOOK_TOKEN,
     PRODUCTION_ADMIN_TOKEN,
     PRODUCTION_DEVICE_TOKEN,
-    PRODUCTION_PASSPHRASE
+    PRODUCTION_PASSPHRASE,
+    TEST_WEBHOOK_URL,
+    PRODUCTION_WEBHOOK_URL
   ];
   for (const response of responses) {
     assert.equal(response.status, 502);

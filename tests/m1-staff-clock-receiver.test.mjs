@@ -357,6 +357,15 @@ test('snapshot filters inactive fake staff and rejects production or malformed r
   });
   assert.equal(production.result, 'rejected');
 
+  const productionCredentialValue = createHash('sha256')
+    .update('gib-m1-production:private-production-script-id', 'utf8')
+    .digest('base64url');
+  const productionCredential = harness.post(receiverBody('staffClockSnapshot', {
+    token: productionCredentialValue
+  }));
+  assert.equal(productionCredential.result, 'rejected');
+  assert.equal(harness.spreadsheetOpens, 1);
+
   const malformed = createHarness({ staffRows: [['real-person', 'Ordinary Person', true]] });
   const before = structuredClone(malformed.sheets.get('Staff Time').values);
   assert.equal(malformed.post(receiverBody('staffClockSnapshot')).result, 'failed');

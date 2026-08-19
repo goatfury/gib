@@ -69,6 +69,38 @@ var GIB_M1_STAFF_REQUEST_ID_PATTERN_ = /^gib-m1-staff-request-[0-9a-f]{8}-[0-9a-
 var GIB_M1_STAFF_ID_PATTERN_ = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 var GIB_M1_STAFF_PAY_ANCHOR_ = '2026-08-10';
 var GIB_M1_STAFF_MAX_SHIFT_MS_ = 18 * 60 * 60 * 1000;
+var GIB_M1_PRODUCTION_STAFF_SHEET_ = 'Staff Clock Staff';
+var GIB_M1_PRODUCTION_STAFF_HEADERS_ = ['Staff ID', 'Staff Name', 'Active'];
+var GIB_M1_PRODUCTION_STAFF_TIME_SHEET_ = 'Staff Time';
+var GIB_M1_PRODUCTION_STAFF_TIME_HEADERS_ = [
+  'Punch ID',
+  'Timestamp',
+  'Date',
+  'Staff ID',
+  'Staff Name',
+  'Action',
+  'Site',
+  'Device',
+  'Build',
+  'Note',
+  'Status',
+  'Source',
+  'Admin Name',
+  'Linked Punch ID'
+];
+var GIB_M1_PRODUCTION_STAFF_AUDIT_SHEET_ = 'Staff Time Audit';
+var GIB_M1_PRODUCTION_STAFF_AUDIT_HEADERS_ = [
+  'Request ID',
+  'Action Time',
+  'Admin Name',
+  'Staff ID',
+  'Staff Name',
+  'Punch Timestamp',
+  'Action',
+  'Required Reason',
+  'Result',
+  'Linked Punch ID'
+];
 
 function adReceiverV2_(e) {
   try {
@@ -92,9 +124,10 @@ function adReceiverV2_(e) {
       || action === 'staffTimeCorrect'
       || action === 'staffTimeVoid'
     ) {
-      // Staff Clock is intentionally TEST-only in this candidate. A production
-      // project that receives one of these action names fails before Sheet access.
-      if (configuredDeploymentTarget_() !== 'test') return rejectedAuthResult_();
+      var staffClockTarget = configuredDeploymentTarget_();
+      if (staffClockTarget !== 'test' && staffClockTarget !== 'production') {
+        return rejectedAuthResult_();
+      }
       if (action === 'staffClockSnapshot' || action === 'staffClockPunch') {
         if (!receiverKioskAuthorized_(body)) return rejectedAuthResult_();
       } else if (!adminActionAuthorized_(body)) {
@@ -1615,14 +1648,45 @@ function addMissedInstructorAction_(body) {
   }
 }
 
-function staffClockTestConstantsReady_() {
-  return configuredDeploymentTarget_() === 'test'
+function staffClockDeploymentConfiguration_() {
+  var target = configuredDeploymentTarget_();
+  if (
+    target === 'test'
     && typeof GIB_M1_TEST_STAFF_SHEET_ !== 'undefined'
     && typeof GIB_M1_TEST_STAFF_HEADERS_ !== 'undefined'
     && typeof GIB_M1_TEST_STAFF_TIME_SHEET_ !== 'undefined'
     && typeof GIB_M1_TEST_STAFF_TIME_HEADERS_ !== 'undefined'
     && typeof GIB_M1_TEST_STAFF_AUDIT_SHEET_ !== 'undefined'
-    && typeof GIB_M1_TEST_STAFF_AUDIT_HEADERS_ !== 'undefined';
+    && typeof GIB_M1_TEST_STAFF_AUDIT_HEADERS_ !== 'undefined'
+  ) {
+    return {
+      target: target,
+      staffSheet: GIB_M1_TEST_STAFF_SHEET_,
+      staffHeaders: GIB_M1_TEST_STAFF_HEADERS_,
+      timeSheet: GIB_M1_TEST_STAFF_TIME_SHEET_,
+      timeHeaders: GIB_M1_TEST_STAFF_TIME_HEADERS_,
+      auditSheet: GIB_M1_TEST_STAFF_AUDIT_SHEET_,
+      auditHeaders: GIB_M1_TEST_STAFF_AUDIT_HEADERS_
+    };
+  }
+  if (
+    target === 'production'
+    && typeof GIB_M1_REQUIRE_PERSISTED_TARGET_LOCK !== 'undefined'
+    && GIB_M1_REQUIRE_PERSISTED_TARGET_LOCK === true
+    && typeof GIB_M1_ALLOW_RECEIVER_TOKEN_OVERRIDE !== 'undefined'
+    && GIB_M1_ALLOW_RECEIVER_TOKEN_OVERRIDE === false
+  ) {
+    return {
+      target: target,
+      staffSheet: GIB_M1_PRODUCTION_STAFF_SHEET_,
+      staffHeaders: GIB_M1_PRODUCTION_STAFF_HEADERS_,
+      timeSheet: GIB_M1_PRODUCTION_STAFF_TIME_SHEET_,
+      timeHeaders: GIB_M1_PRODUCTION_STAFF_TIME_HEADERS_,
+      auditSheet: GIB_M1_PRODUCTION_STAFF_AUDIT_SHEET_,
+      auditHeaders: GIB_M1_PRODUCTION_STAFF_AUDIT_HEADERS_
+    };
+  }
+  return null;
 }
 
 function staffClockExactKeys_(value, expected) {
@@ -1635,7 +1699,7 @@ function staffClockExactKeys_(value, expected) {
 }
 
 function staffClockSheetValues_(spreadsheet, name, expectedHeaders) {
-  if (!staffClockTestConstantsReady_()) {
+  if (!staffClockDeploymentConfiguration_()) {
     throw new Error('Staff Clock is not configured for this deployment.');
   }
   var sheet = spreadsheet.getSheetByName(name);
@@ -1659,10 +1723,14 @@ function staffClockPopulatedRow_(row) {
 }
 
 function staffClockStaffState_(spreadsheet) {
+  var configuration = staffClockDeploymentConfiguration_();
+  if (!configuration) {
+    throw new Error('Staff Clock is not configured for this deployment.');
+  }
   var source = staffClockSheetValues_(
     spreadsheet,
-    GIB_M1_TEST_STAFF_SHEET_,
-    GIB_M1_TEST_STAFF_HEADERS_
+    configuration.staffSheet,
+    configuration.staffHeaders
   );
   var all = [];
   var active = [];
@@ -1673,11 +1741,13 @@ function staffClockStaffState_(spreadsheet) {
     var staffId = safeExactText_(row[0], 80, false);
     var staffName = safeExactText_(row[1], 100, false);
     var enabled = row[2];
+    var obviousTestRosterValue = obviousTestValue_(staffId) || obviousTestValue_(staffName);
     if (
       !staffId
       || !GIB_M1_STAFF_ID_PATTERN_.test(staffId)
       || !staffName
-      || !obviousTestValue_(staffName)
+      || (configuration.target === 'test' && !obviousTestValue_(staffName))
+      || (configuration.target === 'production' && obviousTestRosterValue)
       || (enabled !== true && enabled !== false)
       || byId[staffId]
       || names[normalizeEventText_(staffName)]
@@ -1690,7 +1760,11 @@ function staffClockStaffState_(spreadsheet) {
     names[normalizeEventText_(staffName)] = true;
     if (enabled) active.push({ staffId: staffId, staffName: staffName });
   });
-  if (!active.length) throw new Error('Staff Clock Staff has no active TEST staff.');
+  if (!active.length) {
+    throw new Error(configuration.target === 'test'
+      ? 'Staff Clock Staff has no active TEST staff.'
+      : 'Staff Clock Staff has no active production staff.');
+  }
   return { all: all, active: active, byId: byId };
 }
 
@@ -1756,10 +1830,14 @@ function staffClockPublicRecord_(record) {
 }
 
 function staffClockReadTime_(spreadsheet, staffState) {
+  var configuration = staffClockDeploymentConfiguration_();
+  if (!configuration) {
+    throw new Error('Staff Clock is not configured for this deployment.');
+  }
   var source = staffClockSheetValues_(
     spreadsheet,
-    GIB_M1_TEST_STAFF_TIME_SHEET_,
-    GIB_M1_TEST_STAFF_TIME_HEADERS_
+    configuration.timeSheet,
+    configuration.timeHeaders
   );
   var records = [];
   var byId = {};
@@ -1849,10 +1927,14 @@ function staffClockPublicAudit_(record) {
 }
 
 function staffClockReadAudit_(spreadsheet, staffState, timeState) {
+  var configuration = staffClockDeploymentConfiguration_();
+  if (!configuration) {
+    throw new Error('Staff Clock is not configured for this deployment.');
+  }
   var source = staffClockSheetValues_(
     spreadsheet,
-    GIB_M1_TEST_STAFF_AUDIT_SHEET_,
-    GIB_M1_TEST_STAFF_AUDIT_HEADERS_
+    configuration.auditSheet,
+    configuration.auditHeaders
   );
   var records = [];
   var byRequestId = {};

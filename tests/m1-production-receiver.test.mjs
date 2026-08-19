@@ -26,7 +26,39 @@ const SIGNIN_HEADERS = Object.freeze([
   'Notes',
   'Status'
 ]);
+const STAFF_HEADERS = Object.freeze(['Staff ID', 'Staff Name', 'Active']);
+const STAFF_ROWS = Object.freeze([Object.freeze(['mandy', 'Mandy', true])]);
+const STAFF_TIME_HEADERS = Object.freeze([
+  'Punch ID',
+  'Timestamp',
+  'Date',
+  'Staff ID',
+  'Staff Name',
+  'Action',
+  'Site',
+  'Device',
+  'Build',
+  'Note',
+  'Status',
+  'Source',
+  'Admin Name',
+  'Linked Punch ID'
+]);
+const STAFF_AUDIT_HEADERS = Object.freeze([
+  'Request ID',
+  'Action Time',
+  'Admin Name',
+  'Staff ID',
+  'Staff Name',
+  'Punch Timestamp',
+  'Action',
+  'Required Reason',
+  'Result',
+  'Linked Punch ID'
+]);
 const ROW_ID = 'gib-m1-12345678-1234-4123-8123-123456789abc';
+const STAFF_PUNCH_ID = 'gib-m1-staff-20000000-0000-4000-8000-000000000001';
+const NOW_ISO = '2026-08-19T16:00:00.000Z';
 
 function makeSheet(initialRows = [], onWrite = () => {}) {
   const values = initialRows.map(row => [...row]);
@@ -75,6 +107,12 @@ function makeSheet(initialRows = [], onWrite = () => {}) {
           });
           return this;
         },
+        setValue(value) {
+          onWrite('setValue');
+          if (!values[startRow - 1]) values[startRow - 1] = [];
+          values[startRow - 1][startColumn - 1] = value;
+          return this;
+        },
         setNumberFormat(format) {
           onWrite('setNumberFormat');
           for (let rowOffset = 0; rowOffset < rowCount; rowOffset += 1) {
@@ -98,6 +136,46 @@ function makeSheet(initialRows = [], onWrite = () => {}) {
       frozenRows = count;
     }
   };
+}
+
+function offsetFor(date, timeZone) {
+  const parts = {};
+  new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  }).formatToParts(date).forEach(part => {
+    if (part.type !== 'literal') parts[part.type] = part.value;
+  });
+  const localAsUtc = Date.UTC(
+    Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+    Number(parts.hour), Number(parts.minute), Number(parts.second)
+  );
+  return Math.round((localAsUtc - date.getTime()) / 60000);
+}
+
+function formatDate(dateValue, timeZone, pattern) {
+  const date = new Date(dateValue);
+  const parts = {};
+  new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  }).formatToParts(date).forEach(part => {
+    if (part.type !== 'literal') parts[part.type] = part.value;
+  });
+  const day = `${parts.year}-${parts.month}-${parts.day}`;
+  const time = `${parts.hour}:${parts.minute}:${parts.second}`;
+  if (pattern === 'yyyy-MM-dd') return day;
+  if (pattern === 'yyyy-MM-dd HH:mm:ss') return `${day} ${time}`;
+  if (pattern === "yyyy-MM-dd'T'HH:mm:ss") return `${day}T${time}`;
+  if (pattern === 'Z') {
+    const offset = offsetFor(date, timeZone);
+    const sign = offset < 0 ? '-' : '+';
+    const absolute = Math.abs(offset);
+    return `${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}${String(absolute % 60).padStart(2, '0')}`;
+  }
+  throw new Error(`Unsupported test format: ${pattern}`);
 }
 
 function sheetRow(row, status = 'OK') {
@@ -132,6 +210,22 @@ function kioskRow(overrides = {}) {
   };
 }
 
+function staffPunch(overrides = {}) {
+  return {
+    punchId: STAFF_PUNCH_ID,
+    timestamp: '2026-08-19T09:00:00-04:00',
+    date: '2026-08-19',
+    staffId: 'mandy',
+    staffName: 'Mandy',
+    punchAction: 'clockIn',
+    site: 'Rev',
+    device: 'Production tablet',
+    build: 'm1b-production-release',
+    note: '',
+    ...overrides
+  };
+}
+
 function createFile(id) {
   return {
     getId: () => id,
@@ -145,8 +239,17 @@ function createHarness({
   propertyValues: initialProperties = {},
   driveMatchCount = 1,
   wrapper = true,
-  strictWithoutWrapper = false
+  strictWithoutWrapper = false,
+  includeStaffSheets = false,
+  staffRows = STAFF_ROWS,
+  timeRows = [],
+  auditRows = [],
+  nowIso = NOW_ISO
 } = {}) {
+  class FixedDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [nowIso])); }
+    static now() { return Date.parse(nowIso); }
+  }
   const propertyValues = new Map(Object.entries({
     GIB_M1_PRODUCTION_SPREADSHEET_ID: 'production-spreadsheet-id',
     GIB_M1_DEPLOYMENT_TARGET_LOCK: 'production',
@@ -161,6 +264,13 @@ function createHarness({
   const propertyWriteEvents = [];
   const recordSheetWrite = operation => sheetWriteEvents.push(operation);
   let signins = initialRows === null ? null : makeSheet(initialRows, recordSheetWrite);
+  const sheets = new Map();
+  if (signins) sheets.set('Signins', signins);
+  if (includeStaffSheets) {
+    sheets.set('Staff Clock Staff', makeSheet([STAFF_HEADERS, ...staffRows], recordSheetWrite));
+    sheets.set('Staff Time', makeSheet([STAFF_TIME_HEADERS, ...timeRows], recordSheetWrite));
+    sheets.set('Staff Time Audit', makeSheet([STAFF_AUDIT_HEADERS, ...auditRows], recordSheetWrite));
+  }
   let spreadsheetOpens = 0;
   let spreadsheetCreates = 0;
   let driveQueries = 0;
@@ -169,12 +279,13 @@ function createHarness({
     getId: () => spreadsheetId,
     getName: () => EXPECTED_TITLE,
     getSheetByName(name) {
-      return name === 'Signins' ? signins : null;
+      return sheets.get(name) || null;
     },
     insertSheet(name) {
       assert.equal(name, 'Signins');
       recordSheetWrite('insertSheet');
       signins = makeSheet([], recordSheetWrite);
+      sheets.set(name, signins);
       return signins;
     }
   };
@@ -193,6 +304,7 @@ function createHarness({
     module: { exports: {} },
     exports: {},
     console,
+    Date: FixedDate,
     ContentService: {
       MimeType: { JSON: 'application/json' },
       createTextOutput(text) {
@@ -264,11 +376,7 @@ function createHarness({
         assert.equal(charset, 'UTF_8');
         return [...createHmac('sha256', String(secret)).update(String(value), 'utf8').digest()];
       },
-      formatDate(_value, _zone, pattern) {
-        return pattern === 'yyyy-MM-dd HH:mm:ss'
-          ? '2026-08-07 12:00:00'
-          : '2026-08-07';
-      }
+      formatDate
     }
   };
   if (!wrapper) {
@@ -285,6 +393,7 @@ function createHarness({
     derivedToken,
     provisioningSecret,
     propertyValues,
+    sheets,
     get signins() { return signins; },
     get spreadsheetOpens() { return spreadsheetOpens; },
     get spreadsheetCreates() { return spreadsheetCreates; },
@@ -462,6 +571,156 @@ test('production wrapper returns the complete read-only Daily Review contract', 
   assert.deepEqual(response.auditHistory, []);
   assert.equal(harness.sheetWrites, 0);
   assert.equal(harness.propertyWrites, 0);
+});
+
+test('production Staff Clock reads only Mandy from exact empty tabs without writing', () => {
+  const harness = createHarness({ includeStaffSheets: true });
+  const signinsBefore = structuredClone(harness.signins.values);
+  const snapshot = harness.post({
+    token: harness.derivedToken,
+    action: 'staffClockSnapshot',
+    target: 'production'
+  });
+
+  assert.deepEqual(snapshot, {
+    ok: true,
+    target: 'production',
+    staff: [{ staffId: 'mandy', staffName: 'Mandy' }],
+    records: []
+  });
+
+  const review = harness.post({
+    token: harness.derivedToken,
+    adminActionToken: 'production-admin-token',
+    adminName: 'Andrew Smith',
+    action: 'staffTimeReview',
+    target: 'production'
+  });
+  assert.equal(review.ok, true);
+  assert.equal(review.target, 'production');
+  assert.deepEqual(review.staff, [{ staffId: 'mandy', staffName: 'Mandy' }]);
+  assert.deepEqual(review.records, []);
+  assert.deepEqual(review.todayPunches, []);
+  assert.deepEqual(review.audit, []);
+  assert.deepEqual(review.clockedInNow, []);
+  assert.deepEqual(review.needsAttention, []);
+  assert.deepEqual(harness.sheets.get('Staff Clock Staff').values, [STAFF_HEADERS, ...STAFF_ROWS]);
+  assert.deepEqual(harness.sheets.get('Staff Time').values, [STAFF_TIME_HEADERS]);
+  assert.deepEqual(harness.sheets.get('Staff Time Audit').values, [STAFF_AUDIT_HEADERS]);
+  assert.deepEqual(harness.signins.values, signinsBefore);
+  assert.equal(harness.sheetWrites, 0);
+  assert.equal(harness.propertyWrites, 0);
+});
+
+test('production Staff Clock rejects TEST roster values and schema drift without writing', () => {
+  const fakeRoster = createHarness({
+    includeStaffSheets: true,
+    staffRows: [['mandy-test', 'Mandy Test', true]]
+  });
+  assert.equal(fakeRoster.post({
+    token: fakeRoster.derivedToken,
+    action: 'staffClockSnapshot',
+    target: 'production'
+  }).result, 'failed');
+  assert.equal(fakeRoster.sheetWrites, 0);
+
+  const drifted = createHarness({ includeStaffSheets: true });
+  drifted.sheets.get('Staff Time').values[0][2] = 'Wrong Date';
+  assert.equal(drifted.post({
+    token: drifted.derivedToken,
+    action: 'staffClockSnapshot',
+    target: 'production'
+  }).result, 'failed');
+  assert.equal(drifted.sheetWrites, 0);
+});
+
+test('production Staff Clock punch is target-isolated and permanently replay-safe', () => {
+  const harness = createHarness({ includeStaffSheets: true });
+  const signinsBefore = structuredClone(harness.signins.values);
+  const request = {
+    token: harness.derivedToken,
+    action: 'staffClockPunch',
+    target: 'production',
+    punches: [staffPunch()]
+  };
+
+  const added = harness.post(request);
+  const recoveredAfterLostConfirmation = harness.post(request);
+  const conflictingReplay = harness.post({
+    ...request,
+    punches: [staffPunch({ note: 'changed after the permanent ID was used' })]
+  });
+
+  assert.deepEqual(added.results, [{
+    punchId: STAFF_PUNCH_ID,
+    result: 'added',
+    linkedPunchId: STAFF_PUNCH_ID
+  }]);
+  assert.deepEqual(recoveredAfterLostConfirmation.results, [{
+    punchId: STAFF_PUNCH_ID,
+    result: 'already exists',
+    linkedPunchId: STAFF_PUNCH_ID
+  }]);
+  assert.equal(conflictingReplay.results[0].result, 'rejected');
+  assert.equal(harness.sheets.get('Staff Time').values.length, 2);
+  assert.equal(harness.sheets.get('Staff Time').values[1][3], 'mandy');
+  assert.equal(harness.sheets.get('Staff Time').values[1][4], 'Mandy');
+  assert.deepEqual(harness.signins.values, signinsBefore);
+  assert.deepEqual(harness.sheets.get('Staff Time Audit').values, [STAFF_AUDIT_HEADERS]);
+});
+
+test('production Staff Clock requires production tablet and Admin authorization before Sheet access', () => {
+  const wrongTablet = createHarness({ includeStaffSheets: true });
+  assert.equal(wrongTablet.post({
+    token: 'unit-receiver-token',
+    action: 'staffClockSnapshot',
+    target: 'production'
+  }).result, 'rejected');
+  assert.equal(wrongTablet.spreadsheetOpens, 0);
+
+  const wrongTarget = createHarness({ includeStaffSheets: true });
+  assert.equal(wrongTarget.post({
+    token: wrongTarget.derivedToken,
+    action: 'staffClockSnapshot',
+    target: 'test'
+  }).result, 'rejected');
+  assert.equal(wrongTarget.spreadsheetOpens, 0);
+
+  const missingAdmin = createHarness({ includeStaffSheets: true });
+  assert.equal(missingAdmin.post({
+    token: missingAdmin.derivedToken,
+    action: 'staffTimeReview',
+    target: 'production'
+  }).result, 'rejected');
+  assert.equal(missingAdmin.spreadsheetOpens, 0);
+
+  const wrongAdmin = createHarness({ includeStaffSheets: true });
+  assert.equal(wrongAdmin.post({
+    token: wrongAdmin.derivedToken,
+    adminActionToken: 'unit-admin-token',
+    action: 'staffTimeReview',
+    target: 'production'
+  }).result, 'rejected');
+  assert.equal(wrongAdmin.spreadsheetOpens, 0);
+
+  const missingCorrectionAdmin = createHarness({ includeStaffSheets: true });
+  assert.equal(missingCorrectionAdmin.post({
+    token: missingCorrectionAdmin.derivedToken,
+    action: 'staffTimeCorrect',
+    target: 'production'
+  }).result, 'rejected');
+  assert.equal(missingCorrectionAdmin.spreadsheetOpens, 0);
+
+  const unlocked = createHarness({
+    includeStaffSheets: true,
+    propertyValues: { GIB_M1_DEPLOYMENT_TARGET_LOCK: '' }
+  });
+  assert.equal(unlocked.post({
+    token: unlocked.derivedToken,
+    action: 'staffClockSnapshot',
+    target: 'production'
+  }).result, 'rejected');
+  assert.equal(unlocked.spreadsheetOpens, 0);
 });
 
 test('all production auth paths reject TEST and missing persisted target locks before Sheet access', () => {

@@ -14,6 +14,7 @@ import {
   sanitizeStaffTimeVoidRequest,
   sanitizeStaffTimeVoidResult
 } from './_lib/m1-staff-clock-contracts.mjs';
+import { validExactProductionRequest } from './_lib/m1-production-runtime.mjs';
 
 export const ADMIN_STAFF_TIME_PATH = '/.netlify/functions/m1-admin-staff-time';
 export const ADMIN_STAFF_TIME_SITE = 'Rev';
@@ -73,9 +74,11 @@ function adminFailureResponse(google, operation) {
 }
 
 export async function handleAdminStaffTime(request, dependencies = {}) {
-  // M1B remains isolated to Deploy Preview/immutable TEST hosts. Production
-  // Admin support belongs to the separately approved release run.
-  const target = validPreviewSameOriginRequest(request) ? 'test' : '';
+  const target = validPreviewSameOriginRequest(request)
+    ? 'test'
+    : validExactProductionRequest(request, ADMIN_STAFF_TIME_PATH)
+      ? 'production'
+      : '';
   if (!target) {
     return jsonResponse(403, { ok: false, message: 'Same-origin Staff time request required.' });
   }

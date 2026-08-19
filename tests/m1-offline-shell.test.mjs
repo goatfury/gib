@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const ROOT = new URL('../', import.meta.url);
 const kioskHtml = readFileSync(new URL('m1/index.html', ROOT), 'utf8');
+const staffClockClientSource = readFileSync(new URL('m1/staff-clock-client.mjs', ROOT), 'utf8');
 const workerSource = readFileSync(new URL('m1/service-worker.js', ROOT), 'utf8');
 const headersSource = readFileSync(new URL('_headers', ROOT), 'utf8').replaceAll('\r\n', '\n');
 const ORIGIN = 'https://deploy-preview-99--gib-live.netlify.app';
@@ -162,6 +163,14 @@ test('kiosk import, worker registration, scope, and no-store header share one re
   assert.match(
     kioskHtml,
     new RegExp(`from './sync-core\\.mjs\\?v=${revision}';`, 'u')
+  );
+  assert.match(
+    kioskHtml,
+    new RegExp(`<script type="module" src="\\./staff-clock-client\\.mjs\\?v=${revision}"></script>`, 'u')
+  );
+  assert.match(
+    staffClockClientSource,
+    new RegExp(`from './staff-clock-core\\.mjs\\?v=${revision}';`, 'u')
   );
   assert.match(
     kioskHtml,
