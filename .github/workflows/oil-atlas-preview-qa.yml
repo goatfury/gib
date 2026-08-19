@@ -25,12 +25,14 @@ jobs:
         with:
           node-version: 22
 
-      - name: Reconstruct and verify bundle
+      - name: Reconstruct and audit Gulf model
         run: |
           node oil-atlas/build.mjs
           test -s oil-atlas/public/index.html
-          grep -q "Oil Flow Atlas" oil-atlas/public/index.html
           test -s oil-atlas/public/data/fallback.json
+          grep -q "Audited Gulf export evidence" oil-atlas/public/index.html
+          grep -q "no daily interpolation" oil-atlas/public/index.html
+          node --test oil-atlas/tests/gulf-model.test.mjs
 
       - name: Wait for Netlify preview
         run: |
@@ -45,26 +47,35 @@ jobs:
 
       - name: Verify page and live data endpoint
         run: |
-          grep -q "Oil Flow Atlas" /tmp/oil-atlas.html
+          grep -q "Gulf oil evidence" /tmp/oil-atlas.html
           grep -q "Whole world" /tmp/oil-atlas.html
-          grep -q "Gulf exports" /tmp/oil-atlas.html
+          grep -q "Audited Gulf export evidence" /tmp/oil-atlas.html
           curl --fail --silent --show-error --location "$PREVIEW_URL/api/oil_data" -o /tmp/oil-data.json
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
           const data = JSON.parse(readFileSync('/tmp/oil-data.json', 'utf8'));
-          if (data.schemaVersion !== 1) throw new Error('Unexpected schemaVersion');
+          if (data.schemaVersion !== 2) throw new Error('Unexpected schemaVersion');
           if (!data.checkedAt) throw new Error('Missing checkedAt');
           if (!Array.isArray(data.world?.anchors) || data.world.anchors.length < 12) throw new Error('World anchors missing');
           if (!Array.isArray(data.world?.regions) || data.world.regions.length !== 8) throw new Error('World regions missing');
-          if (!Array.isArray(data.gulf?.anchors) || !data.gulf?.verifiedThrough) throw new Error('Gulf verification boundary missing');
-          if (!['live', 'fallback'].includes(data.refresh?.world)) throw new Error('Refresh state missing');
+          if (!Array.isArray(data.gulf?.periods) || data.gulf.periods.length !== 5) throw new Error('Audited Gulf periods missing');
+          if (!Array.isArray(data.gulf?.observations) || data.gulf.observations.length !== 4) throw new Error('Gulf observations missing');
+          if (!Array.isArray(data.gulf?.hormuzQuarters) || data.gulf.hormuzQuarters.length !== 6) throw new Error('Hormuz quarters missing');
+          if ('anchors' in data.gulf) throw new Error('Legacy fake daily anchors survived');
+          if (!/No daily interpolation/i.test(data.gulf.policy || '')) throw new Error('Gulf evidence policy missing');
+          const periods = Object.fromEntries(data.gulf.periods.map((item) => [item.id, item]));
+          if (periods['prewar-iea-average']?.value !== 24) throw new Error('Prewar average changed');
+          if (periods['march-tracker-week']?.low !== 7.5 || periods['march-tracker-week']?.high !== 9.71) throw new Error('March tracker range changed');
+          if (periods['june-average']?.value !== 16.1 || periods['july-average']?.value !== 15) throw new Error('Monthly evidence changed');
+          if (!['live', 'fallback'].includes(data.refresh?.world)) throw new Error('World refresh state missing');
+          if (!['live', 'fallback'].includes(data.refresh?.hormuz)) throw new Error('Hormuz refresh state missing');
           console.log(JSON.stringify({
             checkedAt: data.checkedAt,
-            refresh: data.refresh.world,
+            worldRefresh: data.refresh.world,
+            hormuzRefresh: data.refresh.hormuz,
             release: data.world.releaseLabel,
-            historicalThrough: data.world.lastHistoricalMonth,
-            forecastFrom: data.world.firstForecastMonth,
-            gulfVerifiedThrough: data.gulf.verifiedThrough,
+            broadGulfThrough: data.gulf.latestBroadPeriodEnd,
+            policy: data.gulf.policy,
           }, null, 2));
           NODE
 
@@ -73,6 +84,9 @@ jobs:
           google-chrome --headless=new --no-sandbox --disable-gpu \
             --window-size=1366,768 --virtual-time-budget=8000 \
             --dump-dom "$PREVIEW_URL/" > /tmp/oil-atlas-dom.html
-          grep -q "Oil Flow Atlas" /tmp/oil-atlas-dom.html
+          grep -q "Gulf oil evidence" /tmp/oil-atlas-dom.html
           grep -q "Pause" /tmp/oil-atlas-dom.html
           grep -q "Checked today" /tmp/oil-atlas-dom.html
+          grep -q 'class="gulf-period' /tmp/oil-atlas-dom.html
+          grep -q 'class="hormuz-quarter-line' /tmp/oil-atlas-dom.html
+          grep -q "UNKNOWN" /tmp/oil-atlas-dom.html
