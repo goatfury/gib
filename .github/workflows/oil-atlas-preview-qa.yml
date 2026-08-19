@@ -75,4 +75,4 @@ jobs:
             --dump-dom "$PREVIEW_URL/" > /tmp/oil-atlas-dom.html
           grep -q "Oil Flow Atlas" /tmp/oil-atlas-dom.html
           grep -q "Pause" /tmp/oil-atlas-dom.html
-          grep -q "Latest verified" /tmp/oil-atlas-dom.html
+          grep -q "Checked today" /tmp/oil-atlas-dom.html
