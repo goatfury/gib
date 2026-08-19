@@ -27,7 +27,7 @@ jobs:
 
       - name: Reconstruct and audit Gulf model
         run: |
-          node oil-atlas/build.mjs
+          node oil-atlas/build-audited.mjs
           test -s oil-atlas/public/index.html
           test -s oil-atlas/public/data/fallback.json
           grep -q "Audited Gulf export evidence" oil-atlas/public/index.html
