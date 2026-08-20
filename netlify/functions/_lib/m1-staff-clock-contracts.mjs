@@ -4,8 +4,11 @@ export const STAFF_ACTIONS = Object.freeze(['clockIn', 'clockOut']);
 export const STAFF_RECORD_STATUSES = Object.freeze(['ACTIVE', 'VOID']);
 export const STAFF_RECORD_SOURCES = Object.freeze(['Tablet', 'Admin-added']);
 export const MAX_STAFF_CLOCK_PUNCHES = 50;
-export const MAX_STAFF_CLOCK_RECORDS = 2_000;
+export const MAX_STAFF_CLOCK_PAGE_ITEMS = 500;
 export const MAX_STAFF_CLOCK_STAFF = 100;
+export const MAX_STAFF_CLOCK_RECORDS = 500;
+export const MAX_STAFF_CLOCK_AUDIT = 500;
+export const MAX_STAFF_CLOCK_ATTENTION_GROUPS = 600;
 
 const ADMIN_NAMES = new Set(['Andrew Smith', 'Stuart Turner']);
 const ACTIONS = new Set(STAFF_ACTIONS);
@@ -25,7 +28,10 @@ const FORMULA_PREFIX_PATTERN = /^[=+\-@]/u;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const NEW_YORK_TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2})T((?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d)(?:\.\d{1,3})?(-04:00|-05:00)$/u;
 const MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
-const MAX_SAFE_TOTAL_SECONDS = 14 * 24 * 60 * 60;
+const MAX_SAFE_TOTAL_SECONDS = 15 * 24 * 60 * 60;
+const STAFF_VIEW_TOKEN_PATTERN = /^[0-9a-f]{64}$/u;
+const KIOSK_PAGE_STREAMS = new Set(['records', 'attention']);
+const ADMIN_PAGE_STREAMS = new Set(['records', 'attention', 'audit']);
 
 const newYorkFormatter = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/New_York',
@@ -253,7 +259,12 @@ function sanitizeRecord(input, options = {}) {
   if (
     !value.punchId
     || !validDate(date)
-    || !validNewYorkTimestamp(value.timestamp, date, options.now || new Date())
+    || !validNewYorkTimestamp(
+      value.timestamp,
+      date,
+      options.now || new Date(),
+      Number.POSITIVE_INFINITY
+    )
     || !value.staffId
     || !value.staffName
     || !value.punchAction
@@ -288,29 +299,8 @@ function sanitizeRecord(input, options = {}) {
   return Object.freeze(output);
 }
 
-function sanitizeRecords(input, options = {}) {
-  return sanitizeUniqueArray(
-    input,
-    MAX_STAFF_CLOCK_RECORDS,
-    item => sanitizeRecord(item, options),
-    item => item.punchId
-  );
-}
-
 export function sanitizeStaffClockSnapshot(input, expectedTarget, options = {}) {
-  if (
-    !exactObjectKeys(input, ['ok', 'target', 'staff', 'records'])
-    || input.ok !== true
-    || input.target !== expectedTarget
-  ) return null;
-  const requireTestName = expectedTarget === 'test';
-  const staff = sanitizeStaffList(input.staff, requireTestName);
-  const records = sanitizeRecords(input.records, {
-    requireTestName,
-    now: options.now || new Date()
-  });
-  if (!staff || !records) return null;
-  return Object.freeze({ staff: Object.freeze(staff), records: Object.freeze(records) });
+  return sanitizeStaffViewSummary(input, expectedTarget, options, false);
 }
 
 function validResultLink(value) {
@@ -471,61 +461,29 @@ function sanitizeAuditRecord(input, options = {}) {
   return Object.freeze(value);
 }
 
-function sanitizeClockedInNow(input, recordById, requireTestName) {
+function sanitizeClockedInNow(input, requireTestName, now) {
   if (!exactObjectKeys(input, ['punchId', 'staffId', 'staffName', 'clockInAt'])) return null;
   const staffId = sanitizeStaffId(input.staffId);
   const staffName = sanitizeStaffName(input.staffName, requireTestName);
-  const record = typeof input.punchId === 'string' ? recordById.get(input.punchId) : null;
   if (
-    !record
+    typeof input.punchId !== 'string'
+    || !STAFF_PUNCH_ID_PATTERN.test(input.punchId)
     || !staffId
     || !staffName
-    || record.staffId !== staffId
-    || record.staffName !== staffName
-    || record.punchAction !== 'clockIn'
-    || record.status !== 'ACTIVE'
-    || input.clockInAt !== record.timestamp
-  ) return null;
-  return Object.freeze({ punchId: record.punchId, staffId, staffName, clockInAt: record.timestamp });
-}
-
-function sanitizeTodayPunch(input, recordById, requireTestName) {
-  if (!exactObjectKeys(input, [
-    'punchId',
-    'staffId',
-    'staffName',
-    'punchAction',
-    'timestamp',
-    'source',
-    'status'
-  ])) return null;
-  const staffId = sanitizeStaffId(input.staffId);
-  const staffName = sanitizeStaffName(input.staffName, requireTestName);
-  const record = typeof input.punchId === 'string' ? recordById.get(input.punchId) : null;
-  if (
-    !record
-    || !staffId
-    || !staffName
-    || record.staffId !== staffId
-    || record.staffName !== staffName
-    || input.punchAction !== record.punchAction
-    || input.timestamp !== record.timestamp
-    || input.source !== record.source
-    || input.status !== record.status
+    || !validNewYorkTimestamp(input.clockInAt, '', now)
   ) return null;
   return Object.freeze({
-    punchId: record.punchId,
+    punchId: input.punchId,
     staffId,
     staffName,
-    punchAction: record.punchAction,
-    timestamp: record.timestamp,
-    source: record.source,
-    status: record.status
+    clockInAt: input.clockInAt
   });
 }
 
 function sanitizeAttention(input, requireTestName) {
-  if (!exactObjectKeys(input, ['staffId', 'staffName', 'code', 'message', 'linkedPunchIds'])) return null;
+  if (!exactObjectKeys(input, [
+    'staffId', 'staffName', 'code', 'message', 'linkedPunchIds', 'occurrenceCount'
+  ])) return null;
   const staffId = sanitizeStaffId(input.staffId);
   const staffName = sanitizeStaffName(input.staffName, requireTestName);
   const code = exactText(input.code, 64);
@@ -538,6 +496,8 @@ function sanitizeAttention(input, requireTestName) {
     || !message
     || !Array.isArray(input.linkedPunchIds)
     || input.linkedPunchIds.length > 20
+    || !Number.isSafeInteger(input.occurrenceCount)
+    || input.occurrenceCount < 1
   ) return null;
   const linkedPunchIds = [];
   const seen = new Set();
@@ -548,7 +508,14 @@ function sanitizeAttention(input, requireTestName) {
     seen.add(punchId);
     linkedPunchIds.push(punchId);
   }
-  return Object.freeze({ staffId, staffName, code, message, linkedPunchIds: Object.freeze(linkedPunchIds) });
+  return Object.freeze({
+    staffId,
+    staffName,
+    code,
+    message,
+    linkedPunchIds: Object.freeze(linkedPunchIds),
+    occurrenceCount: input.occurrenceCount
+  });
 }
 
 function shiftDate(dateString, days) {
@@ -586,7 +553,6 @@ function sanitizePeriod(input, requireTestName) {
       || seen.has(key)
       || !Number.isSafeInteger(item.completedShifts)
       || item.completedShifts < 0
-      || item.completedShifts > 1_000
       || !Number.isSafeInteger(item.totalSeconds)
       || item.totalSeconds < 0
       || item.totalSeconds > MAX_SAFE_TOTAL_SECONDS
@@ -608,75 +574,209 @@ function sanitizePeriod(input, requireTestName) {
   });
 }
 
-export function sanitizeStaffTimeReview(input, expectedTarget, options = {}) {
+function sanitizeStaffViewMetadata(input, includeAdmin) {
+  if (!exactObjectKeys(input, [
+    'token',
+    'today',
+    'recordCount',
+    'recordTotal',
+    'todayPunchCount',
+    'todayPunchTotal',
+    'adjustmentCount',
+    'adjustmentTotal',
+    'attentionCount',
+    'attentionOccurrenceCount',
+    'auditCount',
+    'auditTotal',
+    'recordsTruncated',
+    'auditTruncated'
+  ])) return null;
   if (
-    !exactObjectKeys(input, [
-      'ok',
-      'target',
-      'staff',
-      'records',
-      'audit',
-      'clockedInNow',
-      'todayPunches',
-      'needsAttention',
-      'periods'
-    ])
+    typeof input.token !== 'string'
+    || !STAFF_VIEW_TOKEN_PATTERN.test(input.token)
+    || !validDate(input.today)
+    || !Number.isSafeInteger(input.recordCount)
+    || input.recordCount < 0
+    || input.recordCount > MAX_STAFF_CLOCK_RECORDS
+    || !Number.isSafeInteger(input.recordTotal)
+    || input.recordTotal < input.recordCount
+    || !Number.isSafeInteger(input.todayPunchCount)
+    || input.todayPunchCount < 0
+    || input.todayPunchCount > input.recordCount
+    || !Number.isSafeInteger(input.todayPunchTotal)
+    || input.todayPunchTotal < input.todayPunchCount
+    || input.todayPunchTotal > input.recordTotal
+    || !Number.isSafeInteger(input.adjustmentCount)
+    || input.adjustmentCount < 0
+    || input.adjustmentCount > input.recordCount
+    || !Number.isSafeInteger(input.adjustmentTotal)
+    || input.adjustmentTotal < input.adjustmentCount
+    || input.adjustmentTotal > input.recordTotal
+    || !Number.isSafeInteger(input.attentionCount)
+    || input.attentionCount < 0
+    || input.attentionCount > MAX_STAFF_CLOCK_ATTENTION_GROUPS
+    || !Number.isSafeInteger(input.attentionOccurrenceCount)
+    || input.attentionOccurrenceCount < input.attentionCount
+    || !Number.isSafeInteger(input.auditCount)
+    || input.auditCount < 0
+    || input.auditCount > MAX_STAFF_CLOCK_AUDIT
+    || !Number.isSafeInteger(input.auditTotal)
+    || input.auditTotal < input.auditCount
+    || typeof input.recordsTruncated !== 'boolean'
+    || input.recordsTruncated !== (input.recordCount < input.recordTotal)
+    || typeof input.auditTruncated !== 'boolean'
+    || input.auditTruncated !== (input.auditCount < input.auditTotal)
+    || (!includeAdmin && (
+      input.auditCount !== 0
+      || input.auditTotal !== 0
+      || input.auditTruncated !== false
+    ))
+  ) return null;
+  return Object.freeze({
+    token: input.token,
+    today: input.today,
+    recordCount: input.recordCount,
+    recordTotal: input.recordTotal,
+    todayPunchCount: input.todayPunchCount,
+    todayPunchTotal: input.todayPunchTotal,
+    adjustmentCount: input.adjustmentCount,
+    adjustmentTotal: input.adjustmentTotal,
+    attentionCount: input.attentionCount,
+    attentionOccurrenceCount: input.attentionOccurrenceCount,
+    auditCount: input.auditCount,
+    auditTotal: input.auditTotal,
+    recordsTruncated: input.recordsTruncated,
+    auditTruncated: input.auditTruncated
+  });
+}
+
+function sanitizeStaffViewSummary(input, expectedTarget, options, includeAdmin) {
+  if (
+    !exactObjectKeys(input, ['ok', 'target', 'staff', 'clockedInNow', 'periods', 'view'])
     || input.ok !== true
     || input.target !== expectedTarget
     || !exactObjectKeys(input.periods, ['current', 'previous'])
   ) return null;
   const requireTestName = expectedTarget === 'test';
-  const validationOptions = { requireTestName, now: options.now || new Date() };
+  const now = options.now || new Date();
   const staff = sanitizeStaffList(input.staff, requireTestName);
-  const records = sanitizeRecords(input.records, validationOptions);
-  if (!staff || !records) return null;
-  const recordById = new Map(records.map(record => [record.punchId, record]));
-  const audit = sanitizeUniqueArray(
-    input.audit,
-    MAX_STAFF_CLOCK_RECORDS,
-    item => sanitizeAuditRecord(item, validationOptions),
-    item => item.requestId
-  );
   const clockedInNow = sanitizeUniqueArray(
     input.clockedInNow,
     MAX_STAFF_CLOCK_STAFF,
-    item => sanitizeClockedInNow(item, recordById, requireTestName),
+    item => sanitizeClockedInNow(item, requireTestName, now),
     item => item.staffId
   );
-  const todayPunches = sanitizeUniqueArray(
-    input.todayPunches,
-    MAX_STAFF_CLOCK_RECORDS,
-    item => sanitizeTodayPunch(item, recordById, requireTestName),
-    item => item.punchId
-  );
-  if (
-    !audit
-    || !clockedInNow
-    || !todayPunches
-    || !Array.isArray(input.needsAttention)
-    || input.needsAttention.length > MAX_STAFF_CLOCK_RECORDS
-  ) return null;
-  const needsAttention = input.needsAttention.map(item => sanitizeAttention(item, requireTestName));
-  if (needsAttention.some(item => !item)) return null;
-  for (const item of needsAttention) {
-    if (item.linkedPunchIds.some(punchId => !recordById.has(punchId))) return null;
-  }
   const current = sanitizePeriod(input.periods.current, requireTestName);
   const previous = sanitizePeriod(input.periods.previous, requireTestName);
+  const view = sanitizeStaffViewMetadata(input.view, includeAdmin);
   if (
-    !current
+    !staff
+    || !clockedInNow
+    || new Set(clockedInNow.map(item => item.punchId)).size !== clockedInNow.length
+    || !current
     || !previous
+    || !view
+    || clockedInNow.length > view.recordCount
     || shiftDate(previous.endDate, 1) !== current.startDate
+    || view.today < current.startDate
+    || view.today > current.endDate
   ) return null;
   return Object.freeze({
     staff: Object.freeze(staff),
-    records: Object.freeze(records),
-    audit: Object.freeze(audit),
     clockedInNow: Object.freeze(clockedInNow),
-    todayPunches: Object.freeze(todayPunches),
-    needsAttention: Object.freeze(needsAttention),
-    periods: Object.freeze({ current, previous })
+    periods: Object.freeze({ current, previous }),
+    view
   });
+}
+
+export function sanitizeStaffTimeReview(input, expectedTarget, options = {}) {
+  return sanitizeStaffViewSummary(input, expectedTarget, options, true);
+}
+
+export function sanitizeStaffViewPageRequest(input, expectedOperation, options = {}) {
+  if (
+    !exactObjectKeys(input, ['operation', 'viewToken', 'stream', 'offset'])
+    || input.operation !== expectedOperation
+    || typeof input.viewToken !== 'string'
+    || !STAFF_VIEW_TOKEN_PATTERN.test(input.viewToken)
+    || typeof input.stream !== 'string'
+    || !(options.includeAudit === true ? ADMIN_PAGE_STREAMS : KIOSK_PAGE_STREAMS).has(input.stream)
+    || !Number.isSafeInteger(input.offset)
+    || input.offset < 0
+  ) return null;
+  return Object.freeze({
+    operation: expectedOperation,
+    viewToken: input.viewToken,
+    stream: input.stream,
+    offset: input.offset
+  });
+}
+
+function sanitizeStaffViewPageItems(input, stream, validationOptions) {
+  if (!Array.isArray(input) || input.length > MAX_STAFF_CLOCK_PAGE_ITEMS) return null;
+  if (stream === 'records') {
+    return sanitizeUniqueArray(
+      input,
+      MAX_STAFF_CLOCK_PAGE_ITEMS,
+      item => sanitizeRecord(item, validationOptions),
+      item => item.punchId
+    );
+  }
+  if (stream === 'audit') {
+    return sanitizeUniqueArray(
+      input,
+      MAX_STAFF_CLOCK_PAGE_ITEMS,
+      item => sanitizeAuditRecord(item, validationOptions),
+      item => item.requestId
+    );
+  }
+  return sanitizeUniqueArray(
+    input,
+    MAX_STAFF_CLOCK_PAGE_ITEMS,
+    item => sanitizeAttention(item, validationOptions.requireTestName),
+    item => `${item.staffId}\u0000${item.code}`
+  );
+}
+
+export function sanitizeStaffViewPage(input, expectedTarget, expectedRequest, options = {}) {
+  if (
+    !expectedRequest
+    || !exactObjectKeys(input, [
+      'ok', 'target', 'viewToken', 'stream', 'offset', 'items', 'nextOffset'
+    ])
+    || input.ok !== true
+    || input.target !== expectedTarget
+    || input.viewToken !== expectedRequest.viewToken
+    || input.stream !== expectedRequest.stream
+    || input.offset !== expectedRequest.offset
+  ) return null;
+  const items = sanitizeStaffViewPageItems(input.items, input.stream, {
+    requireTestName: expectedTarget === 'test',
+    now: options.now || new Date()
+  });
+  if (!items || items.length < 1) return null;
+  const terminal = input.nextOffset === null;
+  if (
+    !terminal
+    && (
+      !Number.isSafeInteger(input.nextOffset)
+      || input.nextOffset !== input.offset + items.length
+    )
+  ) return null;
+  return Object.freeze({
+    viewToken: input.viewToken,
+    stream: input.stream,
+    offset: input.offset,
+    items: Object.freeze(items),
+    nextOffset: input.nextOffset
+  });
+}
+
+export function isStaffViewStale(input, expectedTarget) {
+  return exactObjectKeys(input, ['ok', 'target', 'result'])
+    && input.ok === false
+    && input.target === expectedTarget
+    && input.result === 'stale';
 }
 
 function validAuditActionNumber(value) {

@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import {
   sanitizeStaffClockSnapshot,
   sanitizeStaffClockSyncResults,
+  sanitizeStaffViewPage,
   sanitizeStaffTimeCorrectionResult,
   sanitizeStaffTimeReview,
   sanitizeStaffTimeVoidResult
@@ -57,12 +58,23 @@ function makeSheet(initialRows = []) {
   const operations = [];
   let maxRows = Math.max(1000, values.length);
   let frozenRows = 0;
+  let dataRangeReads = 0;
   return {
     values,
     operations,
-    appendRow(row) { values.push([...row]); },
-    deleteRow(rowNumber) { values.splice(rowNumber - 1, 1); },
-    getDataRange() { return { getValues: () => values.map(row => [...row]) }; },
+    appendRow(row) {
+      values.push([...row]);
+      operations.push({ type: 'appendRow' });
+    },
+    deleteRow(rowNumber) {
+      values.splice(rowNumber - 1, 1);
+      operations.push({ type: 'deleteRow', rowNumber });
+    },
+    getDataRange() {
+      dataRangeReads += 1;
+      return { getValues: () => values.map(row => [...row]) };
+    },
+    get dataRangeReads() { return dataRangeReads; },
     getLastRow() { return values.length; },
     getLastColumn() {
       let last = 0;
@@ -103,10 +115,16 @@ function makeSheet(initialRows = []) {
         }
       };
     },
-    setFrozenRows(count) { frozenRows = count; },
+    setFrozenRows(count) {
+      frozenRows = count;
+      operations.push({ type: 'setFrozenRows', count });
+    },
     get frozenRows() { return frozenRows; },
     getMaxRows() { return maxRows; },
-    insertRowsAfter(_row, count) { maxRows += count; }
+    insertRowsAfter(row, count) {
+      maxRows += count;
+      operations.push({ type: 'insertRowsAfter', row, count });
+    }
   };
 }
 
@@ -171,6 +189,30 @@ function timeRow({
   ];
 }
 
+function generatedPunchId(index) {
+  return `gib-m1-staff-${(0x60000000 + index).toString(16)}-1111-4111-8111-${index.toString(16).padStart(12, '0')}`;
+}
+
+function generatedRequestId(index) {
+  return `gib-m1-staff-request-${(0x70000000 + index).toString(16)}-1111-4111-8111-${index.toString(16).padStart(12, '0')}`;
+}
+
+function ordinaryPeriodTimeRows({ count, startIndex, date, staffId, staffName }) {
+  return Array.from({ length: count }, (_, index) => {
+    const seconds = (9 * 60 * 60) + index;
+    const hour = String(Math.floor(seconds / 3600)).padStart(2, '0');
+    const minute = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
+    const second = String(seconds % 60).padStart(2, '0');
+    return timeRow({
+      punchId: generatedPunchId(startIndex + index),
+      timestamp: `${date}T${hour}:${minute}:${second}-04:00`,
+      staffId,
+      staffName,
+      action: index % 2 === 0 ? 'clockIn' : 'clockOut'
+    });
+  });
+}
+
 function createHarness({
   staffRows = STAFF_ROWS,
   timeRows = [],
@@ -217,12 +259,20 @@ function createHarness({
     GIB_M1_ADMIN_ACTION_TOKEN: 'unit-admin-token',
     GIB_M1_RECOVERY_TOKEN: 'unit-recovery-token'
   }));
+  const cacheValues = new Map();
   let spreadsheetOpens = 0;
   const context = {
     module: { exports: {} }, exports: {}, console, Date: FixedDate,
     ContentService: {
       MimeType: { JSON: 'application/json' },
       createTextOutput(text) { return { text, setMimeType() { return this; } }; }
+    },
+    CacheService: {
+      getScriptCache: () => ({
+        get: key => cacheValues.get(key) || null,
+        put(key, value) { cacheValues.set(key, String(value)); },
+        remove(key) { cacheValues.delete(key); }
+      })
     },
     DriveApp: {
       getFilesByName: () => {
@@ -264,7 +314,8 @@ function createHarness({
       base64EncodeWebSafe: bytes => Buffer.from(bytes.map(value => value < 0 ? value + 256 : value)).toString('base64url'),
       computeDigest: (_algorithm, value) => [...createHash('sha256').update(String(value)).digest()],
       computeHmacSha256Signature: () => [],
-      formatDate
+      formatDate,
+      newBlob: value => ({ getBytes: () => Buffer.from(String(value), 'utf8') })
     }
   };
   const vmContext = vm.createContext(context);
@@ -276,6 +327,7 @@ function createHarness({
     signins,
     adminAudit,
     properties,
+    cacheValues,
     get spreadsheetOpens() { return spreadsheetOpens; },
     post(body) {
       const result = vmContext.doPost({ postData: { contents: JSON.stringify(body) } });
@@ -294,6 +346,51 @@ function adminBody(action, fields = {}) {
     adminName: 'Andrew Smith',
     ...fields
   });
+}
+
+function readPagedStaffView(harness, { admin = false } = {}) {
+  const now = new Date(NOW_ISO);
+  const initialAction = admin ? 'staffTimeReviewV2' : 'staffClockSnapshotV2';
+  const pageAction = admin ? 'staffTimeReviewPageV2' : 'staffClockSnapshotPageV2';
+  const initialRaw = harness.post(admin
+    ? adminBody(initialAction)
+    : receiverBody(initialAction));
+  const initial = admin
+    ? sanitizeStaffTimeReview(initialRaw, 'test', { now })
+    : sanitizeStaffClockSnapshot(initialRaw, 'test', { now });
+  assert.ok(initial, `${initialAction} returns a strict paged-view summary`);
+
+  const counts = {
+    records: initial.view.recordCount,
+    attention: initial.view.attentionCount,
+    ...(admin ? { audit: initial.view.auditCount } : {})
+  };
+  const streams = {};
+  const pageSizes = {};
+  const pageByteLengths = {};
+  for (const [stream, count] of Object.entries(counts)) {
+    const items = [];
+    const sizes = [];
+    const byteLengths = [];
+    let offset = 0;
+    while (items.length < count) {
+      const fields = { viewToken: initial.view.token, stream, offset };
+      const raw = harness.post(admin ? adminBody(pageAction, fields) : receiverBody(pageAction, fields));
+      byteLengths.push(Buffer.byteLength(JSON.stringify(raw), 'utf8'));
+      const page = sanitizeStaffViewPage(raw, 'test', fields, { now });
+      assert.ok(page, `${pageAction} returns a strict ${stream} page at ${offset}`);
+      items.push(...page.items);
+      sizes.push(page.items.length);
+      if (page.nextOffset === null) break;
+      assert.equal(page.nextOffset, offset + page.items.length);
+      offset = page.nextOffset;
+    }
+    assert.equal(items.length, count, `${stream} pages exactly match the trusted initial count`);
+    streams[stream] = items;
+    pageSizes[stream] = sizes;
+    pageByteLengths[stream] = byteLengths;
+  }
+  return { initial, streams, pageSizes, pageByteLengths };
 }
 
 function punch({
@@ -407,6 +504,109 @@ test('ordinary Clock In and Clock Out are locked, offset-exact, replay-safe, and
   assert.deepEqual(harness.adminAudit.values, adminAuditBefore);
 });
 
+test('completed pay-period hours remain after the staff member becomes inactive', () => {
+  const inactiveWithoutHistory = ['inactive-without-history-test', 'Inactive Without History Test', false];
+  const harness = createHarness({
+    staffRows: [...STAFF_ROWS, inactiveWithoutHistory],
+    timeRows: [
+      timeRow({
+        punchId: IDS.other,
+        timestamp: '2026-08-03T09:00:00-04:00'
+      }),
+      timeRow({
+        punchId: IDS.correction,
+        timestamp: '2026-08-03T10:00:00-04:00',
+        action: 'clockOut'
+      })
+    ]
+  });
+  assert.equal(harness.post(receiverBody('staffClockPunch', {
+    punches: [punch({ timestamp: '2026-08-18T09:00:00-04:00' })]
+  })).results[0].result, 'added');
+  assert.equal(harness.post(receiverBody('staffClockPunch', {
+    punches: [punch({
+      punchId: IDS.out,
+      timestamp: '2026-08-18T11:30:00-04:00',
+      punchAction: 'clockOut'
+    })]
+  })).results[0].result, 'added');
+
+  harness.sheets.get('Staff Clock Staff').values[1][2] = false;
+  const timeBeforeReview = structuredClone(harness.sheets.get('Staff Time').values);
+  const auditBeforeReview = structuredClone(harness.sheets.get('Staff Time Audit').values);
+  const timeOperationCount = harness.sheets.get('Staff Time').operations.length;
+  const auditOperationCount = harness.sheets.get('Staff Time Audit').operations.length;
+  const signinsBeforeReview = structuredClone(harness.signins.values);
+  const adminAuditBeforeReview = structuredClone(harness.adminAudit.values);
+
+  const legacySnapshot = harness.post(receiverBody('staffClockSnapshot'));
+  assert.equal(legacySnapshot.ok, true);
+  assert.ok(!legacySnapshot.staff.some(item => item.staffId === 'mandy-test'));
+  assert.equal(legacySnapshot.records.filter(item => item.staffId === 'mandy-test').length, 4);
+
+  const snapshot = readPagedStaffView(harness);
+  assert.ok(!snapshot.initial.staff.some(item => item.staffId === 'mandy-test'));
+  assert.equal(snapshot.streams.records.filter(item => item.staffId === 'mandy-test').length, 2);
+  assert.deepEqual(
+    snapshot.initial.periods.current.totals.find(item => item.staffId === 'mandy-test'),
+    {
+      staffId: 'mandy-test',
+      staffName: 'Mandy Test',
+      completedShifts: 1,
+      totalSeconds: 9_000,
+      needsAttention: false
+    }
+  );
+  assert.deepEqual(
+    snapshot.initial.periods.previous.totals.find(item => item.staffId === 'mandy-test'),
+    {
+      staffId: 'mandy-test',
+      staffName: 'Mandy Test',
+      completedShifts: 1,
+      totalSeconds: 3_600,
+      needsAttention: false
+    }
+  );
+
+  const adminSnapshot = readPagedStaffView(harness, { admin: true });
+  assert.ok(!adminSnapshot.initial.staff.some(item => item.staffId === 'mandy-test'));
+  assert.deepEqual(
+    adminSnapshot.initial.periods.current.totals.find(item => item.staffId === 'mandy-test'),
+    snapshot.initial.periods.current.totals.find(item => item.staffId === 'mandy-test')
+  );
+  assert.deepEqual(
+    adminSnapshot.initial.periods.previous.totals.find(item => item.staffId === 'mandy-test'),
+    snapshot.initial.periods.previous.totals.find(item => item.staffId === 'mandy-test')
+  );
+
+  const review = harness.post(adminBody('staffTimeReview'));
+  const mandy = review.periods.current.totals.find(item => item.staffId === 'mandy-test');
+  const previousMandy = review.periods.previous.totals.find(item => item.staffId === 'mandy-test');
+  assert.deepEqual(mandy, {
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test',
+    completedShifts: 1,
+    totalSeconds: 9_000,
+    needsAttention: false
+  });
+  assert.deepEqual(previousMandy, {
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test',
+    completedShifts: 1,
+    totalSeconds: 3_600,
+    needsAttention: false
+  });
+  assert.ok(!review.periods.current.totals.some(item => (
+    item.staffId === 'inactive-without-history-test'
+  )));
+  assert.deepEqual(harness.sheets.get('Staff Time').values, timeBeforeReview);
+  assert.deepEqual(harness.sheets.get('Staff Time Audit').values, auditBeforeReview);
+  assert.equal(harness.sheets.get('Staff Time').operations.length, timeOperationCount);
+  assert.equal(harness.sheets.get('Staff Time Audit').operations.length, auditOperationCount);
+  assert.deepEqual(harness.signins.values, signinsBeforeReview);
+  assert.deepEqual(harness.adminAudit.values, adminAuditBeforeReview);
+});
+
 test('contradictory confirmed records surface Needs attention and block another ordinary punch', () => {
   const harness = createHarness({
     timeRows: [timeRow({ action: 'clockOut', punchId: IDS.out })]
@@ -479,13 +679,21 @@ test('state remains unknown after the first punch-order contradiction', () => {
   assert.equal(review.periods.current.totals[0].completedShifts, 0);
 });
 
-test('a stored near-future open punch is attention, not clocked-in state', () => {
+test('a stored future punch beyond write skew remains visible as attention in paged views', () => {
   const harness = createHarness({
-    timeRows: [timeRow({ timestamp: '2026-08-18T18:04:00-04:00' })]
+    timeRows: [timeRow({ timestamp: '2026-08-18T19:00:00-04:00' })]
   });
   const review = harness.post(adminBody('staffTimeReview'));
   assert.deepEqual(review.needsAttention.map(issue => issue.code), ['future_punch']);
   assert.deepEqual(review.clockedInNow, []);
+  const kioskView = readPagedStaffView(harness);
+  const adminView = readPagedStaffView(harness, { admin: true });
+  assert.deepEqual(kioskView.streams.attention.map(issue => issue.code), ['future_punch']);
+  assert.deepEqual(adminView.streams.attention.map(issue => issue.code), ['future_punch']);
+  assert.deepEqual(kioskView.initial.clockedInNow, []);
+  assert.deepEqual(adminView.initial.clockedInNow, []);
+  assert.equal(kioskView.streams.records[0].timestamp, '2026-08-18T19:00:00-04:00');
+  assert.equal(adminView.streams.records[0].timestamp, '2026-08-18T19:00:00-04:00');
 });
 
 test('Admin correction has one permanent request audit and heals a row-only interruption', () => {
@@ -603,6 +811,451 @@ test('review returns today, audit, and exact anchored current/previous period to
   assert.deepEqual(review.audit, []);
 });
 
+test('an old VOID adjacent to an unresolved punch remains visible with its audit evidence', () => {
+  const activeClockInId = generatedPunchId(8_000);
+  const voidClockOutId = generatedPunchId(8_001);
+  const voidRequestId = 'gib-m1-staff-request-20000000-0000-4000-8000-000000000001';
+  const harness = createHarness({
+    timeRows: [
+      timeRow({
+        punchId: activeClockInId,
+        timestamp: '2025-12-30T09:00:00-05:00'
+      }),
+      timeRow({
+        punchId: voidClockOutId,
+        timestamp: '2025-12-30T10:00:00-05:00',
+        action: 'clockOut',
+        status: 'VOID'
+      })
+    ],
+    auditRows: [[
+      voidRequestId, '2025-12-30T10:05:00-05:00', 'Andrew Smith',
+      'mandy-test', 'Mandy Test', '2025-12-30T10:00:00-05:00',
+      'void', 'Wrong old TEST punch', 'voided', voidClockOutId
+    ]]
+  });
+  const before = new Map([...harness.sheets].map(([name, sheet]) => (
+    [name, structuredClone(sheet.values)]
+  )));
+  const snapshot = readPagedStaffView(harness);
+  assert.deepEqual(snapshot.streams.records.map(record => record.punchId), [
+    activeClockInId,
+    voidClockOutId
+  ]);
+  assert.deepEqual(snapshot.streams.attention.map(item => [item.code, item.linkedPunchIds]), [[
+    'missing_clock_out',
+    [activeClockInId]
+  ]]);
+
+  const review = readPagedStaffView(harness, { admin: true });
+  assert.equal(
+    review.streams.records.find(record => record.punchId === voidClockOutId).status,
+    'VOID'
+  );
+  assert.deepEqual(review.streams.audit.map(item => [item.requestId, item.linkedPunchId]), [[
+    voidRequestId,
+    voidClockOutId
+  ]]);
+
+  for (const [name, sheet] of harness.sheets) {
+    assert.deepEqual(sheet.values, before.get(name), `${name} rows remain byte-for-byte equivalent`);
+    assert.deepEqual(sheet.operations, [], `${name} receives no write operation`);
+  }
+});
+
+test('more than 10,000 same-day punches keep exact state and totals in a bounded immutable projection', () => {
+  const ordinaryPeriodRows = ordinaryPeriodTimeRows({
+    count: 10_002,
+    startIndex: 0,
+    date: '2026-08-18',
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test'
+  });
+  const openPunchId = generatedPunchId(50_000);
+  const issuePunchId = generatedPunchId(50_001);
+  const voidPunchId = generatedPunchId(50_002);
+  const correctedInId = generatedPunchId(50_003);
+  const correctedOutId = generatedPunchId(50_004);
+  const relevantRows = [
+    timeRow({
+      punchId: IDS.other,
+      timestamp: '2026-08-03T09:00:00-04:00',
+      staffId: 'front-desk-test-three',
+      staffName: 'Front Desk Test Three',
+      action: 'clockIn'
+    }),
+    timeRow({
+      punchId: IDS.correction,
+      timestamp: '2026-08-03T10:30:00-04:00',
+      staffId: 'front-desk-test-three',
+      staffName: 'Front Desk Test Three',
+      action: 'clockOut'
+    }),
+    timeRow({
+      punchId: correctedInId,
+      timestamp: '2026-08-17T08:00:00-04:00',
+      staffId: 'front-desk-test-two',
+      staffName: 'Front Desk Test Two',
+      action: 'clockIn',
+      source: 'Admin-added',
+      adminName: 'Andrew Smith',
+      device: 'Admin Staff time',
+      note: `Admin correction | Request: ${IDS.request} | Reason: Missed TEST punch`
+    }),
+    timeRow({
+      punchId: correctedOutId,
+      timestamp: '2026-08-17T09:00:00-04:00',
+      staffId: 'front-desk-test-two',
+      staffName: 'Front Desk Test Two',
+      action: 'clockOut'
+    }),
+    timeRow({
+      punchId: openPunchId,
+      timestamp: '2026-08-18T12:00:00-04:00',
+      staffId: 'mandy-test',
+      staffName: 'Mandy Test'
+    }),
+    timeRow({
+      punchId: issuePunchId,
+      timestamp: '2025-12-31T09:00:00-05:00',
+      staffId: 'attention-test',
+      staffName: 'Attention Test',
+      action: 'clockOut'
+    }),
+    timeRow({
+      punchId: voidPunchId,
+      timestamp: '2026-08-18T14:00:00-04:00',
+      action: 'clockOut',
+      status: 'VOID'
+    })
+  ];
+  const auditRows = [
+    [
+      IDS.request, '2026-08-18T16:00:00-04:00', 'Andrew Smith',
+      'front-desk-test-two', 'Front Desk Test Two', '2026-08-17T08:00:00-04:00',
+      'clockIn', 'Missed TEST punch', 'added', correctedInId
+    ],
+    [
+      IDS.voidRequest, '2026-08-18T17:00:00-04:00', 'Andrew Smith',
+      'mandy-test', 'Mandy Test', '2026-08-18T14:00:00-04:00',
+      'void', 'Wrong TEST punch', 'voided', voidPunchId
+    ]
+  ];
+  const harness = createHarness({
+    staffRows: [...STAFF_ROWS, ['attention-test', 'Attention Test', false]],
+    timeRows: [...ordinaryPeriodRows, ...relevantRows],
+    auditRows
+  });
+  const before = new Map([...harness.sheets].map(([name, sheet]) => (
+    [name, structuredClone(sheet.values)]
+  )));
+  assert.ok(harness.sheets.get('Staff Time').values.length - 1 > 10_000);
+
+  const snapshot = readPagedStaffView(harness);
+  assert.equal(snapshot.pageSizes.records.reduce((sum, size) => sum + size, 0), 500);
+  assert.ok(snapshot.pageSizes.records.every(size => size > 0 && size <= 500));
+  assert.ok(snapshot.pageByteLengths.records.every(size => size <= 80_000));
+  assert.deepEqual(snapshot.pageSizes.attention, [1]);
+  assert.equal(snapshot.initial.view.recordCount, 500);
+  assert.equal(snapshot.initial.view.recordTotal, 10_007);
+  assert.equal(snapshot.initial.view.todayPunchCount, 497);
+  assert.equal(snapshot.initial.view.todayPunchTotal, 10_004);
+  assert.equal(snapshot.initial.view.adjustmentCount, 2);
+  assert.equal(snapshot.initial.view.adjustmentTotal, 2);
+  assert.equal(snapshot.initial.view.recordsTruncated, true);
+  assert.equal(snapshot.initial.view.attentionCount, 1);
+  assert.equal(snapshot.initial.view.attentionOccurrenceCount, 1);
+  assert.equal(snapshot.initial.view.auditCount, 0);
+  assert.equal(snapshot.initial.view.auditTotal, 0);
+  assert.equal(snapshot.initial.view.auditTruncated, false);
+  assert.equal(snapshot.streams.records.length, 500);
+  assert.equal(
+    new Set(snapshot.streams.records.map(record => record.punchId)).size,
+    snapshot.streams.records.length,
+    'record pages contain no gaps or duplicates'
+  );
+  assert.deepEqual(snapshot.streams.records.slice(0, 5).map(record => record.punchId), [
+    openPunchId,
+    issuePunchId,
+    voidPunchId,
+    correctedOutId,
+    correctedInId
+  ], 'open/issue evidence and correction/VOID evidence outrank the same-day tail');
+  assert.deepEqual(
+    snapshot.initial.clockedInNow.map(item => [item.staffId, item.punchId]),
+    [['mandy-test', openPunchId]]
+  );
+  assert.deepEqual(snapshot.streams.attention.map(item => [item.code, item.linkedPunchIds]), [
+    ['clock_out_without_clock_in', [issuePunchId]]
+  ]);
+  assert.equal(
+    snapshot.streams.records.filter(record => record.date === snapshot.initial.view.today).length,
+    snapshot.initial.view.todayPunchCount
+  );
+  const snapshotMandy = snapshot.initial.periods.current.totals.find(item => (
+    item.staffId === 'mandy-test'
+  ));
+  assert.equal(snapshotMandy.completedShifts, 5_001);
+  assert.equal(snapshotMandy.totalSeconds, 5_001);
+  assert.equal(snapshot.streams.records.find(item => item.punchId === correctedInId).source, 'Admin-added');
+  assert.ok(snapshot.streams.records.some(item => item.punchId === correctedOutId));
+  assert.equal(snapshot.streams.records.find(item => item.punchId === voidPunchId).status, 'VOID');
+
+  const review = readPagedStaffView(harness, { admin: true });
+  assert.equal(review.pageSizes.records.reduce((sum, size) => sum + size, 0), 500);
+  assert.ok(review.pageByteLengths.records.every(size => size <= 80_000));
+  assert.deepEqual(review.pageSizes.attention, [1]);
+  assert.deepEqual(review.pageSizes.audit, [2]);
+  assert.equal(review.initial.view.recordTotal, 10_007);
+  assert.equal(review.initial.view.recordCount, 500);
+  assert.equal(review.initial.view.auditTotal, 2);
+  assert.equal(review.initial.view.auditCount, 2);
+  assert.equal(review.initial.view.auditTruncated, false);
+  assert.notEqual(review.initial.view.token, snapshot.initial.view.token, 'Admin token is mode-bound');
+  assert.deepEqual(
+    review.initial.clockedInNow.map(item => [item.staffId, item.punchId]),
+    [['mandy-test', openPunchId]]
+  );
+  const currentMandy = review.initial.periods.current.totals.find(item => item.staffId === 'mandy-test');
+  const currentDesk = review.initial.periods.current.totals.find(item => item.staffId === 'front-desk-test-two');
+  const previousDesk = review.initial.periods.previous.totals.find(item => (
+    item.staffId === 'front-desk-test-three'
+  ));
+  assert.equal(currentMandy.completedShifts, 5_001);
+  assert.equal(currentMandy.totalSeconds, 5_001);
+  assert.equal(currentDesk.totalSeconds, 3_600);
+  assert.equal(previousDesk.totalSeconds, 5_400);
+  assert.equal(previousDesk.completedShifts, 1);
+  assert.deepEqual(review.streams.attention.map(item => [item.code, item.linkedPunchIds]), [
+    ['clock_out_without_clock_in', [issuePunchId]]
+  ]);
+  assert.equal(review.streams.records.find(item => item.punchId === correctedInId).source, 'Admin-added');
+  assert.equal(review.streams.records.find(item => item.punchId === voidPunchId).status, 'VOID');
+  assert.deepEqual(review.streams.audit.map(item => item.linkedPunchId), [voidPunchId, correctedInId]);
+
+  for (const [name, sheet] of harness.sheets) {
+    assert.deepEqual(sheet.values, before.get(name), `${name} rows remain byte-for-byte equivalent`);
+    assert.deepEqual(sheet.operations, [], `${name} receives no write operation`);
+  }
+});
+
+test('maximum-length Unicode records stay under the receiver byte ceiling across every page', () => {
+  const staffId = 'unicode-test';
+  const staffName = `${'測'.repeat(90)} TEST`;
+  const rows = ordinaryPeriodTimeRows({
+    count: 500,
+    startIndex: 20_000,
+    date: '2026-08-18',
+    staffId,
+    staffName
+  });
+  for (const row of rows) {
+    row[6] = `${'測'.repeat(75)} TEST`;
+    row[7] = `${'測'.repeat(115)} TEST`;
+    row[8] = `${'測'.repeat(115)} TEST`;
+    row[9] = '測'.repeat(400);
+  }
+  const harness = createHarness({
+    staffRows: [[staffId, staffName, true]],
+    timeRows: rows
+  });
+  const before = structuredClone(harness.sheets.get('Staff Time').values);
+
+  const snapshot = readPagedStaffView(harness);
+  assert.equal(snapshot.initial.view.recordCount, rows.length);
+  assert.equal(snapshot.initial.view.todayPunchCount, rows.length);
+  assert.ok(snapshot.pageSizes.records.length > 1, 'byte ceiling splits a nominal 500-item page');
+  assert.equal(snapshot.pageSizes.records.reduce((sum, size) => sum + size, 0), rows.length);
+  assert.ok(snapshot.pageSizes.records.every(size => size > 0 && size <= 500));
+  assert.ok(snapshot.pageByteLengths.records.every(size => size <= 80_000));
+  assert.deepEqual(
+    snapshot.streams.records.map(record => record.punchId),
+    rows.map(row => row[0]).reverse(),
+    'variable pages assemble every Unicode record once in deterministic newest-first order'
+  );
+  assert.deepEqual(harness.sheets.get('Staff Time').values, before);
+  assert.deepEqual(harness.sheets.get('Staff Time').operations, []);
+});
+
+test('Admin audit projection keeps only cross-linked included records when more than 500 adjustments reorder', () => {
+  const rows = ordinaryPeriodTimeRows({
+    count: 502,
+    startIndex: 70_000,
+    date: '2026-08-18',
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test'
+  });
+  rows.forEach(row => {
+    row[7] = 'Admin Staff time';
+    row[8] = 'm1b-test-build';
+    row[9] = 'Admin correction evidence';
+    row[11] = 'Admin-added';
+    row[12] = 'Andrew Smith';
+  });
+  const auditRows = rows.map((row, index) => {
+    const actionSeconds = (15 * 60 * 60) + (rows.length - 1 - index);
+    const hour = String(Math.floor(actionSeconds / 3600)).padStart(2, '0');
+    const minute = String(Math.floor((actionSeconds % 3600) / 60)).padStart(2, '0');
+    const second = String(actionSeconds % 60).padStart(2, '0');
+    return [
+      generatedRequestId(70_000 + index),
+      `2026-08-18T${hour}:${minute}:${second}-04:00`,
+      'Andrew Smith',
+      'mandy-test',
+      'Mandy Test',
+      row[1],
+      row[5],
+      'Added missing TEST punch',
+      'added',
+      row[0]
+    ];
+  });
+  const harness = createHarness({ timeRows: rows, auditRows });
+  const beforeTime = structuredClone(harness.sheets.get('Staff Time').values);
+  const beforeAudit = structuredClone(harness.sheets.get('Staff Time Audit').values);
+  const review = readPagedStaffView(harness, { admin: true });
+
+  assert.equal(review.initial.view.recordCount, 500);
+  assert.equal(review.initial.view.recordTotal, 502);
+  assert.equal(review.initial.view.adjustmentCount, 500);
+  assert.equal(review.initial.view.adjustmentTotal, 502);
+  assert.equal(review.initial.view.auditCount, 500);
+  assert.equal(review.initial.view.auditTotal, 502);
+  assert.equal(review.initial.view.recordsTruncated, true);
+  assert.equal(review.initial.view.auditTruncated, true);
+  const includedIds = new Set(review.streams.records.map(item => item.punchId));
+  assert.equal(includedIds.has(rows[0][0]), false);
+  assert.equal(includedIds.has(rows[1][0]), false);
+  assert.ok(review.streams.audit.every(item => includedIds.has(item.linkedPunchId)));
+  assert.deepEqual(review.streams.audit.slice(0, 2).map(item => item.linkedPunchId), [
+    rows[2][0],
+    rows[3][0]
+  ], 'audit action order cannot reintroduce records omitted by record priority');
+  assert.ok(review.pageByteLengths.audit.every(size => size <= 80_000));
+  assert.deepEqual(harness.sheets.get('Staff Time').values, beforeTime);
+  assert.deepEqual(harness.sheets.get('Staff Time Audit').values, beforeAudit);
+  assert.deepEqual(harness.sheets.get('Staff Time').operations, []);
+  assert.deepEqual(harness.sheets.get('Staff Time Audit').operations, []);
+});
+
+test('paged Staff Clock views are deterministic and reject stale or noncanonical pages', () => {
+  const harness = createHarness({
+    timeRows: [
+      timeRow({ punchId: IDS.in }),
+      timeRow({ punchId: IDS.out, timestamp: '2026-08-18T10:00:00-04:00', action: 'clockOut' })
+    ]
+  });
+  const first = harness.post(receiverBody('staffClockSnapshotV2'));
+  const replay = harness.post(receiverBody('staffClockSnapshotV2'));
+  assert.match(first.view.token, /^[0-9a-f]{64}$/u);
+  assert.equal(replay.view.token, first.view.token);
+
+  for (const fields of [
+    { viewToken: ` ${first.view.token}`, stream: 'records', offset: 0 },
+    { viewToken: first.view.token.toUpperCase(), stream: 'records', offset: 0 },
+    { viewToken: first.view.token, stream: ' records', offset: 0 },
+    { viewToken: first.view.token, stream: 'audit', offset: 0 },
+    { viewToken: first.view.token, stream: 'records', offset: first.view.recordCount }
+  ]) {
+    assert.deepEqual(harness.post(receiverBody('staffClockSnapshotPageV2', fields)), {
+      ok: false,
+      target: 'test',
+      result: 'rejected'
+    });
+  }
+
+  harness.sheets.get('Staff Clock Staff').values[1][2] = false;
+  assert.deepEqual(harness.post(receiverBody('staffClockSnapshotPageV2', {
+    viewToken: first.view.token,
+    stream: 'records',
+    offset: 0
+  })), {
+    ok: false,
+    target: 'test',
+    result: 'stale'
+  });
+});
+
+test('immutable cached pages never rebuild Sheets and an evicted page forces one summary rebuild', () => {
+  const harness = createHarness({
+    timeRows: [
+      timeRow({ punchId: IDS.in }),
+      timeRow({ punchId: IDS.out, timestamp: '2026-08-18T10:00:00-04:00', action: 'clockOut' })
+    ]
+  });
+  const timeSheet = harness.sheets.get('Staff Time');
+  const auditSheet = harness.sheets.get('Staff Time Audit');
+  const first = harness.post(receiverBody('staffClockSnapshotV2'));
+  assert.equal(first.ok, true);
+  assert.equal(timeSheet.dataRangeReads, 1, 'first summary performs one authoritative Time build');
+  assert.equal(auditSheet.dataRangeReads, 0, 'kiosk summary never performs a full Audit read');
+
+  const replay = harness.post(receiverBody('staffClockSnapshotV2'));
+  assert.equal(replay.view.token, first.view.token);
+  assert.equal(timeSheet.dataRangeReads, 1, 'same signature reuses the cached immutable summary');
+
+  const pageRequest = {
+    viewToken: first.view.token,
+    stream: 'records',
+    offset: 0
+  };
+  assert.equal(harness.post(receiverBody('staffClockSnapshotPageV2', pageRequest)).ok, true);
+  assert.equal(timeSheet.dataRangeReads, 1, 'a valid page reads only lightweight state and cache');
+  assert.deepEqual(harness.post(receiverBody('staffClockSnapshotPageV2', {
+    ...pageRequest,
+    viewToken: 'f'.repeat(64)
+  })), { ok: false, target: 'test', result: 'stale' });
+  assert.equal(timeSheet.dataRangeReads, 1, 'a random valid-shape token never scans Staff Time');
+
+  const pageKey = [...harness.cacheValues.keys()].find(key => (
+    key.includes(`-page-${first.view.token}-records-0`)
+  ));
+  assert.ok(pageKey, 'the bounded page is cached under its immutable token and offset');
+  harness.cacheValues.delete(pageKey);
+  assert.deepEqual(harness.post(receiverBody('staffClockSnapshotPageV2', pageRequest)), {
+    ok: false,
+    target: 'test',
+    result: 'stale'
+  });
+  assert.equal(timeSheet.dataRangeReads, 1, 'cache eviction fails stale without a hidden full rebuild');
+
+  const rebuilt = harness.post(receiverBody('staffClockSnapshotV2'));
+  assert.equal(rebuilt.view.token, first.view.token);
+  assert.equal(timeSheet.dataRangeReads, 2, 'one summary retry performs exactly one rebuild');
+  assert.equal(harness.post(receiverBody('staffClockSnapshotV2')).view.token, rebuilt.view.token);
+  assert.equal(timeSheet.dataRangeReads, 2, 'the rebuilt token is cached again');
+});
+
+test('repeated unresolved occurrences collapse by staff and code with newest evidence retained', () => {
+  const firstIn = generatedPunchId(60_000);
+  const firstOut = generatedPunchId(60_001);
+  const latestIn = generatedPunchId(60_002);
+  const latestOut = generatedPunchId(60_003);
+  const harness = createHarness({
+    timeRows: [
+      timeRow({ punchId: firstIn, timestamp: '2026-08-15T00:00:00-04:00' }),
+      timeRow({ punchId: firstOut, timestamp: '2026-08-15T19:00:01-04:00', action: 'clockOut' }),
+      timeRow({ punchId: latestIn, timestamp: '2026-08-16T00:00:00-04:00' }),
+      timeRow({ punchId: latestOut, timestamp: '2026-08-16T19:00:01-04:00', action: 'clockOut' })
+    ]
+  });
+  const view = readPagedStaffView(harness);
+  assert.equal(view.initial.view.attentionCount, 1);
+  assert.equal(view.initial.view.attentionOccurrenceCount, 2);
+  assert.deepEqual(view.streams.attention, [{
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test',
+    code: 'shift_too_long',
+    message: 'Mandy Test has an unreasonably long shift.',
+    linkedPunchIds: [latestIn, latestOut],
+    occurrenceCount: 2
+  }]);
+  assert.deepEqual(view.streams.records.slice(0, 2).map(item => item.punchId), [
+    latestOut,
+    latestIn
+  ]);
+});
+
 test('Netlify-produced requests and strict sanitizers accept every receiver success envelope', () => {
   const harness = createHarness();
   const now = new Date(NOW_ISO);
@@ -610,8 +1263,8 @@ test('Netlify-produced requests and strict sanitizers accept every receiver succ
   const sync = harness.post(receiverBody('staffClockPunch', { punches: [inputPunch] }));
   assert.ok(sanitizeStaffClockSyncResults(sync, [inputPunch], 'test'));
 
-  const snapshot = harness.post(receiverBody('staffClockSnapshot'));
-  assert.ok(sanitizeStaffClockSnapshot(snapshot, 'test', { now }));
+  const snapshot = readPagedStaffView(harness);
+  assert.ok(snapshot.initial);
 
   const expectedCorrection = {
     requestId: IDS.request,
@@ -630,8 +1283,8 @@ test('Netlify-produced requests and strict sanitizers accept every receiver succ
   const corrected = harness.post(correction());
   assert.ok(sanitizeStaffTimeCorrectionResult(corrected, expectedCorrection, 'test'));
 
-  const review = harness.post(adminBody('staffTimeReview'));
-  assert.ok(sanitizeStaffTimeReview(review, 'test', { now }));
+  const review = readPagedStaffView(harness, { admin: true });
+  assert.ok(review.initial);
 
   const expectedVoid = {
     requestId: IDS.voidRequest,

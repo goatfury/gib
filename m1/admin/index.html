@@ -683,6 +683,12 @@
       const STAFF_PUNCH_ID_PATTERN = /^gib-m1-staff-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
       const STAFF_REQUEST_ID_PATTERN = /^gib-m1-staff-request-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
       const STAFF_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}-(?:04|05):00$/;
+      const STAFF_TIME_VIEW_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+      const STAFF_TIME_PAGE_LIMIT = 500;
+      const STAFF_TIME_PAGE_MAX_BYTES = 200_000;
+      const STAFF_TIME_RECORD_LIMIT = 500;
+      const STAFF_TIME_ATTENTION_LIMIT = 600;
+      const STAFF_TIME_AUDIT_LIMIT = 500;
       const MIN_CLASSES_BY_DAY = Object.freeze({
         Monday: 5,
         Tuesday: 5,
@@ -1505,14 +1511,19 @@
       }
 
       function validStaffAttention(value) {
-        return exactObjectKeys(value, ['staffId', 'staffName', 'code', 'message', 'linkedPunchIds'])
+        return exactObjectKeys(value, [
+          'staffId', 'staffName', 'code', 'message', 'linkedPunchIds', 'occurrenceCount'
+        ])
           && validStaffId(value.staffId)
           && validStaffName(value.staffName)
           && typeof value.code === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(value.code)
           && typeof value.message === 'string' && value.message.length >= 1 && value.message.length <= 240
           && Array.isArray(value.linkedPunchIds)
           && value.linkedPunchIds.length <= 20
-          && value.linkedPunchIds.every(punchId => STAFF_PUNCH_ID_PATTERN.test(punchId));
+          && value.linkedPunchIds.every(punchId => STAFF_PUNCH_ID_PATTERN.test(punchId))
+          && new Set(value.linkedPunchIds).size === value.linkedPunchIds.length
+          && Number.isSafeInteger(value.occurrenceCount)
+          && value.occurrenceCount >= 1;
       }
 
       function validStaffTotal(value) {
@@ -1525,17 +1536,21 @@
           && value.completedShifts >= 0
           && Number.isSafeInteger(value.totalSeconds)
           && value.totalSeconds >= 0
-          && value.totalSeconds <= 14 * 24 * 60 * 60
+          && value.totalSeconds <= 15 * 24 * 60 * 60
           && typeof value.needsAttention === 'boolean';
       }
 
       function validStaffPeriod(value) {
-        return exactObjectKeys(value, ['startDate', 'endDate', 'totals'])
-          && validReviewDate(value.startDate)
-          && validReviewDate(value.endDate)
-          && Array.isArray(value.totals)
-          && value.totals.length <= 500
-          && value.totals.every(validStaffTotal);
+        if (
+          !exactObjectKeys(value, ['startDate', 'endDate', 'totals'])
+          || !validReviewDate(value.startDate)
+          || !validReviewDate(value.endDate)
+          || shiftDate(value.startDate, 13) !== value.endDate
+          || !Array.isArray(value.totals)
+          || value.totals.length > 500
+          || !value.totals.every(validStaffTotal)
+        ) return false;
+        return new Set(value.totals.map(total => total.staffId)).size === value.totals.length;
       }
 
       function validStaffAudit(value) {
@@ -1556,10 +1571,163 @@
           && STAFF_PUNCH_ID_PATTERN.test(value.linkedPunchId);
       }
 
+      function validStaffTimeCount(value) {
+        return Number.isSafeInteger(value) && value >= 0;
+      }
+
+      function staffTimeJsonByteLength(value) {
+        return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+      }
+
+      function validStaffTimeViewMetadata(value) {
+        if (!exactObjectKeys(value, [
+          'token', 'today', 'recordCount', 'recordTotal', 'todayPunchCount',
+          'todayPunchTotal', 'adjustmentCount', 'adjustmentTotal', 'attentionCount',
+          'attentionOccurrenceCount', 'auditCount', 'auditTotal', 'recordsTruncated',
+          'auditTruncated'
+        ])) return false;
+        if (
+          typeof value.token !== 'string'
+          || !STAFF_TIME_VIEW_TOKEN_PATTERN.test(value.token)
+          || !validReviewDate(value.today)
+          || !validStaffTimeCount(value.recordCount)
+          || !validStaffTimeCount(value.recordTotal)
+          || !validStaffTimeCount(value.todayPunchCount)
+          || !validStaffTimeCount(value.todayPunchTotal)
+          || !validStaffTimeCount(value.adjustmentCount)
+          || !validStaffTimeCount(value.adjustmentTotal)
+          || !validStaffTimeCount(value.attentionCount)
+          || !validStaffTimeCount(value.attentionOccurrenceCount)
+          || !validStaffTimeCount(value.auditCount)
+          || !validStaffTimeCount(value.auditTotal)
+          || typeof value.recordsTruncated !== 'boolean'
+          || typeof value.auditTruncated !== 'boolean'
+          || value.recordCount > STAFF_TIME_RECORD_LIMIT
+          || value.todayPunchCount > value.recordCount
+          || value.adjustmentCount > value.recordCount
+          || value.recordTotal < value.recordCount
+          || value.todayPunchTotal < value.todayPunchCount
+          || value.todayPunchTotal > value.recordTotal
+          || value.adjustmentTotal < value.adjustmentCount
+          || value.adjustmentTotal > value.recordTotal
+          || value.attentionCount > STAFF_TIME_ATTENTION_LIMIT
+          || value.attentionOccurrenceCount < value.attentionCount
+          || value.auditCount > STAFF_TIME_AUDIT_LIMIT
+          || value.auditTotal < value.auditCount
+          || value.recordsTruncated !== (value.recordCount < value.recordTotal)
+          || value.auditTruncated !== (value.auditCount < value.auditTotal)
+        ) return false;
+        return true;
+      }
+
+      function validStaffTimeReviewStartResponse(value) {
+        if (!exactObjectKeys(value, [
+          'ok', 'test', 'adminName', 'staff', 'clockedInNow', 'periods', 'view'
+        ])) return false;
+        if (
+          value.ok !== true
+          || typeof value.test !== 'boolean'
+          || value.test !== testMode
+          || value.adminName !== currentAdminName
+          || !Array.isArray(value.staff)
+          || value.staff.length > 500
+          || !Array.isArray(value.clockedInNow)
+          || value.clockedInNow.length > 500
+          || !exactObjectKeys(value.periods, ['current', 'previous'])
+          || !validStaffTimeViewMetadata(value.view)
+          || value.clockedInNow.length > value.view.recordCount
+          || !validStaffPeriod(value.periods.current)
+          || !validStaffPeriod(value.periods.previous)
+          || shiftDate(value.periods.previous.endDate, 1) !== value.periods.current.startDate
+          || value.view.today < value.periods.current.startDate
+          || value.view.today > value.periods.current.endDate
+        ) return false;
+        const staffIds = new Set();
+        const staffNames = new Set();
+        for (const person of value.staff) {
+          const normalizedName = person && typeof person.staffName === 'string'
+            ? person.staffName.toLocaleLowerCase('en-US')
+            : '';
+          if (
+            !validStaffPerson(person)
+            || staffIds.has(person.staffId)
+            || staffNames.has(normalizedName)
+          ) return false;
+          staffIds.add(person.staffId);
+          staffNames.add(normalizedName);
+        }
+        const clockedPunchIds = new Set();
+        const clockedStaffIds = new Set();
+        for (const item of value.clockedInNow) {
+          if (
+            !validStaffClockedIn(item)
+            || clockedPunchIds.has(item.punchId)
+            || clockedStaffIds.has(item.staffId)
+          ) return false;
+          clockedPunchIds.add(item.punchId);
+          clockedStaffIds.add(item.staffId);
+        }
+        return true;
+      }
+
+      function validStaffTimeReviewPageResponse(value, expected) {
+        if (!exactObjectKeys(value, [
+          'ok', 'test', 'adminName', 'viewToken', 'stream', 'offset', 'items', 'nextOffset'
+        ])) return false;
+        if (
+          !expected
+          || value.ok !== true
+          || typeof value.test !== 'boolean'
+          || value.test !== testMode
+          || value.adminName !== currentAdminName
+          || value.viewToken !== expected.viewToken
+          || value.stream !== expected.stream
+          || value.offset !== expected.offset
+          || !['records', 'attention', 'audit'].includes(value.stream)
+          || !validStaffTimeCount(value.offset)
+          || !Array.isArray(value.items)
+          || value.items.length < 1
+          || value.items.length > STAFF_TIME_PAGE_LIMIT
+          || staffTimeJsonByteLength(value) > STAFF_TIME_PAGE_MAX_BYTES
+          || !(
+            value.nextOffset === null
+            || (
+              validStaffTimeCount(value.nextOffset)
+              && value.nextOffset === value.offset + value.items.length
+              && value.nextOffset > value.offset
+            )
+          )
+        ) return false;
+        const validator = value.stream === 'records'
+          ? validStaffRecord
+          : value.stream === 'attention'
+            ? validStaffAttention
+            : validStaffAudit;
+        return value.items.every(validator);
+      }
+
+      function staffTimeStreamIdentity(stream, item) {
+        if (stream === 'records') return item.punchId;
+        if (stream === 'audit') return item.requestId;
+        return `${item.staffId}\u0000${item.code}`;
+      }
+
+      function staffTodayPunchFromRecord(record) {
+        return {
+          punchId: record.punchId,
+          staffId: record.staffId,
+          staffName: record.staffName,
+          punchAction: record.punchAction,
+          timestamp: record.timestamp,
+          source: record.source,
+          status: record.status
+        };
+      }
+
       function validStaffTimeReviewResponse(value) {
         if (!exactObjectKeys(value, [
           'ok', 'test', 'adminName', 'staff', 'records', 'clockedInNow',
-          'todayPunches', 'needsAttention', 'periods', 'audit'
+          'todayPunches', 'needsAttention', 'periods', 'audit', 'view'
         ])) return false;
         if (
           value.ok !== true
@@ -1573,44 +1741,231 @@
           || !Array.isArray(value.needsAttention)
           || !Array.isArray(value.audit)
           || !exactObjectKeys(value.periods, ['current', 'previous'])
+          || !validStaffTimeViewMetadata(value.view)
+          || !validStaffPeriod(value.periods.current)
+          || !validStaffPeriod(value.periods.previous)
+          || shiftDate(value.periods.previous.endDate, 1) !== value.periods.current.startDate
+          || value.view.today < value.periods.current.startDate
+          || value.view.today > value.periods.current.endDate
           || value.staff.length > 500
-          || value.records.length > 5_000
           || value.clockedInNow.length > 500
-          || value.todayPunches.length > 2_000
-          || value.needsAttention.length > 2_000
-          || value.audit.length > 5_000
+          || value.records.length !== value.view.recordCount
+          || value.todayPunches.length !== value.view.todayPunchCount
+          || value.needsAttention.length !== value.view.attentionCount
+          || value.audit.length !== value.view.auditCount
         ) return false;
         const staffIds = new Set();
+        const staffNames = new Set();
         const punchIds = new Set();
+        const recordById = new Map();
         const requestIds = new Set();
         for (const person of value.staff) {
-          if (!validStaffPerson(person) || staffIds.has(person.staffId)) return false;
+          const normalizedName = person && typeof person.staffName === 'string'
+            ? person.staffName.toLocaleLowerCase('en-US')
+            : '';
+          if (
+            !validStaffPerson(person)
+            || staffIds.has(person.staffId)
+            || staffNames.has(normalizedName)
+          ) return false;
           staffIds.add(person.staffId);
+          staffNames.add(normalizedName);
         }
         for (const record of value.records) {
           if (!validStaffRecord(record) || punchIds.has(record.punchId)) return false;
           punchIds.add(record.punchId);
+          recordById.set(record.punchId, record);
         }
-        if (!value.clockedInNow.every(validStaffClockedIn)) return false;
-        if (!value.todayPunches.every(item => (
-          exactObjectKeys(item, [
+        if (value.records.filter(record => (
+          record.date >= value.periods.previous.startDate
+          && record.date <= value.periods.current.endDate
+          && (record.source === 'Admin-added' || record.status === 'VOID')
+        )).length !== value.view.adjustmentCount) return false;
+        const clockedPunchIds = new Set();
+        const clockedStaffIds = new Set();
+        for (const item of value.clockedInNow) {
+          const record = recordById.get(item.punchId);
+          if (
+            !validStaffClockedIn(item)
+            || clockedPunchIds.has(item.punchId)
+            || clockedStaffIds.has(item.staffId)
+            || !record
+            || record.staffId !== item.staffId
+            || record.staffName !== item.staffName
+            || record.punchAction !== 'clockIn'
+            || record.timestamp !== item.clockInAt
+            || record.status !== 'ACTIVE'
+          ) return false;
+          clockedPunchIds.add(item.punchId);
+          clockedStaffIds.add(item.staffId);
+        }
+        const todayPunchIds = new Set();
+        for (const item of value.todayPunches) {
+          const record = recordById.get(item.punchId);
+          if (!(
+            exactObjectKeys(item, [
             'punchId', 'staffId', 'staffName', 'punchAction', 'timestamp', 'source', 'status'
-          ])
-          && STAFF_PUNCH_ID_PATTERN.test(item.punchId)
-          && validStaffId(item.staffId)
-          && validStaffName(item.staffName)
-          && ['clockIn', 'clockOut'].includes(item.punchAction)
-          && validStaffTimestamp(item.timestamp)
-          && ['Tablet', 'Admin-added'].includes(item.source)
-          && ['ACTIVE', 'VOID'].includes(item.status)
-        ))) return false;
-        if (!value.needsAttention.every(validStaffAttention)) return false;
-        if (!validStaffPeriod(value.periods.current) || !validStaffPeriod(value.periods.previous)) return false;
+            ])
+            && !todayPunchIds.has(item.punchId)
+            && record
+            && item.staffId === record.staffId
+            && item.staffName === record.staffName
+            && item.punchAction === record.punchAction
+            && item.timestamp === record.timestamp
+            && item.source === record.source
+            && item.status === record.status
+          )) return false;
+          todayPunchIds.add(item.punchId);
+        }
+        const attentionIds = new Set();
+        let attentionOccurrenceCount = 0;
+        for (const item of value.needsAttention) {
+          const identity = staffTimeStreamIdentity('attention', item);
+          if (!validStaffAttention(item) || attentionIds.has(identity)) return false;
+          if (item.linkedPunchIds.some(punchId => {
+            const record = recordById.get(punchId);
+            return !record || record.staffId !== item.staffId || record.staffName !== item.staffName;
+          })) return false;
+          attentionIds.add(identity);
+          attentionOccurrenceCount += item.occurrenceCount;
+          if (!Number.isSafeInteger(attentionOccurrenceCount)) return false;
+        }
+        if (attentionOccurrenceCount !== value.view.attentionOccurrenceCount) return false;
         for (const audit of value.audit) {
-          if (!validStaffAudit(audit) || requestIds.has(audit.requestId)) return false;
+          const record = recordById.get(audit.linkedPunchId);
+          if (
+            !validStaffAudit(audit)
+            || requestIds.has(audit.requestId)
+            || !record
+            || record.staffId !== audit.staffId
+            || record.staffName !== audit.staffName
+            || record.timestamp !== audit.punchTimestamp
+            || record.punchAction !== audit.punchAction
+          ) return false;
           requestIds.add(audit.requestId);
         }
         return true;
+      }
+
+      async function fetchStaffTimeReviewStream(initial, stream, expectedCount, generation) {
+        const items = [];
+        const identities = new Set();
+        let offset = 0;
+        while (offset < expectedCount) {
+          const page = await requestJson(API.staffTime, {
+            operation: 'reviewPage',
+            viewToken: initial.view.token,
+            stream,
+            offset
+          });
+          if (generation !== staffTimeLoadGeneration) return null;
+          if (!validStaffTimeReviewPageResponse(page, {
+            viewToken: initial.view.token,
+            stream,
+            offset
+          })) {
+            throw new Error('Staff time returned an incomplete page. Nothing was changed.');
+          }
+          const endOffset = offset + page.items.length;
+          const terminal = endOffset === expectedCount;
+          if (
+            endOffset > expectedCount
+            || page.nextOffset !== (terminal ? null : endOffset)
+          ) {
+            throw new Error('Staff time returned an incomplete page. Nothing was changed.');
+          }
+          for (const item of page.items) {
+            const identity = staffTimeStreamIdentity(stream, item);
+            if (identities.has(identity)) {
+              throw new Error('Staff time returned a duplicate page item. Nothing was changed.');
+            }
+            identities.add(identity);
+            items.push(item);
+          }
+          offset = endOffset;
+        }
+        return items;
+      }
+
+      function assembleStaffTimeReview(initial, records, needsAttention, audit) {
+        const todayPunches = records
+          .filter(record => record.date === initial.view.today)
+          .map(staffTodayPunchFromRecord);
+        if (todayPunches.length !== initial.view.todayPunchCount) {
+          throw new Error('Staff time returned an incomplete Today view. Nothing was changed.');
+        }
+        const value = {
+          ok: true,
+          test: initial.test,
+          adminName: initial.adminName,
+          staff: initial.staff,
+          records,
+          clockedInNow: initial.clockedInNow,
+          todayPunches,
+          needsAttention,
+          periods: initial.periods,
+          audit,
+          view: initial.view
+        };
+        if (!validStaffTimeReviewResponse(value)) {
+          throw new Error('Staff time returned an incomplete response. Nothing was changed.');
+        }
+        return value;
+      }
+
+      async function loadStaffTimeReviewOnce(generation) {
+        const initial = await requestJson(API.staffTime, { operation: 'review' });
+        if (generation !== staffTimeLoadGeneration) return null;
+        if (!validStaffTimeReviewStartResponse(initial)) {
+          throw new Error('Staff time returned an incomplete response. Nothing was changed.');
+        }
+        const records = await fetchStaffTimeReviewStream(
+          initial,
+          'records',
+          initial.view.recordCount,
+          generation
+        );
+        if (!records) return null;
+        const needsAttention = await fetchStaffTimeReviewStream(
+          initial,
+          'attention',
+          initial.view.attentionCount,
+          generation
+        );
+        if (!needsAttention) return null;
+        const audit = await fetchStaffTimeReviewStream(
+          initial,
+          'audit',
+          initial.view.auditCount,
+          generation
+        );
+        if (!audit) return null;
+        return assembleStaffTimeReview(initial, records, needsAttention, audit);
+      }
+
+      function validStaffTimeStaleError(error) {
+        return Boolean(error)
+          && error.status === 409
+          && exactObjectKeys(error.data, ['ok', 'result', 'code'])
+          && error.data.ok === false
+          && error.data.result === 'stale'
+          && error.data.code === 'STAFF_TIME_VIEW_STALE';
+      }
+
+      async function loadStaffTimeReviewView(generation) {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            return await loadStaffTimeReviewOnce(generation);
+          } catch (error) {
+            if (generation !== staffTimeLoadGeneration) return null;
+            if (attempt === 0 && validStaffTimeStaleError(error)) continue;
+            if (validStaffTimeStaleError(error)) {
+              throw new Error('Staff time changed while loading. Please refresh and try again.');
+            }
+            throw error;
+          }
+        }
+        return null;
       }
 
       function validStaffMutationResponse(value, expected) {
@@ -2161,6 +2516,14 @@
         return makeElement('div', 'empty', message);
       }
 
+      function staffTruncationNotice(shown, total) {
+        return makeElement(
+          'div',
+          'record-detail',
+          `Showing latest ${shown.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`
+        );
+      }
+
       function staffBadge(text, tone = '') {
         return makeElement('span', `staff-time-badge${tone ? ` ${tone}` : ''}`, text);
       }
@@ -2240,7 +2603,7 @@
       function renderStaffTime(data) {
         currentStaffTime = data;
         populateStaffCorrectionNames(data.staff);
-        $('#staffTimeSummary').textContent = `${data.clockedInNow.length} clocked in · ${data.todayPunches.length} today`;
+        $('#staffTimeSummary').textContent = `${data.clockedInNow.length} clocked in · ${data.view.todayPunchTotal.toLocaleString('en-US')} today`;
 
         const clockedIn = $('#staffClockedInNow');
         clockedIn.replaceChildren(...data.clockedInNow.map(item => staffTimeRow(
@@ -2250,7 +2613,7 @@
         if (!data.clockedInNow.length) clockedIn.appendChild(staffEmpty('No one is clocked in.'));
 
         const today = $('#staffTodayPunches');
-        today.replaceChildren(...data.todayPunches.map(item => {
+        const todayRows = data.todayPunches.map(item => {
           const row = staffTimeRow(
             `${item.staffName} · ${staffActionLabel(item.punchAction)}`,
             staffTimestampLabel(item.timestamp)
@@ -2258,8 +2621,15 @@
           if (item.source === 'Admin-added') row.appendChild(staffBadge('Admin-added', 'admin'));
           if (item.status === 'VOID') row.appendChild(staffBadge('VOID', 'void'));
           return row;
-        }));
-        if (!data.todayPunches.length) today.appendChild(staffEmpty('No punches today.'));
+        });
+        if (data.view.todayPunchCount < data.view.todayPunchTotal) {
+          todayRows.unshift(staffTruncationNotice(
+            data.view.todayPunchCount,
+            data.view.todayPunchTotal
+          ));
+        }
+        today.replaceChildren(...todayRows);
+        if (data.view.todayPunchTotal === 0) today.appendChild(staffEmpty('No punches today.'));
 
         const attentionSection = $('#staffNeedsAttentionSection');
         const attention = $('#staffNeedsAttention');
@@ -2275,11 +2645,15 @@
           Date.parse(right.timestamp) - Date.parse(left.timestamp)
         ));
         const recordList = $('#staffTimeRecords');
-        recordList.replaceChildren(...records.map(record => staffRecordElement(record, true)));
-        if (!records.length) recordList.appendChild(staffEmpty('No Staff Time records yet.'));
+        const recordRows = records.map(record => staffRecordElement(record, true));
+        if (data.view.recordsTruncated) {
+          recordRows.unshift(staffTruncationNotice(data.view.recordCount, data.view.recordTotal));
+        }
+        recordList.replaceChildren(...recordRows);
+        if (data.view.recordTotal === 0) recordList.appendChild(staffEmpty('No Staff Time records yet.'));
 
         const audit = $('#staffTimeAudit');
-        audit.replaceChildren(...data.audit.map(item => {
+        const auditRows = data.audit.map(item => {
           const operation = item.operation === 'void'
             ? 'Marked wrong punch as VOID'
             : `Added missed ${staffActionLabel(item.punchAction)}`;
@@ -2287,8 +2661,12 @@
             `${item.adminName} · ${operation}`,
             `${item.staffName} · ${staffTimestampLabel(item.punchTimestamp)} · ${item.reason} · ${item.result}`
           );
-        }));
-        if (!data.audit.length) audit.appendChild(staffEmpty('No Staff time corrections yet.'));
+        });
+        if (data.view.auditTruncated) {
+          auditRows.unshift(staffTruncationNotice(data.view.auditCount, data.view.auditTotal));
+        }
+        audit.replaceChildren(...auditRows);
+        if (data.view.auditTotal === 0) audit.appendChild(staffEmpty('No Staff time corrections yet.'));
       }
 
       function newStaffUuid() {
@@ -2758,11 +3136,9 @@
           showMessage($('#staffTimeMessage'), 'Loading Staff time…', 'working');
         }
         try {
-          const data = await requestJson(API.staffTime, { operation: 'review' });
+          const data = await loadStaffTimeReviewView(generation);
           if (generation !== staffTimeLoadGeneration) return false;
-          if (!validStaffTimeReviewResponse(data)) {
-            throw new Error('Staff time returned an incomplete response. Nothing was changed.');
-          }
+          if (!data) return false;
           renderStaffTime(data);
           showMessage($('#staffTimeMessage'), '');
           setStaffCorrectionDefaults();

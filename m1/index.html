@@ -1298,10 +1298,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-19-m1b-staff-clock-production-r1';
+} from './sync-core.mjs?v=2026-08-20-m1b-late-review-fixes-r2';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-08-19-m1b-staff-clock-production-r1';
+const OFFLINE_SHELL_REVISION = '2026-08-20-m1b-late-review-fixes-r2';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -4119,6 +4119,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-08-19-m1b-staff-clock-production-r1"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-08-20-m1b-late-review-fixes-r2"></script>
 </body>
 </html>

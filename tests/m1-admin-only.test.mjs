@@ -575,7 +575,14 @@ test('recovery candidate proofs preserve Unicode with explicit UTF-8 HMACs', () 
   const response = harness.post(recoveryRequest([row]));
   assert.equal(response.ok, true);
   assert.equal(response.results[0].result, 'added');
-  assert.equal((receiverSource.match(/Utilities\.Charset\.UTF_8/g) || []).length, 3);
+  const recoveryHmacCalls = receiverSource.match(
+    /Utilities\.computeHmacSha256Signature\([\s\S]*?Utilities\.Charset\.UTF_8\s*\)/g
+  ) || [];
+  assert.equal(recoveryHmacCalls.length, 3);
+  assert.match(
+    receiverSource,
+    /Utilities\.computeDigest\([\s\S]*?Utilities\.Charset\['UTF_8'\]\s*\)/u
+  );
 });
 
 test('partial recovery interruption is safe to retry to completion', () => {
