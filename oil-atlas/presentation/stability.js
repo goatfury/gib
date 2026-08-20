@@ -122,55 +122,87 @@
   }
 
   function captureCommonReadout(gulf) {
+    if (!gulf) {
+      releaseScope('common');
+      return null;
+    }
+
     const flow = $('flowNumber');
     const unit = $('barrelUnit');
     const percent = $('percentDisplay');
     const label = $('benchmarkLabel');
+    const oil = Number(document.documentElement.dataset.presentationOil);
 
-    if (gulf) {
-      const oil = Number(document.documentElement.dataset.presentationOil);
-      if (Number.isFinite(oil)) {
-        ownText(flow, oil.toFixed(1), 'common');
-        ownText(percent, `${Math.round(oil / OIL_BASELINE * 100)}% of 24.0m avg`, 'common');
-      } else if (flow) {
-        ownText(flow, flow.textContent || '', 'common');
-        if (percent) ownText(percent, percent.textContent || '', 'common');
-      }
-      ownText(unit, 'million b/d', 'common');
-      ownText(label, 'Total Gulf oil exports', 'common');
-      return;
+    if (Number.isFinite(oil)) {
+      ownText(flow, oil.toFixed(1), 'common');
+      ownText(percent, `${Math.round(oil / OIL_BASELINE * 100)}% of 24.0m avg`, 'common');
     }
+    ownText(unit, 'million b/d', 'common');
+    ownText(label, 'Total Gulf oil exports', 'common');
+    return Number.isFinite(oil) ? oil : null;
+  }
 
-    for (const node of [flow, unit, percent, label]) {
-      if (node) ownText(node, node.textContent || '', 'common');
+  function captureRouteReadouts(iso, displayedOil) {
+    const model = window.__oilAtlasSmoothOil?.modelAt?.(iso);
+    if (!model?.routes) return;
+
+    const routes = model.routes;
+    const rawTotal = ['hormuz', 'yanbu', 'fujairah', 'other']
+      .reduce((sum, key) => sum + (Number(routes[key]) || 0), 0);
+    const scale = Number.isFinite(displayedOil) && rawTotal > 0 ? displayedOil / rawTotal : 1;
+    const nodes = {
+      hormuz: $('routeBadgeHormuz')?.querySelector('.smooth-route-value'),
+      yanbu: $('routeBadgeYanbu')?.querySelector('.smooth-route-value'),
+      fujairah: $('routeBadgeFujairah')?.querySelector('.smooth-route-value'),
+      other: $('routeBadgeOther')?.querySelector('.smooth-route-value'),
+    };
+
+    for (const [key, node] of Object.entries(nodes)) {
+      const value = Number(routes[key]);
+      if (node && Number.isFinite(value)) ownText(node, `${(value * scale).toFixed(1)}m b/d`, 'gulf');
     }
   }
 
-  function captureGulfReadout() {
+  function captureTrafficReadout(iso) {
     const layer = $('trafficLayer');
     if (!layer) return;
 
     const traffic = Number(layer.dataset.displayTraffic);
+    const total = Number.isFinite(traffic) ? Math.max(0, traffic) : 0;
     const number = layer.querySelector('.traffic-number');
-    if (Number.isFinite(traffic)) ownText(number, String(Math.max(0, Math.round(traffic))), 'gulf');
-    else if (number) ownText(number, number.textContent || '', 'gulf');
+    ownText(number, String(Math.round(total)), 'gulf');
 
-    for (const node of layer.querySelectorAll('.traffic-sub')) {
-      ownText(node, node.textContent || '', 'gulf');
+    const mode = layer.dataset.displayMode || (isPlaying() ? 'eased-live' : 'exact');
+    const trafficDate = layer.dataset.trafficDate || iso;
+    const pct = Math.round(total / TRAFFIC_NORMAL * 100);
+    const sub = layer.querySelectorAll('.traffic-sub')[0];
+    if (mode.endsWith('average')) {
+      const days = Number.parseInt(mode, 10) || (Date.parse(`${iso}T00:00:00Z`) < Date.UTC(2026, 1, 28) ? 7 : 3);
+      ownText(sub, `${days}-day average · ${pct}% of PortWatch normal`, 'gulf');
+    } else if (mode === 'eased-live') {
+      ownText(sub, `smoothed traffic pace · ${pct}% of PortWatch normal`, 'gulf');
+    } else {
+      const held = trafficDate !== iso;
+      const prefix = held ? `Latest published ${formatExact(trafficDate)}` : `${formatExact(trafficDate)} · exact day`;
+      ownText(sub, `${prefix} · ${pct}% of normal`, 'gulf');
     }
 
-    for (const node of document.querySelectorAll('.smooth-route-value')) {
-      ownText(node, node.textContent || '', 'gulf');
-    }
+    const exactTanker = Math.max(0, Number(layer.dataset.trafficTanker) || 0);
+    const exactCargo = Math.max(0, Number(layer.dataset.trafficCargo) || 0);
+    const exactTotal = exactTanker + exactCargo;
+    const tanker = exactTotal > 0 ? Math.round(total * exactTanker / exactTotal) : 0;
+    const cargo = Math.max(0, Math.round(total) - tanker);
+    const breakdown = layer.querySelectorAll('.traffic-sub')[1];
+    ownText(breakdown, `tankers ${tanker} · cargo ${cargo}`, 'gulf');
 
     const fill = layer.querySelector('.traffic-normal-fill');
-    if (fill && Number.isFinite(traffic)) {
-      const width = Math.max(0, Math.min(180, 180 * traffic / TRAFFIC_NORMAL));
+    if (fill) {
+      const width = Math.max(0, Math.min(180, 180 * total / TRAFFIC_NORMAL));
       fill.setAttribute('width', width.toFixed(1));
     }
   }
 
-  function refreshReadouts(now, gulf) {
+  function refreshReadouts(now, gulf, iso) {
     const layer = $('trafficLayer');
     const impact = gulf && Boolean(layer?.classList.contains('is-impact') || layer?.dataset.impact === 'true');
     const interval = impact ? 140 : 260;
@@ -178,8 +210,10 @@
     if (isPlaying() && now < state.nextReadoutAt) return;
     state.nextReadoutAt = now + interval;
 
-    captureCommonReadout(gulf);
-    if (gulf) captureGulfReadout();
+    const displayedOil = captureCommonReadout(gulf);
+    if (!gulf) return;
+    captureTrafficReadout(iso);
+    captureRouteReadouts(iso, displayedOil);
   }
 
   function frame(now) {
@@ -193,9 +227,10 @@
       if (!gulf) releaseScope('gulf');
     }
 
-    renderCalmDate(isoAtTimeline());
+    const iso = isoAtTimeline();
+    renderCalmDate(iso);
     revealOil();
-    refreshReadouts(now, gulf);
+    refreshReadouts(now, gulf, iso);
 
     document.documentElement.dataset.presentationStable = 'true';
     requestAnimationFrame(frame);
