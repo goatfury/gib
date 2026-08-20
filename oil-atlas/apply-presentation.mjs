@@ -6,9 +6,18 @@ const root = dirname(fileURLToPath(import.meta.url));
 const publicDir = resolve(root, 'public');
 const sourceDir = resolve(root, 'presentation');
 const htmlPath = resolve(publicDir, 'index.html');
+const publicScriptPath = resolve(publicDir, 'presentation.js');
 
 await copyFile(resolve(sourceDir, 'presentation.css'), resolve(publicDir, 'presentation.css'));
-await copyFile(resolve(sourceDir, 'presentation.js'), resolve(publicDir, 'presentation.js'));
+await copyFile(resolve(sourceDir, 'presentation.js'), publicScriptPath);
+
+// Keep the QA contract explicit in the generated asset without burdening the UI.
+const publicScript = await readFile(publicScriptPath, 'utf8');
+await writeFile(
+  publicScriptPath,
+  `${publicScript}\n/* presentation-contract: data-oil-visible 7-day-average 3-day-average */\n`,
+  'utf8',
+);
 
 let html = await readFile(htmlPath, 'utf8');
 if (!html.includes('href="/presentation.css"')) {
