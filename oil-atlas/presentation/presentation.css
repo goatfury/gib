@@ -1,0 +1,96 @@
+/* Presentation-first polish: preserve the evidence labels without obscuring the visual story. */
+#barrelGauge[data-oil-visible="true"] #barrelLiquid,
+#barrelGauge[data-oil-visible="true"] #barrelLiquid .barrel-oil,
+#barrelGauge[data-oil-visible="true"] #barrelLiquid .barrel-surface,
+#barrelGauge[data-oil-visible="true"] #barrelLiquid .barrel-surface-line {
+  display: inline !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+#barrelLiquid,
+#barrelCallout {
+  will-change: transform;
+}
+#barrelGauge[data-oil-visible="true"] .barrel-oil {
+  fill: url(#barrelOilGradient) !important;
+  filter: saturate(1.18) brightness(1.08) drop-shadow(0 0 8px rgba(255, 179, 70, .18));
+}
+#barrelGauge[data-oil-visible="true"] .barrel-surface {
+  fill: url(#barrelSurfaceGradient) !important;
+  filter: url(#barrelOilGlow) saturate(1.18) brightness(1.08);
+}
+#barrelGauge[data-oil-visible="true"] .barrel-surface-line {
+  stroke: rgba(255, 210, 112, .92) !important;
+  stroke-width: 1.45 !important;
+}
+#barrelGauge[data-oil-visible="true"] .barrel-shell {
+  fill-opacity: .075 !important;
+}
+#barrelGauge[data-oil-visible="true"] .barrel-shell-highlight {
+  opacity: .24 !important;
+}
+#barrelGauge[data-oil-visible="true"] .barrel-mark {
+  fill: rgba(255, 235, 199, .2) !important;
+}
+#benchmarkLabel {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+html[data-presentation-mode="gulf"] #benchmarkLabel::after {
+  content: "MODELED";
+  display: inline-block;
+  margin-left: 7px;
+  padding: 2px 5px 1px;
+  border: 1px solid rgba(84, 210, 210, .35);
+  border-radius: 999px;
+  color: #8fe5e5;
+  font-size: .49rem;
+  font-weight: 900;
+  letter-spacing: .09em;
+  vertical-align: 1px;
+}
+#dateDisplay,
+#flowNumber,
+#percentDisplay,
+.smooth-route-value,
+#trafficLayer .traffic-number,
+#trafficLayer .traffic-sub,
+.world-node text,
+.mix-item strong {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+}
+#dateDisplay,
+#flowNumber,
+#percentDisplay,
+.smooth-route-value,
+#trafficLayer .traffic-number,
+#trafficLayer .traffic-sub {
+  text-rendering: geometricPrecision;
+}
+#trafficLayer .traffic-number {
+  letter-spacing: -.025em;
+}
+#trafficLayer .traffic-counter-bg,
+#trafficLayer .traffic-lane {
+  animation-timing-function: ease-out !important;
+}
+@media (prefers-reduced-motion: no-preference) {
+  #barrelGauge[data-oil-visible="true"] .barrel-surface {
+    animation: presentationOilSurface 3.2s ease-in-out infinite alternate;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+}
+@keyframes presentationOilSurface {
+  from { transform: scaleX(.985); opacity: .93; }
+  to { transform: scaleX(1.012); opacity: 1; }
+}
+@media (max-width: 1080px) and (min-width: 821px) {
+  html[data-presentation-mode="gulf"] #benchmarkLabel::after {
+    margin-left: 5px;
+    padding: 1px 4px;
+    font-size: .43rem;
+  }
+}
