@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
+      - uses: actions/checkout@v4
+
       - name: Wait for the current Netlify preview
         run: |
           for attempt in $(seq 1 84); do
@@ -30,8 +32,8 @@ jobs:
       - name: Capture the right side at normal speed
         run: |
           mkdir -p /tmp/oil-atlas-motion/frames
-          google-chrome --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
-            --remote-debugging-port=9225 --user-data-dir=/tmp/oil-atlas-motion-chrome about:blank \
+          google-chrome --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --hide-scrollbars \
+            --remote-debugging-port=9224 --user-data-dir=/tmp/oil-atlas-motion-chrome about:blank \
             >/tmp/oil-atlas-motion-chrome.log 2>&1 &
           echo $! >/tmp/oil-atlas-motion-chrome.pid
 
@@ -42,15 +44,18 @@ jobs:
           const dayIndex = (iso) => Math.round((Date.parse(`${iso}T00:00:00Z`) - start) / 86400000);
 
           let page;
-          for (let i = 0; i < 80; i += 1) {
+          for (let i = 0; i < 120; i += 1) {
             try {
-              const tabs = await (await fetch('http://127.0.0.1:9225/json/list')).json();
+              const tabs = await (await fetch('http://127.0.0.1:9224/json/list')).json();
               page = tabs.find((tab) => tab.type === 'page');
               if (page?.webSocketDebuggerUrl) break;
             } catch {}
             await sleep(250);
           }
-          if (!page?.webSocketDebuggerUrl) throw new Error('Chrome unavailable');
+          if (!page?.webSocketDebuggerUrl) {
+            try { console.error(await (await import('node:fs/promises')).readFile('/tmp/oil-atlas-motion-chrome.log', 'utf8')); } catch {}
+            throw new Error('Chrome unavailable');
+          }
 
           const ws = new WebSocket(page.webSocketDebuggerUrl);
           await new Promise((resolve, reject) => {
