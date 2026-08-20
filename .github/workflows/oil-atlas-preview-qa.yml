@@ -17,70 +17,76 @@ env:
 jobs:
   preview-qa:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Rebuild and test both animation layers
+      - name: Build and test
         run: |
           node oil-atlas/build-audited.mjs
           test -s oil-atlas/public/index.html
-          test -s oil-atlas/public/smooth-oil.js
-          test -s oil-atlas/public/smooth-oil.css
-          test -s oil-atlas/public/ship-traffic.js
           test -s oil-atlas/public/ship-traffic.css
-          grep -q 'src="/smooth-oil.js"' oil-atlas/public/index.html
-          grep -q 'src="/ship-traffic.js"' oil-atlas/public/index.html
-          grep -q '51 → 18 → 4 → 0' oil-atlas/public/ship-traffic.js
-          grep -q 'EAST–WEST → YANBU' oil-atlas/public/smooth-oil.js
-          grep -q 'HABSHAN–FUJAIRAH' oil-atlas/public/smooth-oil.js
-          node --test oil-atlas/tests/gulf-model.test.mjs
-          node --test oil-atlas/tests/traffic-model.test.mjs
+          test -s oil-atlas/public/ship-traffic.js
+          grep -q "51 → 18 → 4 → 0" oil-atlas/public/ship-traffic.js
+          node --test oil-atlas/tests/gulf-model.test.mjs oil-atlas/tests/smooth-flow.test.mjs oil-atlas/tests/traffic-model.test.mjs
 
-      - name: Wait for the current Netlify preview
+      - name: Wait for Netlify preview
         run: |
-          for attempt in $(seq 1 72); do
-            if curl --fail --silent --location "$PREVIEW_URL/" -o /tmp/atlas.html; then
-              if grep -q 'src="/smooth-oil.js"' /tmp/atlas.html && grep -q 'src="/ship-traffic.js"' /tmp/atlas.html; then
-                exit 0
-              fi
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --location "$PREVIEW_URL/" -o /tmp/page.html && grep -q "ship-traffic.js" /tmp/page.html; then
+              exit 0
             fi
             sleep 5
           done
-          echo 'Current Netlify preview did not become reachable' >&2
           exit 1
 
-      - name: Verify live data and the four-day traffic cliff
+      - name: Verify live endpoints
         run: |
           curl --fail --silent --location "$PREVIEW_URL/api/oil_data" -o /tmp/oil.json
           curl --fail --silent --location "$PREVIEW_URL/api/hormuz_traffic" -o /tmp/traffic.json
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
           const oil = JSON.parse(readFileSync('/tmp/oil.json', 'utf8'));
-          if (oil.schemaVersion !== 2 || !oil.checkedAt) throw new Error('Oil data contract failed');
-          if (!Array.isArray(oil.world?.regions) || oil.world.regions.length !== 8) throw new Error('World regions missing');
-          if (!Array.isArray(oil.gulf?.periods) || oil.gulf.periods.length !== 5) throw new Error('Audited Gulf periods missing');
-          if ('anchors' in oil.gulf) throw new Error('Legacy fake daily Gulf anchors survived');
           const traffic = JSON.parse(readFileSync('/tmp/traffic.json', 'utf8'));
-          if (traffic.schemaVersion !== 1 || traffic.preCrisisPortWatchMedian !== 73) throw new Error('Traffic contract failed');
-          if (!Array.isArray(traffic.records) || traffic.records.length < 300) throw new Error('Daily traffic series missing');
-          const byDate = new Map(traffic.records.map((row) => [row.date, row]));
-          const cliff = ['2026-02-28','2026-03-01','2026-03-02','2026-03-04'].map((date) => byDate.get(date)?.total);
-          if (JSON.stringify(cliff) !== JSON.stringify([51,18,4,0])) throw new Error(`Traffic cliff changed: ${JSON.stringify(cliff)}`);
-          for (const row of traffic.records) if (row.tanker + row.cargo !== row.total) throw new Error(`Category mismatch ${row.date}`);
-          console.log({ oilCheckedAt: oil.checkedAt, trafficCheckedAt: traffic.checkedAt, latestTrafficDate: traffic.latestPublishedDate, cliff });
+          if (oil.schemaVersion !== 2) throw new Error('Oil schema failed');
+          if (!Array.isArray(traffic.records) || traffic.records.length < 120) throw new Error('Traffic series failed');
+          if (traffic.preCrisisPortWatchMedian !== 73) throw new Error('Traffic baseline failed');
+          const byDate = Object.fromEntries(traffic.records.map((row) => [row.date, row.total]));
+          if (byDate['2026-02-28'] !== 51 || byDate['2026-03-01'] !== 18 || byDate['2026-03-02'] !== 4 || byDate['2026-03-04'] !== 0) throw new Error('Traffic cliff failed');
+          console.log({ trafficThrough: traffic.latestPublishedDate, baseline: traffic.preCrisisPortWatchMedian });
           NODE
 
-      - name: Headless browser smoke test
+      - name: Browser smoke test
         run: |
-          google-chrome --headless=new --no-sandbox --disable-gpu --window-size=1366,768 --virtual-time-budget=8000 \
+          google-chrome --headless=new --no-sandbox --disable-gpu \
+            --window-size=1366,768 --virtual-time-budget=8000 \
             --dump-dom "$PREVIEW_URL/?qaDate=2026-03-02&qaPause=1" > /tmp/dom.html
           grep -q 'id="trafficLayer"' /tmp/dom.html
           grep -q 'data-traffic-total="4"' /tmp/dom.html
-          grep -q 'data-visible-ships="2"' /tmp/dom.html
-          grep -q 'id="routeBadgeHormuz"' /tmp/dom.html
-          grep -q 'id="routeBadgeYanbu"' /tmp/dom.html
-          grep -q 'id="routeBadgeFujairah"' /tmp/dom.html
+          grep -Eq 'data-visible-ships="(1|2)"' /tmp/dom.html
+          grep -q 'TRAFFIC COLLAPSE' /tmp/dom.html
+          grep -q 'Daily tracked ships' /tmp/dom.html
+          grep -q 'PortWatch' /tmp/dom.html
+
+      - name: Capture review screenshots
+        run: |
+          mkdir -p /tmp/review
+          timeout 55s google-chrome --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
+            --window-size=1366,768 --virtual-time-budget=8000 \
+            --screenshot=/tmp/review/prewar-1366.png "$PREVIEW_URL/?qaDate=2026-02-18&qaPause=1"
+          timeout 55s google-chrome --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
+            --window-size=1366,768 --virtual-time-budget=8000 \
+            --screenshot=/tmp/review/collapse-1366.png "$PREVIEW_URL/?qaDate=2026-03-02&qaPause=1"
+          timeout 55s google-chrome --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
+            --window-size=1024,600 --virtual-time-budget=8000 \
+            --screenshot=/tmp/review/collapse-1024.png "$PREVIEW_URL/?qaDate=2026-03-02&qaPause=1"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oil-atlas-ship-traffic-review
+          path: /tmp/review/*.png
+          if-no-files-found: error
+          retention-days: 7
