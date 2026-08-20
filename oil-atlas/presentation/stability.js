@@ -50,6 +50,7 @@
   }
 
   function createSvgMirror(source, key, scope) {
+    for (const prior of document.querySelectorAll(`[data-presentation-for="${key}"]`)) prior.remove();
     const mirror = source.cloneNode(true);
     mirror.removeAttribute('id');
     mirror.setAttribute('data-presentation-for', key);
@@ -227,9 +228,8 @@
     const mode = playing ? (layer.dataset.displayMode || 'eased-live') : 'exact';
     const trafficDate = layer.dataset.trafficDate || iso;
     const pct = Math.round(total / TRAFFIC_NORMAL * 100);
-    const subNodes = [...layer.querySelectorAll('text.traffic-sub:not([data-presentation-for])')];
-    const statusNode = subNodes.find((node) => Number(node.getAttribute('y')) <= 80) || subNodes[0];
-    const breakdownNode = subNodes.find((node) => Number(node.getAttribute('y')) >= 100) || subNodes[1];
+    const statusNode = layer.querySelector('#trafficCounter > text.traffic-sub[y="77"]:not([data-presentation-for])');
+    const breakdownNode = layer.querySelector('#trafficCounter > text.traffic-sub[y="103"]:not([data-presentation-for])');
     if (mode.endsWith('average')) {
       const days = Number.parseInt(mode, 10) || (Date.parse(`${iso}T00:00:00Z`) < Date.UTC(2026, 1, 28) ? 7 : 3);
       setVisibleText(statusNode, `${days}-day average · ${pct}% of PortWatch normal`, 'gulf', 'traffic-sub-0');
