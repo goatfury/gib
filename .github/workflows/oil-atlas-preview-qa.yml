@@ -39,6 +39,7 @@ jobs:
           grep -q 'data-oil-visible' oil-atlas/public/presentation.js
           grep -q '7-day-average' oil-atlas/public/presentation.js
           grep -q '3-day-average' oil-atlas/public/presentation.js
+          grep -q 'presentation-stability' oil-atlas/public/presentation.js
           node --check oil-atlas/public/presentation.js
           node --test oil-atlas/tests/gulf-model.test.mjs oil-atlas/tests/smooth-flow.test.mjs oil-atlas/tests/traffic-model.test.mjs
 
@@ -87,6 +88,8 @@ jobs:
           node --input-type=module <<'NODE'
           import { writeFileSync } from 'node:fs';
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const start = Date.parse('2025-09-01T00:00:00Z');
+          const dayIndex = (iso) => Math.round((Date.parse(`${iso}T00:00:00Z`) - start) / 86400000);
 
           let page;
           for (let i = 0; i < 80; i += 1) {
@@ -125,13 +128,31 @@ jobs:
             if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
             return result.result.value;
           };
+          const setTimeline = async (iso, shouldPlay) => evaluate(`(async () => {
+            const button = document.getElementById('playButton');
+            if (button && /Pause/i.test(button.textContent || '')) button.click();
+            await new Promise((resolve) => setTimeout(resolve, 160));
+            const slider = document.getElementById('timeline');
+            slider.value = '${dayIndex(iso)}';
+            slider.dispatchEvent(new Event('input', { bubbles: true }));
+            slider.dispatchEvent(new Event('change', { bubbles: true }));
+            await new Promise((resolve) => setTimeout(resolve, 1350));
+            if (${shouldPlay ? 'true' : 'false'}) {
+              if (button && /Play/i.test(button.textContent || '')) button.click();
+            } else if (button && /Pause/i.test(button.textContent || '')) {
+              button.click();
+            }
+            await new Promise((resolve) => setTimeout(resolve, 420));
+            return { value: slider.value, play: button?.textContent };
+          })()`);
 
           await send('Page.enable');
           await send('Runtime.enable');
           for (const [width, height] of [[1366, 768], [1024, 600]]) {
             await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
-            await send('Page.navigate', { url: `${process.env.PREVIEW_URL}/?qaDate=2026-04-25&qaPause=1` });
-            await sleep(7000);
+            await send('Page.navigate', { url: process.env.PREVIEW_URL });
+            await sleep(6500);
+            await setTimeline('2026-04-25', false);
 
             const paused = await evaluate(`(() => {
               const app = document.querySelector('.app-screen');
@@ -140,42 +161,83 @@ jobs:
               const clip = liquid?.parentElement;
               const visibleSiblings = clip ? [...clip.children].filter((node) => node !== liquid && getComputedStyle(node).display !== 'none').length : -1;
               const loudModelText = gauge ? [...gauge.querySelectorAll('text')].filter((node) => /^(MODELED|UNKNOWN)$/i.test((node.textContent || '').trim()) && getComputedStyle(node).display !== 'none').length : -1;
+              const routeIds = ['routeBadgeHormuz','routeBadgeYanbu','routeBadgeFujairah','routeBadgeOther'];
+              const routes = Object.fromEntries(routeIds.map((id) => {
+                const text = document.getElementById(id)?.querySelector('.smooth-route-value')?.textContent || '';
+                return [id, Number.parseFloat(text)];
+              }));
+              const trafficSub = [...document.querySelectorAll('#trafficLayer .traffic-sub')].map((node) => node.textContent || '');
+              const traffic = Number.parseInt(document.querySelector('#trafficLayer .traffic-number')?.textContent || '', 10);
+              const modelOil = window.__oilAtlasSmoothOil?.modelAt?.('2026-04-25')?.value;
               return {
+                stable: document.documentElement.dataset.presentationStable,
                 ready: document.documentElement.dataset.presentationReady,
+                dateMode: document.documentElement.dataset.presentationDateMode,
                 oilVisible: gauge?.dataset.oilVisible,
                 liquidDisplay: liquid && getComputedStyle(liquid).display,
                 liquidOpacity: liquid && getComputedStyle(liquid).opacity,
                 visibleSiblings,
                 loudModelText,
                 unit: document.getElementById('barrelUnit')?.textContent,
-                flow: document.getElementById('flowNumber')?.textContent,
+                flow: Number.parseFloat(document.getElementById('flowNumber')?.textContent || ''),
+                modelOil,
                 date: document.getElementById('dateDisplay')?.textContent,
+                timeline: document.getElementById('timeline')?.value,
+                play: document.getElementById('playButton')?.textContent,
+                routes,
+                traffic,
+                trafficSub,
                 fits: !!app && app.getBoundingClientRect().bottom <= innerHeight + 1,
                 horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1,
               };
             })()`);
-            if (paused.ready !== 'true' || paused.oilVisible !== 'true') throw new Error(`Presentation layer missing: ${JSON.stringify(paused)}`);
+            if (paused.ready !== 'true' || paused.stable !== 'true' || paused.oilVisible !== 'true') throw new Error(`Presentation layer missing: ${JSON.stringify(paused)}`);
             if (paused.liquidDisplay === 'none' || Number(paused.liquidOpacity) < .95) throw new Error(`Oil is hidden: ${JSON.stringify(paused)}`);
             if (paused.visibleSiblings !== 0 || paused.loudModelText !== 0) throw new Error(`Barrel mask survived: ${JSON.stringify(paused)}`);
-            if (paused.unit !== 'million b/d' || !/^10\./.test(paused.flow || '')) throw new Error(`Barrel readout is not the modeled oil value: ${JSON.stringify(paused)}`);
-            if (!/April 25, 2026/.test(paused.date || '')) throw new Error(`Paused date lost precision: ${JSON.stringify(paused)}`);
+            if (paused.unit !== 'million b/d' || !Number.isFinite(paused.flow) || Math.abs(paused.flow - paused.modelOil) > .15) throw new Error(`Barrel readout does not match the oil model: ${JSON.stringify(paused)}`);
+            if (paused.dateMode !== 'exact' || !/April 25, 2026/.test(paused.date || '')) throw new Error(`Paused date lost precision: ${JSON.stringify(paused)}`);
+            if (!/Play/.test(paused.play || '') || Number(paused.timeline) !== dayIndex('2026-04-25')) throw new Error(`Paused timeline state failed: ${JSON.stringify(paused)}`);
+            const routeValues = Object.values(paused.routes);
+            if (!routeValues.every(Number.isFinite) || Math.abs(routeValues.reduce((a, b) => a + b, 0) - paused.flow) > .35) throw new Error(`Route readouts do not reconcile to the barrel: ${JSON.stringify(paused)}`);
+            if (paused.traffic !== 3 || !paused.trafficSub[0]?.includes('April 25, 2026')) throw new Error(`Paused traffic readout is stale: ${JSON.stringify(paused)}`);
+            const breakdown = /tankers\s+(\d+)\s+·\s+cargo\s+(\d+)/i.exec(paused.trafficSub[1] || '');
+            if (!breakdown || Number(breakdown[1]) + Number(breakdown[2]) !== paused.traffic) throw new Error(`Traffic breakdown does not reconcile: ${JSON.stringify(paused)}`);
             if (!paused.fits || paused.horizontalOverflow) throw new Error(`Viewport fit failed: ${JSON.stringify(paused)}`);
 
-            const shot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+            let shot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
             writeFileSync(`/tmp/oil-atlas-shots/barrel-${width}x${height}.png`, Buffer.from(shot.data, 'base64'));
 
-            await send('Page.navigate', { url: `${process.env.PREVIEW_URL}/?qaDate=2026-01-15` });
-            await sleep(4200);
-            const playing = await evaluate(`(() => ({
-              dateMode: document.documentElement.dataset.presentationDateMode,
-              date: document.getElementById('dateDisplay')?.textContent,
-              trafficMode: document.getElementById('trafficLayer')?.dataset.displayMode,
-              trafficDisplay: document.getElementById('trafficLayer')?.dataset.displayTraffic,
-              play: document.getElementById('playButton')?.textContent,
-            }))()`);
-            if (playing.dateMode !== 'month' || /\d{1,2},/.test(playing.date || '')) throw new Error(`Playing date still flickers daily: ${JSON.stringify(playing)}`);
+            await setTimeline('2026-01-15', true);
+            const playing = await evaluate(`(async () => {
+              const read = () => ({
+                date: document.getElementById('dateDisplay')?.textContent || '',
+                flow: document.getElementById('flowNumber')?.textContent || '',
+                traffic: document.querySelector('#trafficLayer .traffic-number')?.textContent || '',
+                routes: [...document.querySelectorAll('.smooth-route-value')].map((node) => node.textContent || '').join('|'),
+              });
+              const samples = [];
+              for (let i = 0; i < 25; i += 1) {
+                samples.push(read());
+                await new Promise((resolve) => setTimeout(resolve, 50));
+              }
+              const changes = (key) => samples.slice(1).reduce((count, row, index) => count + (row[key] !== samples[index][key] ? 1 : 0), 0);
+              return {
+                dateMode: document.documentElement.dataset.presentationDateMode,
+                date: document.getElementById('dateDisplay')?.textContent,
+                trafficMode: document.getElementById('trafficLayer')?.dataset.displayMode,
+                trafficDisplay: document.getElementById('trafficLayer')?.dataset.displayTraffic,
+                play: document.getElementById('playButton')?.textContent,
+                stable: document.documentElement.dataset.presentationStable,
+                changes: { date: changes('date'), flow: changes('flow'), traffic: changes('traffic'), routes: changes('routes') },
+              };
+            })()`);
+            if (playing.stable !== 'true' || playing.dateMode !== 'month' || /\d{1,2},/.test(playing.date || '')) throw new Error(`Playing date still flickers daily: ${JSON.stringify(playing)}`);
             if (!/average|eased/.test(playing.trafficMode || '')) throw new Error(`Traffic counter is not smoothed: ${JSON.stringify(playing)}`);
             if (!/Pause/.test(playing.play || '')) throw new Error(`Autoplay is not running: ${JSON.stringify(playing)}`);
+            if (playing.changes.date > 2 || playing.changes.flow > 6 || playing.changes.traffic > 6 || playing.changes.routes > 6) throw new Error(`Readouts are updating too aggressively: ${JSON.stringify(playing)}`);
+
+            shot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+            writeFileSync(`/tmp/oil-atlas-shots/playing-${width}x${height}.png`, Buffer.from(shot.data, 'base64'));
           }
           ws.close();
           NODE
