@@ -34,6 +34,17 @@ jobs:
           grep -q "no daily interpolation" oil-atlas/public/index.html
           node --test oil-atlas/tests/gulf-model.test.mjs
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oil-atlas-audited-source
+          path: |
+            oil-atlas/public/index.html
+            oil-atlas/public/data/fallback.json
+            oil-atlas/lib/*.mjs
+            oil-atlas/netlify/functions/*.mjs
+            oil-atlas/tests/*.mjs
+          if-no-files-found: error
+
       - name: Wait for audited Netlify preview
         run: |
           for attempt in $(seq 1 48); do
