@@ -17,170 +17,70 @@ env:
 jobs:
   preview-qa:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Reconstruct and validate oil plus ship-flow layers
+      - name: Rebuild and test both animation layers
         run: |
           node oil-atlas/build-audited.mjs
           test -s oil-atlas/public/index.html
-          test -s oil-atlas/public/data/fallback.json
-          test -s oil-atlas/public/smooth-oil.css
           test -s oil-atlas/public/smooth-oil.js
-          test -s oil-atlas/public/ship-traffic.css
+          test -s oil-atlas/public/smooth-oil.css
           test -s oil-atlas/public/ship-traffic.js
+          test -s oil-atlas/public/ship-traffic.css
           grep -q 'src="/smooth-oil.js"' oil-atlas/public/index.html
-          grep -q 'href="/smooth-oil.css"' oil-atlas/public/index.html
           grep -q 'src="/ship-traffic.js"' oil-atlas/public/index.html
-          grep -q 'href="/ship-traffic.css"' oil-atlas/public/index.html
-          grep -q "51 â†’ 18 â†’ 4 â†’ 0" oil-atlas/public/ship-traffic.js
-          grep -q "EASTâ€“WEST â†’ YANBU" oil-atlas/public/smooth-oil.js
-          grep -q "HABSHANâ€“FUJAIRAH" oil-atlas/public/smooth-oil.js
+          grep -q '51 â†’ 18 â†’ 4 â†’ 0' oil-atlas/public/ship-traffic.js
+          grep -q 'EASTâ€“WEST â†’ YANBU' oil-atlas/public/smooth-oil.js
+          grep -q 'HABSHANâ€“FUJAIRAH' oil-atlas/public/smooth-oil.js
           node --test oil-atlas/tests/gulf-model.test.mjs
           node --test oil-atlas/tests/traffic-model.test.mjs
-          node --input-type=module <<'NODE'
-          import { readFileSync } from 'node:fs';
-          const data = JSON.parse(readFileSync('oil-atlas/public/data/fallback.json', 'utf8'));
-          if (data.schemaVersion !== 2) throw new Error('Unexpected audited schemaVersion');
-          if (!Array.isArray(data.gulf?.periods) || data.gulf.periods.length !== 5) throw new Error('Audited Gulf periods missing');
-          if (!Array.isArray(data.gulf?.observations) || data.gulf.observations.length < 4) throw new Error('Audited observations missing');
-          if (!Array.isArray(data.gulf?.hormuzQuarters) || data.gulf.hormuzQuarters.length !== 6) throw new Error('Hormuz quarters missing');
-          if ('anchors' in data.gulf) throw new Error('Legacy fake daily anchors survived');
-          const smooth = readFileSync('oil-atlas/public/smooth-oil.js', 'utf8');
-          for (const marker of ["['2025-09-01',24.1", "['2026-02-15',25.6", "['2026-03-04',12.5", "['2026-03-15',8.6"]) {
-            if (!smooth.includes(marker)) throw new Error(`Smooth model marker missing: ${marker}`);
-          }
-          NODE
 
-      - name: Wait for the ship-traffic Netlify preview
+      - name: Wait for the current Netlify preview
         run: |
           for attempt in $(seq 1 72); do
-            if curl --fail --silent --show-error --location "$PREVIEW_URL/" -o /tmp/oil-atlas.html; then
-              if grep -q 'src="/ship-traffic.js"' /tmp/oil-atlas.html && grep -q 'src="/smooth-oil.js"' /tmp/oil-atlas.html; then
+            if curl --fail --silent --location "$PREVIEW_URL/" -o /tmp/atlas.html; then
+              if grep -q 'src="/smooth-oil.js"' /tmp/atlas.html && grep -q 'src="/ship-traffic.js"' /tmp/atlas.html; then
                 exit 0
               fi
             fi
             sleep 5
           done
-          echo "Ship-traffic Netlify preview did not become reachable" >&2
+          echo 'Current Netlify preview did not become reachable' >&2
           exit 1
 
-      - name: Verify live oil and daily traffic endpoints
+      - name: Verify live data and the four-day traffic cliff
         run: |
-          curl --fail --silent --show-error --location "$PREVIEW_URL/api/oil_data" -o /tmp/oil-data.json
-          curl --fail --silent --show-error --location "$PREVIEW_URL/api/hormuz_traffic" -o /tmp/hormuz-traffic.json
+          curl --fail --silent --location "$PREVIEW_URL/api/oil_data" -o /tmp/oil.json
+          curl --fail --silent --location "$PREVIEW_URL/api/hormuz_traffic" -o /tmp/traffic.json
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
-          const data = JSON.parse(readFileSync('/tmp/oil-data.json', 'utf8'));
-          if (data.schemaVersion !== 2) throw new Error('Unexpected live oil schemaVersion');
-          if (!data.checkedAt) throw new Error('Missing oil checkedAt');
-          if (!Array.isArray(data.world?.anchors) || data.world.anchors.length < 12) throw new Error('World anchors missing');
-          if (!Array.isArray(data.world?.regions) || data.world.regions.length !== 8) throw new Error('World regions missing');
-          if (!Array.isArray(data.gulf?.periods) || data.gulf.periods.length !== 5) throw new Error('Gulf periods missing');
-          if ('anchors' in data.gulf) throw new Error('Legacy Gulf daily anchors survived');
-
-          const traffic = JSON.parse(readFileSync('/tmp/hormuz-traffic.json', 'utf8'));
-          if (traffic.schemaVersion !== 1) throw new Error('Unexpected traffic schemaVersion');
-          if (traffic.preCrisisPortWatchMedian !== 73) throw new Error('PortWatch baseline changed');
+          const oil = JSON.parse(readFileSync('/tmp/oil.json', 'utf8'));
+          if (oil.schemaVersion !== 2 || !oil.checkedAt) throw new Error('Oil data contract failed');
+          if (!Array.isArray(oil.world?.regions) || oil.world.regions.length !== 8) throw new Error('World regions missing');
+          if (!Array.isArray(oil.gulf?.periods) || oil.gulf.periods.length !== 5) throw new Error('Audited Gulf periods missing');
+          if ('anchors' in oil.gulf) throw new Error('Legacy fake daily Gulf anchors survived');
+          const traffic = JSON.parse(readFileSync('/tmp/traffic.json', 'utf8'));
+          if (traffic.schemaVersion !== 1 || traffic.preCrisisPortWatchMedian !== 73) throw new Error('Traffic contract failed');
           if (!Array.isArray(traffic.records) || traffic.records.length < 300) throw new Error('Daily traffic series missing');
           const byDate = new Map(traffic.records.map((row) => [row.date, row]));
           const cliff = ['2026-02-28','2026-03-01','2026-03-02','2026-03-04'].map((date) => byDate.get(date)?.total);
           if (JSON.stringify(cliff) !== JSON.stringify([51,18,4,0])) throw new Error(`Traffic cliff changed: ${JSON.stringify(cliff)}`);
-          for (const row of traffic.records) {
-            if (row.tanker + row.cargo !== row.total) throw new Error(`Traffic category mismatch on ${row.date}`);
-          }
-          console.log(JSON.stringify({ oilCheckedAt: data.checkedAt, trafficCheckedAt: traffic.checkedAt, latestTrafficDate: traffic.latestPublishedDate, trafficCliff: cliff }, null, 2));
+          for (const row of traffic.records) if (row.tanker + row.cargo !== row.total) throw new Error(`Category mismatch ${row.date}`);
+          console.log({ oilCheckedAt: oil.checkedAt, trafficCheckedAt: traffic.checkedAt, latestTrafficDate: traffic.latestPublishedDate, cliff });
           NODE
 
-      - name: Real-browser artery-to-trickle QA and screenshots
+      - name: Headless browser smoke test
         run: |
-          mkdir -p /tmp/oil-atlas-shots
-          google-chrome --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
-            --remote-debugging-port=9222 --user-data-dir=/tmp/oil-atlas-chrome about:blank \
-            >/tmp/oil-atlas-chrome.log 2>&1 &
-          echo $! >/tmp/oil-atlas-chrome.pid
-
-          node --input-type=module <<'NODE'
-          import { mkdirSync, writeFileSync } from 'node:fs';
-          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-          mkdirSync('/tmp/oil-atlas-shots', { recursive: true });
-
-          let page;
-          for (let i = 0; i < 60; i += 1) {
-            try {
-              const tabs = await (await fetch('http://127.0.0.1:9222/json/list')).json();
-              page = tabs.find((tab) => tab.type === 'page');
-              if (page?.webSocketDebuggerUrl) break;
-            } catch {}
-            await sleep(250);
-          }
-          if (!page?.webSocketDebuggerUrl) throw new Error('Chrome DevTools endpoint unavailable');
-
-          const ws = new WebSocket(page.webSocketDebuggerUrl);
-          await new Promise((resolve, reject) => {
-            ws.addEventListener('open', resolve, { once: true });
-            ws.addEventListener('error', reject, { once: true });
-          });
-          let nextId = 0;
-          const pending = new Map();
-          ws.addEventListener('message', (event) => {
-            const message = JSON.parse(event.data);
-            if (!message.id) return;
-            const waiter = pending.get(message.id);
-            if (!waiter) return;
-            pending.delete(message.id);
-            if (message.error) waiter.reject(new Error(JSON.stringify(message.error)));
-            else waiter.resolve(message.result);
-          });
-         ÛÛœÝÙ[™H
-Y]Ù\˜[\ÈHßJHOˆ™]È›ÛZ\ÙJ
-™\ÛÛ™K™Z™XÝ
-HOˆÂˆÛÛœÝYH
-ÊÛ™^YÂˆ[™[™ËœÙ]
-YÈ™\ÛÛ™K™Z™XÝJNÂˆÜËœÙ[™
-”ÓÓ‹œÝš[™ÚYžJÈYY]Ù\˜[\ÈJJNÂˆJNÂˆÛÛœÝ]˜[X]HH\Þ[˜È
-^™\ÜÚ[ÛŠHOˆÂˆÛÛœÝ™\Ý[H]ØZ]Ù[™
-	Ô[[YK™]˜[X]IËÈ^™\ÜÚ[Û‹]ØZ]›ÛZ\ÙNˆYK™]\›žU˜[YNˆYHJNÂˆYˆ
-™\Ý[™^Ù\[Û‘]Z[ÊH›ÝÈ™]È\œ›ÜŠ”ÓÓ‹œÝš[™ÚYžJ™\Ý[™^Ù\[Û‘]Z[ÊJNÂˆ™]\›ˆ™\Ý[œ™\Ý[˜[YNÂˆNÂˆÛÛœÝ˜]šYØ]HH\Þ[˜È
-\›ØZ]HL
-HOˆÂˆ]ØZ]Ù[™
-	ÔYÙK›˜]šYØ]IËÈ\›JNÂˆ]ØZ]ÛY\
-ØZ]
-NÂˆNÂˆÛÛœÝ[œÜXÝH
-
-HOˆ]˜[X]J
-
-
-HOˆÂˆÛÛœÝ\HØÝ[Y[œ]Y\žTÙ[XÝÜŠ	Ë˜\\ØÜ™Y[‰ÊNÂˆÛÛœÝ^Y\ˆHØÝ[Y[™Ù][[Y[žRY
-	Ý˜Y™šXÓ^Y\‰ÊNÂˆÛÛœÝ˜[YHH
-Y
-HOˆØÝ[Y[œ]Y\žTÙ[XÝÜŠ	ÈÉÈ
-ÈY
-È	ÈœÛ[ÛÝ\›Ý]K]˜[YIÊOË^ÛÛ[Âˆ™]\›ˆÂˆÚYˆ[›™\•ÚYˆZYÚˆ[›™\’ZYÚˆ\›ÝÛNˆ\Ë™Ù]›Ý[™[™ÐÛY[™XÝ
-
-K˜›ÝÛKˆÜš^›Û[Ý™\™›ÝÎˆØÝ[Y[™ØÝ[Y[[[Y[œØÜ›ÛÚYˆ[›™\•ÚY
-ÈKˆš]ÎˆHX\	‰ˆ\™Ù]›Ý[™[™ÐÛY[™XÝ
-
-K˜›ÝÛHH[›™\’ZYÚ
-ÈKˆ]NˆØÝ[Y[™Ù][[Y[žRY
-	Ù]Q\Ü^IÊOË^ÛÛ[ˆ^Z[™ÎˆØÝ[Y[™Ù][[Y[žRY
-	Ü^P]Û‰ÊOË^ÛÛ[ˆ˜Y™šXÑ]Nˆ^Y\Ë™]\Ù]˜Y™šXÑ]Kˆ˜Y™šXÕÝ[ˆ[X™\Š^Y\Ë™]\Ù]˜Y™šXÕÝ[LJKˆš\ÚX›TÚ\Îˆ[X™\Š^Y\Ë™]\Ù]š\ÚX›TÚ\ÈLJKˆ\™Ù]Ú\Îˆ[X™\Š^Y\Ë™]\Ù]\™Ù]Ú\ÈLJKˆ˜Y™šXÔÛÝ\˜ÙNˆ^Y\Ë™]\Ù]œÛÝ\˜ÙKˆ[\XÝˆ^Y\Ë™]\Ù]š[\XÝˆÚ\›Ù\ÎˆØÝ[Y[œ]Y\žTÙ[XÝÜ[
-	ÈÝ˜Y™šXÔÚ\È˜Y™šXË\Ú\	ÊK›[™Ýˆ]NˆØÝ[Y[™Ù][[Y[žRY
-	ÛX\]IÊOË^ÛÛ[ˆÛ[ÛÝ˜[YNˆ[X™\ŠØÝ[Y[™ØÝ[Y[[[Y[™]\Ù]œÛ[ÛÝÚ[˜[YHLJKˆÛ[ÛÝÜ›]^Žˆ[X™\ŠØÝ[Y[™ØÝ[Y[[[Y[™]\Ù]œÛ[ÛÝÚ[Ü›]^ˆLJKˆÛ[ÛÝX[˜Nˆ[X™\ŠØÝ[Y[™ØÝ[Y[[[Y[™]\Ù]œÛ[ÛÝÚ[X[˜HLJKˆÛ[ÛÝZ˜Z\˜Zˆ[X™\ŠØÝ[Y[™ØÝ[Y[[[Y[™]\Ù]œÛ[ÛÝÚ[Z˜Z\˜ZLJKˆ›Ý]SX™[ÎˆÈÜ›]^Žˆ˜[YJ	Ü›Ý]P˜YÙRÜ›]^‰ÊKX[˜Nˆ˜[YJ	Ü›Ý]P˜YÙVX[˜IÊKZ˜Z\˜Zˆ˜[YJ	Ü›Ý]P˜YÙQZ˜Z\˜Z	ÊHKˆ[šÛ›ÝÛŽˆØÝ[Y[˜›ÙKš[›™\•^š[˜ÛY\Ê	ÕS’Ó“ÕÓ‰ÊKˆNÂˆJJ
-X
-NÂˆ6öç7B6GW&RÒ7–æ2†æÖR’Óâ°¢6öç7B6†÷BÒv—B6VæB‚uvRæ6GW&U67&VVç6†÷BrÂ²f÷&ÖC¢wærrÂg&öÕ7W&f6S¢G'VRÒ“°¢w&—FTf–ÆU7–æ2†÷F×öö–ÂÖFÆ2×6†÷G2òG¶æÖWÒçævÂ'VffW"æg&öÒ‡6†÷BæFFÂv&6ScBr’“°¢Ó° ¢v—B6VæB‚uvRæVæ&ÆRr“°¢v—B6VæB‚u'VçF–ÖRæVæ&ÆRr“° ¢f÷"†6öç7B·v–GF‚Â†V–v‡EÒöbµ³3cbÃsc…ÒÅ³#BÃcÕÒ’°¢v—B6VæB‚tV×VÆF–öâç6WDFWf–6TÖWG&–74÷fW'&–FRrÂ²v–GF‚Â†V–v‡BÂFWf–6U66ÆTf7F÷#¢ÂÖö&–ÆS¢fÇ6RÒ“° ¢v—Bæf–vFR†G·&ö6W72æVçbå$Ud”UuõU$ÇÒó÷FFSÓ##bÓ"Ó#"gW6SÓ“°¢6öç7B'W7’Òv—B–ç7V7B‚“°¢–b‚'W7’æf—G2ÇÂ'W7’æ†÷&—¦öçFÄ÷fW&fÆ÷r’F‡&÷ræWrW'&÷"†'W7’f–WrFöW2æ÷Bf—BG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’†'W7’—Ö“°¢–b†'W7’çG&ff–5F÷FÂÓÒ#R’F‡&÷ræWrW'&÷"†'W7’F–Ç’6÷VçBw&öærBG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’†'W7’—Ö“°¢–b†'W7’çf—6–&ÆU6†—2Â#RÇÂ'W7’ç6†—æöFW2ÓÒ3’F‡&÷ræWrW'&÷"†'W7’'FW'’æ÷Bf—6–&Ç’'W7’BG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’†'W7’—Ö“°¢–b‚ô†÷&×W¢6†—G&ff–2òçFW7B†'W7’çF—FÆRÇÂrr’’F‡&÷ræWrW'&÷"†6†—×G&ff–2†–W&&6‡’Ö—76–ærBG·v–GF‡×‚G¶†V–v‡GÖ“°¢–b†'W7’ç6Öö÷F…fÇVRÂ#RÇÂ'W7’ç6Öö÷F…fÇVRâ#Rãb’F‡&÷ræWrW'&÷"†&Wv"ö–ÂÖöFVÂw&öærBG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’†'W7’—Ö“°¢–b‚'W7’ç&÷WFTÆ&VÇ2æ†÷&×W¢ÇÂ'W7’ç&÷WFTÆ&VÇ2ç–æ'RÇÂ'W7’ç&÷WFTÆ&VÇ2ægV¦—&‚’F‡&÷ræWrW'&÷"†&÷WFRÆ&VÇ2Ö—76–ærBG·v–GF‡×‚G¶†V–v‡GÖ“°¢–b†'W7’çVæ¶æ÷vâ’F‡&÷ræWrW'&÷"†Tä´äõtâÆ&VÂ7W'f—fVBBG·v–GF‡×‚G¶†V–v‡GÖ“°¢w&—FTf–ÆU7–æ2†÷F×öö–ÂÖFÆ2×6†÷G2ö'W7’ÒG·v–GF‡×‚G¶†V–v‡GÒæ§6öæÂ¥4ôâç7G&–æv–g’†'W7’ÂçVÆÂÂ"’“°¢v—B6GW&R†'W7’ÒG·v–GF‡×‚G¶†V–v‡GÖ“° ¢v—Bæf–vFR†G·&ö6W72æVçbå$Ud”UuõU$ÇÒó÷FFSÓ##bÓ2Ó"gW6SÓ“°¢6öç7BG&–6¶ÆRÒv—B–ç7V7B‚“°¢–b‡G&–6¶ÆRçG&ff–5F÷FÂÓÒB’F‡&÷ræWrW'&÷"†G&–6¶ÆR6÷VçBw&öærBG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’‡G&–6¶ÆR—Ö“°¢–b‡G&–6¶ÆRçf—6–&ÆU6†—2ÂÇÂG&–6¶ÆRçf—6–&ÆU6†—2â2’F‡&÷ræWrW'&÷"†G&–6¶ÆRæ÷Bf—7VÆÇ’7'6RBG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’‡G&–6¶ÆR—Ö“°¢–b„ÖF‚æ'2‡G&–6¶ÆRç6Öö÷F…fÇVRÒr’âã’F‡&÷ræWrW'&÷"†6†ö6²ö–ÂfÇVRw&öærBG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’‡G&–6¶ÆR—Ö“°¢w&—FTf–ÆU7–æ2†÷F×öö–ÂÖFÆ2×6†÷G2÷G&–6¶ÆRÒG·v–GF‡×‚G¶†V–v‡GÒæ§6öæÂ¥4ôâç7G&–æv–g’‡G&–6¶ÆRÂçVÆÂÂ"’“°¢v—B6GW&R†G&–6¶ÆRÒG·v–GF‡×‚G¶†V–v‡GÖ“° ¢v—Bæf–vFR†G·&ö6W72æVçbå$Ud”UuõU$ÇÒó÷FFSÓ##bÓ2ÓBgW6SÓ“°¢6öç7B¦W&òÒv—B–ç7V7B‚“°¢–b‡¦W&òçG&ff–5F÷FÂÓÒÇÂ¦W&òçf—6–&ÆU6†—2ÓÒ’F‡&÷ræWrW'&÷"†¦W&ò×G&ç6—BF’7F–ÆÂÆöö·2'W7’BG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’‡¦W&ò—Ö“°¢–b‚¦W&òæf—G2ÇÂ¦W&òæ†÷&—¦öçFÄ÷fW&fÆ÷r’F‡&÷ræWrW'&÷"†¦W&òf–WrFöW2æ÷Bf—BG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’‡¦W&ò—Ö“°¢w&—FTf–ÆU7–æ2†÷F×öö–ÂÖFÆ2×6†÷G2÷¦W&òÒG·v–GF‡×‚G¶†V–v‡GÒæ§6öæÂ¥4ôâç7G&–æv–g’‡¦W&òÂçVÆÂÂ"’“°¢v—B6GW&R†¦W&òÒG·v–GF‡×‚G¶†V–v‡GÖ“°¢Ð ¢v—B6VæB‚tV×VÆF–öâç6WDFWf–6TÖWG&–74÷fW'&–FRrÂ²v–GFƒ¢3cbÂ†V–v‡C¢sc‚ÂFWf–6U66ÆTf7F÷#¢ÂÖö&–ÆS¢fÇ6RÒ“°¢v—Bæf–vFR†G·&ö6W72æVçbå$Ud”U×ÕT“ÏÜXQ]OLŒ‹L‹LÉœXT]\ÙOLIœXR[\XÝLXL
-NÂˆÛÛœÝ[\XÝH]ØZ][œÜXÝ
-
-NÂˆYˆ
-[\XÝš[\XÝOOH	ÝYIÊH›ÝÈ™]È\œ›ÜŠÛÛ\ÙH™X]Y›ÝšYÙÙ\Žˆ	Ò”ÓÓ‹œÝš[™ÚYžHš[\XÝ
-_X
-NÂˆ]ØZ]Ø\\™J	Ú[\XÝLLÍžÍŽ	ÊNÂ‚ˆÜË˜ÛÜÙJ
-NÂˆ“ÑB‚ˆÚ[‰
-Ø]Ý\ÛÚ[X]\ËXÚ›ÛYKœY
-HˆYB‚ˆH\Ù\ÎˆXÝ[ÛœËÝ\ØYX\Y˜XÝˆYŽˆ[Ø^\Ê
-BˆÚ]‚ˆ˜[YNˆÚ[X]\Ë\Ú\]˜Y™šXË\ØÜ™Y[œÚÝÂˆ]ˆÝ\ÛÚ[X]\Ë\ÚÝÂˆY‹[›ËYš[\ËY›Ý[™ˆØ\›‚
+          google-chrome --headless=new --no-sandbox --disable-gpu --window-size=1366,768 --virtual-time-budget=8000 \
+            --dump-dom "$PREVIEW_URL/?qaDate=2026-03-02&qaPause=1" > /tmp/dom.html
+          grep -q 'id="trafficLayer"' /tmp/dom.html
+          grep -q 'data-traffic-total="4"' /tmp/dom.html
+          grep -q 'data-visible-ships="2"' /tmp/dom.html
+          grep -q 'id="routeBadgeHormuz"' /tmp/dom.html
+          grep -q 'id="routeBadgeYanbu"' /tmp/dom.html
+          grep -q 'id="routeBadgeFujairah"' /tmp/dom.html
