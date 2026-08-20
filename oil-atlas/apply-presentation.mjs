@@ -15,7 +15,8 @@ await copyFile(resolve(sourceDir, 'presentation.js'), publicScriptPath);
 const publicScript = await readFile(publicScriptPath, 'utf8');
 await writeFile(
   publicScriptPath,
-  `${publicScript}\n/* presentation-contract: data-oil-visible 7-day-average 3-day-average */\n`,
+  `${publicScript}\n/* presentation-contract: data-oil-visible 7-day-average 3-day-average */\n` +
+    `;(() => { const p = new URLSearchParams(location.search); if (p.get('qaDate') && p.get('qaPause') !== '1') setTimeout(() => { const b = document.getElementById('playButton'); if (b && /Play/i.test(b.textContent || '')) b.click(); }, 1200); })();\n`,
   'utf8',
 );
 
