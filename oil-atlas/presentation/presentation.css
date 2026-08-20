@@ -50,6 +50,30 @@ html[data-presentation-mode="gulf"] #benchmarkLabel::after {
   letter-spacing: .09em;
   vertical-align: 1px;
 }
+#dateDisplay.presentation-text-proxy {
+  position: relative;
+  color: transparent !important;
+}
+#dateDisplay.presentation-text-proxy::before {
+  content: attr(data-presentation-text);
+  position: absolute;
+  inset: 0;
+  color: var(--presentation-text-color, #54d2d2);
+  font: inherit;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  letter-spacing: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  text-transform: inherit;
+  white-space: nowrap;
+  pointer-events: none;
+}
+[data-presentation-for] {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  text-rendering: geometricPrecision;
+}
 #dateDisplay,
 #flowNumber,
 #percentDisplay,
