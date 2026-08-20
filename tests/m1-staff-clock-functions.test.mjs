@@ -14,12 +14,15 @@ import {
   PRODUCTION_ORIGIN
 } from '../netlify/functions/_lib/m1-production-runtime.mjs';
 import {
+  MAX_STAFF_CLOCK_PAGE_ITEMS,
   STAFF_PUNCH_ID_PATTERN,
   STAFF_REQUEST_ID_PATTERN,
   sanitizeStaffClockPunch,
   sanitizeStaffClockSnapshot,
   sanitizeStaffTimeCorrectionRequest,
   sanitizeStaffTimeReview,
+  sanitizeStaffViewPage,
+  sanitizeStaffViewPageRequest,
   validNewYorkTimestamp
 } from '../netlify/functions/_lib/m1-staff-clock-contracts.mjs';
 import {
@@ -52,6 +55,7 @@ const ADMIN_REQUEST_TOKEN = 'A'.repeat(43);
 const PUNCH_ID = 'gib-m1-staff-12345678-1234-4123-8123-123456789abc';
 const SECOND_PUNCH_ID = 'gib-m1-staff-abcdef12-3456-4789-8abc-def012345678';
 const REQUEST_ID = 'gib-m1-staff-request-87654321-4321-4321-8321-cba987654321';
+const VIEW_TOKEN = 'a'.repeat(64);
 const PRODUCTION_DEVICE_CREDENTIAL = createProductionDeviceCredential(
   PRODUCTION_DEVICE_TOKEN,
   () => Buffer.alloc(32, 7),
@@ -225,7 +229,32 @@ function snapshot(target = 'test', overrides = {}) {
     ok: true,
     target,
     staff: [{ staffId: 'mandy-test', staffName: 'Mandy Test' }],
-    records: [record()],
+    clockedInNow: [{
+      punchId: PUNCH_ID,
+      staffId: 'mandy-test',
+      staffName: 'Mandy Test',
+      clockInAt: '2026-08-18T16:30:00-04:00'
+    }],
+    periods: {
+      current: period('2026-08-10', '2026-08-23'),
+      previous: period('2026-07-27', '2026-08-09')
+    },
+    view: {
+      token: VIEW_TOKEN,
+      today: '2026-08-18',
+      recordCount: 1,
+      recordTotal: 1,
+      todayPunchCount: 1,
+      todayPunchTotal: 1,
+      adjustmentCount: 0,
+      adjustmentTotal: 0,
+      attentionCount: 1,
+      attentionOccurrenceCount: 1,
+      auditCount: 0,
+      auditTotal: 0,
+      recordsTruncated: false,
+      auditTruncated: false
+    },
     ...overrides
   };
 }
@@ -233,72 +262,11 @@ function snapshot(target = 'test', overrides = {}) {
 function productionSnapshot(overrides = {}) {
   return snapshot('production', {
     staff: [{ staffId: 'mandy', staffName: 'Mandy' }],
-    records: [productionRecord()],
-    ...overrides
-  });
-}
-
-function period(startDate, endDate, overrides = {}) {
-  return {
-    startDate,
-    endDate,
-    totals: [{
-      staffId: 'mandy-test',
-      staffName: 'Mandy Test',
-      completedShifts: 0,
-      totalSeconds: 0,
-      needsAttention: false
-    }],
-    ...overrides
-  };
-}
-
-function reviewPayload(target = 'test', overrides = {}) {
-  return {
-    ...snapshot(target),
-    audit: [],
-    clockedInNow: [{
-      punchId: PUNCH_ID,
-      staffId: 'mandy-test',
-      staffName: 'Mandy Test',
-      clockInAt: '2026-08-18T16:30:00-04:00'
-    }],
-    todayPunches: [{
-      punchId: PUNCH_ID,
-      staffId: 'mandy-test',
-      staffName: 'Mandy Test',
-      punchAction: 'clockIn',
-      timestamp: '2026-08-18T16:30:00-04:00',
-      source: 'Tablet',
-      status: 'ACTIVE'
-    }],
-    needsAttention: [],
-    periods: {
-      current: period('2026-08-10', '2026-08-23'),
-      previous: period('2026-07-27', '2026-08-09')
-    },
-    ...overrides
-  };
-}
-
-function productionReviewPayload(overrides = {}) {
-  return reviewPayload('production', {
-    staff: [{ staffId: 'mandy', staffName: 'Mandy' }],
-    records: [productionRecord()],
     clockedInNow: [{
       punchId: PUNCH_ID,
       staffId: 'mandy',
       staffName: 'Mandy',
       clockInAt: '2026-08-18T16:30:00-04:00'
-    }],
-    todayPunches: [{
-      punchId: PUNCH_ID,
-      staffId: 'mandy',
-      staffName: 'Mandy',
-      punchAction: 'clockIn',
-      timestamp: '2026-08-18T16:30:00-04:00',
-      source: 'Tablet',
-      status: 'ACTIVE'
     }],
     periods: {
       current: period('2026-08-10', '2026-08-23', {
@@ -322,6 +290,94 @@ function productionReviewPayload(overrides = {}) {
     },
     ...overrides
   });
+}
+
+function period(startDate, endDate, overrides = {}) {
+  return {
+    startDate,
+    endDate,
+    totals: [{
+      staffId: 'mandy-test',
+      staffName: 'Mandy Test',
+      completedShifts: 0,
+      totalSeconds: 0,
+      needsAttention: false
+    }],
+    ...overrides
+  };
+}
+
+function reviewPayload(target = 'test', overrides = {}) {
+  return {
+    ...snapshot(target),
+    view: {
+      ...snapshot(target).view,
+      auditCount: 1,
+      auditTotal: 1
+    },
+    ...overrides
+  };
+}
+
+function productionReviewPayload(overrides = {}) {
+  return {
+    ...productionSnapshot(),
+    view: {
+      ...productionSnapshot().view,
+      auditCount: 1,
+      auditTotal: 1
+    },
+    ...overrides
+  };
+}
+
+function attention(target = 'test', overrides = {}) {
+  const production = target === 'production';
+  return {
+    staffId: production ? 'mandy' : 'mandy-test',
+    staffName: production ? 'Mandy' : 'Mandy Test',
+    code: 'missing_clock_out',
+    message: `${production ? 'Mandy' : 'Mandy Test'} may be missing a Clock Out.`,
+    linkedPunchIds: [PUNCH_ID],
+    occurrenceCount: 1,
+    ...overrides
+  };
+}
+
+function audit(target = 'test', overrides = {}) {
+  const production = target === 'production';
+  return {
+    requestId: REQUEST_ID,
+    actionTime: '2026-08-18T16:45:00-04:00',
+    adminName: 'Andrew Smith',
+    operation: 'correct',
+    staffId: production ? 'mandy' : 'mandy-test',
+    staffName: production ? 'Mandy' : 'Mandy Test',
+    punchTimestamp: '2026-08-18T16:30:00-04:00',
+    punchAction: 'clockIn',
+    reason: 'Forgotten punch',
+    result: 'added',
+    linkedPunchId: PUNCH_ID,
+    ...overrides
+  };
+}
+
+function viewPage(target = 'test', stream = 'records', overrides = {}) {
+  const items = stream === 'records'
+    ? [target === 'production' ? productionRecord() : record()]
+    : stream === 'attention'
+      ? [attention(target)]
+      : [audit(target)];
+  return {
+    ok: true,
+    target,
+    viewToken: VIEW_TOKEN,
+    stream,
+    offset: 0,
+    items,
+    nextOffset: null,
+    ...overrides
+  };
 }
 
 function productionDeviceCookie(credential = PRODUCTION_DEVICE_CREDENTIAL) {
@@ -355,20 +411,120 @@ test('Staff Clock contract uses separate permanent IDs and exact New York timest
   assert.equal(sanitizeStaffClockPunch(record(), { requireTestName: true, now: NOW }), null);
 });
 
-test('snapshot contract rejects inactive flags, unsafe record labels, and semantic aliases', () => {
+test('initial Staff Clock summary and paginated view contracts require exact fields', () => {
   assert.ok(sanitizeStaffClockSnapshot(snapshot(), 'test', { now: NOW }));
+  assert.equal(sanitizeStaffClockSnapshot({
+    ok: true,
+    target: 'test',
+    staff: snapshot().staff,
+    clockedInNow: snapshot().clockedInNow,
+    periods: snapshot().periods
+  }, 'test', { now: NOW }), null);
   assert.equal(sanitizeStaffClockSnapshot(snapshot('test', {
     staff: [{ staffId: 'mandy-test', staffName: 'Mandy Test', active: true }]
   }), 'test', { now: NOW }), null);
   assert.equal(sanitizeStaffClockSnapshot(snapshot('test', {
-    records: [record({ status: 'active' })]
+    records: [record()]
   }), 'test', { now: NOW }), null);
   assert.equal(sanitizeStaffClockSnapshot(snapshot('test', {
-    records: [record({ source: 'Admin', adminName: 'Andrew Smith' })]
+    view: { ...snapshot().view, recordCount: 0 }
   }), 'test', { now: NOW }), null);
   assert.equal(sanitizeStaffClockSnapshot(snapshot('test', {
-    records: [record({ staffName: 'Mandy' })]
+    view: { ...snapshot().view, auditCount: 1 }
   }), 'test', { now: NOW }), null);
+  assert.equal(sanitizeStaffClockSnapshot(snapshot('test', {
+    clockedInNow: [{
+      ...snapshot().clockedInNow[0],
+      clockInAt: '2026-08-18T18:30:00-04:00'
+    }]
+  }), 'test', { now: NOW }), null);
+
+  const recordRequest = sanitizeStaffViewPageRequest({
+    operation: 'snapshotPage',
+    viewToken: VIEW_TOKEN,
+    stream: 'records',
+    offset: 0
+  }, 'snapshotPage');
+  assert.deepEqual(recordRequest, {
+    operation: 'snapshotPage',
+    viewToken: VIEW_TOKEN,
+    stream: 'records',
+    offset: 0
+  });
+  assert.ok(sanitizeStaffViewPage(viewPage(), 'test', recordRequest, { now: NOW }));
+  assert.equal(sanitizeStaffViewPageRequest({
+    ...recordRequest,
+    extra: true
+  }, 'snapshotPage'), null);
+  assert.equal(sanitizeStaffViewPageRequest({
+    ...recordRequest,
+    stream: 'audit'
+  }, 'snapshotPage'), null);
+  assert.deepEqual(sanitizeStaffViewPageRequest({
+    ...recordRequest,
+    offset: MAX_STAFF_CLOCK_PAGE_ITEMS - 1
+  }, 'snapshotPage'), {
+    ...recordRequest,
+    offset: MAX_STAFF_CLOCK_PAGE_ITEMS - 1
+  });
+  assert.equal(sanitizeStaffViewPageRequest({
+    ...recordRequest,
+    offset: -1
+  }, 'snapshotPage'), null);
+  assert.equal(sanitizeStaffViewPage({
+    ...viewPage(),
+    extra: true
+  }, 'test', recordRequest, { now: NOW }), null);
+  assert.equal(sanitizeStaffViewPage({
+    ...viewPage(),
+    items: []
+  }, 'test', recordRequest, { now: NOW }), null);
+  assert.equal(sanitizeStaffViewPage({
+    ...viewPage(),
+    viewToken: 'b'.repeat(64)
+  }, 'test', recordRequest, { now: NOW }), null);
+  assert.equal(sanitizeStaffViewPage(
+    viewPage('test', 'attention'),
+    'test',
+    recordRequest,
+    { now: NOW }
+  ), null);
+  assert.equal(sanitizeStaffViewPage({
+    ...viewPage(),
+    offset: 1
+  }, 'test', recordRequest, { now: NOW }), null);
+  assert.equal(sanitizeStaffViewPage({
+    ...viewPage(),
+    items: [record(), record()]
+  }, 'test', recordRequest, { now: NOW }), null);
+  assert.equal(sanitizeStaffViewPage({
+    ...viewPage(),
+    nextOffset: 2
+  }, 'test', recordRequest, { now: NOW }), null);
+  assert.ok(sanitizeStaffViewPage({
+    ...viewPage(),
+    nextOffset: 1
+  }, 'test', recordRequest, { now: NOW }));
+
+  const adminAuditRequest = sanitizeStaffViewPageRequest({
+    operation: 'reviewPage',
+    viewToken: VIEW_TOKEN,
+    stream: 'audit',
+    offset: 0
+  }, 'reviewPage', { includeAudit: true });
+  assert.ok(adminAuditRequest);
+  assert.ok(sanitizeStaffViewPage(
+    viewPage('test', 'audit'),
+    'test',
+    adminAuditRequest,
+    { now: NOW }
+  ));
+  assert.equal(sanitizeStaffViewPage(
+    viewPage('test', 'audit', { items: [audit(), audit()] }),
+    'test',
+    adminAuditRequest,
+    { now: NOW }
+  ), null);
 });
 
 test('tablet route is exact, rate-limited, same-origin, and pins TEST transport', async () => {
@@ -404,17 +560,87 @@ test('tablet route is exact, rate-limited, same-origin, and pins TEST transport'
     assert.equal(call.url, TEST_WEBHOOK_URL);
     assert.deepEqual(call.body, {
       token: TEST_WEBHOOK_TOKEN,
-      action: 'staffClockSnapshot',
+      action: 'staffClockSnapshotV2',
+      target: 'test',
+      adminActionToken: ''
+    });
+    assert.deepEqual(await responseBody(response), snapshot());
+  }
+});
+
+test('tablet snapshotPage exposes only exact records and attention pages and maps stale views to 409', async () => {
+  for (const stream of ['records', 'attention']) {
+    let upstream;
+    const body = {
+      operation: 'snapshotPage',
+      viewToken: VIEW_TOKEN,
+      stream,
+      offset: 0
+    };
+    const response = await handleStaffClock(staffClockRequest({ body }), {
+      env: ENV,
+      dateNow: NOW,
+      fetch: async (url, options) => {
+        upstream = { url, body: JSON.parse(options.body) };
+        return googleResponse(viewPage('test', stream));
+      }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(upstream.url, TEST_WEBHOOK_URL);
+    assert.deepEqual(upstream.body, {
+      viewToken: VIEW_TOKEN,
+      stream,
+      offset: 0,
+      token: TEST_WEBHOOK_TOKEN,
+      action: 'staffClockSnapshotPageV2',
       target: 'test',
       adminActionToken: ''
     });
     assert.deepEqual(await responseBody(response), {
       ok: true,
       target: 'test',
-      staff: [{ staffId: 'mandy-test', staffName: 'Mandy Test' }],
-      records: [publicRecord()]
+      viewToken: VIEW_TOKEN,
+      stream,
+      offset: 0,
+      items: stream === 'records' ? [publicRecord()] : [attention()],
+      nextOffset: null
     });
   }
+
+  let called = false;
+  const rejected = await handleStaffClock(staffClockRequest({
+    body: {
+      operation: 'snapshotPage',
+      viewToken: VIEW_TOKEN,
+      stream: 'audit',
+      offset: 0
+    }
+  }), {
+    env: ENV,
+    dateNow: NOW,
+    fetch: async () => { called = true; throw new Error('invalid kiosk page called Google'); }
+  });
+  assert.equal(rejected.status, 400);
+  assert.equal(called, false);
+
+  const stale = await handleStaffClock(staffClockRequest({
+    body: {
+      operation: 'snapshotPage',
+      viewToken: VIEW_TOKEN,
+      stream: 'records',
+      offset: 0
+    }
+  }), {
+    env: ENV,
+    dateNow: NOW,
+    fetch: async () => googleResponse({ ok: false, target: 'test', result: 'stale' })
+  });
+  assert.equal(stale.status, 409);
+  assert.deepEqual(await responseBody(stale), {
+    ok: false,
+    result: 'stale',
+    code: 'STAFF_CLOCK_VIEW_STALE'
+  });
 });
 
 test('production credentials cannot authorize or replace the TEST Staff Clock transport', async () => {
@@ -655,17 +881,12 @@ test('production tablet route pins private transport and refreshes only the sign
   assert.equal(call.url, PRODUCTION_WEBHOOK_URL);
   assert.deepEqual(call.body, {
     token: PRODUCTION_WEBHOOK_TOKEN,
-    action: 'staffClockSnapshot',
+    action: 'staffClockSnapshotV2',
     target: 'production'
   });
   assert.equal(Object.hasOwn(call.body, 'adminActionToken'), false);
   assert.equal(JSON.stringify(call.body).includes(PRODUCTION_DEVICE_TOKEN), false);
-  assert.deepEqual(await responseBody(response), {
-    ok: true,
-    target: 'production',
-    staff: [{ staffId: 'mandy', staffName: 'Mandy' }],
-    records: [publicRecord(productionRecord())]
-  });
+  assert.deepEqual(await responseBody(response), productionSnapshot());
   const setCookie = response.headers.get('set-cookie') || '';
   assert.match(setCookie, new RegExp(`^${PRODUCTION_DEVICE_COOKIE}=`, 'u'));
   assert.match(setCookie, /; Secure; HttpOnly; SameSite=Strict$/u);
@@ -753,16 +974,20 @@ test('Admin review requires the existing cookie plus request token and returns a
   assert.equal(upstream.url, TEST_WEBHOOK_URL);
   assert.deepEqual(upstream.body, {
     token: TEST_WEBHOOK_TOKEN,
-    action: 'staffTimeReview',
+    action: 'staffTimeReviewV2',
     target: 'test',
     adminActionToken: TEST_ADMIN_TOKEN
   });
   const data = await responseBody(response);
-  assert.equal(data.adminName, 'Andrew Smith');
-  assert.equal(data.test, true);
-  assert.deepEqual(data.staff, reviewPayload().staff);
-  assert.deepEqual(data.records, [publicRecord()]);
-  assert.deepEqual(data.periods, reviewPayload().periods);
+  assert.deepEqual(data, {
+    ok: true,
+    test: true,
+    adminName: 'Andrew Smith',
+    staff: reviewPayload().staff,
+    clockedInNow: reviewPayload().clockedInNow,
+    periods: reviewPayload().periods,
+    view: reviewPayload().view
+  });
 });
 
 test('Admin review contract fails closed on semantic drift in computed arrays and periods', () => {
@@ -772,7 +997,7 @@ test('Admin review contract fails closed on semantic drift in computed arrays an
       punchId: PUNCH_ID,
       staffId: 'mandy-test',
       staffName: 'Mandy Test',
-      clockInAt: '2026-08-18T15:30:00-04:00'
+      clockInAt: '2026-08-18T18:30:00-04:00'
     }]
   }), 'test', { now: NOW }), null);
   assert.equal(sanitizeStaffTimeReview(reviewPayload('test', {
@@ -782,8 +1007,77 @@ test('Admin review contract fails closed on semantic drift in computed arrays an
     }
   }), 'test', { now: NOW }), null);
   assert.equal(sanitizeStaffTimeReview(reviewPayload('test', {
-    todayPunches: [{ ...reviewPayload().todayPunches[0], source: 'Admin-added' }]
+    view: { ...reviewPayload().view, auditCount: -1 }
   }), 'test', { now: NOW }), null);
+  assert.equal(sanitizeStaffTimeReview(reviewPayload('test', {
+    audit: []
+  }), 'test', { now: NOW }), null);
+});
+
+test('Admin reviewPage adds exact records, attention, and audit streams and maps stale views to 409', async () => {
+  for (const stream of ['records', 'attention', 'audit']) {
+    let upstream;
+    const body = {
+      operation: 'reviewPage',
+      viewToken: VIEW_TOKEN,
+      stream,
+      offset: 0
+    };
+    const response = await handleAdminStaffTime(adminRequest({ body }), {
+      env: ENV,
+      now: NOW_MS,
+      dateNow: NOW,
+      fetch: async (url, options) => {
+        upstream = { url, body: JSON.parse(options.body) };
+        return googleResponse(viewPage('test', stream));
+      }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(upstream.url, TEST_WEBHOOK_URL);
+    assert.deepEqual(upstream.body, {
+      viewToken: VIEW_TOKEN,
+      stream,
+      offset: 0,
+      token: TEST_WEBHOOK_TOKEN,
+      action: 'staffTimeReviewPageV2',
+      target: 'test',
+      adminActionToken: TEST_ADMIN_TOKEN
+    });
+    assert.deepEqual(await responseBody(response), {
+      ok: true,
+      test: true,
+      adminName: 'Andrew Smith',
+      viewToken: VIEW_TOKEN,
+      stream,
+      offset: 0,
+      items: stream === 'records'
+        ? [publicRecord()]
+        : stream === 'attention'
+          ? [attention()]
+          : [audit()],
+      nextOffset: null
+    });
+  }
+
+  const stale = await handleAdminStaffTime(adminRequest({
+    body: {
+      operation: 'reviewPage',
+      viewToken: VIEW_TOKEN,
+      stream: 'audit',
+      offset: 0
+    }
+  }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async () => googleResponse({ ok: false, target: 'test', result: 'stale' })
+  });
+  assert.equal(stale.status, 409);
+  assert.deepEqual(await responseBody(stale), {
+    ok: false,
+    result: 'stale',
+    code: 'STAFF_TIME_VIEW_STALE'
+  });
 });
 
 test('Admin correction pins attribution and replay identity, then validates the full confirmation', async () => {
@@ -1028,15 +1322,20 @@ test('authenticated production Admin review pins private production transport an
   assert.equal(upstream.url, PRODUCTION_WEBHOOK_URL);
   assert.deepEqual(upstream.body, {
     token: PRODUCTION_WEBHOOK_TOKEN,
-    action: 'staffTimeReview',
+    action: 'staffTimeReviewV2',
     target: 'production',
     adminActionToken: PRODUCTION_ADMIN_TOKEN
   });
   const data = await responseBody(response);
-  assert.equal(data.test, false);
-  assert.equal(data.adminName, 'Andrew Smith');
-  assert.deepEqual(data.staff, [{ staffId: 'mandy', staffName: 'Mandy' }]);
-  assert.deepEqual(data.records, [publicRecord(productionRecord())]);
+  assert.deepEqual(data, {
+    ok: true,
+    test: false,
+    adminName: 'Andrew Smith',
+    staff: productionReviewPayload().staff,
+    clockedInNow: productionReviewPayload().clockedInNow,
+    periods: productionReviewPayload().periods,
+    view: productionReviewPayload().view
+  });
 });
 
 test('authenticated production Admin corrections and voids accept real staff and exact confirmations', async () => {

@@ -1,5 +1,4 @@
 import {
-  buildStaffReview,
   createStaffPunchId,
   evaluateStaffState,
   formatStaffElapsed,
@@ -8,7 +7,7 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-08-19-m1b-staff-clock-production-r1';
+} from './staff-clock-core.mjs?v=2026-08-20-m1b-late-review-fixes-r2';
 
 const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
 const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
@@ -18,6 +17,9 @@ const STAFF_CLOCK_STATE_KEY = 'gib_m1b_staff_clock_state_v1';
 const STAFF_CLOCK_STAFF_CACHE_KEY = 'gib_m1b_staff_clock_staff_v1';
 const STAFF_CLOCK_ENDPOINT = '/api/m1-staff-clock';
 const STAFF_CLOCK_RETRY_INTERVAL_MS = 30_000;
+const STAFF_CLOCK_STATE_VERSION = 2;
+const STAFF_CLOCK_MAX_INCLUDED_RECORDS = 500;
+const STAFF_CLOCK_MAX_ATTENTION_GROUPS = 600;
 const $ = selector => document.querySelector(selector);
 
 function fmtDate(value) {
@@ -60,6 +62,8 @@ function fmtDate(value) {
   let staffClockSyncPromise = null;
   let staffClockSyncRequested = false;
   let staffClockSnapshotPromise = null;
+  let staffClockSnapshotRequested = false;
+  let staffClockStateRevision = 0;
   let staffClockTotalsSelection = 'current';
 
   function exactStaffClockKeys(value, expectedKeys) {
@@ -86,7 +90,12 @@ function fmtDate(value) {
   }
 
   function blankStaffClockState() {
-    return { version: 1, ledger: [], queue: [] };
+    return {
+      version: STAFF_CLOCK_STATE_VERSION,
+      baseline: null,
+      overlay: [],
+      queue: []
+    };
   }
 
   function normalizeStaffClockPerson(value) {
@@ -148,35 +157,294 @@ function fmtDate(value) {
       || STAFF_RECORD_KEYS.every(key => left?.[key] === right?.[key]);
   }
 
+  function normalizeStaffClockRecordList(value, maximum = Number.MAX_SAFE_INTEGER) {
+    if (!Array.isArray(value) || value.length > maximum) return null;
+    const records = value.map(normalizeStaffClockRecord);
+    if (records.some(record => !record)) return null;
+    const byId = new Map();
+    for (const record of records) {
+      const existing = byId.get(record.punchId);
+      if (existing && !sameStaffClockRecord(existing, record)) return null;
+      if (existing) return null;
+      byId.set(record.punchId, record);
+    }
+    return records;
+  }
+
+  function normalizeStaffClockPeriod(period) {
+    if (
+      !exactStaffClockKeys(period, ['startDate', 'endDate', 'totals'])
+      || !/^\d{4}-\d{2}-\d{2}$/u.test(period.startDate)
+      || !/^\d{4}-\d{2}-\d{2}$/u.test(period.endDate)
+      || dateKeyAsUtc(period.endDate) - dateKeyAsUtc(period.startDate) !== 13 * 86_400_000
+      || !Array.isArray(period.totals)
+      || period.totals.length > 100
+    ) return null;
+    const totals = [];
+    const seen = new Set();
+    for (const item of period.totals) {
+      if (!exactStaffClockKeys(item, [
+        'staffId',
+        'staffName',
+        'completedShifts',
+        'totalSeconds',
+        'needsAttention'
+      ])) return null;
+      const staffId = cleanStaffClockText(item.staffId, 80);
+      const staffName = cleanStaffClockText(item.staffName, 100);
+      if (
+        !staffId
+        || !staffName
+        || seen.has(staffId)
+        || !Number.isSafeInteger(item.completedShifts)
+        || item.completedShifts < 0
+        || !Number.isSafeInteger(item.totalSeconds)
+        || item.totalSeconds < 0
+        || item.totalSeconds > 15 * 24 * 60 * 60
+        || typeof item.needsAttention !== 'boolean'
+      ) return null;
+      seen.add(staffId);
+      totals.push({
+        staffId,
+        staffName,
+        completedShifts: item.completedShifts,
+        totalSeconds: item.totalSeconds,
+        needsAttention: item.needsAttention
+      });
+    }
+    return { startDate: period.startDate, endDate: period.endDate, totals };
+  }
+
+  function normalizeStaffClockPeriods(value) {
+    if (!exactStaffClockKeys(value, ['current', 'previous'])) return null;
+    const current = normalizeStaffClockPeriod(value.current);
+    const previous = normalizeStaffClockPeriod(value.previous);
+    return current
+      && previous
+      && dateKeyAsUtc(current.startDate) - dateKeyAsUtc(previous.endDate) === 86_400_000
+      ? { current, previous }
+      : null;
+  }
+
+  function normalizeStaffClockView(value) {
+    const countKeys = [
+      'recordCount',
+      'recordTotal',
+      'todayPunchCount',
+      'todayPunchTotal',
+      'adjustmentCount',
+      'adjustmentTotal',
+      'attentionCount',
+      'attentionOccurrenceCount',
+      'auditCount',
+      'auditTotal'
+    ];
+    if (
+      !exactStaffClockKeys(value, [
+        'token',
+        'today',
+        ...countKeys,
+        'recordsTruncated',
+        'auditTruncated'
+      ])
+      || !/^[0-9a-f]{64}$/u.test(value.token)
+      || !/^\d{4}-\d{2}-\d{2}$/u.test(value.today)
+      || utcAsDateKey(dateKeyAsUtc(value.today)) !== value.today
+      || countKeys.some(key => !Number.isSafeInteger(value[key]) || value[key] < 0)
+      || value.recordCount > STAFF_CLOCK_MAX_INCLUDED_RECORDS
+      || value.attentionCount > STAFF_CLOCK_MAX_ATTENTION_GROUPS
+      || value.recordCount > value.recordTotal
+      || value.todayPunchCount > value.recordCount
+      || value.todayPunchCount > value.todayPunchTotal
+      || value.todayPunchTotal > value.recordTotal
+      || value.adjustmentCount > value.recordCount
+      || value.adjustmentCount > value.adjustmentTotal
+      || value.adjustmentTotal > value.recordTotal
+      || value.attentionCount > value.attentionOccurrenceCount
+      || value.auditCount !== 0
+      || value.auditTotal !== 0
+      || value.recordsTruncated !== (value.recordCount < value.recordTotal)
+      || value.auditTruncated !== false
+    ) return null;
+    return Object.fromEntries([
+      ['token', value.token],
+      ['today', value.today],
+      ...countKeys.map(key => [key, value[key]]),
+      ['recordsTruncated', value.recordsTruncated],
+      ['auditTruncated', false]
+    ]);
+  }
+
+  function normalizeStaffClockSummary(value, records) {
+    if (
+      !value
+      || !exactStaffClockKeys(value, [
+        'records',
+        'clockedInNow',
+        'needsAttention',
+        'periods',
+        'view'
+      ])
+      || !Array.isArray(records)
+      || !Array.isArray(value.clockedInNow)
+      || value.clockedInNow.length > 100
+      || !Array.isArray(value.needsAttention)
+      || value.needsAttention.length > STAFF_CLOCK_MAX_ATTENTION_GROUPS
+    ) return null;
+
+    const normalizedRecords = normalizeStaffClockRecordList(
+      value.records,
+      STAFF_CLOCK_MAX_INCLUDED_RECORDS
+    );
+    const periods = normalizeStaffClockPeriods(value.periods);
+    const view = normalizeStaffClockView(value.view);
+    if (!normalizedRecords || !periods || !view || normalizedRecords.length !== view.recordCount) {
+      return null;
+    }
+    const clockedInNow = [];
+    const clockedStaff = new Set();
+    for (const item of value.clockedInNow) {
+      if (!exactStaffClockKeys(item, ['punchId', 'staffId', 'staffName', 'clockInAt'])) return null;
+      const staffId = cleanStaffClockText(item.staffId, 80);
+      const staffName = cleanStaffClockText(item.staffName, 100);
+      if (
+        !STAFF_PUNCH_ID_PATTERN.test(item.punchId)
+        || !staffId
+        || !staffName
+        || !validStaffClockTimestamp(item.clockInAt)
+        || clockedStaff.has(staffId)
+      ) return null;
+      clockedStaff.add(staffId);
+      clockedInNow.push({
+        punchId: item.punchId,
+        staffId,
+        staffName,
+        clockInAt: item.clockInAt
+      });
+    }
+
+    const needsAttention = [];
+    const attentionIdentities = new Set();
+    let attentionOccurrences = 0;
+    for (const item of value.needsAttention) {
+      if (!exactStaffClockKeys(item, [
+        'staffId',
+        'staffName',
+        'code',
+        'message',
+        'linkedPunchIds',
+        'occurrenceCount'
+      ])) return null;
+      const staffId = cleanStaffClockText(item.staffId, 80);
+      const staffName = cleanStaffClockText(item.staffName, 100);
+      const code = cleanStaffClockText(item.code, 64);
+      const message = cleanStaffClockText(item.message, 240);
+      const identity = `${staffId}\u0000${code}`;
+      if (
+        !staffId
+        || !staffName
+        || !/^[a-z][a-z0-9_]*$/u.test(code)
+        || !message
+        || attentionIdentities.has(identity)
+        || !Array.isArray(item.linkedPunchIds)
+        || item.linkedPunchIds.length > 20
+        || !Number.isSafeInteger(item.occurrenceCount)
+        || item.occurrenceCount < 1
+      ) return null;
+      const linkedPunchIds = [];
+      const linked = new Set();
+      for (const punchId of item.linkedPunchIds) {
+        if (
+          typeof punchId !== 'string'
+          || !STAFF_PUNCH_ID_PATTERN.test(punchId)
+          || linked.has(punchId)
+        ) return null;
+        linked.add(punchId);
+        linkedPunchIds.push(punchId);
+      }
+      attentionIdentities.add(identity);
+      attentionOccurrences += item.occurrenceCount;
+      if (!Number.isSafeInteger(attentionOccurrences)) return null;
+      needsAttention.push({
+        staffId,
+        staffName,
+        code,
+        message,
+        linkedPunchIds,
+        occurrenceCount: item.occurrenceCount
+      });
+    }
+    if (
+      clockedInNow.length > view.recordTotal
+      || needsAttention.length !== view.attentionCount
+      || attentionOccurrences !== view.attentionOccurrenceCount
+      || view.today < periods.current.startDate
+      || view.today > periods.current.endDate
+    ) return null;
+    const todayCount = normalizedRecords.filter(record => record.date === view.today).length;
+    const adjustmentCount = normalizedRecords.filter(record => (
+      record.date >= periods.previous.startDate
+      && record.date <= periods.current.endDate
+      && (record.source === 'Admin-added' || record.status === 'VOID')
+    )).length;
+    if (todayCount !== view.todayPunchCount || adjustmentCount !== view.adjustmentCount) return null;
+    return {
+      records: normalizedRecords,
+      clockedInNow,
+      needsAttention,
+      periods,
+      view
+    };
+  }
+
   function loadStaffClockState() {
     try {
       const parsed = JSON.parse(localStorage.getItem(STAFF_CLOCK_STATE_KEY) || 'null');
-      if (
-        !parsed
-        || parsed.version !== 1
-        || !Array.isArray(parsed.ledger)
-        || !Array.isArray(parsed.queue)
-      ) {
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         return blankStaffClockState();
       }
-      const ledger = parsed.ledger.map(normalizeStaffClockRecord);
-      const queue = parsed.queue.map(normalizeStaffClockRecord);
-      if (ledger.some(record => !record) || queue.some(record => !record)) {
-        return blankStaffClockState();
-      }
-      const ledgerById = new Map();
-      for (const record of ledger) {
-        const existing = ledgerById.get(record.punchId);
-        if (existing && !sameStaffClockRecord(existing, record)) return blankStaffClockState();
-        ledgerById.set(record.punchId, record);
-      }
-      for (const record of queue) {
-        const ledgerRecord = ledgerById.get(record.punchId);
-        if (!ledgerRecord || !sameStaffClockRecord(ledgerRecord, record)) {
+      if (parsed.version === 1) {
+        const ledger = normalizeStaffClockRecordList(parsed.ledger);
+        const queue = normalizeStaffClockRecordList(parsed.queue);
+        if (!ledger || !queue) return blankStaffClockState();
+        const ledgerById = new Map(ledger.map(record => [record.punchId, record]));
+        if (queue.some(record => !sameStaffClockRecord(ledgerById.get(record.punchId), record))) {
           return blankStaffClockState();
         }
+        const baselineIds = new Set(Array.isArray(parsed.baselinePunchIds)
+          ? parsed.baselinePunchIds
+          : []);
+        const overlay = ledger.filter(record => !baselineIds.has(record.punchId));
+        const overlayById = new Map(overlay.map(record => [record.punchId, record]));
+        queue.forEach(record => {
+          if (!overlayById.has(record.punchId)) {
+            overlay.push(record);
+            overlayById.set(record.punchId, record);
+          }
+        });
+        return {
+          version: STAFF_CLOCK_STATE_VERSION,
+          baseline: null,
+          overlay,
+          queue
+        };
       }
-      return { version: 1, ledger, queue };
+      if (
+        parsed.version !== STAFF_CLOCK_STATE_VERSION
+        || !exactStaffClockKeys(parsed, ['version', 'baseline', 'overlay', 'queue'])
+      ) return blankStaffClockState();
+      const overlay = normalizeStaffClockRecordList(parsed.overlay);
+      const queue = normalizeStaffClockRecordList(parsed.queue);
+      if (!overlay || !queue) return blankStaffClockState();
+      const overlayById = new Map(overlay.map(record => [record.punchId, record]));
+      if (queue.some(record => !sameStaffClockRecord(overlayById.get(record.punchId), record))) {
+        return blankStaffClockState();
+      }
+      const baseline = parsed.baseline == null
+        ? null
+        : normalizeStaffClockSummary(parsed.baseline, parsed.baseline.records);
+      if (parsed.baseline != null && !baseline) return blankStaffClockState();
+      return { version: STAFF_CLOCK_STATE_VERSION, baseline, overlay, queue };
     } catch {
       return blankStaffClockState();
     }
@@ -185,26 +453,46 @@ function fmtDate(value) {
   function saveStaffClockState(state) {
     if (
       !state
-      || state.version !== 1
-      || !Array.isArray(state.ledger)
-      || !Array.isArray(state.queue)
-      || state.ledger.some(record => !normalizeStaffClockRecord(record))
-      || state.queue.some(record => !normalizeStaffClockRecord(record))
-    ) {
-      throw new Error('Staff Clock state is invalid.');
-    }
-    const ledgerById = new Map(state.ledger.map(record => [record.punchId, record]));
-    if (state.queue.some(record => (
-      !ledgerById.has(record.punchId)
-      || !sameStaffClockRecord(ledgerById.get(record.punchId), record)
-    ))) {
+      || state.version !== STAFF_CLOCK_STATE_VERSION
+      || !exactStaffClockKeys(state, ['version', 'baseline', 'overlay', 'queue'])
+    ) throw new Error('Staff Clock state is invalid.');
+    const overlay = normalizeStaffClockRecordList(state.overlay);
+    const queue = normalizeStaffClockRecordList(state.queue);
+    if (!overlay || !queue) throw new Error('Staff Clock state is invalid.');
+    const overlayById = new Map(overlay.map(record => [record.punchId, record]));
+    if (queue.some(record => !sameStaffClockRecord(overlayById.get(record.punchId), record))) {
       throw new Error('Staff Clock waiting state is invalid.');
     }
+    const baseline = state.baseline == null
+      ? null
+      : normalizeStaffClockSummary(state.baseline, state.baseline.records);
+    if (state.baseline != null && !baseline) {
+      throw new Error('Staff Clock server baseline is invalid.');
+    }
     localStorage.setItem(STAFF_CLOCK_STATE_KEY, JSON.stringify({
-      version: 1,
-      ledger: state.ledger,
-      queue: state.queue
+      version: STAFF_CLOCK_STATE_VERSION,
+      baseline,
+      overlay,
+      queue
     }));
+  }
+
+  function reconcileStaffClockSnapshotState(state, baseline) {
+    if (
+      !state
+      || state.version !== STAFF_CLOCK_STATE_VERSION
+      || !Array.isArray(state.queue)
+      || state.queue.length
+      || !baseline
+    ) return null;
+    const normalized = normalizeStaffClockSummary(baseline, baseline.records);
+    if (!normalized) return null;
+    return {
+      version: STAFF_CLOCK_STATE_VERSION,
+      baseline: normalized,
+      overlay: [],
+      queue: []
+    };
   }
 
   function loadStaffClockPeople() {
@@ -266,15 +554,52 @@ function fmtDate(value) {
   }
 
   function combinedStaffClockRecords(state = loadStaffClockState()) {
-    return mergeStaffRecords(state.ledger, state.queue);
+    return mergeStaffRecords(state.overlay, state.queue);
+  }
+
+  function staffClockBaselineOpenRecord(item) {
+    return {
+      punchId: item.punchId,
+      timestamp: item.clockInAt,
+      date: fmtDate(new Date(item.clockInAt)),
+      staffId: item.staffId,
+      staffName: item.staffName,
+      punchAction: 'clockIn',
+      site: 'Server baseline',
+      device: 'Staff Clock server baseline',
+      build: 'Staff Clock server baseline',
+      note: '',
+      status: 'ACTIVE',
+      source: 'Tablet',
+      adminName: '',
+      linkedPunchId: ''
+    };
   }
 
   function staffClockStatusFor(staffId, state = loadStaffClockState(), now = new Date()) {
     const merged = combinedStaffClockRecords(state);
-    return evaluateStaffState(staffId, merged.records, {
+    const open = state.baseline?.clockedInNow.find(item => item.staffId === staffId) || null;
+    const evaluated = evaluateStaffState(
+      staffId,
+      open ? [staffClockBaselineOpenRecord(open), ...merged.records] : merged.records,
+      {
       now,
       attention: merged.attention
-    });
+      }
+    );
+    const baselineAttention = state.baseline?.needsAttention
+      .filter(item => item.staffId === staffId) || [];
+    return baselineAttention.length
+      ? {
+          ...evaluated,
+          needsAttention: true,
+          attention: baselineAttention.map(item => ({
+            code: item.code,
+            punchId: item.linkedPunchIds[0] || '',
+            message: item.message
+          }))
+        }
+      : evaluated;
   }
 
   function formatStaffClockTime(timestamp) {
@@ -453,8 +778,8 @@ function fmtDate(value) {
       });
       if (!punch) throw new Error('The Staff Clock punch was invalid.');
       saveStaffClockState({
-        version: 1,
-        ledger: [...state.ledger, punch],
+        ...state,
+        overlay: [...state.overlay, punch],
         queue: [...state.queue, punch]
       });
     } catch {
@@ -509,7 +834,9 @@ function fmtDate(value) {
         ...(controller ? { signal: controller.signal } : {})
       });
       if (!response || response.ok !== true || typeof response.json !== 'function') {
-        throw new Error('Staff Clock was not confirmed.');
+        const error = new Error('Staff Clock was not confirmed.');
+        error.staffClockStatus = Number.isSafeInteger(response?.status) ? response.status : 0;
+        throw error;
       }
       return await response.json();
     } finally {
@@ -517,62 +844,250 @@ function fmtDate(value) {
     }
   }
 
-  function validatedStaffClockSnapshot(value) {
+  function validatedStaffClockSnapshotStart(value) {
     const expectedTarget = IS_PRODUCTION_ORIGIN ? 'production' : 'test';
     if (
       !value
       || typeof value !== 'object'
-      || !exactStaffClockKeys(value, ['ok', 'target', 'staff', 'records'])
+      || !exactStaffClockKeys(value, [
+        'ok',
+        'target',
+        'staff',
+        'clockedInNow',
+        'periods',
+        'view'
+      ])
       || value.ok !== true
       || value.target !== expectedTarget
       || !Array.isArray(value.staff)
-      || !Array.isArray(value.records)
+      || !Array.isArray(value.clockedInNow)
+      || value.clockedInNow.length > 100
     ) return null;
     const staff = value.staff.map(normalizeStaffClockPerson);
-    const records = value.records.map(normalizeStaffClockRecord);
-    if (!staff.length || staff.some(person => !person) || records.some(record => !record)) {
+    if (!staff.length || staff.some(person => !person)) {
       return null;
     }
     const ids = new Set(staff.map(person => person.staffId));
     const names = new Set(staff.map(person => person.staffName.toLocaleLowerCase('en-US')));
-    const recordIds = new Set(records.map(record => record.punchId));
+    if (ids.size !== staff.length || names.size !== staff.length) return null;
+
+    const clockedInNow = [];
+    const clockedIds = new Set();
+    const clockedStaff = new Set();
+    for (const item of value.clockedInNow) {
+      if (!exactStaffClockKeys(item, ['punchId', 'staffId', 'staffName', 'clockInAt'])) return null;
+      const staffId = cleanStaffClockText(item.staffId, 80);
+      const staffName = cleanStaffClockText(item.staffName, 100);
+      if (
+        !STAFF_PUNCH_ID_PATTERN.test(item.punchId)
+        || !staffId
+        || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(staffId)
+        || !staffName
+        || !validStaffClockTimestamp(item.clockInAt)
+        || clockedIds.has(item.punchId)
+        || clockedStaff.has(staffId)
+      ) return null;
+      clockedIds.add(item.punchId);
+      clockedStaff.add(staffId);
+      clockedInNow.push({
+        punchId: item.punchId,
+        staffId,
+        staffName,
+        clockInAt: item.clockInAt
+      });
+    }
+
+    const periods = normalizeStaffClockPeriods(value.periods);
+    const view = normalizeStaffClockView(value.view);
     if (
-      ids.size !== staff.length
-      || names.size !== staff.length
-      || recordIds.size !== records.length
+      !periods
+      || !view
+      || clockedInNow.length > view.recordTotal
+      || view.today < periods.current.startDate
+      || view.today > periods.current.endDate
     ) return null;
-    return { staff, records };
+    return {
+      staff,
+      clockedInNow,
+      periods,
+      view
+    };
+  }
+
+  function normalizeStaffClockPageAttention(value) {
+    if (!exactStaffClockKeys(value, [
+      'staffId',
+      'staffName',
+      'code',
+      'message',
+      'linkedPunchIds',
+      'occurrenceCount'
+    ])) return null;
+    const staffId = cleanStaffClockText(value.staffId, 80);
+    const staffName = cleanStaffClockText(value.staffName, 100);
+    const code = cleanStaffClockText(value.code, 64);
+    const message = cleanStaffClockText(value.message, 240);
+    if (
+      !staffId
+      || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(staffId)
+      || !staffName
+      || !/^[a-z][a-z0-9_]*$/u.test(code)
+      || !message
+      || !Array.isArray(value.linkedPunchIds)
+      || value.linkedPunchIds.length > 20
+      || !Number.isSafeInteger(value.occurrenceCount)
+      || value.occurrenceCount < 1
+    ) return null;
+    const linkedPunchIds = [];
+    const seen = new Set();
+    for (const punchId of value.linkedPunchIds) {
+      if (
+        typeof punchId !== 'string'
+        || !STAFF_PUNCH_ID_PATTERN.test(punchId)
+        || seen.has(punchId)
+      ) return null;
+      seen.add(punchId);
+      linkedPunchIds.push(punchId);
+    }
+    return {
+      staffId,
+      staffName,
+      code,
+      message,
+      linkedPunchIds,
+      occurrenceCount: value.occurrenceCount
+    };
+  }
+
+  function validatedStaffClockSnapshotPage(value, start, stream, offset) {
+    const expectedTarget = IS_PRODUCTION_ORIGIN ? 'production' : 'test';
+    const expectedCount = stream === 'records'
+      ? start.view.recordCount
+      : start.view.attentionCount;
+    if (
+      !value
+      || !exactStaffClockKeys(value, [
+        'ok',
+        'target',
+        'viewToken',
+        'stream',
+        'offset',
+        'items',
+        'nextOffset'
+      ])
+      || value.ok !== true
+      || value.target !== expectedTarget
+      || value.viewToken !== start.view.token
+      || value.stream !== stream
+      || value.offset !== offset
+      || !Array.isArray(value.items)
+      || value.items.length > 500
+      || offset < 0
+      || offset >= expectedCount
+      || value.items.length < 1
+      || offset + value.items.length > expectedCount
+    ) return null;
+    const endOffset = offset + value.items.length;
+    if (
+      (endOffset === expectedCount && value.nextOffset !== null)
+      || (endOffset < expectedCount && value.nextOffset !== endOffset)
+    ) return null;
+    const items = value.items.map(item => (
+      stream === 'records'
+        ? normalizeStaffClockRecord(item)
+        : normalizeStaffClockPageAttention(item)
+    ));
+    return items.some(item => !item)
+      ? null
+      : { items, nextOffset: value.nextOffset };
+  }
+
+  async function loadStaffClockSnapshot() {
+    const start = validatedStaffClockSnapshotStart(
+      await postStaffClock({ operation: 'snapshot' })
+    );
+    if (!start) return null;
+    const streams = { records: [], attention: [] };
+    const seen = { records: new Set(), attention: new Set() };
+    for (const stream of ['records', 'attention']) {
+      const expectedCount = stream === 'records'
+        ? start.view.recordCount
+        : start.view.attentionCount;
+      let offset = 0;
+      while (offset < expectedCount) {
+        const page = validatedStaffClockSnapshotPage(
+          await postStaffClock({
+            operation: 'snapshotPage',
+            viewToken: start.view.token,
+            stream,
+            offset
+          }),
+          start,
+          stream,
+          offset
+        );
+        if (!page) return null;
+        for (const item of page.items) {
+          const key = stream === 'records'
+            ? item.punchId
+            : `${item.staffId}\u0000${item.code}`;
+          if (seen[stream].has(key)) return null;
+          seen[stream].add(key);
+          streams[stream].push(item);
+        }
+        offset = page.nextOffset == null ? expectedCount : page.nextOffset;
+      }
+      if (streams[stream].length !== expectedCount) return null;
+    }
+
+    const baseline = normalizeStaffClockSummary({
+      records: streams.records,
+      clockedInNow: start.clockedInNow,
+      needsAttention: streams.attention,
+      periods: start.periods,
+      view: start.view
+    }, streams.records);
+    return baseline ? {
+      staff: start.staff,
+      baseline
+    } : null;
+  }
+
+  async function loadStaffClockSnapshotWithRetry() {
+    try {
+      return await loadStaffClockSnapshot();
+    } catch (error) {
+      if (error?.staffClockStatus !== 409) throw error;
+      return loadStaffClockSnapshot();
+    }
   }
 
   async function refreshStaffClockSnapshot() {
-    if (staffClockSnapshotPromise) return staffClockSnapshotPromise;
+    if (staffClockSnapshotPromise) {
+      staffClockSnapshotRequested = true;
+      return staffClockSnapshotPromise;
+    }
     if (navigator.onLine === false) return null;
+    if (loadStaffClockState().queue.length) {
+      void syncStaffClockQueue();
+      return null;
+    }
+    const requestedAtRevision = staffClockStateRevision;
     staffClockSnapshotPromise = (async () => {
       try {
-        const payload = validatedStaffClockSnapshot(
-          await postStaffClock({ operation: 'snapshot' })
-        );
+        const payload = await loadStaffClockSnapshotWithRetry();
         if (!payload) return null;
-
-        const state = loadStaffClockState();
-        const queueIds = new Set(state.queue.map(record => record.punchId));
-        const nextById = new Map(state.ledger.map(record => [record.punchId, record]));
-        for (const record of payload.records) {
-          const existing = nextById.get(record.punchId);
-          if (
-            existing
-            && queueIds.has(record.punchId)
-            && !sameStaffClockRecord(existing, record)
-          ) {
-            return null;
-          }
-          nextById.set(record.punchId, record);
+        if (staffClockStateRevision !== requestedAtRevision) {
+          staffClockSnapshotRequested = true;
+          return null;
         }
-        saveStaffClockState({
-          version: 1,
-          ledger: [...nextById.values()],
-          queue: state.queue
-        });
+
+        const nextState = reconcileStaffClockSnapshotState(
+          loadStaffClockState(),
+          payload.baseline
+        );
+        if (!nextState) return null;
+        saveStaffClockState(nextState);
         saveStaffClockPeople(payload.staff);
         populateStaffClockPeople();
         renderStaffTimeAdmin();
@@ -581,6 +1096,10 @@ function fmtDate(value) {
         return null;
       } finally {
         staffClockSnapshotPromise = null;
+        if (staffClockSnapshotRequested) {
+          staffClockSnapshotRequested = false;
+          void refreshStaffClockSnapshot();
+        }
       }
     })();
     return staffClockSnapshotPromise;
@@ -654,6 +1173,7 @@ function fmtDate(value) {
       // Yield once so the promise lock is assigned before an empty startup run
       // can reach `finally` and clear it.
       await Promise.resolve();
+      let acceptedAny = false;
       try {
         while (navigator.onLine !== false) {
           const before = loadStaffClockState();
@@ -665,6 +1185,7 @@ function fmtDate(value) {
           });
           const accepted = acceptedStaffClockSyncIds(response, batch);
           if (!accepted.size) break;
+          acceptedAny = true;
 
           const latest = loadStaffClockState();
           const submitted = new Map(batch.map(record => [record.punchId, record]));
@@ -674,15 +1195,17 @@ function fmtDate(value) {
             return !exactSubmitted || !sameStaffClockRecord(record, exactSubmitted);
           });
           saveStaffClockState({
-            version: 1,
-            ledger: latest.ledger,
+            ...latest,
             queue: nextQueue
           });
+          if (nextQueue.length !== latest.queue.length) staffClockStateRevision += 1;
           accepted.forEach(markStaffClockConfirmationConfirmed);
           renderStaffClock();
           renderStaffTimeAdmin();
         }
-        void refreshStaffClockSnapshot();
+        if (acceptedAny && !loadStaffClockState().queue.length) {
+          void refreshStaffClockSnapshot();
+        }
       } catch {
         // The exact queue remains durable. Lifecycle and timer retries are automatic.
       } finally {
@@ -736,7 +1259,7 @@ function fmtDate(value) {
 
   function allKnownStaffClockPeople(state) {
     const byId = new Map(staffClockPeople.map(person => [person.staffId, person]));
-    state.ledger.forEach(record => {
+    [...(state.baseline?.records || []), ...state.overlay].forEach(record => {
       if (!byId.has(record.staffId)) {
         byId.set(record.staffId, {
           staffId: record.staffId,
@@ -744,6 +1267,23 @@ function fmtDate(value) {
         });
       }
     });
+    const summary = state.baseline;
+    if (summary) {
+      const summarized = [
+        ...summary.clockedInNow,
+        ...summary.needsAttention,
+        ...summary.periods.current.totals,
+        ...summary.periods.previous.totals
+      ];
+      summarized.forEach(item => {
+        if (!byId.has(item.staffId)) {
+          byId.set(item.staffId, {
+            staffId: item.staffId,
+            staffName: item.staffName
+          });
+        }
+      });
+    }
     return [...byId.values()].sort((left, right) => (
       left.staffName.localeCompare(right.staffName)
     ));
@@ -765,6 +1305,177 @@ function fmtDate(value) {
     });
   }
 
+  function staffClockPeriodRowsFromSummary(period, state, people) {
+    const serverById = new Map(period.totals.map(total => [total.staffId, total]));
+    if (!state.overlay.length) {
+      return people
+        .filter(person => serverById.has(person.staffId))
+        .map(person => {
+          const total = serverById.get(person.staffId);
+          return {
+            person,
+            completedShifts: total.completedShifts,
+            elapsedMs: total.totalSeconds * 1_000,
+            needsAttention: total.needsAttention
+          };
+        });
+    }
+
+    const range = {
+      start: period.startDate,
+      end: period.endDate,
+      endExclusive: utcAsDateKey(dateKeyAsUtc(period.endDate) + 86_400_000)
+    };
+    const baselineState = {
+      version: STAFF_CLOCK_STATE_VERSION,
+      baseline: state.baseline,
+      overlay: [],
+      queue: []
+    };
+    const baselineById = new Map(
+      staffClockTotals(people, baselineState, range).map(total => [total.person.staffId, total])
+    );
+    const withOverlayById = new Map(
+      staffClockTotals(people, state, range).map(total => [total.person.staffId, total])
+    );
+    return people.flatMap(person => {
+      const server = serverById.get(person.staffId);
+      const baseline = baselineById.get(person.staffId);
+      const withOverlay = withOverlayById.get(person.staffId);
+      const completedDelta = (withOverlay?.completedShifts || 0) - (baseline?.completedShifts || 0);
+      const elapsedDelta = (withOverlay?.elapsedMs || 0) - (baseline?.elapsedMs || 0);
+      const overlayAttention = Boolean(withOverlay?.needsAttention && !baseline?.needsAttention);
+      if (!server && completedDelta === 0 && elapsedDelta === 0 && !overlayAttention) return [];
+      return [{
+        person,
+        completedShifts: Math.max(0, (server?.completedShifts || 0) + completedDelta),
+        elapsedMs: Math.max(0, ((server?.totalSeconds || 0) * 1_000) + elapsedDelta),
+        needsAttention: Boolean(server?.needsAttention || overlayAttention)
+      }];
+    });
+  }
+
+  function staffClockOverlayPeriodRows(range, state, people) {
+    return staffClockTotals(people, {
+      version: STAFF_CLOCK_STATE_VERSION,
+      baseline: null,
+      overlay: state.overlay,
+      queue: state.queue
+    }, range);
+  }
+
+  function staffClockDisplayedPeriods(state, people, today) {
+    const local = {
+      current: staffPayPeriodRange(today),
+      previous: staffPayPeriodRange(today, -1)
+    };
+    if (!state.baseline) {
+      return {
+        current: {
+          range: local.current,
+          rows: staffClockTotals(people, state, local.current)
+        },
+        previous: {
+          range: local.previous,
+          rows: staffClockTotals(people, state, local.previous)
+        }
+      };
+    }
+
+    const server = state.baseline.periods;
+    const serverCurrentIsLocalCurrent = server.current.startDate === local.current.start
+      && server.current.endDate === local.current.end;
+    if (serverCurrentIsLocalCurrent) {
+      return {
+        current: {
+          range: local.current,
+          rows: staffClockPeriodRowsFromSummary(server.current, state, people)
+        },
+        previous: {
+          range: local.previous,
+          rows: staffClockPeriodRowsFromSummary(server.previous, state, people)
+        }
+      };
+    }
+
+    const serverCurrentIsLocalPrevious = server.current.startDate === local.previous.start
+      && server.current.endDate === local.previous.end;
+    if (serverCurrentIsLocalPrevious) {
+      return {
+        current: {
+          range: local.current,
+          rows: staffClockOverlayPeriodRows(local.current, state, people)
+        },
+        previous: {
+          range: local.previous,
+          rows: staffClockPeriodRowsFromSummary(server.current, state, people)
+        }
+      };
+    }
+
+    return {
+      current: {
+        range: local.current,
+        rows: staffClockOverlayPeriodRows(local.current, state, people)
+      },
+      previous: {
+        range: local.previous,
+        rows: staffClockOverlayPeriodRows(local.previous, state, people)
+      }
+    };
+  }
+
+  function staffClockAdminView(state, people, now = new Date()) {
+    const today = fmtDate(now);
+    const statuses = people.map(person => staffClockStatusFor(person.staffId, state, now));
+    const clockedInNow = statuses
+      .filter(status => status.clockedIn)
+      .map(status => ({
+        staffId: status.staffId,
+        staffName: status.staffName,
+        clockInAt: status.clockInRecord.timestamp
+      }));
+
+    const todayById = new Map((state.baseline?.records || [])
+      .filter(record => record.date === today)
+      .map(record => [record.punchId, record]));
+    state.overlay.forEach(record => {
+      if (record.date === today) todayById.set(record.punchId, record);
+    });
+    const todayPunches = [...todayById.values()]
+      .filter(record => record.status === 'ACTIVE')
+      .sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp));
+
+    const needsAttention = (state.baseline?.needsAttention || []).map(item => ({ ...item }));
+    const identities = new Set(needsAttention.map(item => `${item.staffId}\u0000${item.code}`));
+    statuses.forEach(status => {
+      if ((state.baseline?.needsAttention || []).some(item => item.staffId === status.staffId)) return;
+      status.attention.forEach(item => {
+        const code = String(item.code || '').toLowerCase();
+        const identity = `${status.staffId}\u0000${code}`;
+        if (identities.has(identity)) return;
+        identities.add(identity);
+        needsAttention.push({
+          staffId: status.staffId,
+          staffName: status.staffName,
+          code,
+          message: item.message || code.replaceAll('_', ' '),
+          linkedPunchIds: item.punchId ? [item.punchId] : [],
+          occurrenceCount: 1
+        });
+      });
+    });
+    return {
+      today,
+      clockedInNow,
+      todayPunches,
+      needsAttention,
+      truncation: state.baseline?.view.recordsTruncated
+        ? state.baseline.view
+        : null
+    };
+  }
+
   function makeStaffTimeTextRow(text, className = '') {
     const row = document.createElement('div');
     if (className) row.className = className;
@@ -778,32 +1489,25 @@ function fmtDate(value) {
     const state = loadStaffClockState();
     const people = allKnownStaffClockPeople(state);
     const today = fmtDate(new Date());
-    const review = buildStaffReview({
-      confirmedRecords: state.ledger,
-      pendingRecords: state.queue,
-      staffMembers: people,
-      now: new Date()
-    });
+    const adminView = staffClockAdminView(state, people);
     const peopleById = new Map(people.map(person => [person.staffId, person]));
-    const active = review.clockedInNow.map(status => ({
-      person: peopleById.get(status.staffId) || {
-        staffId: status.staffId,
-        staffName: status.staffName
+    const active = adminView.clockedInNow.map(item => ({
+      person: peopleById.get(item.staffId) || {
+        staffId: item.staffId,
+        staffName: item.staffName
       },
-      status
+      clockInAt: item.clockInAt
     }));
-    const attention = review.staffStates
-      .filter(status => status.needsAttention)
-      .map(status => ({
-        person: peopleById.get(status.staffId) || {
-          staffId: status.staffId,
-          staffName: status.staffName
+    const attention = adminView.needsAttention.map(item => ({
+        person: peopleById.get(item.staffId) || {
+          staffId: item.staffId,
+          staffName: item.staffName
         },
-        message: status.attention
-          .map(item => item.code.replaceAll('_', ' ').toLowerCase())
-          .join('; ')
+        message: item.occurrenceCount > 1
+          ? `${item.message} · ${item.occurrenceCount} items`
+          : item.message
       }));
-    const todayPunches = review.todayPunches.filter(record => record.status === 'ACTIVE');
+    const todayPunches = adminView.todayPunches;
 
     slot.replaceChildren();
     const grid = document.createElement('div');
@@ -820,7 +1524,7 @@ function fmtDate(value) {
     } else {
       active.forEach(item => {
         activeList.appendChild(makeStaffTimeTextRow(
-          `${item.person.staffName} · since ${formatStaffClockTime(item.status.clockInRecord.timestamp)}`
+          `${item.person.staffName} · since ${formatStaffClockTime(item.clockInAt)}`
         ));
       });
     }
@@ -840,6 +1544,12 @@ function fmtDate(value) {
           `${punch.staffName} · ${punch.punchAction === 'clockIn' ? 'Clock In' : 'Clock Out'} · ${formatStaffClockTime(punch.timestamp)}${state.queue.some(waiting => waiting.punchId === punch.punchId) ? ' · waiting to sync' : ''}`
         ));
       });
+    }
+    if (adminView.truncation) {
+      punchesList.appendChild(makeStaffTimeTextRow(
+        `Showing ${adminView.truncation.recordCount} of ${adminView.truncation.recordTotal} relevant records (${adminView.truncation.todayPunchCount} of ${adminView.truncation.todayPunchTotal} today). Current status and pay-period totals are complete.`,
+        'staff-time-empty'
+      ));
     }
     punchesBlock.append(punchesHeading, punchesList);
     grid.append(activeBlock, punchesBlock);
@@ -867,10 +1577,7 @@ function fmtDate(value) {
     totalsSummary.textContent = 'Pay-period totals';
     const controls = document.createElement('div');
     controls.className = 'staff-time-total-controls';
-    const ranges = {
-      current: staffPayPeriodRange(today),
-      previous: staffPayPeriodRange(today, -1)
-    };
+    const displayedPeriods = staffClockDisplayedPeriods(state, people, today);
     ['current', 'previous'].forEach(key => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -886,11 +1593,15 @@ function fmtDate(value) {
       });
       controls.appendChild(button);
     });
-    const chosenRange = ranges[staffClockTotalsSelection] || ranges.current;
-    const periodLabel = makeStaffTimeTextRow(staffPeriodLabel(chosenRange), 'staff-time-empty');
+    const chosenPeriod = displayedPeriods[staffClockTotalsSelection]
+      || displayedPeriods.current;
+    const periodLabel = makeStaffTimeTextRow(
+      staffPeriodLabel(chosenPeriod.range),
+      'staff-time-empty'
+    );
     const totalsList = document.createElement('div');
     totalsList.className = 'staff-time-list';
-    const rows = staffClockTotals(people, state, chosenRange);
+    const rows = chosenPeriod.rows;
     if (!rows.length) {
       totalsList.appendChild(makeStaffTimeTextRow('No staff hours in this pay period.'));
     } else {

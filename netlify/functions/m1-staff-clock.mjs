@@ -8,10 +8,13 @@ import {
   MAX_STAFF_CLOCK_PUNCHES,
   STAFF_PUNCH_ID_PATTERN,
   exactObjectKeys,
+  isStaffViewStale,
   rejectedPunchResult,
   sanitizeStaffClockPunch,
   sanitizeStaffClockSnapshot,
-  sanitizeStaffClockSyncResults
+  sanitizeStaffClockSyncResults,
+  sanitizeStaffViewPage,
+  sanitizeStaffViewPageRequest
 } from './_lib/m1-staff-clock-contracts.mjs';
 import {
   productionDeviceAuthorization,
@@ -129,7 +132,7 @@ export async function handleStaffClock(request, dependencies = {}) {
   const parsed = await readJson(request, MAX_REQUEST_BYTES);
   if (parsed.response) return parsed.response;
   const operation = parsed.value.operation;
-  if (operation !== 'snapshot' && operation !== 'sync') {
+  if (operation !== 'snapshot' && operation !== 'snapshotPage' && operation !== 'sync') {
     return jsonResponse(400, { ok: false, message: 'Staff Clock request was rejected.' });
   }
   if (target === 'test') runtime = previewRuntimeConfig(env, request.url);
@@ -148,7 +151,7 @@ export async function handleStaffClock(request, dependencies = {}) {
     }
     const google = await postGoogle(
       runtime,
-      'staffClockSnapshot',
+      'staffClockSnapshotV2',
       {},
       dependencies.fetch || fetch
     );
@@ -160,7 +163,48 @@ export async function handleStaffClock(request, dependencies = {}) {
     if (!snapshot) return upstreamFailure(target, google, 'snapshot');
     return jsonResponse(200, successBody(target, {
       staff: snapshot.staff,
-      records: snapshot.records
+      clockedInNow: snapshot.clockedInNow,
+      periods: snapshot.periods,
+      view: snapshot.view
+    }), target === 'production'
+      ? { 'Set-Cookie': productionDeviceCookieHeader(productionDeviceCredential) }
+      : {});
+  }
+
+  if (operation === 'snapshotPage') {
+    const pageRequest = sanitizeStaffViewPageRequest(parsed.value, 'snapshotPage');
+    if (!pageRequest) {
+      return jsonResponse(400, { ok: false, message: 'Staff Clock page request was rejected.' });
+    }
+    const google = await postGoogle(
+      runtime,
+      'staffClockSnapshotPageV2',
+      {
+        viewToken: pageRequest.viewToken,
+        stream: pageRequest.stream,
+        offset: pageRequest.offset
+      },
+      dependencies.fetch || fetch
+    );
+    if (google.readable && isStaffViewStale(google.value, target)) {
+      return jsonResponse(409, {
+        ok: false,
+        result: 'stale',
+        code: 'STAFF_CLOCK_VIEW_STALE'
+      });
+    }
+    const page = google.readable
+      ? sanitizeStaffViewPage(google.value, target, pageRequest, {
+        now: dependencies.dateNow || new Date()
+      })
+      : null;
+    if (!page) return upstreamFailure(target, google, 'snapshot page');
+    return jsonResponse(200, successBody(target, {
+      viewToken: page.viewToken,
+      stream: page.stream,
+      offset: page.offset,
+      items: page.items,
+      nextOffset: page.nextOffset
     }), target === 'production'
       ? { 'Set-Cookie': productionDeviceCookieHeader(productionDeviceCredential) }
       : {});

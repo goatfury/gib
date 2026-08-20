@@ -8,9 +8,12 @@ import {
 } from './_lib/m1-common.mjs';
 import {
   exactObjectKeys,
+  isStaffViewStale,
   sanitizeStaffTimeCorrectionRequest,
   sanitizeStaffTimeCorrectionResult,
   sanitizeStaffTimeReview,
+  sanitizeStaffViewPage,
+  sanitizeStaffViewPageRequest,
   sanitizeStaffTimeVoidRequest,
   sanitizeStaffTimeVoidResult
 } from './_lib/m1-staff-clock-contracts.mjs';
@@ -59,8 +62,8 @@ function validPreviewSameOriginRequest(request) {
 function adminFailureResponse(google, operation) {
   const failureClass = googleFailureClass(google);
   const unreachable = failureClass === 'UNREACHABLE';
-  const label = operation === 'review'
-    ? 'Staff time review'
+  const label = operation === 'review' || operation === 'reviewPage'
+    ? operation === 'reviewPage' ? 'Staff time review page' : 'Staff time review'
     : operation === 'correct'
       ? 'Staff time correction'
       : 'Staff time void';
@@ -96,7 +99,12 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
   if (auth.response) return auth.response;
 
   const operation = parsed.value.operation;
-  if (operation !== 'review' && operation !== 'correct' && operation !== 'void') {
+  if (
+    operation !== 'review'
+    && operation !== 'reviewPage'
+    && operation !== 'correct'
+    && operation !== 'void'
+  ) {
     return jsonResponse(400, { ok: false, message: 'Staff time request was rejected.' });
   }
   const fetchImpl = dependencies.fetch || fetch;
@@ -106,7 +114,7 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
     if (!exactObjectKeys(parsed.value, ['operation'])) {
       return jsonResponse(400, { ok: false, message: 'Staff time review request was rejected.' });
     }
-    const google = await postGoogle(runtime, 'staffTimeReview', {}, fetchImpl);
+    const google = await postGoogle(runtime, 'staffTimeReviewV2', {}, fetchImpl);
     const review = google.readable
       ? sanitizeStaffTimeReview(google.value, target, { now: dateNow })
       : null;
@@ -116,12 +124,44 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
       test: runtime.preview,
       adminName: auth.session.adminName,
       staff: review.staff,
-      records: review.records,
-      audit: review.audit,
       clockedInNow: review.clockedInNow,
-      todayPunches: review.todayPunches,
-      needsAttention: review.needsAttention,
-      periods: review.periods
+      periods: review.periods,
+      view: review.view
+    });
+  }
+
+  if (operation === 'reviewPage') {
+    const pageRequest = sanitizeStaffViewPageRequest(parsed.value, 'reviewPage', {
+      includeAudit: true
+    });
+    if (!pageRequest) {
+      return jsonResponse(400, { ok: false, message: 'Staff time review page was rejected.' });
+    }
+    const google = await postGoogle(runtime, 'staffTimeReviewPageV2', {
+      viewToken: pageRequest.viewToken,
+      stream: pageRequest.stream,
+      offset: pageRequest.offset
+    }, fetchImpl);
+    if (google.readable && isStaffViewStale(google.value, target)) {
+      return jsonResponse(409, {
+        ok: false,
+        result: 'stale',
+        code: 'STAFF_TIME_VIEW_STALE'
+      });
+    }
+    const page = google.readable
+      ? sanitizeStaffViewPage(google.value, target, pageRequest, { now: dateNow })
+      : null;
+    if (!page) return adminFailureResponse(google, operation);
+    return jsonResponse(200, {
+      ok: true,
+      test: runtime.preview,
+      adminName: auth.session.adminName,
+      viewToken: page.viewToken,
+      stream: page.stream,
+      offset: page.offset,
+      items: page.items,
+      nextOffset: page.nextOffset
     });
   }
 

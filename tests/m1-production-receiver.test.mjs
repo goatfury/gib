@@ -58,6 +58,7 @@ const STAFF_AUDIT_HEADERS = Object.freeze([
 ]);
 const ROW_ID = 'gib-m1-12345678-1234-4123-8123-123456789abc';
 const STAFF_PUNCH_ID = 'gib-m1-staff-20000000-0000-4000-8000-000000000001';
+const STAFF_REQUEST_ID = 'gib-m1-staff-request-20000000-0000-4000-8000-000000000002';
 const NOW_ISO = '2026-08-19T16:00:00.000Z';
 
 function makeSheet(initialRows = [], onWrite = () => {}) {
@@ -65,6 +66,7 @@ function makeSheet(initialRows = [], onWrite = () => {}) {
   const numberFormats = new Map();
   let maxRows = Math.max(1000, values.length);
   let frozenRows = 0;
+  let dataRangeReads = 0;
   return {
     values,
     numberFormats,
@@ -74,8 +76,10 @@ function makeSheet(initialRows = [], onWrite = () => {}) {
       values.splice(rowNumber - 1, 1);
     },
     getDataRange() {
+      dataRangeReads += 1;
       return { getValues: () => values.map(row => [...row]) };
     },
+    get dataRangeReads() { return dataRangeReads; },
     getLastRow() {
       return values.length;
     },
@@ -226,6 +230,45 @@ function staffPunch(overrides = {}) {
   };
 }
 
+function generatedStaffPunchId(index) {
+  return `gib-m1-staff-30000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`;
+}
+
+function staffTimeRow(overrides = {}) {
+  const value = staffPunch(overrides);
+  return [
+    value.punchId,
+    value.timestamp,
+    value.date,
+    value.staffId,
+    value.staffName,
+    value.punchAction,
+    value.site,
+    value.device,
+    value.build,
+    value.note,
+    overrides.status || 'ACTIVE',
+    overrides.source || 'Tablet',
+    overrides.adminName || '',
+    overrides.linkedPunchId || ''
+  ];
+}
+
+function staffAuditRow(overrides = {}) {
+  return [
+    overrides.requestId || STAFF_REQUEST_ID,
+    overrides.actionTime || '2026-08-19T11:00:00-04:00',
+    overrides.adminName || 'Andrew Smith',
+    overrides.staffId || 'mandy',
+    overrides.staffName || 'Mandy',
+    overrides.punchTimestamp || '2026-08-18T09:00:00-04:00',
+    overrides.action || 'clockIn',
+    overrides.reason || 'Forgotten punch',
+    overrides.result || 'added',
+    overrides.linkedPunchId || STAFF_PUNCH_ID
+  ];
+}
+
 function createFile(id) {
   return {
     getId: () => id,
@@ -262,6 +305,7 @@ function createHarness({
   }));
   const sheetWriteEvents = [];
   const propertyWriteEvents = [];
+  const cacheValues = new Map();
   const recordSheetWrite = operation => sheetWriteEvents.push(operation);
   let signins = initialRows === null ? null : makeSheet(initialRows, recordSheetWrite);
   const sheets = new Map();
@@ -310,6 +354,13 @@ function createHarness({
       createTextOutput(text) {
         return { text, setMimeType() { return this; } };
       }
+    },
+    CacheService: {
+      getScriptCache: () => ({
+        get: key => cacheValues.get(key) || null,
+        put(key, value) { cacheValues.set(key, String(value)); },
+        remove(key) { cacheValues.delete(key); }
+      })
     },
     DriveApp: {
       getFilesByName(title) {
@@ -376,6 +427,11 @@ function createHarness({
         assert.equal(charset, 'UTF_8');
         return [...createHmac('sha256', String(secret)).update(String(value), 'utf8').digest()];
       },
+      newBlob(value) {
+        return {
+          getBytes: () => [...Buffer.from(String(value), 'utf8')]
+        };
+      },
       formatDate
     }
   };
@@ -393,6 +449,7 @@ function createHarness({
     derivedToken,
     provisioningSecret,
     propertyValues,
+    cacheValues,
     sheets,
     get signins() { return signins; },
     get spreadsheetOpens() { return spreadsheetOpens; },
@@ -578,36 +635,335 @@ test('production Staff Clock reads only Mandy from exact empty tabs without writ
   const signinsBefore = structuredClone(harness.signins.values);
   const snapshot = harness.post({
     token: harness.derivedToken,
-    action: 'staffClockSnapshot',
+    action: 'staffClockSnapshotV2',
     target: 'production'
   });
+  const snapshotToken = snapshot.view.token;
+  assert.match(snapshotToken, /^[0-9a-f]{64}$/u);
 
   assert.deepEqual(snapshot, {
     ok: true,
     target: 'production',
     staff: [{ staffId: 'mandy', staffName: 'Mandy' }],
-    records: []
+    clockedInNow: [],
+    periods: {
+      current: {
+        startDate: '2026-08-10',
+        endDate: '2026-08-23',
+        totals: [{
+          staffId: 'mandy',
+          staffName: 'Mandy',
+          completedShifts: 0,
+          totalSeconds: 0,
+          needsAttention: false
+        }]
+      },
+      previous: {
+        startDate: '2026-07-27',
+        endDate: '2026-08-09',
+        totals: [{
+          staffId: 'mandy',
+          staffName: 'Mandy',
+          completedShifts: 0,
+          totalSeconds: 0,
+          needsAttention: false
+        }]
+      }
+    },
+    view: {
+      token: snapshotToken,
+      today: '2026-08-19',
+      recordCount: 0,
+      recordTotal: 0,
+      todayPunchCount: 0,
+      todayPunchTotal: 0,
+      adjustmentCount: 0,
+      adjustmentTotal: 0,
+      attentionCount: 0,
+      attentionOccurrenceCount: 0,
+      auditCount: 0,
+      auditTotal: 0,
+      recordsTruncated: false,
+      auditTruncated: false
+    }
   });
 
   const review = harness.post({
     token: harness.derivedToken,
     adminActionToken: 'production-admin-token',
     adminName: 'Andrew Smith',
+    action: 'staffTimeReviewV2',
+    target: 'production'
+  });
+  const reviewToken = review.view.token;
+  assert.match(reviewToken, /^[0-9a-f]{64}$/u);
+  assert.deepEqual(review, {
+    ...snapshot,
+    view: {
+      ...snapshot.view,
+      token: reviewToken
+    }
+  });
+  assert.notEqual(reviewToken, snapshotToken);
+
+  const legacySnapshot = harness.post({
+    token: harness.derivedToken,
+    action: 'staffClockSnapshot',
+    target: 'production'
+  });
+  assert.deepEqual(legacySnapshot, {
+    ok: true,
+    target: 'production',
+    staff: [{ staffId: 'mandy', staffName: 'Mandy' }],
+    records: []
+  });
+  const legacyReview = harness.post({
+    token: harness.derivedToken,
+    adminActionToken: 'production-admin-token',
+    adminName: 'Andrew Smith',
     action: 'staffTimeReview',
     target: 'production'
   });
-  assert.equal(review.ok, true);
-  assert.equal(review.target, 'production');
-  assert.deepEqual(review.staff, [{ staffId: 'mandy', staffName: 'Mandy' }]);
-  assert.deepEqual(review.records, []);
-  assert.deepEqual(review.todayPunches, []);
-  assert.deepEqual(review.audit, []);
-  assert.deepEqual(review.clockedInNow, []);
-  assert.deepEqual(review.needsAttention, []);
+  assert.deepEqual(legacyReview, {
+    ...legacySnapshot,
+    audit: [],
+    clockedInNow: [],
+    todayPunches: [],
+    needsAttention: [],
+    periods: snapshot.periods
+  });
   assert.deepEqual(harness.sheets.get('Staff Clock Staff').values, [STAFF_HEADERS, ...STAFF_ROWS]);
   assert.deepEqual(harness.sheets.get('Staff Time').values, [STAFF_TIME_HEADERS]);
   assert.deepEqual(harness.sheets.get('Staff Time Audit').values, [STAFF_AUDIT_HEADERS]);
   assert.deepEqual(harness.signins.values, signinsBefore);
+  assert.equal(harness.sheetWrites, 0);
+  assert.equal(harness.propertyWrites, 0);
+});
+
+test('production Staff Clock pages exact records and attention while Admin adds audit and stale tokens fail closed', () => {
+  const timeRow = staffTimeRow({
+    timestamp: '2026-08-18T09:00:00-04:00',
+    date: '2026-08-18'
+  });
+  const auditRow = staffAuditRow();
+  const harness = createHarness({
+    includeStaffSheets: true,
+    timeRows: [timeRow],
+    auditRows: [auditRow]
+  });
+  const kioskSummary = harness.post({
+    token: harness.derivedToken,
+    action: 'staffClockSnapshotV2',
+    target: 'production'
+  });
+  assert.deepEqual(Object.keys(kioskSummary).sort(), [
+    'clockedInNow',
+    'ok',
+    'periods',
+    'staff',
+    'target',
+    'view'
+  ]);
+  assert.deepEqual(kioskSummary.clockedInNow, [{
+    punchId: STAFF_PUNCH_ID,
+    staffId: 'mandy',
+    staffName: 'Mandy',
+    clockInAt: '2026-08-18T09:00:00-04:00'
+  }]);
+  assert.deepEqual(kioskSummary.view, {
+    token: kioskSummary.view.token,
+    today: '2026-08-19',
+    recordCount: 1,
+    recordTotal: 1,
+    todayPunchCount: 0,
+    todayPunchTotal: 0,
+    adjustmentCount: 0,
+    adjustmentTotal: 0,
+    attentionCount: 1,
+    attentionOccurrenceCount: 1,
+    auditCount: 0,
+    auditTotal: 0,
+    recordsTruncated: false,
+    auditTruncated: false
+  });
+  assert.match(kioskSummary.view.token, /^[0-9a-f]{64}$/u);
+
+  const recordsPage = harness.post({
+    token: harness.derivedToken,
+    action: 'staffClockSnapshotPageV2',
+    target: 'production',
+    viewToken: kioskSummary.view.token,
+    stream: 'records',
+    offset: 0
+  });
+  assert.deepEqual(recordsPage, {
+    ok: true,
+    target: 'production',
+    viewToken: kioskSummary.view.token,
+    stream: 'records',
+    offset: 0,
+    items: [{
+      punchId: STAFF_PUNCH_ID,
+      timestamp: '2026-08-18T09:00:00-04:00',
+      date: '2026-08-18',
+      staffId: 'mandy',
+      staffName: 'Mandy',
+      punchAction: 'clockIn',
+      site: 'Rev',
+      device: 'Production tablet',
+      build: 'm1b-production-release',
+      note: '',
+      status: 'ACTIVE',
+      source: 'Tablet',
+      adminName: '',
+      linkedPunchId: ''
+    }],
+    nextOffset: null
+  });
+  const attentionPage = harness.post({
+    token: harness.derivedToken,
+    action: 'staffClockSnapshotPageV2',
+    target: 'production',
+    viewToken: kioskSummary.view.token,
+    stream: 'attention',
+    offset: 0
+  });
+  assert.deepEqual(attentionPage, {
+    ok: true,
+    target: 'production',
+    viewToken: kioskSummary.view.token,
+    stream: 'attention',
+    offset: 0,
+    items: [{
+      staffId: 'mandy',
+      staffName: 'Mandy',
+      code: 'missing_clock_out',
+      message: 'Mandy may be missing a Clock Out.',
+      linkedPunchIds: [STAFF_PUNCH_ID],
+      occurrenceCount: 1
+    }],
+    nextOffset: null
+  });
+  assert.deepEqual(harness.post({
+    token: harness.derivedToken,
+    action: 'staffClockSnapshotPageV2',
+    target: 'production',
+    viewToken: kioskSummary.view.token,
+    stream: 'audit',
+    offset: 0
+  }), { ok: false, target: 'production', result: 'rejected' });
+
+  const adminSummary = harness.post({
+    token: harness.derivedToken,
+    adminActionToken: 'production-admin-token',
+    action: 'staffTimeReviewV2',
+    target: 'production'
+  });
+  assert.deepEqual(Object.keys(adminSummary).sort(), [
+    'clockedInNow',
+    'ok',
+    'periods',
+    'staff',
+    'target',
+    'view'
+  ]);
+  assert.equal(adminSummary.view.recordCount, 1);
+  assert.equal(adminSummary.view.attentionCount, 1);
+  assert.equal(adminSummary.view.auditCount, 1);
+  assert.notEqual(adminSummary.view.token, kioskSummary.view.token);
+
+  const auditPage = harness.post({
+    token: harness.derivedToken,
+    adminActionToken: 'production-admin-token',
+    action: 'staffTimeReviewPageV2',
+    target: 'production',
+    viewToken: adminSummary.view.token,
+    stream: 'audit',
+    offset: 0
+  });
+  assert.deepEqual(auditPage, {
+    ok: true,
+    target: 'production',
+    viewToken: adminSummary.view.token,
+    stream: 'audit',
+    offset: 0,
+    items: [{
+      requestId: STAFF_REQUEST_ID,
+      actionTime: '2026-08-19T11:00:00-04:00',
+      adminName: 'Andrew Smith',
+      staffId: 'mandy',
+      staffName: 'Mandy',
+      punchTimestamp: '2026-08-18T09:00:00-04:00',
+      operation: 'correct',
+      punchAction: 'clockIn',
+      reason: 'Forgotten punch',
+      result: 'added',
+      linkedPunchId: STAFF_PUNCH_ID
+    }],
+    nextOffset: null
+  });
+
+  harness.sheets.get('Staff Time').values.push(staffTimeRow({
+    punchId: generatedStaffPunchId(999),
+    timestamp: '2026-08-19T12:00:00-04:00',
+    date: '2026-08-19',
+    note: 'view changed'
+  }));
+  assert.deepEqual(harness.post({
+    token: harness.derivedToken,
+    action: 'staffClockSnapshotPageV2',
+    target: 'production',
+    viewToken: kioskSummary.view.token,
+    stream: 'records',
+    offset: 0
+  }), { ok: false, target: 'production', result: 'stale' });
+  assert.equal(harness.sheetWrites, 0);
+  assert.equal(harness.propertyWrites, 0);
+});
+
+test('production Staff Clock page offsets follow the UTF-8 byte bound instead of fixed 500-row boundaries', () => {
+  const unicodeNote = '界'.repeat(400);
+  const timeRows = Array.from({ length: 500 }, (_unused, index) => staffTimeRow({
+    punchId: generatedStaffPunchId(index + 1),
+    timestamp: '2026-08-19T09:00:00-04:00',
+    date: '2026-08-19',
+    note: unicodeNote,
+    status: 'VOID'
+  }));
+  const harness = createHarness({ includeStaffSheets: true, timeRows });
+  const summary = harness.post({
+    token: harness.derivedToken,
+    action: 'staffClockSnapshotV2',
+    target: 'production'
+  });
+  assert.equal(summary.view.recordCount, 500);
+
+  const first = harness.post({
+    token: harness.derivedToken,
+    action: 'staffClockSnapshotPageV2',
+    target: 'production',
+    viewToken: summary.view.token,
+    stream: 'records',
+    offset: 0
+  });
+  assert.equal(first.ok, true);
+  assert.ok(first.items.length > 0 && first.items.length < 500);
+  assert.equal(first.nextOffset, first.items.length);
+  assert.ok(Buffer.byteLength(JSON.stringify(first), 'utf8') <= 80_000);
+
+  const second = harness.post({
+    token: harness.derivedToken,
+    action: 'staffClockSnapshotPageV2',
+    target: 'production',
+    viewToken: summary.view.token,
+    stream: 'records',
+    offset: first.nextOffset
+  });
+  assert.equal(second.ok, true);
+  assert.equal(second.offset, first.nextOffset);
+  assert.ok(second.items.length > 0);
+  assert.equal(second.nextOffset, second.offset + second.items.length);
+  assert.ok(Buffer.byteLength(JSON.stringify(second), 'utf8') <= 80_000);
   assert.equal(harness.sheetWrites, 0);
   assert.equal(harness.propertyWrites, 0);
 });
