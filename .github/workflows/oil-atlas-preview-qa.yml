@@ -17,7 +17,7 @@ env:
 jobs:
   preview-qa:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -25,81 +25,186 @@ jobs:
         with:
           node-version: 22
 
-      - name: Reconstruct and audit Gulf model
+      - name: Reconstruct and validate the smooth Gulf model
         run: |
           node oil-atlas/build-audited.mjs
           test -s oil-atlas/public/index.html
           test -s oil-atlas/public/data/fallback.json
-          grep -q "Audited Gulf export evidence" oil-atlas/public/index.html
-          grep -q "no daily interpolation" oil-atlas/public/index.html
+          grep -q "Gulf oil routes" oil-atlas/public/index.html
+          grep -q "Modeled split" oil-atlas/public/index.html
+          grep -q "EAST–WEST → YANBU" oil-atlas/public/index.html
+          grep -q "HABSHAN–FUJAIRAH" oil-atlas/public/index.html
+          ! grep -q "UNKNOWN" oil-atlas/public/index.html
           node --test oil-atlas/tests/gulf-model.test.mjs
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const data = JSON.parse(readFileSync('oil-atlas/public/data/fallback.json', 'utf8'));
+          if (data.schemaVersion !== 3) throw new Error('Unexpected schemaVersion');
+          if (!Array.isArray(data.gulf?.modelAnchors) || data.gulf.modelAnchors.length < 20) throw new Error('Modeled anchors missing');
+          if ('anchors' in data.gulf) throw new Error('Legacy Gulf anchors survived');
+          if (data.gulf.evidence?.baseline?.value !== 24) throw new Error('IEA reference average changed');
+          if (data.gulf.routeCapacities?.yanbu?.exportCapacity !== 5) throw new Error('Yanbu export capacity changed');
+          if (data.gulf.routeCapacities?.fujairah?.pipelineCapacity !== 1.8) throw new Error('Fujairah capacity changed');
+          const prewar = data.gulf.modelAnchors.filter((item) => item.date <= '2026-02-27').map((item) => item.value);
+          if (new Set(prewar).size < 5) throw new Error('Prewar model is still flat');
+          for (const item of data.gulf.modelAnchors) {
+            const r = item.routes;
+            const total = r.hormuz + r.yanbu + r.fujairah + r.other;
+            if (Math.abs(total - item.value) > 1e-8) throw new Error(`Route total mismatch on ${item.date}`);
+            if (Math.abs(r.yanbu - r.yanbuNorth - r.yanbuSouth) > 1e-8) throw new Error(`Yanbu split mismatch on ${item.date}`);
+          }
+          NODE
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: oil-atlas-audited-source
-          path: |
-            oil-atlas/public/index.html
-            oil-atlas/public/data/fallback.json
-            oil-atlas/lib/*.mjs
-            oil-atlas/netlify/functions/*.mjs
-            oil-atlas/tests/*.mjs
-          if-no-files-found: error
-
-      - name: Wait for audited Netlify preview
+      - name: Wait for the modeled Netlify preview
         run: |
-          for attempt in $(seq 1 48); do
+          for attempt in $(seq 1 60); do
             if curl --fail --silent --show-error --location "$PREVIEW_URL/" -o /tmp/oil-atlas.html; then
-              if grep -q "Gulf oil evidence" /tmp/oil-atlas.html && grep -q "Audited Gulf export evidence" /tmp/oil-atlas.html; then
+              if grep -q "Gulf oil routes" /tmp/oil-atlas.html && grep -q "EAST–WEST → YANBU" /tmp/oil-atlas.html; then
                 exit 0
               fi
             fi
             sleep 5
           done
-          echo "Audited Netlify preview did not become reachable" >&2
+          echo "Modeled Netlify preview did not become reachable" >&2
           exit 1
 
-      - name: Verify page and live data endpoint
+      - name: Verify the live endpoint and model contract
         run: |
-          grep -q "Gulf oil evidence" /tmp/oil-atlas.html
-          grep -q "Whole world" /tmp/oil-atlas.html
-          grep -q "Audited Gulf export evidence" /tmp/oil-atlas.html
+          ! grep -q "UNKNOWN" /tmp/oil-atlas.html
           curl --fail --silent --show-error --location "$PREVIEW_URL/api/oil_data" -o /tmp/oil-data.json
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
           const data = JSON.parse(readFileSync('/tmp/oil-data.json', 'utf8'));
-          if (data.schemaVersion !== 2) throw new Error('Unexpected schemaVersion');
+          if (data.schemaVersion !== 3) throw new Error('Unexpected live schemaVersion');
           if (!data.checkedAt) throw new Error('Missing checkedAt');
           if (!Array.isArray(data.world?.anchors) || data.world.anchors.length < 12) throw new Error('World anchors missing');
           if (!Array.isArray(data.world?.regions) || data.world.regions.length !== 8) throw new Error('World regions missing');
-          if (!Array.isArray(data.gulf?.periods) || data.gulf.periods.length !== 5) throw new Error('Audited Gulf periods missing');
-          if (!Array.isArray(data.gulf?.observations) || data.gulf.observations.length !== 4) throw new Error('Gulf observations missing');
+          if (!Array.isArray(data.gulf?.modelAnchors) || data.gulf.modelAnchors.length < 20) throw new Error('Modeled Gulf anchors missing');
+          if (!Array.isArray(data.gulf?.evidence?.periods) || data.gulf.evidence.periods.length !== 5) throw new Error('Published Gulf periods missing');
+          if (!Array.isArray(data.gulf?.evidence?.observations) || data.gulf.evidence.observations.length < 5) throw new Error('Published Gulf observations missing');
           if (!Array.isArray(data.gulf?.hormuzQuarters) || data.gulf.hormuzQuarters.length !== 6) throw new Error('Hormuz quarters missing');
           if ('anchors' in data.gulf) throw new Error('Legacy fake daily anchors survived');
-          if (!/No daily interpolation/i.test(data.gulf.policy || '')) throw new Error('Gulf evidence policy missing');
-          const periods = Object.fromEntries(data.gulf.periods.map((item) => [item.id, item]));
-          if (periods['prewar-iea-average']?.value !== 24) throw new Error('Prewar average changed');
-          if (periods['march-tracker-week']?.low !== 7.5 || periods['march-tracker-week']?.high !== 9.71) throw new Error('March tracker range changed');
-          if (periods['june-average']?.value !== 16.1 || periods['july-average']?.value !== 15) throw new Error('Monthly evidence changed');
+          if (data.refresh?.gulf !== 'modeled') throw new Error('Gulf model state missing');
           if (!['live', 'fallback'].includes(data.refresh?.world)) throw new Error('World refresh state missing');
           if (!['live', 'fallback'].includes(data.refresh?.hormuz)) throw new Error('Hormuz refresh state missing');
+          const prewar = data.gulf.modelAnchors.filter((item) => item.date <= '2026-02-27').map((item) => item.value);
+          if (Math.min(...prewar) !== 23.8 || Math.max(...prewar) !== 25.6) throw new Error('Prewar modeled range changed');
+          for (const item of data.gulf.modelAnchors) {
+            const r = item.routes;
+            if (Math.abs(item.value - (r.hormuz + r.yanbu + r.fujairah + r.other)) > 1e-8) throw new Error(`Route total mismatch on ${item.date}`);
+            if (Math.abs(r.yanbu - (r.yanbuNorth + r.yanbuSouth)) > 1e-8) throw new Error(`Yanbu split mismatch on ${item.date}`);
+          }
           console.log(JSON.stringify({
             checkedAt: data.checkedAt,
             worldRefresh: data.refresh.world,
             hormuzRefresh: data.refresh.hormuz,
-            release: data.world.releaseLabel,
-            broadGulfThrough: data.gulf.latestBroadPeriodEnd,
-            policy: data.gulf.policy,
+            modelThrough: data.gulf.modelThrough,
+            anchors: data.gulf.modelAnchors.length,
           }, null, 2));
           NODE
 
-      - name: Browser render smoke test
+      - name: Real-browser laptop QA and screenshots
         run: |
-          google-chrome --headless=new --no-sandbox --disable-gpu \
-            --window-size=1366,768 --virtual-time-budget=8000 \
-            --dump-dom "$PREVIEW_URL/" > /tmp/oil-atlas-dom.html
-          grep -q "Gulf oil evidence" /tmp/oil-atlas-dom.html
-          grep -q "Pause" /tmp/oil-atlas-dom.html
-          grep -q "Checked today" /tmp/oil-atlas-dom.html
-          grep -q 'class="gulf-period' /tmp/oil-atlas-dom.html
-          grep -q 'class="hormuz-quarter-line' /tmp/oil-atlas-dom.html
-          grep -q "UNKNOWN" /tmp/oil-atlas-dom.html
+          mkdir -p /tmp/oil-atlas-shots
+          google-chrome --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
+            --remote-debugging-port=9222 --user-data-dir=/tmp/oil-atlas-chrome about:blank \
+            >/tmp/oil-atlas-chrome.log 2>&1 &
+          echo $! >/tmp/oil-atlas-chrome.pid
+
+          node --input-type=module <<'NODE'
+          import { mkdirSync, writeFileSync } from 'node:fs';
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          mkdirSync('/tmp/oil-atlas-shots', { recursive: true });
+
+          let page;
+          for (let i = 0; i < 60; i += 1) {
+            try {
+              const tabs = await (await fetch('http://127.0.0.1:9222/json/list')).json();
+              page = tabs.find((tab) => tab.type === 'page');
+              if (page?.webSocketDebuggerUrl) break;
+            } catch {}
+            await sleep(250);
+          }
+          if (!page?.webSocketDebuggerUrl) throw new Error('Chrome DevTools endpoint unavailable');
+
+          const ws = new WebSocket(page.webSocketDebuggerUrl);
+          await new Promise((resolve, reject) => {
+            ws.addEventListener('open', resolve, { once: true });
+            ws.addEventListener('error', reject, { once: true });
+          });
+          let nextId = 0;
+          const pending = new Map();
+          ws.addEventListener('message', (event) => {
+            const message = JSON.parse(event.data);
+            if (!message.id) return;
+            const waiter = pending.get(message.id);
+            if (!waiter) return;
+            pending.delete(message.id);
+            if (message.error) waiter.reject(new Error(JSON.stringify(message.error)));
+            else waiter.resolve(message.result);
+          });
+          const send = (method, params = {}) => new Promise((resolve, reject) => {
+            const id = ++nextId;
+            pending.set(id, { resolve, reject });
+            ws.send(JSON.stringify({ id, method, params }));
+          });
+          const evaluate = async (expression) => {
+            const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+            if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
+            return result.result.value;
+          };
+
+          await send('Page.enable');
+          await send('Runtime.enable');
+          const sizes = [[1366, 768], [1280, 720], [1024, 600]];
+          for (const [width, height] of sizes) {
+            await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+            await send('Page.navigate', { url: process.env.PREVIEW_URL });
+            await sleep(8500);
+            const shockDay = Math.round((Date.parse('2026-03-15T00:00:00Z') - Date.parse('2025-09-01T00:00:00Z')) / 86400000);
+            await evaluate(`(async () => {
+              const slider = document.getElementById('timeline');
+              slider.value = ${shockDay};
+              slider.dispatchEvent(new Event('input', { bubbles: true }));
+              await new Promise((resolve) => setTimeout(resolve, 700));
+              return true;
+            })()`);
+            const qa = await evaluate(`(() => {
+              const app = document.querySelector('.app-screen');
+              const routeIds = ['routeValueHormuz','routeValueYanbu','routeValueFujairah','routeValueOther'];
+              return {
+                width: innerWidth,
+                height: innerHeight,
+                appBottom: app?.getBoundingClientRect().bottom,
+                horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1,
+                fits: !!app && app.getBoundingClientRect().bottom <= innerHeight + 1,
+                date: document.getElementById('dateDisplay')?.textContent,
+                flow: document.getElementById('flowNumber')?.textContent,
+                barrelUnit: document.getElementById('barrelUnit')?.textContent,
+                routes: Object.fromEntries(routeIds.map((id) => [id, document.getElementById(id)?.textContent])),
+                playing: document.getElementById('playButton')?.textContent,
+                unknown: document.body.innerText.includes('UNKNOWN'),
+              };
+            })()`);
+            if (!qa.fits) throw new Error(`Active atlas exceeds ${width}x${height}: ${JSON.stringify(qa)}`);
+            if (qa.horizontalOverflow) throw new Error(`Horizontal overflow at ${width}x${height}`);
+            if (qa.unknown) throw new Error(`UNKNOWN label survived at ${width}x${height}`);
+            if (!/March 15, 2026/.test(qa.date || '')) throw new Error(`Timeline did not scrub at ${width}x${height}`);
+            if (!/modeled/i.test(qa.barrelUnit || '')) throw new Error(`Modeled barrel label missing at ${width}x${height}`);
+            if (!Object.values(qa.routes).every((value) => /\d/.test(value || ''))) throw new Error(`Route value missing at ${width}x${height}`);
+            if (!/Pause/.test(qa.playing || '')) throw new Error(`Autoplay not visible at ${width}x${height}`);
+            writeFileSync(`/tmp/oil-atlas-shots/qa-${width}x${height}.json`, JSON.stringify(qa, null, 2));
+            const shot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+            writeFileSync(`/tmp/oil-atlas-shots/gulf-${width}x${height}.png`, Buffer.from(shot.data, 'base64'));
+          }
+          ws.close();
+          NODE
+
+          kill "$(cat /tmp/oil-atlas-chrome.pid)" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: oil-atlas-route-flow-screenshots
+          path: /tmp/oil-atlas-shots
+          if-no-files-found: error
