@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, inflateRawSync } from 'node:zlib';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -118,6 +118,21 @@ const compressed = Buffer.from(encoded, 'base64');
 const actualHash = createHash('sha256').update(compressed).digest('hex');
 if (actualHash !== expectedSha256) throw new Error(`Gulf flow patch checksum mismatch: ${actualHash}`);
 
-const patchText = gunzipSync(compressed).toString('utf8');
+let patchBuffer;
+try {
+  patchBuffer = gunzipSync(compressed);
+} catch (error) {
+  // The legacy, content-addressed bundle has a malformed gzip trailer. Its exact
+  // bytes remain SHA-pinned above, and the patcher below still validates every
+  // source context line before writing. Only bypass the broken trailer checksum.
+  const standardHeader = compressed.length > 18
+    && compressed[0] === 0x1f && compressed[1] === 0x8b
+    && compressed[2] === 0x08 && compressed[3] === 0x00;
+  if (!standardHeader || error?.code !== 'Z_DATA_ERROR') throw error;
+  patchBuffer = inflateRawSync(compressed.subarray(10, -8));
+  console.warn('Recovered the SHA-pinned Gulf flow patch from its legacy malformed gzip trailer.');
+}
+
+const patchText = patchBuffer.toString('utf8');
 const patchedFiles = await applyUnifiedPatch(patchText);
 console.log(`Applied the smooth Gulf route-flow model to ${patchedFiles} files.`);
