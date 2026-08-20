@@ -1,5 +1,4 @@
 [build]
-  base = "oil-atlas"
   command = "node build-audited.mjs"
   publish = "public"
   functions = "netlify/functions"

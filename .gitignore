@@ -1,9 +1,5 @@
-/private/
-/node_modules/
-/.netlify/
-/.env
-/.env.*
-/.clasp.json
-/.clasprc.json
-/client_secret*.json
-/credentials.json
+node_modules/
+.netlify/
+public/
+*.log
+.DS_Store

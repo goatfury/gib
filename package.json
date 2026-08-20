@@ -1,13 +1,15 @@
 {
-  "name": "gib-production-candidate",
+  "name": "oil-flow-atlas-netlify-preview",
+  "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "test": "node --test tests/m1-*.test.mjs"
+    "build": "node build.mjs"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "dependencies": {
-    "@netlify/blobs": "10.7.12"
-  },
-  "devDependencies": {
-    "@google/clasp": "3.3.0"
+    "@netlify/blobs": "10.7.9"
   }
 }
