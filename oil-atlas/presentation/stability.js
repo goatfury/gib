@@ -22,7 +22,8 @@
   };
 
   function isPlaying() {
-    return document.documentElement.classList.contains('is-playing');
+    return document.documentElement.classList.contains('is-playing')
+      || /Pause/i.test($('playButton')?.textContent || '');
   }
 
   function isGulf() {
@@ -274,10 +275,7 @@
   }
 
   function refreshReadouts(now, gulf, iso) {
-    const layer = $('trafficLayer');
-    const impact = gulf && Boolean(layer?.classList.contains('is-impact') || layer?.dataset.impact === 'true');
-    const interval = impact ? 190 : 320;
-
+    const interval = 400;
     if (isPlaying() && now < state.nextReadoutAt) return;
     state.nextReadoutAt = now + interval;
 
