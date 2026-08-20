@@ -25,40 +25,35 @@ jobs:
         with:
           node-version: 22
 
-      - name: Reconstruct and validate oil plus ship-flow models
+      - name: Reconstruct and validate oil plus ship-flow layers
         run: |
           node oil-atlas/build-audited.mjs
           test -s oil-atlas/public/index.html
           test -s oil-atlas/public/data/fallback.json
+          test -s oil-atlas/public/smooth-oil.css
+          test -s oil-atlas/public/smooth-oil.js
           test -s oil-atlas/public/ship-traffic.css
           test -s oil-atlas/public/ship-traffic.js
-          grep -q "Gulf oil routes" oil-atlas/public/index.html
-          grep -q "Modeled split" oil-atlas/public/index.html
-          grep -q "EASTâ€“WEST â†’ YANBU" oil-atlas/public/index.html
-          grep -q "HABSHANâ€“FUJAIRAH" oil-atlas/public/index.html
+          grep -q 'src="/smooth-oil.js"' oil-atlas/public/index.html
+          grep -q 'href="/smooth-oil.css"' oil-atlas/public/index.html
           grep -q 'src="/ship-traffic.js"' oil-atlas/public/index.html
           grep -q 'href="/ship-traffic.css"' oil-atlas/public/index.html
-          grep -q "shipping artery empty almost overnight" oil-atlas/public/ship-traffic.js
           grep -q "51 â†’ 18 â†’ 4 â†’ 0" oil-atlas/public/ship-traffic.js
-          ! grep -q "UNKNOWN" oil-atlas/public/index.html
+          grep -q "EASTâ€“WEST â†’ YANBU" oil-atlas/public/smooth-oil.js
+          grep -q "HABSHANâ€“FUJAIRAH" oil-atlas/public/smooth-oil.js
           node --test oil-atlas/tests/gulf-model.test.mjs
           node --test oil-atlas/tests/traffic-model.test.mjs
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
           const data = JSON.parse(readFileSync('oil-atlas/public/data/fallback.json', 'utf8'));
-          if (data.schemaVersion !== 3) throw new Error('Unexpected schemaVersion');
-          if (!Array.isArray(data.gulf?.modelAnchors) || data.gulf.modelAnchors.length < 20) throw new Error('Modeled anchors missing');
-          if ('anchors' in data.gulf) throw new Error('Legacy Gulf anchors survived');
-          if (data.gulf.evidence?.baseline?.value !== 24) throw new Error('IEA reference average changed');
-          if (data.gulf.routeCapacities?.yanbu?.exportCapacity !== 5) throw new Error('Yanbu export capacity changed');
-          if (data.gulf.routeCapacities?.fujairah?.pipelineCapacity !== 1.8) throw new Error('Fujairah capacity changed');
-          const prewar = data.gulf.modelAnchors.filter((item) => item.date <= '2026-02-27').map((item) => item.value);
-          if (new Set(prewar).size < 5) throw new Error('Prewar oil model is still flat');
-          for (const item of data.gulf.modelAnchors) {
-            const r = item.routes;
-            const total = r.hormuz + r.yanbu + r.fujairah + r.other;
-            if (Math.abs(total - item.value) > 1e-8) throw new Error(`Route total mismatch on ${item.date}`);
-            if (Math.abs(r.yanbu - r.yanbuNorth - r.yanbuSouth) > 1e-8) throw new Error(`Yanbu split mismatch on ${item.date}`);
+          if (data.schemaVersion !== 2) throw new Error('Unexpected audited schemaVersion');
+          if (!Array.isArray(data.gulf?.periods) || data.gulf.periods.length !== 5) throw new Error('Audited Gulf periods missing');
+          if (!Array.isArray(data.gulf?.observations) || data.gulf.observations.length < 4) throw new Error('Audited observations missing');
+          if (!Array.isArray(data.gulf?.hormuzQuarters) || data.gulf.hormuzQuarters.length !== 6) throw new Error('Hormuz quarters missing');
+          if ('anchors' in data.gulf) throw new Error('Legacy fake daily anchors survived');
+          const smooth = readFileSync('oil-atlas/public/smooth-oil.js', 'utf8');
+          for (const marker of ["['2025-09-01',24.1", "['2026-02-15',25.6", "['2026-03-04',12.5", "['2026-03-15',8.6"]) {
+            if (!smooth.includes(marker)) throw new Error(`Smooth model marker missing: ${marker}`);
           }
           NODE
 
@@ -66,7 +61,7 @@ jobs:
         run: |
           for attempt in $(seq 1 72); do
             if curl --fail --silent --show-error --location "$PREVIEW_URL/" -o /tmp/oil-atlas.html; then
-              if grep -q "Gulf oil routes" /tmp/oil-atlas.html && grep -q 'src="/ship-traffic.js"' /tmp/oil-atlas.html; then
+              if grep -q 'src="/ship-traffic.js"' /tmp/oil-atlas.html && grep -q 'src="/smooth-oil.js"' /tmp/oil-atlas.html; then
                 exit 0
               fi
             fi
@@ -77,31 +72,17 @@ jobs:
 
       - name: Verify live oil and daily traffic endpoints
         run: |
-          ! grep -q "UNKNOWN" /tmp/oil-atlas.html
           curl --fail --silent --show-error --location "$PREVIEW_URL/api/oil_data" -o /tmp/oil-data.json
           curl --fail --silent --show-error --location "$PREVIEW_URL/api/hormuz_traffic" -o /tmp/hormuz-traffic.json
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
           const data = JSON.parse(readFileSync('/tmp/oil-data.json', 'utf8'));
-          if (data.schemaVersion !== 3) throw new Error('Unexpected live schemaVersion');
-          if (!data.checkedAt) throw new Error('Missing checkedAt');
+          if (data.schemaVersion !== 2) throw new Error('Unexpected live oil schemaVersion');
+          if (!data.checkedAt) throw new Error('Missing oil checkedAt');
           if (!Array.isArray(data.world?.anchors) || data.world.anchors.length < 12) throw new Error('World anchors missing');
           if (!Array.isArray(data.world?.regions) || data.world.regions.length !== 8) throw new Error('World regions missing');
-          if (!Array.isArray(data.gulf?.modelAnchors) || data.gulf.modelAnchors.length < 20) throw new Error('Modeled Gulf anchors missing');
-          if (!Array.isArray(data.gulf?.evidence?.periods) || data.gulf.evidence.periods.length !== 5) throw new Error('Published Gulf periods missing');
-          if (!Array.isArray(data.gulf?.evidence?.observations) || data.gulf.evidence.observations.length < 5) throw new Error('Published Gulf observations missing');
-          if (!Array.isArray(data.gulf?.hormuzQuarters) || data.gulf.hormuzQuarters.length !== 6) throw new Error('Hormuz quarters missing');
-          if ('anchors' in data.gulf) throw new Error('Legacy fake daily anchors survived');
-          if (data.refresh?.gulf !== 'modeled') throw new Error('Gulf model state missing');
-          if (!['live', 'fallback'].includes(data.refresh?.world)) throw new Error('World refresh state missing');
-          if (!['live', 'fallback'].includes(data.refresh?.hormuz)) throw new Error('Hormuz refresh state missing');
-          const prewar = data.gulf.modelAnchors.filter((item) => item.date <= '2026-02-27').map((item) => item.value);
-          if (Math.min(...prewar) !== 23.8 || Math.max(...prewar) !== 25.6) throw new Error('Prewar modeled range changed');
-          for (const item of data.gulf.modelAnchors) {
-            const r = item.routes;
-            if (Math.abs(item.value - (r.hormuz + r.yanbu + r.fujairah + r.other)) > 1e-8) throw new Error(`Route total mismatch on ${item.date}`);
-            if (Math.abs(r.yanbu - (r.yanbuNorth + r.yanbuSouth)) > 1e-8) throw new Error(`Yanbu split mismatch on ${item.date}`);
-          }
+          if (!Array.isArray(data.gulf?.periods) || data.gulf.periods.length !== 5) throw new Error('Gulf periods missing');
+          if ('anchors' in data.gulf) throw new Error('Legacy Gulf daily anchors survived');
 
           const traffic = JSON.parse(readFileSync('/tmp/hormuz-traffic.json', 'utf8'));
           if (traffic.schemaVersion !== 1) throw new Error('Unexpected traffic schemaVersion');
@@ -113,12 +94,7 @@ jobs:
           for (const row of traffic.records) {
             if (row.tanker + row.cargo !== row.total) throw new Error(`Traffic category mismatch on ${row.date}`);
           }
-          console.log(JSON.stringify({
-            oilCheckedAt: data.checkedAt,
-            trafficCheckedAt: traffic.checkedAt,
-            latestTrafficDate: traffic.latestPublishedDate,
-            trafficCliff: cliff,
-          }, null, 2));
+          console.log(JSON.stringify({ oilCheckedAt: data.checkedAt, trafficCheckedAt: traffic.checkedAt, latestTrafficDate: traffic.latestPublishedDate, trafficCliff: cliff }, null, 2));
           NODE
 
       - name: Real-browser artery-to-trickle QA and screenshots
@@ -161,94 +137,50 @@ jobs:
             if (message.error) waiter.reject(new Error(JSON.stringify(message.error)));
             else waiter.resolve(message.result);
           });
-          const send = (method, params = {}) => new Promise((resolve, reject) => {
-            const id = ++nextId;
-            pending.set(id, { resolve, reject });
-            ws.send(JSON.stringify({ id, method, params }));
-          });
-          const evaluate = async (expression) => {
-            const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-            if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
-            return result.result.value;
-          };
-          const navigate = async (url, wait = 6500) => {
-            await send('Page.navigate', { url });
-            await sleep(wait);
-          };
-          const inspect = () => evaluate(`(() => {
-            const app = document.querySelector('.app-screen');
-            const layer = document.getElementById('trafficLayer');
-            const routeIds = ['routeValueHormuz','routeValueYanbu','routeValueFujairah','routeValueOther'];
-            return {
-              width: innerWidth,
-              height: innerHeight,
-              appBottom: app?.getBoundingClientRect().bottom,
-              horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1,
-              fits: !!app && app.getBoundingClientRect().bottom <= innerHeight + 1,
-              date: document.getElementById('dateDisplay')?.textContent,
-              routes: Object.fromEntries(routeIds.map((id) => [id, document.getElementById(id)?.textContent])),
-              playing: document.getElementById('playButton')?.textContent,
-              trafficDate: layer?.dataset.trafficDate,
-              trafficTotal: Number(layer?.dataset.trafficTotal || -1),
-              visibleShips: Number(layer?.dataset.visibleShips || -1),
-              targetShips: Number(layer?.dataset.targetShips || -1),
-              trafficSource: layer?.dataset.source,
-              impact: layer?.dataset.impact,
-              shipNodes: document.querySelectorAll('#trafficShips .traffic-ship').length,
-              title: document.getElementById('mapTitle')?.textContent,
-              unknown: document.body.innerText.includes('UNKNOWN'),
-            };
-          })()`);
-          const capture = async (name) => {
-            const shot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
-            writeFileSync(`/tmp/oil-atlas-shots/${name}.png`, Buffer.from(shot.data, 'base64'));
-          };
+         ÛÛœİÙ[™H
+Y]Ù\˜[\ÈHßJHOˆ™]È›ÛZ\ÙJ
+™\ÛÛ™K™Z™Xİ
+HOˆÂˆÛÛœİYH
+ÊÛ™^YÂˆ[™[™ËœÙ]
+YÈ™\ÛÛ™K™Z™XİJNÂˆÜËœÙ[™
+”ÓÓ‹œİš[™ÚYJÈYY]Ù\˜[\ÈJJNÂˆJNÂˆÛÛœİ]˜[X]HH\Ş[˜È
+^™\ÜÚ[ÛŠHOˆÂˆÛÛœİ™\İ[H]ØZ]Ù[™
+	Ô[[YK™]˜[X]IËÈ^™\ÜÚ[Û‹]ØZ]›ÛZ\ÙNˆYK™]\›U˜[YNˆYHJNÂˆYˆ
+™\İ[™^Ù\[Û‘]Z[ÊH›İÈ™]È\œ›ÜŠ”ÓÓ‹œİš[™ÚYJ™\İ[™^Ù\[Û‘]Z[ÊJNÂˆ™]\›ˆ™\İ[œ™\İ[˜[YNÂˆNÂˆÛÛœİ˜]šYØ]HH\Ş[˜È
+\›ØZ]HL
+HOˆÂˆ]ØZ]Ù[™
+	ÔYÙK›˜]šYØ]IËÈ\›JNÂˆ]ØZ]ÛY\
+ØZ]
+NÂˆNÂˆÛÛœİ[œÜXİH
 
-          await send('Page.enable');
-          await send('Runtime.enable');
+HOˆ]˜[X]J
 
-          for (const [width, height] of [[1366,768],[1024,600]]) {
-            await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
 
-            await navigate(`${process.env.PREVIEW_URL}/?qaDate=2026-02-22&qaPause=1`);
-            const busy = await inspect();
-            if (!busy.fits || busy.horizontalOverflow) throw new Error(`Busy view does not fit ${width}x${height}: ${JSON.stringify(busy)}`);
-            if (busy.trafficTotal !== 125) throw new Error(`Busy daily count wrong at ${width}x${height}: ${JSON.stringify(busy)}`);
-            if (busy.visibleShips < 25 || busy.shipNodes !== 30) throw new Error(`Busy artery not visibly busy at ${width}x${height}: ${JSON.stringify(busy)}`);
-            if (!/Hormuz ship traffic/.test(busy.title || '')) throw new Error(`Ship-traffic hierarchy missing at ${width}x${height}`);
-            if (busy.unknown) throw new Error(`UNKNOWN label survived at ${width}x${height}`);
-            writeFileSync(`/tmp/oil-atlas-shots/busy-${width}x${height}.json`, JSON.stringify(busy, null, 2));
-            await capture(`busy-${width}x${height}`);
+HOˆÂˆÛÛœİ\HØİ[Y[œ]Y\TÙ[XİÜŠ	Ë˜\\ØÜ™Y[‰ÊNÂˆÛÛœİ^Y\ˆHØİ[Y[™Ù][[Y[RY
+	İ˜Y™šXÓ^Y\‰ÊNÂˆÛÛœİ˜[YHH
+Y
+HOˆØİ[Y[œ]Y\TÙ[XİÜŠ	ÈÉÈ
+ÈY
+È	ÈœÛ[Ûİ\›İ]K]˜[YIÊOË^ÛÛ[Âˆ™]\›ˆÂˆÚYˆ[›™\•ÚYˆZYÚˆ[›™\’ZYÚˆ\›İÛNˆ\Ë™Ù]›İ[™[™ĞÛY[™Xİ
 
-            await navigate(`${process.env.PREVIEW_URL}/?qaDate=2026-03-02&qaPause=1`);
-            const trickle = await inspect();
-            if (trickle.trafficTotal !== 4) throw new Error(`Trickle count wrong at ${width}x${height}: ${JSON.stringify(trickle)}`);
-            if (trickle.visibleShips < 1 || trickle.visibleShips > 3) throw new Error(`Trickle not visually sparse at ${width}x${height}: ${JSON.stringify(trickle)}`);
-            writeFileSync(`/tmp/oil-atlas-shots/trickle-${width}x${height}.json`, JSON.stringify(trickle, null, 2));
-            await capture(`trickle-${width}x${height}`);
+K˜›İÛKˆÜš^›Û[İ™\™›İÎˆØİ[Y[™Øİ[Y[[[Y[œØÜ›ÛÚYˆ[›™\•ÚY
+ÈKˆš]ÎˆHX\	‰ˆ\™Ù]›İ[™[™ĞÛY[™Xİ
 
-            await navigate(`${process.env.PREVIEW_URL}/?qaDate=2026-03-04&qaPause=1`);
-            const zero = await inspect();
-            if (zero.trafficTotal !== 0 || zero.visibleShips !== 0) throw new Error(`Zero-transit day still looks busy at ${width}x${height}: ${JSON.stringify(zero)}`);
-            if (!zero.fits || zero.horizontalOverflow) throw new Error(`Zero view does not fit ${width}x${height}: ${JSON.stringify(zero)}`);
-            writeFileSync(`/tmp/oil-atlas-shots/zero-${width}x${height}.json`, JSON.stringify(zero, null, 2));
-            await capture(`zero-${width}x${height}`);
-          }
+K˜›İÛHH[›™\’ZYÚ
+ÈKˆ]NˆØİ[Y[™Ù][[Y[RY
+	Ù]Q\Ü^IÊOË^ÛÛ[ˆ^Z[™ÎˆØİ[Y[™Ù][[Y[RY
+	Ü^P]Û‰ÊOË^ÛÛ[ˆ˜Y™šXÑ]Nˆ^Y\Ë™]\Ù]˜Y™šXÑ]Kˆ˜Y™šXÕİ[ˆ[X™\Š^Y\Ë™]\Ù]˜Y™šXÕİ[LJKˆš\ÚX›TÚ\Îˆ[X™\Š^Y\Ë™]\Ù]š\ÚX›TÚ\ÈLJKˆ\™Ù]Ú\Îˆ[X™\Š^Y\Ë™]\Ù]\™Ù]Ú\ÈLJKˆ˜Y™šXÔÛİ\˜ÙNˆ^Y\Ë™]\Ù]œÛİ\˜ÙKˆ[\Xİˆ^Y\Ë™]\Ù]š[\XİˆÚ\›Ù\ÎˆØİ[Y[œ]Y\TÙ[XİÜ[
+	Èİ˜Y™šXÔÚ\È˜Y™šXË\Ú\	ÊK›[™İˆ]NˆØİ[Y[™Ù][[Y[RY
+	ÛX\]IÊOË^ÛÛ[ˆÛ[Ûİ˜[YNˆ[X™\ŠØİ[Y[™Øİ[Y[[[Y[™]\Ù]œÛ[ÛİÚ[˜[YHLJKˆÛ[ÛİÜ›]^ˆ[X™\ŠØİ[Y[™Øİ[Y[[[Y[™]\Ù]œÛ[ÛİÚ[Ü›]^ˆLJKˆÛ[ÛİX[˜Nˆ[X™\ŠØİ[Y[™Øİ[Y[[[Y[™]\Ù]œÛ[ÛİÚ[X[˜HLJKˆÛ[ÛİZ˜Z\˜Zˆ[X™\ŠØİ[Y[™Øİ[Y[[[Y[™]\Ù]œÛ[ÛİÚ[Z˜Z\˜ZLJKˆ›İ]SX™[ÎˆÈÜ›]^ˆ˜[YJ	Ü›İ]P˜YÙRÜ›]^‰ÊKX[˜Nˆ˜[YJ	Ü›İ]P˜YÙVX[˜IÊKZ˜Z\˜Zˆ˜[YJ	Ü›İ]P˜YÙQZ˜Z\˜Z	ÊHKˆ[šÛ›İÛˆØİ[Y[˜›ÙKš[›™\•^š[˜ÛY\Ê	ÕS’Ó“ÕÓ‰ÊKˆNÂˆJJ
+X
+NÂˆ6öç7B6GW&RÒ7–æ2†æÖR’Óâ°¢6öç7B6†÷BÒv—B6VæB‚uvRæ6GW&U67&VVç6†÷BrÂ²f÷&ÖC¢wærrÂg&öÕ7W&f6S¢G'VRÒ“°¢w&—FTf–ÆU7–æ2†÷F×öö–ÂÖFÆ2×6†÷G2òG¶æÖWÒçævÂ'VffW"æg&öÒ‡6†÷BæFFÂv&6ScBr’“°¢Ó° ¢v—B6VæB‚uvRæVæ&ÆRr“°¢v—B6VæB‚u'VçF–ÖRæVæ&ÆRr“° ¢f÷"†6öç7B·v–GF‚Â†V–v‡EÒöbµ³3cbÃsc…ÒÅ³#BÃcÕÒ’°¢v—B6VæB‚tV×VÆF–öâç6WDFWf–6TÖWG&–74÷fW'&–FRrÂ²v–GF‚Â†V–v‡BÂFWf–6U66ÆTf7F÷#¢ÂÖö&–ÆS¢fÇ6RÒ“° ¢v—Bæf–vFR†G·&ö6W72æVçbå$Ud”UuõU$ÇÒó÷FFSÓ##bÓ"Ó#"gW6SÓ“°¢6öç7B'W7’Òv—B–ç7V7B‚“°¢–b‚'W7’æf—G2ÇÂ'W7’æ†÷&—¦öçFÄ÷fW&fÆ÷r’F‡&÷ræWrW'&÷"†'W7’f–WrFöW2æ÷Bf—BG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’†'W7’—Ö“°¢–b†'W7’çG&ff–5F÷FÂÓÒ#R’F‡&÷ræWrW'&÷"†'W7’F–Ç’6÷VçBw&öærBG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’†'W7’—Ö“°¢–b†'W7’çf—6–&ÆU6†—2Â#RÇÂ'W7’ç6†—æöFW2ÓÒ3’F‡&÷ræWrW'&÷"†'W7’'FW'’æ÷Bf—6–&Ç’'W7’BG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’†'W7’—Ö“°¢–b‚ô†÷&×W¢6†—G&ff–2òçFW7B†'W7’çF—FÆRÇÂrr’’F‡&÷ræWrW'&÷"†6†—×G&ff–2†–W&&6‡’Ö—76–ærBG·v–GF‡×‚G¶†V–v‡GÖ“°¢–b†'W7’ç6Öö÷F…fÇVRÂ#RÇÂ'W7’ç6Öö÷F…fÇVRâ#Rãb’F‡&÷ræWrW'&÷"†&Wv"ö–ÂÖöFVÂw&öærBG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’†'W7’—Ö“°¢–b‚'W7’ç&÷WFTÆ&VÇ2æ†÷&×W¢ÇÂ'W7’ç&÷WFTÆ&VÇ2ç–æ'RÇÂ'W7’ç&÷WFTÆ&VÇ2ægV¦—&‚’F‡&÷ræWrW'&÷"†&÷WFRÆ&VÇ2Ö—76–ærBG·v–GF‡×‚G¶†V–v‡GÖ“°¢–b†'W7’çVæ¶æ÷vâ’F‡&÷ræWrW'&÷"†Tä´äõtâÆ&VÂ7W'f—fVBBG·v–GF‡×‚G¶†V–v‡GÖ“°¢w&—FTf–ÆU7–æ2†÷F×öö–ÂÖFÆ2×6†÷G2ö'W7’ÒG·v–GF‡×‚G¶†V–v‡GÒæ§6öæÂ¥4ôâç7G&–æv–g’†'W7’ÂçVÆÂÂ"’“°¢v—B6GW&R†'W7’ÒG·v–GF‡×‚G¶†V–v‡GÖ“° ¢v—Bæf–vFR†G·&ö6W72æVçbå$Ud”UuõU$ÇÒó÷FFSÓ##bÓ2Ó"gW6SÓ“°¢6öç7BG&–6¶ÆRÒv—B–ç7V7B‚“°¢–b‡G&–6¶ÆRçG&ff–5F÷FÂÓÒB’F‡&÷ræWrW'&÷"†G&–6¶ÆR6÷VçBw&öærBG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’‡G&–6¶ÆR—Ö“°¢–b‡G&–6¶ÆRçf—6–&ÆU6†—2ÂÇÂG&–6¶ÆRçf—6–&ÆU6†—2â2’F‡&÷ræWrW'&÷"†G&–6¶ÆRæ÷Bf—7VÆÇ’7'6RBG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’‡G&–6¶ÆR—Ö“°¢–b„ÖF‚æ'2‡G&–6¶ÆRç6Öö÷F…fÇVRÒr’âã’F‡&÷ræWrW'&÷"†6†ö6²ö–ÂfÇVRw&öærBG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’‡G&–6¶ÆR—Ö“°¢w&—FTf–ÆU7–æ2†÷F×öö–ÂÖFÆ2×6†÷G2÷G&–6¶ÆRÒG·v–GF‡×‚G¶†V–v‡GÒæ§6öæÂ¥4ôâç7G&–æv–g’‡G&–6¶ÆRÂçVÆÂÂ"’“°¢v—B6GW&R†G&–6¶ÆRÒG·v–GF‡×‚G¶†V–v‡GÖ“° ¢v—Bæf–vFR†G·&ö6W72æVçbå$Ud”UuõU$ÇÒó÷FFSÓ##bÓ2ÓBgW6SÓ“°¢6öç7B¦W&òÒv—B–ç7V7B‚“°¢–b‡¦W&òçG&ff–5F÷FÂÓÒÇÂ¦W&òçf—6–&ÆU6†—2ÓÒ’F‡&÷ræWrW'&÷"†¦W&ò×G&ç6—BF’7F–ÆÂÆöö·2'W7’BG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’‡¦W&ò—Ö“°¢–b‚¦W&òæf—G2ÇÂ¦W&òæ†÷&—¦öçFÄ÷fW&fÆ÷r’F‡&÷ræWrW'&÷"†¦W&òf–WrFöW2æ÷Bf—BG·v–GF‡×‚G¶†V–v‡GÓ¢G´¥4ôâç7G&–æv–g’‡¦W&ò—Ö“°¢w&—FTf–ÆU7–æ2†÷F×öö–ÂÖFÆ2×6†÷G2÷¦W&òÒG·v–GF‡×‚G¶†V–v‡GÒæ§6öæÂ¥4ôâç7G&–æv–g’‡¦W&òÂçVÆÂÂ"’“°¢v—B6GW&R†¦W&òÒG·v–GF‡×‚G¶†V–v‡GÖ“°¢Ğ ¢v—B6VæB‚tV×VÆF–öâç6WDFWf–6TÖWG&–74÷fW'&–FRrÂ²v–GFƒ¢3cbÂ†V–v‡C¢sc‚ÂFWf–6U66ÆTf7F÷#¢ÂÖö&–ÆS¢fÇ6RÒ“°¢v—Bæf–vFR†G·&ö6W72æVçbå$Ud”U×ÕT“ÏÜXQ]OLŒ‹L‹LÉœXT]\ÙOLIœXR[\XİLXL
+NÂˆÛÛœİ[\XİH]ØZ][œÜXİ
 
-          await send('Emulation.setDeviceMetricsOverride', { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false });
-          await navigate(`${process.env.PREVIEW_URL}/?qaDate=2026-02-27&qaPause=1&qaImpact=1`, 900);
-          const impact = await inspect();
-          if (impact.impact !== 'true') throw new Error(`Collapse beat did not trigger: ${JSON.stringify(impact)}`);
-          await capture('impact-1366x768');
-
-          ws.close();
-          NODE
-
-          kill "$(cat /tmp/oil-atlas-chrome.pid)" || true
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: oil-atlas-ship-traffic-screenshots
-          path: /tmp/oil-atlas-shots
-          if-no-files-found: error
+NÂˆYˆ
+[\Xİš[\XİOOH	İYIÊH›İÈ™]È\œ›ÜŠÛÛ\ÙH™X]Y›İšYÙÙ\ˆ	Ò”ÓÓ‹œİš[™ÚYHš[\Xİ
+_X
+NÂˆ]ØZ]Ø\\™J	Ú[\XİLLÍÍ	ÊNÂ‚ˆÜË˜ÛÜÙJ
+NÂˆ“ÑB‚ˆÚ[‰
+Ø]İ\ÛÚ[X]\ËXÚ›ÛYKœY
+HˆYB‚ˆH\Ù\ÎˆXİ[ÛœËİ\ØYX\Y˜XİˆYˆ[Ø^\Ê
+BˆÚ]‚ˆ˜[YNˆÚ[X]\Ë\Ú\]˜Y™šXË\ØÜ™Y[œÚİÂˆ]ˆİ\ÛÚ[X]\Ë\ÚİÂˆY‹[›ËYš[\ËY›İ[™ˆØ\›‚

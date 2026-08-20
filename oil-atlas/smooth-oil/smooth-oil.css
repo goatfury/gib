@@ -1,0 +1,31 @@
+#smoothOilLabels { pointer-events: none; }
+.smooth-route-badge rect {
+  fill: rgba(3, 15, 26, .9);
+  stroke: rgba(255, 255, 255, .18);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 4px 11px rgba(0,0,0,.28));
+}
+.smooth-route-title {
+  fill: #8fa9bd;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: .075em;
+}
+.smooth-route-value {
+  fill: #f6fbff;
+  font-size: 14px;
+  font-weight: 950;
+}
+.smooth-route-capacity {
+  fill: #7895aa;
+  font-size: 7px;
+  font-weight: 700;
+}
+#routeBadgeHormuz rect { stroke: rgba(255, 200, 87, .42); }
+#routeBadgeYanbu rect, #routeBadgeFujairah rect { stroke: rgba(84, 210, 210, .38); }
+@media (max-width: 1080px) and (min-width: 821px) {
+  .smooth-route-title { font-size: 7.2px; }
+  .smooth-route-value { font-size: 12.5px; }
+  .smooth-route-capacity { font-size: 6.4px; }
+}
