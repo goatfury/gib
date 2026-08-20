@@ -23,6 +23,34 @@ const parseHunkHeader = (line) => {
   };
 };
 
+const blockMatchesAt = (lines, block, index) => {
+  if (index < 0 || index + block.length > lines.length) return false;
+  for (let i = 0; i < block.length; i += 1) {
+    if (lines[index + i] !== block[i]) return false;
+  }
+  return true;
+};
+
+const locateExactBlock = (lines, block, expected, file) => {
+  if (block.length === 0) return Math.max(0, Math.min(lines.length, expected));
+  if (blockMatchesAt(lines, block, expected)) return expected;
+
+  const matches = [];
+  for (let i = 0; i <= lines.length - block.length; i += 1) {
+    if (blockMatchesAt(lines, block, i)) matches.push(i);
+  }
+  if (!matches.length) {
+    throw new Error(
+      `Exact Gulf-flow hunk block not found in ${file}; expected near line ${expected + 1}; first expected line ${JSON.stringify(block[0])}; actual ${JSON.stringify(lines[expected])}`,
+    );
+  }
+  matches.sort((a, b) => Math.abs(a - expected) - Math.abs(b - expected));
+  if (matches.length > 1 && Math.abs(matches[0] - expected) === Math.abs(matches[1] - expected)) {
+    throw new Error(`Ambiguous Gulf-flow hunk in ${file} near line ${expected + 1}`);
+  }
+  return matches[0];
+};
+
 const applyUnifiedPatch = async (patchText) => {
   const lines = patchText.replace(/\r\n/g, '\n').split('\n');
   let i = 0;
@@ -42,16 +70,15 @@ const applyUnifiedPatch = async (patchText) => {
     if (targetRelative === '/dev/null') throw new Error('Patch cannot have /dev/null on both sides');
     const targetPath = safePath(targetRelative);
 
-    let originalLines = [];
+    let current = [];
     if (oldPath !== '/dev/null') {
       const originalText = (await readFile(safePath(oldPath), 'utf8')).replace(/\r\n/g, '\n');
-      originalLines = originalText.endsWith('\n') ? originalText.slice(0, -1).split('\n') : originalText.split('\n');
-      if (originalLines.length === 1 && originalLines[0] === '') originalLines = [];
+      current = originalText.endsWith('\n') ? originalText.slice(0, -1).split('\n') : originalText.split('\n');
+      if (current.length === 1 && current[0] === '') current = [];
     }
 
-    const output = [];
-    let cursor = 0;
     let sawHunk = false;
+    let cumulativeDelta = 0;
 
     while (i < lines.length && !lines[i].startsWith('--- ')) {
       if (!lines[i]) { i += 1; continue; }
@@ -60,13 +87,8 @@ const applyUnifiedPatch = async (patchText) => {
       const { oldStart, oldCount, newCount } = parseHunkHeader(lines[i]);
       i += 1;
 
-      const oldIndex = oldStart === 0 ? 0 : oldStart - 1;
-      if (oldIndex < cursor || oldIndex > originalLines.length) {
-        throw new Error(`Patch hunk for ${targetRelative} starts outside the source file`);
-      }
-      output.push(...originalLines.slice(cursor, oldIndex));
-      cursor = oldIndex;
-
+      const oldBlock = [];
+      const newBlock = [];
       let usedOld = 0;
       let usedNew = 0;
       while (usedOld < oldCount || usedNew < newCount) {
@@ -75,31 +97,32 @@ const applyUnifiedPatch = async (patchText) => {
         if (patchLine === '\\ No newline at end of file') { i += 1; continue; }
         const prefix = patchLine[0];
         const content = patchLine.slice(1);
-
         if (prefix === ' ') {
-          if (originalLines[cursor] !== content) throw new Error(`Context mismatch in ${targetRelative} at source line ${cursor + 1}`);
-          output.push(content);
-          cursor += 1;
+          oldBlock.push(content);
+          newBlock.push(content);
           usedOld += 1;
           usedNew += 1;
         } else if (prefix === '-') {
-          if (originalLines[cursor] !== content) throw new Error(`Deletion mismatch in ${targetRelative} at source line ${cursor + 1}`);
-          cursor += 1;
+          oldBlock.push(content);
           usedOld += 1;
         } else if (prefix === '+') {
-          output.push(content);
+          newBlock.push(content);
           usedNew += 1;
         } else {
           throw new Error(`Invalid patch line in ${targetRelative}: ${patchLine}`);
         }
         i += 1;
       }
+
+      const nominal = (oldStart === 0 ? 0 : oldStart - 1) + cumulativeDelta;
+      const at = locateExactBlock(current, oldBlock, nominal, targetRelative);
+      current.splice(at, oldBlock.length, ...newBlock);
+      cumulativeDelta += newBlock.length - oldBlock.length;
     }
 
     if (!sawHunk) throw new Error(`Patch contains no hunks for ${targetRelative}`);
-    output.push(...originalLines.slice(cursor));
     await mkdir(dirname(targetPath), { recursive: true });
-    await writeFile(targetPath, `${output.join('\n')}\n`, 'utf8');
+    await writeFile(targetPath, `${current.join('\n')}\n`, 'utf8');
     patchedFiles += 1;
   }
 
@@ -123,8 +146,8 @@ try {
   patchBuffer = gunzipSync(compressed);
 } catch (error) {
   // The legacy, content-addressed bundle has a malformed gzip trailer. Its exact
-  // bytes remain SHA-pinned above, and the patcher below still validates every
-  // source context line before writing. Only bypass the broken trailer checksum.
+  // bytes remain SHA-pinned above. Every patch hunk is still matched as an exact,
+  // unique source block before any file is written.
   const standardHeader = compressed.length > 18
     && compressed[0] === 0x1f && compressed[1] === 0x8b
     && compressed[2] === 0x08 && compressed[3] === 0x00;
@@ -133,6 +156,5 @@ try {
   console.warn('Recovered the SHA-pinned Gulf flow patch from its legacy malformed gzip trailer.');
 }
 
-const patchText = patchBuffer.toString('utf8');
-const patchedFiles = await applyUnifiedPatch(patchText);
+const patchedFiles = await applyUnifiedPatch(patchBuffer.toString('utf8'));
 console.log(`Applied the smooth Gulf route-flow model to ${patchedFiles} files.`);
