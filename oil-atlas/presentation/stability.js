@@ -227,16 +227,18 @@
     const mode = playing ? (layer.dataset.displayMode || 'eased-live') : 'exact';
     const trafficDate = layer.dataset.trafficDate || iso;
     const pct = Math.round(total / TRAFFIC_NORMAL * 100);
-    const subs = layer.querySelectorAll('.traffic-sub:not([data-presentation-for])');
+    const subNodes = [...layer.querySelectorAll('text.traffic-sub:not([data-presentation-for])')];
+    const statusNode = subNodes.find((node) => Number(node.getAttribute('y')) <= 80) || subNodes[0];
+    const breakdownNode = subNodes.find((node) => Number(node.getAttribute('y')) >= 100) || subNodes[1];
     if (mode.endsWith('average')) {
       const days = Number.parseInt(mode, 10) || (Date.parse(`${iso}T00:00:00Z`) < Date.UTC(2026, 1, 28) ? 7 : 3);
-      setVisibleText(subs[0], `${days}-day average · ${pct}% of PortWatch normal`, 'gulf', 'traffic-sub-0');
+      setVisibleText(statusNode, `${days}-day average · ${pct}% of PortWatch normal`, 'gulf', 'traffic-sub-0');
     } else if (mode === 'eased-live') {
-      setVisibleText(subs[0], `smoothed traffic pace · ${pct}% of PortWatch normal`, 'gulf', 'traffic-sub-0');
+      setVisibleText(statusNode, `smoothed traffic pace · ${pct}% of PortWatch normal`, 'gulf', 'traffic-sub-0');
     } else {
       const held = trafficDate !== iso;
       const prefix = held ? `Latest published ${formatExact(trafficDate)}` : `${formatExact(trafficDate)} · exact day`;
-      setVisibleText(subs[0], `${prefix} · ${pct}% of normal`, 'gulf', 'traffic-sub-0');
+      setVisibleText(statusNode, `${prefix} · ${pct}% of normal`, 'gulf', 'traffic-sub-0');
     }
 
     let tanker;
@@ -249,7 +251,7 @@
       tanker = Math.round(total * ratio);
       cargo = Math.max(0, Math.round(total) - tanker);
     }
-    setVisibleText(subs[1], `tankers ${tanker} · cargo ${cargo}`, 'gulf', 'traffic-sub-1');
+    setVisibleText(breakdownNode, `tankers ${tanker} · cargo ${cargo}`, 'gulf', 'traffic-sub-1');
 
     const fill = layer.querySelector('.traffic-normal-fill');
     if (fill) {
