@@ -1,0 +1,166 @@
+name: Oil Atlas Motion Capture
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/oil-atlas-motion-capture.yml"
+
+permissions:
+  contents: read
+
+env:
+  PREVIEW_URL: https://deploy-preview-${{ github.event.pull_request.number }}--gib-live.netlify.app
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for the current Netlify preview
+        run: |
+          for attempt in $(seq 1 84); do
+            if curl --fail --silent --location "$PREVIEW_URL/" -o /tmp/atlas.html; then
+              if grep -q 'src="/presentation.js"' /tmp/atlas.html; then
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          echo 'Current Netlify preview did not become reachable' >&2
+          exit 1
+
+      - name: Record the right side at normal speed
+        run: |
+          mkdir -p /tmp/oil-atlas-motion/frames
+          google-chrome --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
+            --remote-debugging-port=9224 --user-data-dir=/tmp/oil-atlas-motion-chrome about:blank \
+            >/tmp/oil-atlas-motion-chrome.log 2>&1 &
+          echo $! >/tmp/oil-atlas-motion-chrome.pid
+
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const start = Date.parse('2025-09-01T00:00:00Z');
+          const dayIndex = (iso) => Math.round((Date.parse(`${iso}T00:00:00Z`) - start) / 86400000);
+
+          let page;
+          for (let i = 0; i < 80; i += 1) {
+            try {
+              const tabs = await (await fetch('http://127.0.0.1:9224/json/list')).json();
+              page = tabs.find((tab) => tab.type === 'page');
+              if (page?.webSocketDebuggerUrl) break;
+            } catch {}
+            await sleep(250);
+          }
+          if (!page?.webSocketDebuggerUrl) throw new Error('Chrome DevTools endpoint unavailable');
+
+          const ws = new WebSocket(page.webSocketDebuggerUrl);
+          await new Promise((resolve, reject) => {
+            ws.addEventListener('open', resolve, { once: true });
+            ws.addEventListener('error', reject, { once: true });
+          });
+          let nextId = 0;
+          const pending = new Map();
+          ws.addEventListener('message', (event) => {
+            const message = JSON.parse(event.data);
+            if (!message.id) return;
+            const waiter = pending.get(message.id);
+            if (!waiter) return;
+            pending.delete(message.id);
+            if (message.error) waiter.reject(new Error(JSON.stringify(message.error)));
+            else waiter.resolve(message.result);
+          });
+          const send = (method, params = {}) => new Promise((resolve, reject) => {
+            const id = ++nextId;
+            pending.set(id, { resolve, reject });
+            ws.send(JSON.stringify({ id, method, params }));
+          });
+          const evaluate = async (expression) => {
+            const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+            if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
+            return result.result.value;
+          };
+
+          await send('Page.enable');
+          await send('Runtime.enable');
+          await send('Emulation.setDeviceMetricsOverride', {
+            width: 1366,
+            height: 768,
+            deviceScaleFactor: 1,
+            mobile: false,
+          });
+          await send('Page.navigate', { url: process.env.PREVIEW_URL });
+          await sleep(7000);
+
+          await evaluate(`(async () => {
+            const button = document.getElementById('playButton');
+            if (button && /Pause/i.test(button.textContent || '')) button.click();
+            await new Promise((resolve) => setTimeout(resolve, 200));
+            const one = [...document.querySelectorAll('button')].find((node) => /^1[×x]$/i.test((node.textContent || '').trim()));
+            one?.click();
+            const slider = document.getElementById('timeline');
+            slider.value = '${dayIndex('2026-01-15')}';
+            slider.dispatchEvent(new Event('input', { bubbles: true }));
+            slider.dispatchEvent(new Event('change', { bubbles: true }));
+            await new Promise((resolve) => setTimeout(resolve, 900));
+            if (button && /Play/i.test(button.textContent || '')) button.click();
+            await new Promise((resolve) => setTimeout(resolve, 800));
+          })()`);
+
+          const samples = [];
+          const clip = { x: 770, y: 0, width: 596, height: 768, scale: 1 };
+          const captureStart = performance.now();
+          for (let frame = 0; frame < 160; frame += 1) {
+            const shot = await send('Page.captureScreenshot', {
+              format: 'jpeg',
+              quality: 82,
+              fromSurface: true,
+              clip,
+            });
+            writeFileSync(
+              `/tmp/oil-atlas-motion/frames/frame-${String(frame).padStart(4, '0')}.jpg`,
+              Buffer.from(shot.data, 'base64'),
+            );
+            samples.push(await evaluate(`(() => {
+              const visible = (key, fallbackId = key) => {
+                const mirror = document.querySelector('[data-presentation-for="' + key + '"]');
+                if (mirror) return mirror.textContent || '';
+                const fallback = document.getElementById(fallbackId);
+                return fallback?.dataset.presentationText || fallback?.textContent || '';
+              };
+              return {
+                timeline: document.getElementById('timeline')?.value,
+                date: visible('dateDisplay'),
+                flow: visible('flowNumber'),
+                percent: visible('percentDisplay'),
+                traffic: visible('traffic-number'),
+                routes: ['route-hormuz','route-yanbu','route-fujairah','route-other'].map((key) => visible(key)),
+                liquidTransform: document.getElementById('barrelLiquid')?.getAttribute('transform'),
+                calloutTransform: document.getElementById('barrelCallout')?.getAttribute('transform'),
+              };
+            })()`));
+            const target = captureStart + (frame + 1) * 50;
+            await sleep(Math.max(0, target - performance.now()));
+          }
+          writeFileSync('/tmp/oil-atlas-motion/samples.json', JSON.stringify(samples, null, 2));
+          ws.close();
+          NODE
+
+          kill "$(cat /tmp/oil-atlas-motion-chrome.pid)" || true
+          ffmpeg -hide_banner -loglevel error -y \
+            -framerate 20 -i /tmp/oil-atlas-motion/frames/frame-%04d.jpg \
+            -c:v libx264 -preset fast -crf 21 -pix_fmt yuv420p -movflags +faststart \
+            /tmp/oil-atlas-motion/right-current.mp4
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: oil-atlas-right-motion-current
+          path: |
+            /tmp/oil-atlas-motion/right-current.mp4
+            /tmp/oil-atlas-motion/samples.json
+          if-no-files-found: error
+          retention-days: 7
