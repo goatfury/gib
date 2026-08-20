@@ -7,6 +7,12 @@
   const TRAFFIC_NORMAL = 73;
   const QA_PAUSE = new URLSearchParams(location.search).get('qaPause') === '1';
   const SVG_NS = 'http://www.w3.org/2000/svg';
+  const SVG_STYLE_PROPS = [
+    'fill', 'stroke', 'stroke-width', 'paint-order', 'filter',
+    'font-family', 'font-size', 'font-weight', 'font-style', 'font-variant',
+    'letter-spacing', 'word-spacing', 'text-transform', 'text-anchor',
+    'dominant-baseline', 'alignment-baseline',
+  ];
   const $ = (id) => document.getElementById(id);
 
   const displays = new Map();
@@ -51,10 +57,17 @@
 
   function createSvgMirror(source, key, scope) {
     for (const prior of document.querySelectorAll(`[data-presentation-for="${key}"]`)) prior.remove();
+    const computed = getComputedStyle(source);
     const mirror = source.cloneNode(true);
     mirror.removeAttribute('id');
+    mirror.removeAttribute('class');
+    mirror.setAttribute('class', 'presentation-value-mirror');
     mirror.setAttribute('data-presentation-for', key);
     mirror.setAttribute('aria-hidden', 'false');
+    for (const property of SVG_STYLE_PROPS) {
+      const value = computed.getPropertyValue(property);
+      if (value) mirror.style.setProperty(property, value);
+    }
     mirror.style.setProperty('display', 'inline', 'important');
     mirror.style.setProperty('visibility', 'visible', 'important');
     mirror.style.setProperty('opacity', '1', 'important');
