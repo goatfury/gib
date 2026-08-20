@@ -167,12 +167,20 @@
     const layer = $('trafficLayer');
     if (!layer) return;
 
-    const traffic = Number(layer.dataset.displayTraffic);
-    const total = Number.isFinite(traffic) ? Math.max(0, traffic) : 0;
+    const playing = isPlaying();
+    const exactTanker = Math.max(0, Number(layer.dataset.trafficTanker) || 0);
+    const exactCargo = Math.max(0, Number(layer.dataset.trafficCargo) || 0);
+    const exactTotal = exactTanker + exactCargo;
+    const easedTraffic = Number(layer.dataset.displayTraffic);
+    const total = playing && Number.isFinite(easedTraffic)
+      ? Math.max(0, easedTraffic)
+      : exactTotal;
     const number = layer.querySelector('.traffic-number');
     ownText(number, String(Math.round(total)), 'gulf');
 
-    const mode = layer.dataset.displayMode || (isPlaying() ? 'eased-live' : 'exact');
+    const mode = playing
+      ? (layer.dataset.displayMode || 'eased-live')
+      : 'exact';
     const trafficDate = layer.dataset.trafficDate || iso;
     const pct = Math.round(total / TRAFFIC_NORMAL * 100);
     const sub = layer.querySelectorAll('.traffic-sub')[0];
@@ -187,11 +195,16 @@
       ownText(sub, `${prefix} · ${pct}% of normal`, 'gulf');
     }
 
-    const exactTanker = Math.max(0, Number(layer.dataset.trafficTanker) || 0);
-    const exactCargo = Math.max(0, Number(layer.dataset.trafficCargo) || 0);
-    const exactTotal = exactTanker + exactCargo;
-    const tanker = exactTotal > 0 ? Math.round(total * exactTanker / exactTotal) : 0;
-    const cargo = Math.max(0, Math.round(total) - tanker);
+    let tanker;
+    let cargo;
+    if (!playing) {
+      tanker = Math.round(exactTanker);
+      cargo = Math.round(exactCargo);
+    } else {
+      const ratio = exactTotal > 0 ? exactTanker / exactTotal : .5;
+      tanker = Math.round(total * ratio);
+      cargo = Math.max(0, Math.round(total) - tanker);
+    }
     const breakdown = layer.querySelectorAll('.traffic-sub')[1];
     ownText(breakdown, `tankers ${tanker} · cargo ${cargo}`, 'gulf');
 
