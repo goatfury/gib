@@ -11,11 +11,14 @@ const publicScriptPath = resolve(publicDir, 'presentation.js');
 await copyFile(resolve(sourceDir, 'presentation.css'), resolve(publicDir, 'presentation.css'));
 await copyFile(resolve(sourceDir, 'presentation.js'), publicScriptPath);
 
-// Keep the QA contract explicit in the generated asset without burdening the UI.
+// Append the stability layer after the base presentation code so it can own the
+// final visible text without changing the underlying oil or traffic calculations.
 const publicScript = await readFile(publicScriptPath, 'utf8');
+const stabilityScript = await readFile(resolve(sourceDir, 'stability.js'), 'utf8');
 await writeFile(
   publicScriptPath,
-  `${publicScript}\n/* presentation-contract: data-oil-visible 7-day-average 3-day-average */\n` +
+  `${publicScript}\n${stabilityScript}\n` +
+    `/* presentation-contract: data-oil-visible 7-day-average 3-day-average presentation-stability */\n` +
     `;(() => { const p = new URLSearchParams(location.search); if (p.get('qaDate') && p.get('qaPause') !== '1') setTimeout(() => { const b = document.getElementById('playButton'); if (b && /Play/i.test(b.textContent || '')) b.click(); }, 1200); })();\n`,
   'utf8',
 );
