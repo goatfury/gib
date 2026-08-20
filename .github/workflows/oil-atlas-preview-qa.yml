@@ -40,6 +40,7 @@ jobs:
           grep -q '7-day-average' oil-atlas/public/presentation.js
           grep -q '3-day-average' oil-atlas/public/presentation.js
           grep -q 'presentation-stability' oil-atlas/public/presentation.js
+          grep -q 'data-presentation-for' oil-atlas/public/presentation.js
           node --check oil-atlas/public/presentation.js
           node --test oil-atlas/tests/gulf-model.test.mjs oil-atlas/tests/smooth-flow.test.mjs oil-atlas/tests/traffic-model.test.mjs
 
@@ -155,19 +156,26 @@ jobs:
             await setTimeline('2026-04-25', false);
 
             const paused = await evaluate(`(() => {
+              const visible = (key, fallbackId = key) => {
+                const mirror = document.querySelector('[data-presentation-for="' + key + '"]');
+                if (mirror) return mirror.textContent || '';
+                const fallback = document.getElementById(fallbackId);
+                return fallback?.dataset.presentationText || fallback?.textContent || '';
+              };
               const app = document.querySelector('.app-screen');
               const gauge = document.getElementById('barrelGauge');
               const liquid = document.getElementById('barrelLiquid');
               const clip = liquid?.parentElement;
               const visibleSiblings = clip ? [...clip.children].filter((node) => node !== liquid && getComputedStyle(node).display !== 'none').length : -1;
               const loudModelText = gauge ? [...gauge.querySelectorAll('text')].filter((node) => /^(MODELED|UNKNOWN)$/i.test((node.textContent || '').trim()) && getComputedStyle(node).display !== 'none').length : -1;
-              const routeIds = ['routeBadgeHormuz','routeBadgeYanbu','routeBadgeFujairah','routeBadgeOther'];
-              const routes = Object.fromEntries(routeIds.map((id) => {
-                const text = document.getElementById(id)?.querySelector('.smooth-route-value')?.textContent || '';
-                return [id, Number.parseFloat(text)];
-              }));
-              const trafficSub = [...document.querySelectorAll('#trafficLayer .traffic-sub')].map((node) => node.textContent || '');
-              const traffic = Number.parseInt(document.querySelector('#trafficLayer .traffic-number')?.textContent || '', 10);
+              const routes = {
+                hormuz: Number.parseFloat(visible('route-hormuz')),
+                yanbu: Number.parseFloat(visible('route-yanbu')),
+                fujairah: Number.parseFloat(visible('route-fujairah')),
+                other: Number.parseFloat(visible('route-other')),
+              };
+              const trafficSub = [visible('traffic-sub-0'), visible('traffic-sub-1')];
+              const traffic = Number.parseInt(visible('traffic-number'), 10);
               const modelOil = window.__oilAtlasSmoothOil?.modelAt?.('2026-04-25')?.value;
               return {
                 stable: document.documentElement.dataset.presentationStable,
@@ -178,10 +186,11 @@ jobs:
                 liquidOpacity: liquid && getComputedStyle(liquid).opacity,
                 visibleSiblings,
                 loudModelText,
-                unit: document.getElementById('barrelUnit')?.textContent,
-                flow: Number.parseFloat(document.getElementById('flowNumber')?.textContent || ''),
+                mirrorCount: document.querySelectorAll('[data-presentation-for]').length,
+                unit: visible('barrelUnit'),
+                flow: Number.parseFloat(visible('flowNumber')),
                 modelOil,
-                date: document.getElementById('dateDisplay')?.textContent,
+                date: visible('dateDisplay'),
                 timeline: document.getElementById('timeline')?.value,
                 play: document.getElementById('playButton')?.textContent,
                 routes,
@@ -191,7 +200,7 @@ jobs:
                 horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1,
               };
             })()`);
-            if (paused.ready !== 'true' || paused.stable !== 'true' || paused.oilVisible !== 'true') throw new Error(`Presentation layer missing: ${JSON.stringify(paused)}`);
+            if (paused.ready !== 'true' || paused.stable !== 'true' || paused.oilVisible !== 'true' || paused.mirrorCount < 9) throw new Error(`Presentation layer missing: ${JSON.stringify(paused)}`);
             if (paused.liquidDisplay === 'none' || Number(paused.liquidOpacity) < .95) throw new Error(`Oil is hidden: ${JSON.stringify(paused)}`);
             if (paused.visibleSiblings !== 0 || paused.loudModelText !== 0) throw new Error(`Barrel mask survived: ${JSON.stringify(paused)}`);
             if (paused.unit !== 'million b/d' || !Number.isFinite(paused.flow) || Math.abs(paused.flow - paused.modelOil) > .15) throw new Error(`Barrel readout does not match the oil model: ${JSON.stringify(paused)}`);
@@ -209,11 +218,17 @@ jobs:
 
             await setTimeline('2026-01-15', true);
             const playing = await evaluate(`(async () => {
+              const visible = (key, fallbackId = key) => {
+                const mirror = document.querySelector('[data-presentation-for="' + key + '"]');
+                if (mirror) return mirror.textContent || '';
+                const fallback = document.getElementById(fallbackId);
+                return fallback?.dataset.presentationText || fallback?.textContent || '';
+              };
               const read = () => ({
-                date: document.getElementById('dateDisplay')?.textContent || '',
-                flow: document.getElementById('flowNumber')?.textContent || '',
-                traffic: document.querySelector('#trafficLayer .traffic-number')?.textContent || '',
-                routes: [...document.querySelectorAll('.smooth-route-value')].map((node) => node.textContent || '').join('|'),
+                date: visible('dateDisplay'),
+                flow: visible('flowNumber'),
+                traffic: visible('traffic-number'),
+                routes: ['route-hormuz','route-yanbu','route-fujairah','route-other'].map((key) => visible(key)).join('|'),
               });
               const samples = [];
               for (let i = 0; i < 25; i += 1) {
@@ -223,7 +238,7 @@ jobs:
               const changes = (key) => samples.slice(1).reduce((count, row, index) => count + (row[key] !== samples[index][key] ? 1 : 0), 0);
               return {
                 dateMode: document.documentElement.dataset.presentationDateMode,
-                date: document.getElementById('dateDisplay')?.textContent,
+                date: visible('dateDisplay'),
                 trafficMode: document.getElementById('trafficLayer')?.dataset.displayMode,
                 trafficDisplay: document.getElementById('trafficLayer')?.dataset.displayTraffic,
                 play: document.getElementById('playButton')?.textContent,
@@ -234,7 +249,7 @@ jobs:
             if (playing.stable !== 'true' || playing.dateMode !== 'month' || /\d{1,2},/.test(playing.date || '')) throw new Error(`Playing date still flickers daily: ${JSON.stringify(playing)}`);
             if (!/average|eased/.test(playing.trafficMode || '')) throw new Error(`Traffic counter is not smoothed: ${JSON.stringify(playing)}`);
             if (!/Pause/.test(playing.play || '')) throw new Error(`Autoplay is not running: ${JSON.stringify(playing)}`);
-            if (playing.changes.date > 2 || playing.changes.flow > 6 || playing.changes.traffic > 6 || playing.changes.routes > 6) throw new Error(`Readouts are updating too aggressively: ${JSON.stringify(playing)}`);
+            if (playing.changes.date > 2 || playing.changes.flow > 5 || playing.changes.traffic > 5 || playing.changes.routes > 5) throw new Error(`Visible readouts are updating too aggressively: ${JSON.stringify(playing)}`);
 
             shot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
             writeFileSync(`/tmp/oil-atlas-shots/playing-${width}x${height}.png`, Buffer.from(shot.data, 'base64'));
