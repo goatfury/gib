@@ -1,10 +1,15 @@
 [build]
-  command = "node atlantic-atlas/build.mjs"
+  base = "atlantic-atlas"
+  command = "node build.mjs"
   publish = "."
-  functions = "netlify/functions"
 
-[functions]
-  node_bundler = "esbuild"
+[build.environment]
+  NODE_VERSION = "22"
 
-[functions."m1-schedule"]
-  included_files = ["m1/shared-schedule.json"]
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow, noarchive"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Cache-Control = "public, max-age=0, must-revalidate"
