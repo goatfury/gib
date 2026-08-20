@@ -5,7 +5,7 @@ import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(fileURLToPath(import.meta.url));
-const expectedSha256 = 'ac524a980e2fffbad791c85b96141e99cf2862f55900864d151052affd5170de';
+const expectedSha256 = 'c1d0bd1d66122725fb517a2d91c2dfb9e977d99284f13e94d0cf363cb2531da2';
 
 const safePath = (relativePath) => {
   const outputPath = resolve(root, relativePath);
