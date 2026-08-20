@@ -14,3 +14,4 @@ for (const part of headParts) head += (await readFile(resolve(patchDir, part), '
 await writeFile(resolve(patchDir, 'gulf-audit-01.b64'), `${head}\n`, 'utf8');
 await import('./build.mjs');
 await import('./apply-flow-v3.mjs');
+await import('./apply-ship-traffic.mjs');

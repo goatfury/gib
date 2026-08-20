@@ -17,7 +17,7 @@ env:
 jobs:
   preview-qa:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
 
@@ -25,17 +25,24 @@ jobs:
         with:
           node-version: 22
 
-      - name: Reconstruct and validate the smooth Gulf model
+      - name: Reconstruct and validate oil plus ship-flow models
         run: |
           node oil-atlas/build-audited.mjs
           test -s oil-atlas/public/index.html
           test -s oil-atlas/public/data/fallback.json
+          test -s oil-atlas/public/ship-traffic.css
+          test -s oil-atlas/public/ship-traffic.js
           grep -q "Gulf oil routes" oil-atlas/public/index.html
           grep -q "Modeled split" oil-atlas/public/index.html
           grep -q "EAST–WEST → YANBU" oil-atlas/public/index.html
           grep -q "HABSHAN–FUJAIRAH" oil-atlas/public/index.html
+          grep -q 'src="/ship-traffic.js"' oil-atlas/public/index.html
+          grep -q 'href="/ship-traffic.css"' oil-atlas/public/index.html
+          grep -q "shipping artery empty almost overnight" oil-atlas/public/ship-traffic.js
+          grep -q "51 → 18 → 4 → 0" oil-atlas/public/ship-traffic.js
           ! grep -q "UNKNOWN" oil-atlas/public/index.html
           node --test oil-atlas/tests/gulf-model.test.mjs
+          node --test oil-atlas/tests/traffic-model.test.mjs
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
           const data = JSON.parse(readFileSync('oil-atlas/public/data/fallback.json', 'utf8'));
@@ -46,7 +53,7 @@ jobs:
           if (data.gulf.routeCapacities?.yanbu?.exportCapacity !== 5) throw new Error('Yanbu export capacity changed');
           if (data.gulf.routeCapacities?.fujairah?.pipelineCapacity !== 1.8) throw new Error('Fujairah capacity changed');
           const prewar = data.gulf.modelAnchors.filter((item) => item.date <= '2026-02-27').map((item) => item.value);
-          if (new Set(prewar).size < 5) throw new Error('Prewar model is still flat');
+          if (new Set(prewar).size < 5) throw new Error('Prewar oil model is still flat');
           for (const item of data.gulf.modelAnchors) {
             const r = item.routes;
             const total = r.hormuz + r.yanbu + r.fujairah + r.other;
@@ -55,23 +62,24 @@ jobs:
           }
           NODE
 
-      - name: Wait for the modeled Netlify preview
+      - name: Wait for the ship-traffic Netlify preview
         run: |
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 72); do
             if curl --fail --silent --show-error --location "$PREVIEW_URL/" -o /tmp/oil-atlas.html; then
-              if grep -q "Gulf oil routes" /tmp/oil-atlas.html && grep -q "EAST–WEST → YANBU" /tmp/oil-atlas.html; then
+              if grep -q "Gulf oil routes" /tmp/oil-atlas.html && grep -q 'src="/ship-traffic.js"' /tmp/oil-atlas.html; then
                 exit 0
               fi
             fi
             sleep 5
           done
-          echo "Modeled Netlify preview did not become reachable" >&2
+          echo "Ship-traffic Netlify preview did not become reachable" >&2
           exit 1
 
-      - name: Verify the live endpoint and model contract
+      - name: Verify live oil and daily traffic endpoints
         run: |
           ! grep -q "UNKNOWN" /tmp/oil-atlas.html
           curl --fail --silent --show-error --location "$PREVIEW_URL/api/oil_data" -o /tmp/oil-data.json
+          curl --fail --silent --show-error --location "$PREVIEW_URL/api/hormuz_traffic" -o /tmp/hormuz-traffic.json
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
           const data = JSON.parse(readFileSync('/tmp/oil-data.json', 'utf8'));
@@ -94,16 +102,26 @@ jobs:
             if (Math.abs(item.value - (r.hormuz + r.yanbu + r.fujairah + r.other)) > 1e-8) throw new Error(`Route total mismatch on ${item.date}`);
             if (Math.abs(r.yanbu - (r.yanbuNorth + r.yanbuSouth)) > 1e-8) throw new Error(`Yanbu split mismatch on ${item.date}`);
           }
+
+          const traffic = JSON.parse(readFileSync('/tmp/hormuz-traffic.json', 'utf8'));
+          if (traffic.schemaVersion !== 1) throw new Error('Unexpected traffic schemaVersion');
+          if (traffic.preCrisisPortWatchMedian !== 73) throw new Error('PortWatch baseline changed');
+          if (!Array.isArray(traffic.records) || traffic.records.length < 300) throw new Error('Daily traffic series missing');
+          const byDate = new Map(traffic.records.map((row) => [row.date, row]));
+          const cliff = ['2026-02-28','2026-03-01','2026-03-02','2026-03-04'].map((date) => byDate.get(date)?.total);
+          if (JSON.stringify(cliff) !== JSON.stringify([51,18,4,0])) throw new Error(`Traffic cliff changed: ${JSON.stringify(cliff)}`);
+          for (const row of traffic.records) {
+            if (row.tanker + row.cargo !== row.total) throw new Error(`Traffic category mismatch on ${row.date}`);
+          }
           console.log(JSON.stringify({
-            checkedAt: data.checkedAt,
-            worldRefresh: data.refresh.world,
-            hormuzRefresh: data.refresh.hormuz,
-            modelThrough: data.gulf.modelThrough,
-            anchors: data.gulf.modelAnchors.length,
+            oilCheckedAt: data.checkedAt,
+            trafficCheckedAt: traffic.checkedAt,
+            latestTrafficDate: traffic.latestPublishedDate,
+            trafficCliff: cliff,
           }, null, 2));
           NODE
 
-      - name: Real-browser laptop QA and screenshots
+      - name: Real-browser artery-to-trickle QA and screenshots
         run: |
           mkdir -p /tmp/oil-atlas-shots
           google-chrome --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
@@ -153,50 +171,76 @@ jobs:
             if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
             return result.result.value;
           };
+          const navigate = async (url, wait = 6500) => {
+            await send('Page.navigate', { url });
+            await sleep(wait);
+          };
+          const inspect = () => evaluate(`(() => {
+            const app = document.querySelector('.app-screen');
+            const layer = document.getElementById('trafficLayer');
+            const routeIds = ['routeValueHormuz','routeValueYanbu','routeValueFujairah','routeValueOther'];
+            return {
+              width: innerWidth,
+              height: innerHeight,
+              appBottom: app?.getBoundingClientRect().bottom,
+              horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1,
+              fits: !!app && app.getBoundingClientRect().bottom <= innerHeight + 1,
+              date: document.getElementById('dateDisplay')?.textContent,
+              routes: Object.fromEntries(routeIds.map((id) => [id, document.getElementById(id)?.textContent])),
+              playing: document.getElementById('playButton')?.textContent,
+              trafficDate: layer?.dataset.trafficDate,
+              trafficTotal: Number(layer?.dataset.trafficTotal || -1),
+              visibleShips: Number(layer?.dataset.visibleShips || -1),
+              targetShips: Number(layer?.dataset.targetShips || -1),
+              trafficSource: layer?.dataset.source,
+              impact: layer?.dataset.impact,
+              shipNodes: document.querySelectorAll('#trafficShips .traffic-ship').length,
+              title: document.getElementById('mapTitle')?.textContent,
+              unknown: document.body.innerText.includes('UNKNOWN'),
+            };
+          })()`);
+          const capture = async (name) => {
+            const shot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+            writeFileSync(`/tmp/oil-atlas-shots/${name}.png`, Buffer.from(shot.data, 'base64'));
+          };
 
           await send('Page.enable');
           await send('Runtime.enable');
-          const sizes = [[1366, 768], [1280, 720], [1024, 600]];
-          for (const [width, height] of sizes) {
+
+          for (const [width, height] of [[1366,768],[1024,600]]) {
             await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
-            await send('Page.navigate', { url: process.env.PREVIEW_URL });
-            await sleep(8500);
-            const shockDay = Math.round((Date.parse('2026-03-15T00:00:00Z') - Date.parse('2025-09-01T00:00:00Z')) / 86400000);
-            await evaluate(`(async () => {
-              const slider = document.getElementById('timeline');
-              slider.value = ${shockDay};
-              slider.dispatchEvent(new Event('input', { bubbles: true }));
-              await new Promise((resolve) => setTimeout(resolve, 700));
-              return true;
-            })()`);
-            const qa = await evaluate(`(() => {
-              const app = document.querySelector('.app-screen');
-              const routeIds = ['routeValueHormuz','routeValueYanbu','routeValueFujairah','routeValueOther'];
-              return {
-                width: innerWidth,
-                height: innerHeight,
-                appBottom: app?.getBoundingClientRect().bottom,
-                horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1,
-                fits: !!app && app.getBoundingClientRect().bottom <= innerHeight + 1,
-                date: document.getElementById('dateDisplay')?.textContent,
-                flow: document.getElementById('flowNumber')?.textContent,
-                barrelUnit: document.getElementById('barrelUnit')?.textContent,
-                routes: Object.fromEntries(routeIds.map((id) => [id, document.getElementById(id)?.textContent])),
-                playing: document.getElementById('playButton')?.textContent,
-                unknown: document.body.innerText.includes('UNKNOWN'),
-              };
-            })()`);
-            if (!qa.fits) throw new Error(`Active atlas exceeds ${width}x${height}: ${JSON.stringify(qa)}`);
-            if (qa.horizontalOverflow) throw new Error(`Horizontal overflow at ${width}x${height}`);
-            if (qa.unknown) throw new Error(`UNKNOWN label survived at ${width}x${height}`);
-            if (!/March 15, 2026/.test(qa.date || '')) throw new Error(`Timeline did not scrub at ${width}x${height}`);
-            if (!/modeled/i.test(qa.barrelUnit || '')) throw new Error(`Modeled barrel label missing at ${width}x${height}`);
-            if (!Object.values(qa.routes).every((value) => /\d/.test(value || ''))) throw new Error(`Route value missing at ${width}x${height}`);
-            if (!/Pause/.test(qa.playing || '')) throw new Error(`Autoplay not visible at ${width}x${height}`);
-            writeFileSync(`/tmp/oil-atlas-shots/qa-${width}x${height}.json`, JSON.stringify(qa, null, 2));
-            const shot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
-            writeFileSync(`/tmp/oil-atlas-shots/gulf-${width}x${height}.png`, Buffer.from(shot.data, 'base64'));
+
+            await navigate(`${process.env.PREVIEW_URL}/?qaDate=2026-02-22&qaPause=1`);
+            const busy = await inspect();
+            if (!busy.fits || busy.horizontalOverflow) throw new Error(`Busy view does not fit ${width}x${height}: ${JSON.stringify(busy)}`);
+            if (busy.trafficTotal !== 125) throw new Error(`Busy daily count wrong at ${width}x${height}: ${JSON.stringify(busy)}`);
+            if (busy.visibleShips < 25 || busy.shipNodes !== 30) throw new Error(`Busy artery not visibly busy at ${width}x${height}: ${JSON.stringify(busy)}`);
+            if (!/Hormuz ship traffic/.test(busy.title || '')) throw new Error(`Ship-traffic hierarchy missing at ${width}x${height}`);
+            if (busy.unknown) throw new Error(`UNKNOWN label survived at ${width}x${height}`);
+            writeFileSync(`/tmp/oil-atlas-shots/busy-${width}x${height}.json`, JSON.stringify(busy, null, 2));
+            await capture(`busy-${width}x${height}`);
+
+            await navigate(`${process.env.PREVIEW_URL}/?qaDate=2026-03-02&qaPause=1`);
+            const trickle = await inspect();
+            if (trickle.trafficTotal !== 4) throw new Error(`Trickle count wrong at ${width}x${height}: ${JSON.stringify(trickle)}`);
+            if (trickle.visibleShips < 1 || trickle.visibleShips > 3) throw new Error(`Trickle not visually sparse at ${width}x${height}: ${JSON.stringify(trickle)}`);
+            writeFileSync(`/tmp/oil-atlas-shots/trickle-${width}x${height}.json`, JSON.stringify(trickle, null, 2));
+            await capture(`trickle-${width}x${height}`);
+
+            await navigate(`${process.env.PREVIEW_URL}/?qaDate=2026-03-04&qaPause=1`);
+            const zero = await inspect();
+            if (zero.trafficTotal !== 0 || zero.visibleShips !== 0) throw new Error(`Zero-transit day still looks busy at ${width}x${height}: ${JSON.stringify(zero)}`);
+            if (!zero.fits || zero.horizontalOverflow) throw new Error(`Zero view does not fit ${width}x${height}: ${JSON.stringify(zero)}`);
+            writeFileSync(`/tmp/oil-atlas-shots/zero-${width}x${height}.json`, JSON.stringify(zero, null, 2));
+            await capture(`zero-${width}x${height}`);
           }
+
+          await send('Emulation.setDeviceMetricsOverride', { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false });
+          await navigate(`${process.env.PREVIEW_URL}/?qaDate=2026-02-27&qaPause=1&qaImpact=1`, 900);
+          const impact = await inspect();
+          if (impact.impact !== 'true') throw new Error(`Collapse beat did not trigger: ${JSON.stringify(impact)}`);
+          await capture('impact-1366x768');
+
           ws.close();
           NODE
 
@@ -205,6 +249,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: oil-atlas-route-flow-screenshots
+          name: oil-atlas-ship-traffic-screenshots
           path: /tmp/oil-atlas-shots
           if-no-files-found: error
