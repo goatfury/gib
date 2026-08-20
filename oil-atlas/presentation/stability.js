@@ -5,6 +5,7 @@
   const DAY = 86400000;
   const OIL_BASELINE = 24;
   const TRAFFIC_NORMAL = 73;
+  const QA_PAUSE = new URLSearchParams(location.search).get('qaPause') === '1';
   const $ = (id) => document.getElementById(id);
 
   const owned = new Map();
@@ -55,6 +56,12 @@
     for (const [node, entry] of [...owned]) {
       if (entry.scope === scope) owned.delete(node);
     }
+  }
+
+  function enforceQaPause() {
+    if (!QA_PAUSE) return;
+    const button = $('playButton');
+    if (button && /Pause/i.test(button.textContent || '')) button.click();
   }
 
   function revealOil() {
@@ -176,6 +183,8 @@
   }
 
   function frame(now) {
+    enforceQaPause();
+
     const gulf = isGulf();
     const mode = gulf ? 'gulf' : 'world';
     if (mode !== state.lastMode) {
