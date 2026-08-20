@@ -6,11 +6,11 @@
   const OIL_BASELINE = 24;
   const TRAFFIC_NORMAL = 73;
   const QA_PAUSE = new URLSearchParams(location.search).get('qaPause') === '1';
+  const SVG_NS = 'http://www.w3.org/2000/svg';
   const $ = (id) => document.getElementById(id);
 
-  const owned = new Map();
+  const displays = new Map();
   const state = {
-    enforcing: false,
     nextReadoutAt: 0,
     lastMode: '',
   };
@@ -45,16 +45,80 @@
     }).format(dateFromIso(iso));
   }
 
-  function ownText(node, text, scope = 'common') {
-    if (!node) return;
-    const value = String(text);
-    owned.set(node, { value, scope });
-    if (node.textContent !== value) node.textContent = value;
+  function isSvgText(node) {
+    return Boolean(node && node.namespaceURI === SVG_NS && node.tagName?.toLowerCase() === 'text');
+  }
+
+  function createSvgMirror(source, key, scope) {
+    const mirror = source.cloneNode(true);
+    mirror.removeAttribute('id');
+    mirror.setAttribute('data-presentation-for', key);
+    mirror.setAttribute('aria-hidden', 'false');
+    mirror.style.setProperty('display', 'inline', 'important');
+    mirror.style.setProperty('visibility', 'visible', 'important');
+    mirror.style.setProperty('opacity', '1', 'important');
+    mirror.style.setProperty('pointer-events', 'none', 'important');
+    source.style.setProperty('opacity', '0', 'important');
+    source.setAttribute('aria-hidden', 'true');
+    source.parentNode?.insertBefore(mirror, source.nextSibling);
+    const entry = { kind: 'svg', source, mirror, key, scope, value: null };
+    displays.set(key, entry);
+    return entry;
+  }
+
+  function createHtmlProxy(source, key, scope) {
+    const computed = getComputedStyle(source);
+    source.classList.add('presentation-text-proxy');
+    source.style.setProperty('--presentation-text-color', computed.color);
+    const entry = { kind: 'html', source, key, scope, value: null };
+    displays.set(key, entry);
+    return entry;
+  }
+
+  function ensureDisplay(source, key, scope) {
+    if (!source) return null;
+    let entry = displays.get(key);
+    if (entry && entry.source === source) {
+      if (entry.kind !== 'svg' || entry.mirror?.isConnected) {
+        entry.scope = scope;
+        return entry;
+      }
+    }
+    if (entry?.kind === 'svg') entry.mirror?.remove();
+    displays.delete(key);
+    return isSvgText(source)
+      ? createSvgMirror(source, key, scope)
+      : createHtmlProxy(source, key, scope);
+  }
+
+  function setVisibleText(source, value, scope = 'common', key = source?.id) {
+    if (!source || !key) return;
+    const entry = ensureDisplay(source, key, scope);
+    if (!entry) return;
+    const text = String(value);
+    if (entry.value === text) return;
+    entry.value = text;
+    if (entry.kind === 'svg') entry.mirror.textContent = text;
+    else entry.source.dataset.presentationText = text;
+  }
+
+  function setDirectText(node, value) {
+    if (node && node.textContent !== String(value)) node.textContent = String(value);
   }
 
   function releaseScope(scope) {
-    for (const [node, entry] of [...owned]) {
-      if (entry.scope === scope) owned.delete(node);
+    for (const [key, entry] of [...displays]) {
+      if (entry.scope !== scope) continue;
+      if (entry.kind === 'svg') {
+        entry.mirror?.remove();
+        entry.source?.style.removeProperty('opacity');
+        entry.source?.removeAttribute('aria-hidden');
+      } else {
+        entry.source?.classList.remove('presentation-text-proxy');
+        entry.source?.removeAttribute('data-presentation-text');
+        entry.source?.style.removeProperty('--presentation-text-color');
+      }
+      displays.delete(key);
     }
   }
 
@@ -71,53 +135,37 @@
     if (!gauge || !liquid) return;
 
     gauge.dataset.oilVisible = 'true';
-    liquid.style.display = 'inline';
-    liquid.style.visibility = 'visible';
-    liquid.style.opacity = '1';
+    liquid.style.setProperty('display', 'inline', 'important');
+    liquid.style.setProperty('visibility', 'visible', 'important');
+    liquid.style.setProperty('opacity', '1', 'important');
 
     const clipGroup = liquid.parentElement;
     if (clipGroup) {
       for (const child of [...clipGroup.children]) {
         if (child === liquid) continue;
-        child.style.display = 'none';
+        child.style.setProperty('display', 'none', 'important');
         child.setAttribute('aria-hidden', 'true');
       }
     }
 
     for (const node of gauge.querySelectorAll('[class*="unknown"], [class*="unmeasured"], [class*="uncertain"], [class*="model-mask"], [class*="hatch"]')) {
-      if (!node.closest('defs')) node.style.display = 'none';
+      if (!node.closest('defs')) node.style.setProperty('display', 'none', 'important');
     }
 
     for (const text of gauge.querySelectorAll('text')) {
       const value = (text.textContent || '').trim();
       if (!/^(UNKNOWN|MODELED)$/i.test(value)) continue;
+      if (text.hasAttribute('data-presentation-for')) continue;
       if (['flowNumber', 'barrelUnit', 'percentDisplay'].includes(text.id)) continue;
       const group = text.closest('g');
-      if (group && group.id !== 'barrelCallout') group.style.display = 'none';
-      else text.style.display = 'none';
-    }
-  }
-
-  function enforceOwnedText() {
-    if (state.enforcing) return;
-    state.enforcing = true;
-    try {
-      for (const [node, entry] of [...owned]) {
-        if (!node.isConnected) {
-          owned.delete(node);
-          continue;
-        }
-        if (node.textContent !== entry.value) node.textContent = entry.value;
-      }
-      revealOil();
-    } finally {
-      state.enforcing = false;
+      if (group && group.id !== 'barrelCallout') group.style.setProperty('display', 'none', 'important');
+      else text.style.setProperty('display', 'none', 'important');
     }
   }
 
   function renderCalmDate(iso) {
     const playing = isPlaying();
-    ownText($('dateDisplay'), playing ? formatMonth(iso) : formatExact(iso), 'date');
+    setVisibleText($('dateDisplay'), playing ? formatMonth(iso) : formatExact(iso), 'date', 'dateDisplay');
     document.documentElement.dataset.presentationDateMode = playing ? 'month' : 'exact';
   }
 
@@ -127,18 +175,13 @@
       return null;
     }
 
-    const flow = $('flowNumber');
-    const unit = $('barrelUnit');
-    const percent = $('percentDisplay');
-    const label = $('benchmarkLabel');
     const oil = Number(document.documentElement.dataset.presentationOil);
-
     if (Number.isFinite(oil)) {
-      ownText(flow, oil.toFixed(1), 'common');
-      ownText(percent, `${Math.round(oil / OIL_BASELINE * 100)}% of 24.0m avg`, 'common');
+      setVisibleText($('flowNumber'), oil.toFixed(1), 'common', 'flowNumber');
+      setVisibleText($('percentDisplay'), `${Math.round(oil / OIL_BASELINE * 100)}% of 24.0m avg`, 'common', 'percentDisplay');
     }
-    ownText(unit, 'million b/d', 'common');
-    ownText(label, 'Total Gulf oil exports', 'common');
+    setVisibleText($('barrelUnit'), 'million b/d', 'common', 'barrelUnit');
+    setDirectText($('benchmarkLabel'), 'Total Gulf oil exports');
     return Number.isFinite(oil) ? oil : null;
   }
 
@@ -151,15 +194,17 @@
       .reduce((sum, key) => sum + (Number(routes[key]) || 0), 0);
     const scale = Number.isFinite(displayedOil) && rawTotal > 0 ? displayedOil / rawTotal : 1;
     const nodes = {
-      hormuz: $('routeBadgeHormuz')?.querySelector('.smooth-route-value'),
-      yanbu: $('routeBadgeYanbu')?.querySelector('.smooth-route-value'),
-      fujairah: $('routeBadgeFujairah')?.querySelector('.smooth-route-value'),
-      other: $('routeBadgeOther')?.querySelector('.smooth-route-value'),
+      hormuz: $('routeBadgeHormuz')?.querySelector('.smooth-route-value:not([data-presentation-for])'),
+      yanbu: $('routeBadgeYanbu')?.querySelector('.smooth-route-value:not([data-presentation-for])'),
+      fujairah: $('routeBadgeFujairah')?.querySelector('.smooth-route-value:not([data-presentation-for])'),
+      other: $('routeBadgeOther')?.querySelector('.smooth-route-value:not([data-presentation-for])'),
     };
 
     for (const [key, node] of Object.entries(nodes)) {
       const value = Number(routes[key]);
-      if (node && Number.isFinite(value)) ownText(node, `${(value * scale).toFixed(1)}m b/d`, 'gulf');
+      if (node && Number.isFinite(value)) {
+        setVisibleText(node, `${(value * scale).toFixed(1)}m b/d`, 'gulf', `route-${key}`);
+      }
     }
   }
 
@@ -175,24 +220,23 @@
     const total = playing && Number.isFinite(easedTraffic)
       ? Math.max(0, easedTraffic)
       : exactTotal;
-    const number = layer.querySelector('.traffic-number');
-    ownText(number, String(Math.round(total)), 'gulf');
 
-    const mode = playing
-      ? (layer.dataset.displayMode || 'eased-live')
-      : 'exact';
+    const number = layer.querySelector('.traffic-number:not([data-presentation-for])');
+    setVisibleText(number, String(Math.round(total)), 'gulf', 'traffic-number');
+
+    const mode = playing ? (layer.dataset.displayMode || 'eased-live') : 'exact';
     const trafficDate = layer.dataset.trafficDate || iso;
     const pct = Math.round(total / TRAFFIC_NORMAL * 100);
-    const sub = layer.querySelectorAll('.traffic-sub')[0];
+    const subs = layer.querySelectorAll('.traffic-sub:not([data-presentation-for])');
     if (mode.endsWith('average')) {
       const days = Number.parseInt(mode, 10) || (Date.parse(`${iso}T00:00:00Z`) < Date.UTC(2026, 1, 28) ? 7 : 3);
-      ownText(sub, `${days}-day average · ${pct}% of PortWatch normal`, 'gulf');
+      setVisibleText(subs[0], `${days}-day average · ${pct}% of PortWatch normal`, 'gulf', 'traffic-sub-0');
     } else if (mode === 'eased-live') {
-      ownText(sub, `smoothed traffic pace · ${pct}% of PortWatch normal`, 'gulf');
+      setVisibleText(subs[0], `smoothed traffic pace · ${pct}% of PortWatch normal`, 'gulf', 'traffic-sub-0');
     } else {
       const held = trafficDate !== iso;
       const prefix = held ? `Latest published ${formatExact(trafficDate)}` : `${formatExact(trafficDate)} · exact day`;
-      ownText(sub, `${prefix} · ${pct}% of normal`, 'gulf');
+      setVisibleText(subs[0], `${prefix} · ${pct}% of normal`, 'gulf', 'traffic-sub-0');
     }
 
     let tanker;
@@ -205,8 +249,7 @@
       tanker = Math.round(total * ratio);
       cargo = Math.max(0, Math.round(total) - tanker);
     }
-    const breakdown = layer.querySelectorAll('.traffic-sub')[1];
-    ownText(breakdown, `tankers ${tanker} · cargo ${cargo}`, 'gulf');
+    setVisibleText(subs[1], `tankers ${tanker} · cargo ${cargo}`, 'gulf', 'traffic-sub-1');
 
     const fill = layer.querySelector('.traffic-normal-fill');
     if (fill) {
@@ -218,7 +261,7 @@
   function refreshReadouts(now, gulf, iso) {
     const layer = $('trafficLayer');
     const impact = gulf && Boolean(layer?.classList.contains('is-impact') || layer?.dataset.impact === 'true');
-    const interval = impact ? 140 : 260;
+    const interval = impact ? 190 : 320;
 
     if (isPlaying() && now < state.nextReadoutAt) return;
     state.nextReadoutAt = now + interval;
@@ -237,7 +280,10 @@
     if (mode !== state.lastMode) {
       state.lastMode = mode;
       state.nextReadoutAt = 0;
-      if (!gulf) releaseScope('gulf');
+      if (!gulf) {
+        releaseScope('gulf');
+        releaseScope('common');
+      }
     }
 
     const iso = isoAtTimeline();
@@ -250,12 +296,6 @@
   }
 
   function init() {
-    const root = document.body || document.documentElement;
-    if (!root) return;
-
-    const observer = new MutationObserver(enforceOwnedText);
-    observer.observe(root, { subtree: true, childList: true, characterData: true });
-
     revealOil();
     requestAnimationFrame(frame);
   }
