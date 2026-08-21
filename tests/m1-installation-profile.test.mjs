@@ -182,6 +182,8 @@ test('the generated browser profile is frozen and cannot be selected by URL or s
 test('Richmond client is fixed to Site Richmond, TEST schedule, local review, and no automatic transport', () => {
   assert.match(kioskHtml, /function getSiteCode\(\) \{\s*if \(IS_RICHMOND\) return INSTALLATION\.siteCode;/u);
   assert.match(kioskHtml, /RICHMOND TEST ONLY — QA Preview Class/u);
+  assert.match(kioskHtml, /html\[data-m1-installation="richmond"\] body\.kiosk-mode header #hdrGym/u);
+  assert.match(kioskHtml, /Richmond BJJ'\} · TEST Preview/u);
   assert.match(kioskHtml, /function startCanonicalScheduleRefresh\(\) \{\s*if \(IS_RICHMOND\)/u);
   assert.match(kioskHtml, /if \(BACKEND_ENABLED && localStorage\.getItem\(SYNC_AUTO_KEY\) === 'true'\)/u);
   assert.match(kioskHtml, /if \(!BACKEND_ENABLED\) \{[\s\S]*Local only — rows kept/u);

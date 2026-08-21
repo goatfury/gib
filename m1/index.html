@@ -547,6 +547,10 @@ html:not([data-m1-staff-clock="true"]) #staffTimeSection {
   display: none !important;
 }
 
+html[data-m1-installation="richmond"] body.kiosk-mode header #hdrGym {
+  display: block;
+}
+
 .installation-blocked {
   width: min(680px, calc(100% - 28px));
   margin: 48px auto;
@@ -1941,7 +1945,9 @@ function refreshNameDatalist() {
       pill.classList.remove('gray');
       pill.querySelector('.dot').style.background = 'rgba(34,197,94,.85)';
       pillText.textContent = `${cfg.gymName || 'Gym'} · ${cfg.location || 'Location'}`;
-      hdrGym.textContent = cfg.gymName || 'Gym';
+      hdrGym.textContent = IS_RICHMOND
+        ? `${cfg.gymName || 'Richmond BJJ'} · TEST Preview`
+        : (cfg.gymName || 'Gym');
       hdrLoc.textContent = cfg.location ? `Location: ${cfg.location}` : 'Location set';
     } else {
       pill.classList.add('gray');
