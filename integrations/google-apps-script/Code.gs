@@ -61,6 +61,18 @@ var GIB_M1_TEST_STAFF_AUDIT_HEADERS_ = [
   'Result',
   'Linked Punch ID'
 ];
+var GIB_M1_TEST_STAFF_ROSTER_AUDIT_SHEET_ = 'Staff Roster Audit';
+var GIB_M1_TEST_STAFF_ROSTER_AUDIT_HEADERS_ = [
+  'Request ID',
+  'Action Time',
+  'Admin Name',
+  'Staff ID',
+  'Staff Name',
+  'Action',
+  'Previous Active',
+  'New Active',
+  'Result'
+];
 
 var TEST_SPREADSHEET_ID = PropertiesService
   .getScriptProperties()
@@ -126,27 +138,74 @@ function gibM1EnsureTestSheet_(spreadsheet, name, headers) {
   return sheet;
 }
 
+function gibM1TestRosterText_(value) {
+  var text = String(value == null ? '' : value);
+  try {
+    text = text.normalize('NFKC');
+  } catch (error) {}
+  return text.trim().replace(/\s+/g, ' ');
+}
+
+function gibM1ValidateTestStaff_(sheet) {
+  var values = sheet.getDataRange().getValues();
+  var byId = {};
+  var byName = {};
+  var populatedCount = 0;
+  var activeCount = 0;
+  values.slice(1).forEach(function(row) {
+    var populated = row.some(function(value) {
+      return gibM1TestRosterText_(value) !== '';
+    });
+    if (!populated) return;
+    var rawStaffId = row[0];
+    var rawStaffName = row[1];
+    var staffId = gibM1TestRosterText_(rawStaffId);
+    var staffName = gibM1TestRosterText_(rawStaffName);
+    var normalizedName = staffName
+      .toLowerCase()
+      .replace(/[’‘`´]/g, "'")
+      .replace(/[‐‑‒–—―−]/g, '-');
+    var active = row[2];
+    if (
+      !staffId
+      || typeof rawStaffId !== 'string'
+      || rawStaffId !== staffId
+      || staffId.length > 80
+      || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(staffId)
+      || !staffName
+      || typeof rawStaffName !== 'string'
+      || rawStaffName !== staffName
+      || staffName.length > 100
+      || !/\p{L}/u.test(staffName)
+      || !/^[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N} .'’-]*$/u.test(staffName)
+      || !/\b(test|fake|demo|qa)\b|do not pay/i.test(staffName)
+      || (active !== true && active !== false)
+      || byId[staffId]
+      || byName[normalizedName]
+    ) {
+      throw new Error('Staff Clock Staff contains an invalid or duplicate row.');
+    }
+    byId[staffId] = true;
+    byName[normalizedName] = true;
+    populatedCount += 1;
+    if (active) activeCount += 1;
+  });
+  if (populatedCount > 100) {
+    throw new Error('Staff Clock Staff contains too many staff rows.');
+  }
+  if (!activeCount) {
+    throw new Error('Staff Clock Staff has no active TEST staff.');
+  }
+  return populatedCount;
+}
+
 function gibM1SeedTestStaff_(sheet) {
   if (sheet.getLastRow() <= 1) {
     sheet
       .getRange(2, 1, GIB_M1_TEST_STAFF_SEED_.length, GIB_M1_TEST_STAFF_HEADERS_.length)
       .setValues(GIB_M1_TEST_STAFF_SEED_);
   }
-  var values = sheet.getDataRange().getValues();
-  if (values.length !== GIB_M1_TEST_STAFF_SEED_.length + 1) {
-    throw new Error('Staff Clock Staff must contain only the approved TEST staff.');
-  }
-  for (var rowIndex = 0; rowIndex < GIB_M1_TEST_STAFF_SEED_.length; rowIndex += 1) {
-    var actual = values[rowIndex + 1] || [];
-    var expected = GIB_M1_TEST_STAFF_SEED_[rowIndex];
-    if (
-      actual[0] !== expected[0]
-      || actual[1] !== expected[1]
-      || actual[2] !== true
-    ) {
-      throw new Error('Staff Clock Staff must contain only the approved active TEST staff.');
-    }
-  }
+  return gibM1ValidateTestStaff_(sheet);
 }
 
 function provisionGibM1TestReceiver() {
@@ -183,7 +242,12 @@ function provisionGibM1TestReceiver() {
       GIB_M1_TEST_STAFF_AUDIT_SHEET_,
       GIB_M1_TEST_STAFF_AUDIT_HEADERS_
     );
-    gibM1SeedTestStaff_(staff);
+    var staffRosterAudit = gibM1EnsureTestSheet_(
+      spreadsheet,
+      GIB_M1_TEST_STAFF_ROSTER_AUDIT_SHEET_,
+      GIB_M1_TEST_STAFF_ROSTER_AUDIT_HEADERS_
+    );
+    var staffCount = gibM1SeedTestStaff_(staff);
     SpreadsheetApp.flush();
 
     PropertiesService
@@ -199,11 +263,13 @@ function provisionGibM1TestReceiver() {
       headerCount: GIB_M1_TEST_SIGNINS_HEADERS_.length,
       dataRowCount: Math.max(0, signins.getLastRow() - 1),
       staffSheet: GIB_M1_TEST_STAFF_SHEET_,
-      staffCount: Math.max(0, staff.getLastRow() - 1),
+      staffCount: staffCount,
       staffTimeSheet: GIB_M1_TEST_STAFF_TIME_SHEET_,
       staffTimeCount: Math.max(0, staffTime.getLastRow() - 1),
       staffAuditSheet: GIB_M1_TEST_STAFF_AUDIT_SHEET_,
-      staffAuditCount: Math.max(0, staffAudit.getLastRow() - 1)
+      staffAuditCount: Math.max(0, staffAudit.getLastRow() - 1),
+      staffRosterAuditSheet: GIB_M1_TEST_STAFF_ROSTER_AUDIT_SHEET_,
+      staffRosterAuditCount: Math.max(0, staffRosterAudit.getLastRow() - 1)
     };
   } finally {
     lock.releaseLock();

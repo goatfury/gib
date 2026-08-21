@@ -126,6 +126,16 @@ function adReceiverV2_(e) {
     var legacyKioskRequest = !action && Array.isArray(body.rows);
     if (!action && Array.isArray(body.rows)) action = 'kioskSignIn';
 
+    if (action === 'staffRosterList' || action === 'staffRosterMutate') {
+      if (
+        configuredDeploymentTarget_() !== 'test'
+        || cleanText_(body.target).toLowerCase() !== 'test'
+      ) return rejectedAuthResult_();
+      if (!adminActionAuthorized_(body)) return rejectedAuthResult_();
+      if (action === 'staffRosterList') return staffRosterListAction_(body);
+      return staffRosterMutateAction_(body);
+    }
+
     if (
       action === 'staffClockSnapshot'
       || action === 'staffClockSnapshotV2'
@@ -1757,29 +1767,40 @@ function staffClockStaffState_(spreadsheet) {
   var all = [];
   var active = [];
   var byId = {};
-  var names = {};
-  source.values.slice(1).forEach(function(row) {
+  var byName = {};
+  source.values.slice(1).forEach(function(row, rowIndex) {
     if (!staffClockPopulatedRow_(row)) return;
+    var rawStaffId = row[0];
+    var rawStaffName = row[1];
     var staffId = safeExactText_(row[0], 80, false);
-    var staffName = safeExactText_(row[1], 100, false);
+    var staffName = safeText_(row[1], 100, false);
     var enabled = row[2];
     var obviousTestRosterValue = obviousTestValue_(staffId) || obviousTestValue_(staffName);
     if (
       !staffId
+      || typeof rawStaffId !== 'string'
+      || rawStaffId !== staffId
       || !GIB_M1_STAFF_ID_PATTERN_.test(staffId)
       || !staffName
+      || typeof rawStaffName !== 'string'
+      || rawStaffName !== staffName
       || (configuration.target === 'test' && !obviousTestValue_(staffName))
       || (configuration.target === 'production' && obviousTestRosterValue)
       || (enabled !== true && enabled !== false)
       || byId[staffId]
-      || names[normalizeEventText_(staffName)]
+      || byName[normalizeEventText_(staffName)]
     ) {
       throw new Error('Staff Clock Staff contains an invalid or duplicate row.');
     }
-    var item = { staffId: staffId, staffName: staffName, active: enabled };
+    var item = {
+      staffId: staffId,
+      staffName: staffName,
+      active: enabled,
+      sheetRow: rowIndex + 2
+    };
     all.push(item);
     byId[staffId] = item;
-    names[normalizeEventText_(staffName)] = true;
+    byName[normalizeEventText_(staffName)] = item;
     if (enabled) active.push({ staffId: staffId, staffName: staffName });
   });
   if (all.length > GIB_M1_STAFF_MAX_STAFF_) {
@@ -1790,7 +1811,399 @@ function staffClockStaffState_(spreadsheet) {
       ? 'Staff Clock Staff has no active TEST staff.'
       : 'Staff Clock Staff has no active production staff.');
   }
-  return { all: all, active: active, byId: byId };
+  return {
+    sheet: source.sheet,
+    all: all,
+    active: active,
+    byId: byId,
+    byName: byName
+  };
+}
+
+function staffRosterConfiguration_() {
+  if (
+    configuredDeploymentTarget_() !== 'test'
+    || typeof GIB_M1_TEST_STAFF_ROSTER_AUDIT_SHEET_ === 'undefined'
+    || typeof GIB_M1_TEST_STAFF_ROSTER_AUDIT_HEADERS_ === 'undefined'
+  ) return null;
+  return {
+    auditSheet: GIB_M1_TEST_STAFF_ROSTER_AUDIT_SHEET_,
+    auditHeaders: GIB_M1_TEST_STAFF_ROSTER_AUDIT_HEADERS_
+  };
+}
+
+function staffRosterTestRequest_(body) {
+  return configuredDeploymentTarget_() === 'test'
+    && cleanText_(body && body.target).toLowerCase() === 'test'
+    && deploymentTargetAllowed_('test')
+    && Boolean(staffRosterConfiguration_());
+}
+
+function staffRosterRejected_() {
+  return jsonResult_({
+    ok: false,
+    result: 'rejected',
+    message: 'Staff Roster request was rejected.'
+  });
+}
+
+function staffRosterConflict_(code) {
+  return jsonResult_({
+    ok: false,
+    target: 'test',
+    result: 'conflict',
+    code: code
+  });
+}
+
+function staffRosterName_(value) {
+  if (typeof value !== 'string') return '';
+  var name = safeText_(value, 100, false);
+  if (
+    !name
+    || !/\p{L}/u.test(name)
+    || !/^[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N} .'’-]*$/u.test(name)
+    || !obviousTestValue_(name)
+  ) return '';
+  return name;
+}
+
+function staffRosterNameKey_(value) {
+  return normalizeEventText_(value);
+}
+
+function staffRosterRequestValue_(body) {
+  var operation = body && typeof body.operation === 'string'
+    ? body.operation
+    : '';
+  var requestId = safeExactText_(body && body.requestId, 180, false);
+  var adminName = safeText_(body && body.adminName, 80, false);
+  if (
+    (operation !== 'add' && operation !== 'deactivate' && operation !== 'reactivate')
+    || !GIB_M1_STAFF_REQUEST_ID_PATTERN_.test(requestId)
+    || GIB_M1_ADMIN_NAMES_.indexOf(adminName) === -1
+  ) return null;
+
+  if (operation === 'add') {
+    if (!staffClockExactKeys_(body, [
+      'action', 'target', 'token', 'adminActionToken', 'operation',
+      'requestId', 'adminName', 'staffName'
+    ])) return null;
+    var staffName = staffRosterName_(body && body.staffName);
+    if (!staffName || (body && body.staffId != null)) return null;
+    return {
+      operation: operation,
+      requestId: requestId,
+      adminName: adminName,
+      staffId: '',
+      staffName: staffName
+    };
+  }
+
+  if (!staffClockExactKeys_(body, [
+    'action', 'target', 'token', 'adminActionToken', 'operation',
+    'requestId', 'adminName', 'staffId'
+  ])) return null;
+  var staffId = safeExactText_(body && body.staffId, 80, false);
+  if (
+    !staffId
+    || !GIB_M1_STAFF_ID_PATTERN_.test(staffId)
+    || (body && body.staffName != null)
+  ) return null;
+  return {
+    operation: operation,
+    requestId: requestId,
+    adminName: adminName,
+    staffId: staffId,
+    staffName: ''
+  };
+}
+
+function staffRosterAuditState_(spreadsheet) {
+  var configuration = staffRosterConfiguration_();
+  if (!configuration) throw new Error('Staff Roster is not configured for this deployment.');
+  var source = staffClockSheetValues_(
+    spreadsheet,
+    configuration.auditSheet,
+    configuration.auditHeaders
+  );
+  var records = [];
+  var byRequestId = {};
+  source.values.slice(1).forEach(function(row, rowIndex) {
+    if (!staffClockPopulatedRow_(row)) return;
+    var requestId = safeExactText_(row[0], 180, false);
+    var actionTime = staffClockTimestamp_(row[1]);
+    var adminName = safeText_(row[2], 80, false);
+    var staffId = safeExactText_(row[3], 80, false);
+    var staffName = staffRosterName_(row[4]);
+    var action = exactText_(row[5]);
+    var previousActive = row[6];
+    var newActive = row[7];
+    var result = exactText_(row[8]);
+    var validAction = action === 'add'
+      || action === 'deactivate'
+      || action === 'reactivate';
+    var expectedResult = action === 'add'
+      ? 'added'
+      : (action === 'deactivate' ? 'deactivated' : 'reactivated');
+    var validActiveValues = action === 'add'
+      ? exactText_(previousActive) === '' && newActive === true
+      : previousActive === (action === 'deactivate')
+        && newActive === (action === 'reactivate');
+    if (
+      !GIB_M1_STAFF_REQUEST_ID_PATTERN_.test(requestId)
+      || byRequestId[requestId]
+      || !actionTime
+      || GIB_M1_ADMIN_NAMES_.indexOf(adminName) === -1
+      || !GIB_M1_STAFF_ID_PATTERN_.test(staffId)
+      || !staffName
+      || !validAction
+      || !validActiveValues
+      || result !== expectedResult
+    ) throw new Error('Staff Roster Audit contains an invalid or duplicate row.');
+    var record = {
+      requestId: requestId,
+      actionTime: actionTime,
+      adminName: adminName,
+      staffId: staffId,
+      staffName: staffName,
+      action: action,
+      previousActive: action === 'add' ? null : previousActive,
+      newActive: newActive,
+      result: result,
+      sheetRow: rowIndex + 2
+    };
+    records.push(record);
+    byRequestId[requestId] = record;
+  });
+  return { sheet: source.sheet, records: records, byRequestId: byRequestId };
+}
+
+function staffRosterAuditMatchesRequest_(record, value) {
+  return Boolean(record)
+    && record.requestId === value.requestId
+    && record.adminName === value.adminName
+    && record.action === value.operation
+    && (value.operation === 'add'
+      ? record.staffName === value.staffName
+      : record.staffId === value.staffId);
+}
+
+function staffRosterSuccess_(record) {
+  return {
+    ok: true,
+    target: 'test',
+    operation: record.action,
+    requestId: record.requestId,
+    result: record.result,
+    confirmation: {
+      adminName: record.adminName,
+      staffId: record.staffId,
+      staffName: record.staffName,
+      action: record.action,
+      previousActive: record.action === 'add' ? null : record.previousActive,
+      newActive: record.newActive
+    }
+  };
+}
+
+function staffRosterAppendAudit_(state, value) {
+  if (state.byRequestId[value.requestId]) {
+    throw new Error('Staff Roster Audit request ID already exists.');
+  }
+  var row = [
+    value.requestId,
+    value.actionTime,
+    value.adminName,
+    value.staffId,
+    value.staffName,
+    value.action,
+    value.action === 'add' ? '' : value.previousActive,
+    value.newActive,
+    value.result
+  ];
+  var nextRow = state.sheet.getLastRow() + 1;
+  if (nextRow > state.sheet.getMaxRows()) {
+    state.sheet.insertRowsAfter(state.sheet.getMaxRows(), nextRow - state.sheet.getMaxRows());
+  }
+  state.sheet.getRange(nextRow, 2, 1, 1).setNumberFormat('@');
+  state.sheet.getRange(nextRow, 1, 1, row.length).setValues([row]);
+  value.sheetRow = nextRow;
+  state.records.push(value);
+  state.byRequestId[value.requestId] = value;
+  return value;
+}
+
+function staffRosterAppendStaff_(staffState, value) {
+  var nextRow = staffState.sheet.getLastRow() + 1;
+  if (nextRow > staffState.sheet.getMaxRows()) {
+    staffState.sheet.insertRowsAfter(
+      staffState.sheet.getMaxRows(),
+      nextRow - staffState.sheet.getMaxRows()
+    );
+  }
+  staffState.sheet.getRange(nextRow, 1, 1, 3).setValues([[
+    value.staffId,
+    value.staffName,
+    true
+  ]]);
+}
+
+function staffRosterSetActive_(staffState, staff, active) {
+  staffState.sheet.getRange(staff.sheetRow, 3, 1, 1).setValue(active);
+  staff.active = active;
+}
+
+function staffRosterGeneratedId_(staffName, staffState) {
+  var nameKey = staffRosterNameKey_(staffName);
+  var base = nameKey.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  base = base.slice(0, 80).replace(/-+$/g, '');
+  if (!base) return '';
+  if (!staffState.byId[base]) return base;
+
+  var digest = staffClockSha256Hex_('gib-m1-staff-roster-id-v1:' + nameKey).slice(0, 8);
+  var suffix = '-' + digest;
+  var candidate = base.slice(0, 80 - suffix.length).replace(/-+$/g, '') + suffix;
+  if (!staffState.byId[candidate]) return candidate;
+  for (var attempt = 2; attempt <= GIB_M1_STAFF_MAX_STAFF_; attempt += 1) {
+    var numberedSuffix = suffix + '-' + attempt;
+    candidate = base
+      .slice(0, 80 - numberedSuffix.length)
+      .replace(/-+$/g, '') + numberedSuffix;
+    if (!staffState.byId[candidate]) return candidate;
+  }
+  return '';
+}
+
+function staffRosterHasLaterAudit_(auditState, record) {
+  return auditState.records.some(function(candidate) {
+    return candidate.staffId === record.staffId && candidate.sheetRow > record.sheetRow;
+  });
+}
+
+function staffRosterHealReplay_(staffState, auditState, record) {
+  if (staffRosterHasLaterAudit_(auditState, record)) return;
+  var staff = staffState.byId[record.staffId];
+  if (record.action === 'add') {
+    if (!staff) {
+      if (staffState.byName[staffRosterNameKey_(record.staffName)]) {
+        throw new Error('Staff Roster replay state conflicts with the roster.');
+      }
+      staffRosterAppendStaff_(staffState, record);
+    } else if (staff.staffName !== record.staffName) {
+      throw new Error('Staff Roster replay state conflicts with the roster.');
+    }
+    return;
+  }
+  if (!staff || staff.staffName !== record.staffName) {
+    throw new Error('Staff Roster replay state conflicts with the roster.');
+  }
+  if (staff.active === record.previousActive) {
+    staffRosterSetActive_(staffState, staff, record.newActive);
+  }
+}
+
+function staffRosterListAction_(body) {
+  if (!staffRosterTestRequest_(body)) return rejectedAuthResult_();
+  return staffClockWithLock_('Staff Roster was busy. Nothing changed.', function() {
+    var spreadsheet = openExpectedSpreadsheet_(body);
+    var staffState = staffClockStaffState_(spreadsheet);
+    staffRosterAuditState_(spreadsheet);
+    return jsonResult_({
+      ok: true,
+      target: 'test',
+      staff: staffState.all.map(function(staff) {
+        return {
+          staffId: staff.staffId,
+          staffName: staff.staffName,
+          active: staff.active
+        };
+      })
+    });
+  });
+}
+
+function staffRosterMutateAction_(body) {
+  if (!staffRosterTestRequest_(body)) return rejectedAuthResult_();
+  return staffClockWithLock_('Staff Roster was busy. Nothing changed.', function() {
+    var value = staffRosterRequestValue_(body);
+    if (!value) return staffRosterRejected_();
+    var spreadsheet = openExpectedSpreadsheet_(body);
+    var staffState = staffClockStaffState_(spreadsheet);
+    var auditState = staffRosterAuditState_(spreadsheet);
+    var replay = auditState.byRequestId[value.requestId];
+    if (replay) {
+      if (!staffRosterAuditMatchesRequest_(replay, value)) {
+        return staffRosterConflict_('request_conflict');
+      }
+      staffRosterHealReplay_(staffState, auditState, replay);
+      SpreadsheetApp.flush();
+      return jsonResult_(staffRosterSuccess_(replay));
+    }
+
+    if (value.operation === 'add') {
+      var duplicate = staffState.byName[staffRosterNameKey_(value.staffName)];
+      if (duplicate) {
+        return staffRosterConflict_(duplicate.active
+          ? 'duplicate_active'
+          : 'reactivate_required');
+      }
+      if (staffState.all.length >= GIB_M1_STAFF_MAX_STAFF_) {
+        return staffRosterConflict_('capacity');
+      }
+      value.staffId = staffRosterGeneratedId_(value.staffName, staffState);
+      if (!value.staffId) return staffRosterConflict_('capacity');
+      var addedAudit = staffRosterAppendAudit_(auditState, {
+        requestId: value.requestId,
+        actionTime: staffClockNowTimestamp_(),
+        adminName: value.adminName,
+        staffId: value.staffId,
+        staffName: value.staffName,
+        action: 'add',
+        previousActive: null,
+        newActive: true,
+        result: 'added'
+      });
+      SpreadsheetApp.flush();
+      staffRosterAppendStaff_(staffState, value);
+      SpreadsheetApp.flush();
+      return jsonResult_(staffRosterSuccess_(addedAudit));
+    }
+
+    var staff = staffState.byId[value.staffId];
+    if (!staff) return staffRosterConflict_('not_found');
+    if (value.operation === 'deactivate' && !staff.active) {
+      return staffRosterConflict_('already_inactive');
+    }
+    if (value.operation === 'reactivate' && staff.active) {
+      return staffRosterConflict_('already_active');
+    }
+    if (value.operation === 'deactivate') {
+      if (staffState.active.length === 1) return staffRosterConflict_('last_active');
+      var timeState = staffClockReadTime_(spreadsheet, staffState);
+      var analysis = staffClockAnalyze_(staffState, timeState);
+      if (analysis.byStaff[staff.staffId].open) {
+        return staffRosterConflict_('clocked_in');
+      }
+    }
+
+    var newActive = value.operation === 'reactivate';
+    var statusAudit = staffRosterAppendAudit_(auditState, {
+      requestId: value.requestId,
+      actionTime: staffClockNowTimestamp_(),
+      adminName: value.adminName,
+      staffId: staff.staffId,
+      staffName: staff.staffName,
+      action: value.operation,
+      previousActive: staff.active,
+      newActive: newActive,
+      result: newActive ? 'reactivated' : 'deactivated'
+    });
+    SpreadsheetApp.flush();
+    staffRosterSetActive_(staffState, staff, newActive);
+    SpreadsheetApp.flush();
+    return jsonResult_(staffRosterSuccess_(statusAudit));
+  });
 }
 
 function staffClockTimestamp_(value) {

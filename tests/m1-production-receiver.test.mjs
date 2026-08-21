@@ -524,6 +524,62 @@ test('production package is separate, locked, executable, and contains no privat
   assert.match(projectGitIgnore, /^credentials\*\.json$/mu);
 });
 
+test('production rejects TEST-only Staff Roster actions before Sheet access and has no roster audit surface', () => {
+  assert.doesNotMatch(
+    wrapperSource,
+    /staffRoster(?:List|Mutate)|Staff Roster Audit|STAFF_ROSTER_AUDIT/u
+  );
+
+  const attempts = [
+    { action: 'staffRosterList', adminName: 'Andrew Smith' },
+    {
+      action: 'staffRosterMutate',
+      operation: 'add',
+      requestId: 'gib-m1-staff-request-20000000-0000-4000-8000-000000000001',
+      adminName: 'Andrew Smith',
+      staffName: 'QA Test Staff'
+    },
+    {
+      action: 'staffRosterMutate',
+      operation: 'deactivate',
+      requestId: 'gib-m1-staff-request-20000000-0000-4000-8000-000000000002',
+      adminName: 'Andrew Smith',
+      staffId: 'mandy'
+    },
+    {
+      action: 'staffRosterMutate',
+      operation: 'reactivate',
+      requestId: 'gib-m1-staff-request-20000000-0000-4000-8000-000000000003',
+      adminName: 'Andrew Smith',
+      staffId: 'mandy'
+    }
+  ];
+
+  for (const attempt of attempts) {
+    const harness = createHarness({ includeStaffSheets: true });
+    const rosterBefore = structuredClone(harness.sheets.get('Staff Clock Staff').values);
+    const timeBefore = structuredClone(harness.sheets.get('Staff Time').values);
+    const timeAuditBefore = structuredClone(harness.sheets.get('Staff Time Audit').values);
+
+    const response = harness.post({
+      token: harness.derivedToken,
+      adminActionToken: 'production-admin-token',
+      target: 'production',
+      ...attempt
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.result, 'rejected');
+    assert.equal(harness.spreadsheetOpens, 0);
+    assert.equal(harness.sheetWrites, 0);
+    assert.equal(harness.propertyWrites, 0);
+    assert.deepEqual(harness.sheets.get('Staff Clock Staff').values, rosterBefore);
+    assert.deepEqual(harness.sheets.get('Staff Time').values, timeBefore);
+    assert.deepEqual(harness.sheets.get('Staff Time Audit').values, timeAuditBefore);
+    assert.equal(harness.sheets.has('Staff Roster Audit'), false);
+  }
+});
+
 test('production accepts a real instructor and permanently replays one UUID only once', () => {
   const harness = createHarness();
   const request = {

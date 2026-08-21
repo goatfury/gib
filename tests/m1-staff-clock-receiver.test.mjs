@@ -37,6 +37,10 @@ const AUDIT_HEADERS = [
   'Request ID', 'Action Time', 'Admin Name', 'Staff ID', 'Staff Name',
   'Punch Timestamp', 'Action', 'Required Reason', 'Result', 'Linked Punch ID'
 ];
+const ROSTER_AUDIT_HEADERS = [
+  'Request ID', 'Action Time', 'Admin Name', 'Staff ID', 'Staff Name',
+  'Action', 'Previous Active', 'New Active', 'Result'
+];
 const ADMIN_AUDIT_HEADERS = [
   'Action Number', 'Admin Name', 'Action Time', 'Instructor', 'Class Date',
   'Class', 'Site', 'Duration', 'Required Reason', 'Final Result',
@@ -50,7 +54,10 @@ const IDS = Object.freeze({
   correction: 'gib-m1-staff-00000000-0000-4000-8000-000000000004',
   request: 'gib-m1-staff-request-10000000-0000-4000-8000-000000000001',
   voidRequest: 'gib-m1-staff-request-10000000-0000-4000-8000-000000000002',
-  voidRequestTwo: 'gib-m1-staff-request-10000000-0000-4000-8000-000000000003'
+  voidRequestTwo: 'gib-m1-staff-request-10000000-0000-4000-8000-000000000003',
+  rosterAddRequest: 'gib-m1-staff-request-20000000-0000-4000-8000-000000000001',
+  rosterDeactivateRequest: 'gib-m1-staff-request-20000000-0000-4000-8000-000000000002',
+  rosterReactivateRequest: 'gib-m1-staff-request-20000000-0000-4000-8000-000000000003'
 });
 
 function makeSheet(initialRows = []) {
@@ -217,6 +224,7 @@ function createHarness({
   staffRows = STAFF_ROWS,
   timeRows = [],
   auditRows = [],
+  rosterAuditRows = [],
   includeStaffSheets = true,
   lockAvailable = true,
   nowIso = NOW_ISO
@@ -241,6 +249,7 @@ function createHarness({
     sheets.set('Staff Clock Staff', makeSheet([STAFF_HEADERS, ...staffRows]));
     sheets.set('Staff Time', makeSheet([TIME_HEADERS, ...timeRows]));
     sheets.set('Staff Time Audit', makeSheet([AUDIT_HEADERS, ...auditRows]));
+    sheets.set('Staff Roster Audit', makeSheet([ROSTER_AUDIT_HEADERS, ...rosterAuditRows]));
   }
   const spreadsheet = {
     getId: () => 'unit-test-spreadsheet-id',
@@ -261,6 +270,7 @@ function createHarness({
   }));
   const cacheValues = new Map();
   let spreadsheetOpens = 0;
+  let lockAttempts = 0;
   const context = {
     module: { exports: {} }, exports: {}, console, Date: FixedDate,
     ContentService: {
@@ -290,7 +300,16 @@ function createHarness({
       }
     },
     LockService: {
-      getScriptLock: () => ({ tryLock: () => lockAvailable, releaseLock() {} })
+      getScriptLock: () => ({
+        tryLock() {
+          const available = Array.isArray(lockAvailable)
+            ? lockAvailable[Math.min(lockAttempts, lockAvailable.length - 1)]
+            : lockAvailable;
+          lockAttempts += 1;
+          return available;
+        },
+        releaseLock() {}
+      })
     },
     MimeType: { GOOGLE_SHEETS: 'application/vnd.google-apps.spreadsheet' },
     PropertiesService: {
@@ -329,6 +348,7 @@ function createHarness({
     properties,
     cacheValues,
     get spreadsheetOpens() { return spreadsheetOpens; },
+    get lockAttempts() { return lockAttempts; },
     post(body) {
       const result = vmContext.doPost({ postData: { contents: JSON.stringify(body) } });
       return JSON.parse(result.text);
@@ -344,6 +364,19 @@ function adminBody(action, fields = {}) {
   return receiverBody(action, {
     adminActionToken: 'unit-admin-token',
     adminName: 'Andrew Smith',
+    ...fields
+  });
+}
+
+function rosterMutation(operation, fields = {}) {
+  const requestIds = {
+    add: IDS.rosterAddRequest,
+    deactivate: IDS.rosterDeactivateRequest,
+    reactivate: IDS.rosterReactivateRequest
+  };
+  return adminBody('staffRosterMutate', {
+    operation,
+    requestId: requestIds[operation],
     ...fields
   });
 }
@@ -424,7 +457,7 @@ function correction(overrides = {}) {
   });
 }
 
-test('TEST provisioner creates only the exact Staff Clock tabs and fake active seed', () => {
+test('TEST provisioner creates the exact Staff Clock and roster-audit tabs with fake active seed', () => {
   const harness = createHarness({ includeStaffSheets: false });
   const signinsBefore = structuredClone(harness.signins.values);
   const adminAuditBefore = structuredClone(harness.adminAudit.values);
@@ -433,10 +466,13 @@ test('TEST provisioner creates only the exact Staff Clock tabs and fake active s
   assert.deepEqual(harness.sheets.get('Staff Clock Staff').values, [STAFF_HEADERS, ...STAFF_ROWS]);
   assert.deepEqual(harness.sheets.get('Staff Time').values, [TIME_HEADERS]);
   assert.deepEqual(harness.sheets.get('Staff Time Audit').values, [AUDIT_HEADERS]);
+  assert.deepEqual(harness.sheets.get('Staff Roster Audit').values, [ROSTER_AUDIT_HEADERS]);
   assert.equal(harness.sheets.get('Staff Clock Staff').frozenRows, 1);
+  assert.equal(harness.sheets.get('Staff Roster Audit').frozenRows, 1);
   assert.equal(result.staffCount, 3);
   assert.equal(result.staffTimeCount, 0);
   assert.equal(result.staffAuditCount, 0);
+  assert.equal(result.staffRosterAuditCount, 0);
   assert.deepEqual(harness.signins.values, signinsBefore);
   assert.deepEqual(harness.adminAudit.values, adminAuditBefore);
 });
@@ -467,6 +503,311 @@ test('snapshot filters inactive fake staff and rejects production or malformed r
   const before = structuredClone(malformed.sheets.get('Staff Time').values);
   assert.equal(malformed.post(receiverBody('staffClockSnapshot')).result, 'failed');
   assert.deepEqual(malformed.sheets.get('Staff Time').values, before);
+});
+
+test('authenticated TEST roster list returns active and inactive staff without writing', () => {
+  const staffRows = [
+    STAFF_ROWS[0],
+    [STAFF_ROWS[1][0], STAFF_ROWS[1][1], false],
+    STAFF_ROWS[2]
+  ];
+  const harness = createHarness({ staffRows });
+  const rosterBefore = structuredClone(harness.sheets.get('Staff Clock Staff').values);
+  const timeBefore = structuredClone(harness.sheets.get('Staff Time').values);
+  const auditBefore = structuredClone(harness.sheets.get('Staff Roster Audit').values);
+
+  assert.deepEqual(harness.post(adminBody('staffRosterList')), {
+    ok: true,
+    target: 'test',
+    staff: staffRows.map(([staffId, staffName, active]) => ({ staffId, staffName, active }))
+  });
+  assert.deepEqual(harness.sheets.get('Staff Clock Staff').values, rosterBefore);
+  assert.deepEqual(harness.sheets.get('Staff Time').values, timeBefore);
+  assert.deepEqual(harness.sheets.get('Staff Roster Audit').values, auditBefore);
+  assert.deepEqual(harness.sheets.get('Staff Clock Staff').operations, []);
+  assert.deepEqual(harness.sheets.get('Staff Roster Audit').operations, []);
+
+  for (const body of [
+    { ...adminBody('staffRosterList'), adminActionToken: '' },
+    { ...adminBody('staffRosterList'), token: 'wrong-token' },
+    { ...adminBody('staffRosterList'), target: 'production' }
+  ]) {
+    const rejected = createHarness({ staffRows });
+    assert.equal(rejected.post(body).result, 'rejected');
+    assert.equal(rejected.spreadsheetOpens, 0);
+    assert.deepEqual(rejected.sheets.get('Staff Clock Staff').operations, []);
+    assert.deepEqual(rejected.sheets.get('Staff Roster Audit').operations, []);
+  }
+});
+
+test('add normalizes names, generates a stable server ID, and resolves ID collisions deterministically', () => {
+  function addTo(harness, requestId = IDS.rosterAddRequest) {
+    return harness.post(rosterMutation('add', {
+      requestId,
+      staffName: '  QA   Test Staff  '
+    }));
+  }
+
+  const firstHarness = createHarness();
+  const first = addTo(firstHarness);
+  const staffId = first.confirmation.staffId;
+  assert.match(staffId, /^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
+  assert.deepEqual(first, {
+    ok: true,
+    target: 'test',
+    operation: 'add',
+    requestId: IDS.rosterAddRequest,
+    result: 'added',
+    confirmation: {
+      adminName: 'Andrew Smith',
+      staffId,
+      staffName: 'QA Test Staff',
+      action: 'add',
+      previousActive: null,
+      newActive: true
+    }
+  });
+  assert.deepEqual(firstHarness.sheets.get('Staff Clock Staff').values.at(-1), [
+    staffId, 'QA Test Staff', true
+  ]);
+  assert.deepEqual(firstHarness.sheets.get('Staff Roster Audit').values[1], [
+    IDS.rosterAddRequest,
+    '2026-08-18T18:00:00-04:00',
+    'Andrew Smith',
+    staffId,
+    'QA Test Staff',
+    'add',
+    '',
+    true,
+    'added'
+  ]);
+
+  const sameInputHarness = createHarness();
+  assert.equal(addTo(sameInputHarness).confirmation.staffId, staffId);
+
+  const collisionRows = [...STAFF_ROWS, [staffId, 'QA Test ID Collision', true]];
+  const collisionHarness = createHarness({ staffRows: collisionRows });
+  const collision = addTo(collisionHarness);
+  assert.equal(collision.result, 'added');
+  assert.notEqual(collision.confirmation.staffId, staffId);
+  assert.match(collision.confirmation.staffId, /^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
+  assert.deepEqual(collisionHarness.sheets.get('Staff Clock Staff').values.at(-1), [
+    collision.confirmation.staffId, 'QA Test Staff', true
+  ]);
+
+  const repeatedCollisionHarness = createHarness({ staffRows: collisionRows });
+  assert.equal(
+    addTo(repeatedCollisionHarness).confirmation.staffId,
+    collision.confirmation.staffId,
+    'the same roster state and normalized name must produce the same collision-safe ID'
+  );
+});
+
+test('duplicate names, malformed mutations, and lock contention cannot alter TEST roster state', () => {
+  const harness = createHarness();
+  const added = harness.post(rosterMutation('add', { staffName: 'QA Test Duplicate' }));
+  assert.equal(added.result, 'added');
+  const afterAdd = structuredClone(harness.sheets.get('Staff Clock Staff').values);
+  const auditAfterAdd = structuredClone(harness.sheets.get('Staff Roster Audit').values);
+
+  for (const [requestId, staffName] of [
+    [generatedRequestId(21), 'qa test duplicate'],
+    [generatedRequestId(22), '  QA   TEST   DUPLICATE  ']
+  ]) {
+    const duplicate = harness.post(rosterMutation('add', { requestId, staffName }));
+    assert.deepEqual(duplicate, {
+      ok: false,
+      target: 'test',
+      result: 'conflict',
+      code: 'duplicate_active'
+    });
+    assert.deepEqual(harness.sheets.get('Staff Clock Staff').values, afterAdd);
+    assert.deepEqual(harness.sheets.get('Staff Roster Audit').values, auditAfterAdd);
+  }
+
+  const inactiveHarness = createHarness({
+    staffRows: [...STAFF_ROWS, ['qa-test-former-staff', 'QA Test Former Staff', false]]
+  });
+  const inactiveBefore = structuredClone(inactiveHarness.sheets.get('Staff Clock Staff').values);
+  const inactiveDuplicate = inactiveHarness.post(rosterMutation('add', {
+    staffName: ' qa TEST former   staff '
+  }));
+  assert.deepEqual(inactiveDuplicate, {
+    ok: false,
+    target: 'test',
+    result: 'conflict',
+    code: 'reactivate_required'
+  });
+  assert.deepEqual(inactiveHarness.sheets.get('Staff Clock Staff').values, inactiveBefore);
+  assert.deepEqual(inactiveHarness.sheets.get('Staff Roster Audit').values, [ROSTER_AUDIT_HEADERS]);
+
+  const invalidMutations = [
+    rosterMutation('add', { staffName: '   ' }),
+    rosterMutation('add', { staffName: '=QA Test Formula' }),
+    rosterMutation('add', { staffName: '<script>QA Test Staff</script>' }),
+    rosterMutation('add', { staffName: `QA Test ${'x'.repeat(200)}` }),
+    rosterMutation('add', { requestId: 'not-a-permanent-request-id', staffName: 'QA Test Staff' }),
+    rosterMutation('add', { adminName: 'Unauthorized Test Admin', staffName: 'QA Test Staff' }),
+    rosterMutation('rename', { staffName: 'QA Test Staff' }),
+    rosterMutation('deactivate', { staffId: '' })
+  ];
+  for (const body of invalidMutations) {
+    const invalidHarness = createHarness();
+    const rosterBefore = structuredClone(invalidHarness.sheets.get('Staff Clock Staff').values);
+    const timeBefore = structuredClone(invalidHarness.sheets.get('Staff Time').values);
+    assert.equal(invalidHarness.post(body).result, 'rejected');
+    assert.deepEqual(invalidHarness.sheets.get('Staff Clock Staff').values, rosterBefore);
+    assert.deepEqual(invalidHarness.sheets.get('Staff Time').values, timeBefore);
+    assert.deepEqual(invalidHarness.sheets.get('Staff Roster Audit').values, [ROSTER_AUDIT_HEADERS]);
+  }
+
+  const contentionHarness = createHarness({ lockAvailable: [false, true, true] });
+  const firstConcurrentBody = rosterMutation('add', {
+    requestId: generatedRequestId(31),
+    staffName: 'QA Test Concurrent Staff'
+  });
+  const secondConcurrentBody = rosterMutation('add', {
+    requestId: generatedRequestId(32),
+    staffName: ' qa   test concurrent staff '
+  });
+  const busy = contentionHarness.post(firstConcurrentBody);
+  assert.equal(busy.ok, false);
+  assert.equal(busy.result, 'failed');
+  assert.equal(contentionHarness.post(secondConcurrentBody).result, 'added');
+  assert.deepEqual(contentionHarness.post(firstConcurrentBody), {
+    ok: false,
+    target: 'test',
+    result: 'conflict',
+    code: 'duplicate_active'
+  });
+  assert.equal(contentionHarness.lockAttempts, 3);
+  assert.equal(
+    contentionHarness.sheets.get('Staff Clock Staff').values
+      .filter(row => String(row[1]).toLowerCase() === 'qa test concurrent staff').length,
+    1
+  );
+  assert.equal(contentionHarness.sheets.get('Staff Roster Audit').values.length, 2);
+});
+
+test('roster lifecycle is idempotent, auditable, cache-fresh, and preserves Staff Time totals', () => {
+  const timeRows = [
+    timeRow({
+      punchId: IDS.in,
+      staffId: 'front-desk-test-two',
+      staffName: 'Front Desk Test Two'
+    }),
+    timeRow({
+      punchId: IDS.out,
+      timestamp: '2026-08-18T10:00:00-04:00',
+      staffId: 'front-desk-test-two',
+      staffName: 'Front Desk Test Two',
+      action: 'clockOut'
+    })
+  ];
+  const harness = createHarness({ timeRows });
+  const timeBefore = structuredClone(harness.sheets.get('Staff Time').values);
+  const before = harness.post(receiverBody('staffClockSnapshotV2'));
+  const beforePage = harness.post(receiverBody('staffClockSnapshotPageV2', {
+    viewToken: before.view.token,
+    stream: 'records',
+    offset: 0
+  }));
+  assert.equal(beforePage.ok, true);
+  const totalBefore = harness.post(adminBody('staffTimeReview'))
+    .periods.current.totals.find(item => item.staffId === 'front-desk-test-two');
+  assert.equal(totalBefore.totalSeconds, 3_600);
+
+  const deactivateBody = rosterMutation('deactivate', { staffId: 'front-desk-test-two' });
+  const deactivated = harness.post(deactivateBody);
+  assert.deepEqual(deactivated, {
+    ok: true,
+    target: 'test',
+    operation: 'deactivate',
+    requestId: IDS.rosterDeactivateRequest,
+    result: 'deactivated',
+    confirmation: {
+      adminName: 'Andrew Smith',
+      staffId: 'front-desk-test-two',
+      staffName: 'Front Desk Test Two',
+      action: 'deactivate',
+      previousActive: true,
+      newActive: false
+    }
+  });
+  assert.deepEqual(harness.post(deactivateBody), deactivated);
+  assert.deepEqual(harness.sheets.get('Staff Time').values, timeBefore);
+  assert.equal(harness.sheets.get('Staff Clock Staff').values[2][2], false);
+  assert.equal(harness.sheets.get('Staff Roster Audit').values.length, 2);
+  assert.deepEqual(harness.sheets.get('Staff Roster Audit').values[1], [
+    IDS.rosterDeactivateRequest,
+    '2026-08-18T18:00:00-04:00',
+    'Andrew Smith',
+    'front-desk-test-two',
+    'Front Desk Test Two',
+    'deactivate',
+    true,
+    false,
+    'deactivated'
+  ]);
+
+  const conflict = harness.post(rosterMutation('reactivate', {
+    requestId: IDS.rosterDeactivateRequest,
+    staffId: 'front-desk-test-two'
+  }));
+  assert.deepEqual(conflict, {
+    ok: false,
+    target: 'test',
+    result: 'conflict',
+    code: 'request_conflict'
+  });
+  assert.equal(harness.sheets.get('Staff Roster Audit').values.length, 2);
+
+  const afterDeactivate = harness.post(receiverBody('staffClockSnapshotV2'));
+  assert.notEqual(afterDeactivate.view.token, before.view.token);
+  assert.equal(afterDeactivate.staff.some(item => item.staffId === 'front-desk-test-two'), false);
+  assert.deepEqual(harness.post(receiverBody('staffClockSnapshotPageV2', {
+    viewToken: before.view.token,
+    stream: 'records',
+    offset: 0
+  })), { ok: false, target: 'test', result: 'stale' });
+  const totalAfterDeactivate = harness.post(adminBody('staffTimeReview'))
+    .periods.current.totals.find(item => item.staffId === 'front-desk-test-two');
+  assert.equal(totalAfterDeactivate.totalSeconds, 3_600);
+
+  const reactivateBody = rosterMutation('reactivate', { staffId: 'front-desk-test-two' });
+  const reactivated = harness.post(reactivateBody);
+  assert.deepEqual(reactivated, {
+    ok: true,
+    target: 'test',
+    operation: 'reactivate',
+    requestId: IDS.rosterReactivateRequest,
+    result: 'reactivated',
+    confirmation: {
+      adminName: 'Andrew Smith',
+      staffId: 'front-desk-test-two',
+      staffName: 'Front Desk Test Two',
+      action: 'reactivate',
+      previousActive: false,
+      newActive: true
+    }
+  });
+  assert.deepEqual(harness.post(reactivateBody), reactivated);
+  assert.equal(harness.sheets.get('Staff Roster Audit').values.length, 3);
+  assert.deepEqual(harness.sheets.get('Staff Roster Audit').values[2], [
+    IDS.rosterReactivateRequest,
+    '2026-08-18T18:00:00-04:00',
+    'Andrew Smith',
+    'front-desk-test-two',
+    'Front Desk Test Two',
+    'reactivate',
+    false,
+    true,
+    'reactivated'
+  ]);
+  const afterReactivate = harness.post(receiverBody('staffClockSnapshotV2'));
+  assert.notEqual(afterReactivate.view.token, afterDeactivate.view.token);
+  assert.equal(afterReactivate.staff.some(item => item.staffId === 'front-desk-test-two'), true);
+  assert.deepEqual(harness.sheets.get('Staff Time').values, timeBefore);
 });
 
 test('ordinary Clock In and Clock Out are locked, offset-exact, replay-safe, and sequence-safe', () => {
