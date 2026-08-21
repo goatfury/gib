@@ -56,9 +56,23 @@ const STAFF_AUDIT_HEADERS = Object.freeze([
   'Result',
   'Linked Punch ID'
 ]);
+const ROSTER_AUDIT_HEADERS = Object.freeze([
+  'Request ID',
+  'Action Time',
+  'Admin Name',
+  'Staff ID',
+  'Staff Name',
+  'Action',
+  'Previous Active',
+  'New Active',
+  'Result'
+]);
 const ROW_ID = 'gib-m1-12345678-1234-4123-8123-123456789abc';
 const STAFF_PUNCH_ID = 'gib-m1-staff-20000000-0000-4000-8000-000000000001';
 const STAFF_REQUEST_ID = 'gib-m1-staff-request-20000000-0000-4000-8000-000000000002';
+const ROSTER_ADD_REQUEST_ID = 'gib-m1-staff-request-40000000-0000-4000-8000-000000000001';
+const ROSTER_DEACTIVATE_REQUEST_ID = 'gib-m1-staff-request-40000000-0000-4000-8000-000000000002';
+const ROSTER_REACTIVATE_REQUEST_ID = 'gib-m1-staff-request-40000000-0000-4000-8000-000000000003';
 const NOW_ISO = '2026-08-19T16:00:00.000Z';
 
 function makeSheet(initialRows = [], onWrite = () => {}) {
@@ -269,6 +283,21 @@ function staffAuditRow(overrides = {}) {
   ];
 }
 
+function rosterAuditRow(overrides = {}) {
+  const action = overrides.action || 'add';
+  return [
+    overrides.requestId || ROSTER_ADD_REQUEST_ID,
+    overrides.actionTime || '2026-08-19T12:00:00-04:00',
+    overrides.adminName || 'Andrew Smith',
+    overrides.staffId || 'stuart-turner',
+    overrides.staffName || 'Stuart Turner',
+    action,
+    action === 'add' ? '' : (action === 'deactivate'),
+    action !== 'deactivate',
+    action === 'add' ? 'added' : `${action}d`
+  ];
+}
+
 function createFile(id) {
   return {
     getId: () => id,
@@ -287,6 +316,11 @@ function createHarness({
   staffRows = STAFF_ROWS,
   timeRows = [],
   auditRows = [],
+  rosterAuditRows = null,
+  rosterAuditHeaders = ROSTER_AUDIT_HEADERS,
+  rosterAuditReadBackFailure = false,
+  failRosterSuccessOutput = false,
+  lockAvailable = true,
   nowIso = NOW_ISO
 } = {}) {
   class FixedDate extends Date {
@@ -314,6 +348,20 @@ function createHarness({
     sheets.set('Staff Clock Staff', makeSheet([STAFF_HEADERS, ...staffRows], recordSheetWrite));
     sheets.set('Staff Time', makeSheet([STAFF_TIME_HEADERS, ...timeRows], recordSheetWrite));
     sheets.set('Staff Time Audit', makeSheet([STAFF_AUDIT_HEADERS, ...auditRows], recordSheetWrite));
+    if (Array.isArray(rosterAuditRows)) {
+      const rosterAudit = makeSheet([rosterAuditHeaders, ...rosterAuditRows], recordSheetWrite);
+      if (rosterAuditReadBackFailure) {
+        const getRange = rosterAudit.getRange.bind(rosterAudit);
+        rosterAudit.getRange = (startRow, startColumn, rowCount, columnCount) => {
+          const range = getRange(startRow, startColumn, rowCount, columnCount);
+          if (startRow > 1 && startColumn === 1 && columnCount === ROSTER_AUDIT_HEADERS.length) {
+            range.getValues = () => { throw new Error('simulated audit confirmation failure'); };
+          }
+          return range;
+        };
+      }
+      sheets.set('Staff Roster Audit', rosterAudit);
+    }
   }
   let spreadsheetOpens = 0;
   let spreadsheetCreates = 0;
@@ -326,11 +374,16 @@ function createHarness({
       return sheets.get(name) || null;
     },
     insertSheet(name) {
-      assert.equal(name, 'Signins');
       recordSheetWrite('insertSheet');
-      signins = makeSheet([], recordSheetWrite);
-      sheets.set(name, signins);
-      return signins;
+      if (name === 'Signins') {
+        signins = makeSheet([], recordSheetWrite);
+        sheets.set(name, signins);
+        return signins;
+      }
+      assert.equal(name, 'Staff Roster Audit');
+      const rosterAudit = makeSheet([], recordSheetWrite);
+      sheets.set(name, rosterAudit);
+      return rosterAudit;
     }
   };
   let files = Array.from({ length: driveMatchCount }, (_unused, index) => (
@@ -344,6 +397,7 @@ function createHarness({
     .update(`gib-m1-production-provisioning:${scriptId}`, 'utf8')
     .digest('base64url');
 
+  let lockAttempts = 0;
   const context = {
     module: { exports: {} },
     exports: {},
@@ -352,6 +406,11 @@ function createHarness({
     ContentService: {
       MimeType: { JSON: 'application/json' },
       createTextOutput(text) {
+        if (
+          failRosterSuccessOutput
+          && /"ok":true/u.test(text)
+          && /"operation":"(?:add|deactivate|reactivate)"/u.test(text)
+        ) throw new Error('simulated unreadable roster success');
         return { text, setMimeType() { return this; } };
       }
     },
@@ -374,7 +433,16 @@ function createHarness({
       }
     },
     LockService: {
-      getScriptLock: () => ({ tryLock: () => true, releaseLock() {} })
+      getScriptLock: () => ({
+        tryLock() {
+          const available = Array.isArray(lockAvailable)
+            ? lockAvailable[Math.min(lockAttempts, lockAvailable.length - 1)]
+            : lockAvailable;
+          lockAttempts += 1;
+          return available;
+        },
+        releaseLock() {}
+      })
     },
     MimeType: { GOOGLE_SHEETS: 'application/vnd.google-apps.spreadsheet' },
     PropertiesService: {
@@ -458,6 +526,7 @@ function createHarness({
     get sheetWrites() { return sheetWriteEvents.length; },
     get sheetWriteEvents() { return [...sheetWriteEvents]; },
     get propertyWrites() { return propertyWriteEvents.length; },
+    get lockAttempts() { return lockAttempts; },
     get propertyWriteEvents() { return propertyWriteEvents.map(event => ({ ...event })); },
     post(body) {
       const event = {
@@ -476,6 +545,30 @@ function provisioningRequest(harness, overrides = {}) {
     provisioningSecret: harness.provisioningSecret,
     ...overrides
   };
+}
+
+function productionAdminBody(harness, action, fields = {}) {
+  return {
+    token: harness.derivedToken,
+    adminActionToken: 'production-admin-token',
+    adminName: 'Andrew Smith',
+    action,
+    target: 'production',
+    ...fields
+  };
+}
+
+function productionRosterMutation(harness, operation, fields = {}) {
+  const requestId = {
+    add: ROSTER_ADD_REQUEST_ID,
+    deactivate: ROSTER_DEACTIVATE_REQUEST_ID,
+    reactivate: ROSTER_REACTIVATE_REQUEST_ID
+  }[operation];
+  return productionAdminBody(harness, 'staffRosterMutate', {
+    operation,
+    requestId,
+    ...fields
+  });
 }
 
 function assertBooleanCountResponse(value) {
@@ -522,6 +615,572 @@ test('production package is separate, locked, executable, and contains no privat
   assert.match(claspIgnore, /!GibM1Receiver\.gs/u);
   assert.match(projectGitIgnore, /^\.clasp\.json$/mu);
   assert.match(projectGitIgnore, /^credentials\*\.json$/mu);
+});
+
+test('production Staff Roster lists real staff and adds a Unicode real name with an exact replay-safe reply', () => {
+  assert.doesNotMatch(
+    wrapperSource,
+    /staffRoster(?:List|Mutate)|Staff Roster Audit|STAFF_ROSTER_AUDIT/u
+  );
+  assert.match(receiverSource, /function provisionGibM1ProductionRosterAudit\(\)/u);
+  const staffRows = [...STAFF_ROWS, ['marvin', 'Marvin', true]];
+  const harness = createHarness({
+    includeStaffSheets: true,
+    staffRows,
+    rosterAuditRows: []
+  });
+  const list = harness.post(productionAdminBody(harness, 'staffRosterList'));
+  assert.deepEqual(list, {
+    ok: true,
+    target: 'production',
+    staff: staffRows.map(([staffId, staffName, active]) => ({ staffId, staffName, active }))
+  });
+  assert.equal(harness.sheetWrites, 0);
+
+  const request = productionRosterMutation(harness, 'add', { staffName: '李 雷' });
+  const added = harness.post(request);
+  assert.deepEqual(added, {
+    ok: true,
+    target: 'production',
+    operation: 'add',
+    requestId: ROSTER_ADD_REQUEST_ID,
+    result: 'added',
+    confirmation: {
+      adminName: 'Andrew Smith',
+      staffId: added.confirmation.staffId,
+      staffName: '李 雷',
+      action: 'add',
+      previousActive: null,
+      newActive: true
+    }
+  });
+  assert.match(added.confirmation.staffId, /^staff-[0-9a-f]{8}(?:-[0-9a-z-]+)?$/u);
+  assert.deepEqual(harness.sheets.get('Staff Clock Staff').values.at(-1), [
+    added.confirmation.staffId, '李 雷', true
+  ]);
+  assert.deepEqual(harness.sheets.get('Staff Roster Audit').values[1], [
+    ROSTER_ADD_REQUEST_ID,
+    '2026-08-19T12:00:00-04:00',
+    'Andrew Smith',
+    added.confirmation.staffId,
+    '李 雷',
+    'add',
+    '',
+    true,
+    'added'
+  ]);
+  const writesAfterAdd = harness.sheetWrites;
+  assert.deepEqual(harness.post(request), added);
+  assert.equal(harness.sheetWrites, writesAfterAdd, 'a confirmed retry performs no second write');
+  assert.equal(harness.propertyWrites, 0);
+});
+
+test('production rejects obvious fake roster names and cross-target assertions before roster writes', () => {
+  for (const staffName of [
+    'QA Staff',
+    'Demo Person',
+    'Fake Coach',
+    'Do-Not-Pay Person',
+    'Do/Not/Pay Person',
+    'Ordinary Test Person'
+  ]) {
+    const harness = createHarness({ includeStaffSheets: true, rosterAuditRows: [] });
+    const response = harness.post(productionRosterMutation(harness, 'add', { staffName }));
+    assert.equal(response.ok, false);
+    assert.equal(response.result, 'rejected');
+    assert.equal(harness.spreadsheetOpens, 0);
+    assert.equal(harness.sheetWrites, 0);
+  }
+
+  const wrongTarget = createHarness({ includeStaffSheets: true, rosterAuditRows: [] });
+  const response = wrongTarget.post({
+    ...productionAdminBody(wrongTarget, 'staffRosterList'),
+    target: 'test'
+  });
+  assert.equal(response.result, 'rejected');
+  assert.equal(wrongTarget.spreadsheetOpens, 0);
+  assert.equal(wrongTarget.sheetWrites, 0);
+
+  const storedFake = createHarness({
+    includeStaffSheets: true,
+    staffRows: [['do-not-pay-person', 'Do-Not-Pay Person', true]],
+    rosterAuditRows: []
+  });
+  assert.equal(
+    storedFake.post(productionAdminBody(storedFake, 'staffRosterList')).result,
+    'failed'
+  );
+  assert.equal(storedFake.spreadsheetOpens, 1);
+  assert.equal(storedFake.sheetWrites, 0);
+
+  const malformedStoredName = createHarness({
+    includeStaffSheets: true,
+    staffRows: [['mandy', 'Mandy <bad>', true], ['marvin', 'Marvin', true]],
+    rosterAuditRows: []
+  });
+  assert.equal(malformedStoredName.post(productionRosterMutation(
+    malformedStoredName,
+    'deactivate',
+    { staffId: 'mandy' }
+  )).result, 'failed');
+  assert.equal(malformedStoredName.sheetWrites, 0);
+});
+
+test('production list tolerates a missing audit tab while mutation fails closed on missing, drifted, duplicate, or unreadable audit', () => {
+  const staffRows = [...STAFF_ROWS, ['marvin', 'Marvin', true]];
+  const missing = createHarness({ includeStaffSheets: true, staffRows });
+  assert.equal(missing.post(productionAdminBody(missing, 'staffRosterList')).ok, true);
+  const missingRosterBefore = structuredClone(missing.sheets.get('Staff Clock Staff').values);
+  assert.equal(missing.post(productionRosterMutation(missing, 'add', {
+    staffName: 'Stuart Turner'
+  })).result, 'failed');
+  assert.deepEqual(missing.sheets.get('Staff Clock Staff').values, missingRosterBefore);
+  assert.equal(missing.sheetWrites, 0);
+
+  for (const [headerIndex, headerValue] of [
+    [7, 'Active'],
+    [0, ' Request ID'],
+    [0, 'Request ID '],
+    [0, '\uff32\uff45\uff51\uff55\uff45\uff53\uff54 \uff29\uff24']
+  ]) {
+    const driftedHeaders = [...ROSTER_AUDIT_HEADERS];
+    driftedHeaders[headerIndex] = headerValue;
+    const drifted = createHarness({
+      includeStaffSheets: true,
+      staffRows,
+      rosterAuditRows: [],
+      rosterAuditHeaders: driftedHeaders
+    });
+    const driftedBefore = structuredClone(drifted.sheets.get('Staff Clock Staff').values);
+    assert.equal(drifted.post(productionRosterMutation(drifted, 'add', {
+      staffName: 'Stuart Turner'
+    })).result, 'failed');
+    assert.deepEqual(drifted.sheets.get('Staff Clock Staff').values, driftedBefore);
+    assert.equal(drifted.sheetWrites, 0);
+  }
+
+  const duplicatedAudit = rosterAuditRow();
+  const duplicate = createHarness({
+    includeStaffSheets: true,
+    staffRows,
+    rosterAuditRows: [duplicatedAudit, duplicatedAudit]
+  });
+  const duplicateBefore = structuredClone(duplicate.sheets.get('Staff Clock Staff').values);
+  assert.equal(duplicate.post(productionRosterMutation(duplicate, 'add', {
+    staffName: 'Another Person'
+  })).result, 'failed');
+  assert.deepEqual(duplicate.sheets.get('Staff Clock Staff').values, duplicateBefore);
+  assert.equal(duplicate.sheetWrites, 0);
+
+  const unreadable = createHarness({
+    includeStaffSheets: true,
+    staffRows,
+    rosterAuditRows: [],
+    rosterAuditReadBackFailure: true
+  });
+  const unreadableRosterBefore = structuredClone(unreadable.sheets.get('Staff Clock Staff').values);
+  assert.equal(unreadable.post(productionRosterMutation(unreadable, 'add', {
+    staffName: 'Readable Person'
+  })).result, 'failed');
+  assert.deepEqual(unreadable.sheets.get('Staff Clock Staff').values, unreadableRosterBefore);
+  assert.equal(unreadable.sheets.get('Staff Roster Audit').values.length, 2);
+
+  const unrenderable = createHarness({
+    includeStaffSheets: true,
+    staffRows,
+    rosterAuditRows: [],
+    failRosterSuccessOutput: true
+  });
+  const unrenderableRosterBefore = structuredClone(unrenderable.sheets.get('Staff Clock Staff').values);
+  assert.equal(unrenderable.post(productionRosterMutation(unrenderable, 'add', {
+    staffName: 'Serializable Person'
+  })).result, 'failed');
+  assert.deepEqual(unrenderable.sheets.get('Staff Clock Staff').values, unrenderableRosterBefore);
+  assert.deepEqual(unrenderable.sheets.get('Staff Roster Audit').values, [ROSTER_AUDIT_HEADERS]);
+  assert.equal(unrenderable.sheetWrites, 0);
+
+  const malformedRoster = createHarness({
+    includeStaffSheets: true,
+    staffRows: [['mandy', 'Mandy', 'TRUE']],
+    rosterAuditRows: []
+  });
+  const malformedBefore = structuredClone(malformedRoster.sheets.get('Staff Clock Staff').values);
+  assert.equal(malformedRoster.post(productionRosterMutation(malformedRoster, 'add', {
+    staffName: 'Valid Person'
+  })).result, 'failed');
+  assert.deepEqual(malformedRoster.sheets.get('Staff Clock Staff').values, malformedBefore);
+  assert.deepEqual(malformedRoster.sheets.get('Staff Roster Audit').values, [ROSTER_AUDIT_HEADERS]);
+  assert.equal(malformedRoster.sheetWrites, 0);
+});
+
+test('production roster lifecycle preserves history, refreshes cached roster state, and reuses the same Staff ID', () => {
+  const staffRows = [...STAFF_ROWS, ['marvin', 'Marvin', true]];
+  const timeRows = [
+    staffTimeRow({
+      punchId: generatedStaffPunchId(401),
+      staffId: 'marvin',
+      staffName: 'Marvin',
+      timestamp: '2026-08-19T09:00:00-04:00',
+      date: '2026-08-19'
+    }),
+    staffTimeRow({
+      punchId: generatedStaffPunchId(402),
+      staffId: 'marvin',
+      staffName: 'Marvin',
+      timestamp: '2026-08-19T10:00:00-04:00',
+      date: '2026-08-19',
+      punchAction: 'clockOut'
+    })
+  ];
+  const harness = createHarness({
+    includeStaffSheets: true,
+    staffRows,
+    timeRows,
+    rosterAuditRows: []
+  });
+  const timeBefore = structuredClone(harness.sheets.get('Staff Time').values);
+  const before = harness.post({
+    token: harness.derivedToken,
+    action: 'staffClockSnapshotV2',
+    target: 'production'
+  });
+  const beforeMarvin = before.periods.current.totals.find(item => item.staffId === 'marvin');
+  assert.equal(beforeMarvin.totalSeconds, 3600);
+
+  const deactivate = productionRosterMutation(harness, 'deactivate', { staffId: 'marvin' });
+  const deactivated = harness.post(deactivate);
+  assert.equal(deactivated.result, 'deactivated');
+  assert.equal(deactivated.confirmation.staffId, 'marvin');
+  const writesAfterDeactivate = harness.sheetWrites;
+  assert.deepEqual(harness.post(deactivate), deactivated);
+  assert.equal(harness.sheetWrites, writesAfterDeactivate);
+  assert.equal(harness.sheets.get('Staff Clock Staff').values[2][2], false);
+  assert.deepEqual(harness.sheets.get('Staff Time').values, timeBefore);
+
+  const afterDeactivate = harness.post({
+    token: harness.derivedToken,
+    action: 'staffClockSnapshotV2',
+    target: 'production'
+  });
+  assert.notEqual(afterDeactivate.view.token, before.view.token);
+  assert.equal(afterDeactivate.staff.some(item => item.staffId === 'marvin'), false);
+  assert.equal(
+    afterDeactivate.periods.current.totals.find(item => item.staffId === 'marvin').totalSeconds,
+    3600
+  );
+
+  const reactivate = productionRosterMutation(harness, 'reactivate', { staffId: 'marvin' });
+  const reactivated = harness.post(reactivate);
+  assert.equal(reactivated.result, 'reactivated');
+  assert.equal(reactivated.confirmation.staffId, 'marvin');
+  assert.deepEqual(harness.post(reactivate), reactivated);
+  const afterReactivate = harness.post({
+    token: harness.derivedToken,
+    action: 'staffClockSnapshotV2',
+    target: 'production'
+  });
+  assert.notEqual(afterReactivate.view.token, afterDeactivate.view.token);
+  assert.equal(afterReactivate.staff.some(item => item.staffId === 'marvin'), true);
+  assert.deepEqual(harness.sheets.get('Staff Time').values, timeBefore);
+  assert.deepEqual(
+    harness.sheets.get('Staff Roster Audit').values.slice(1).map(row => row[5]),
+    ['deactivate', 'reactivate']
+  );
+});
+
+test('production deactivation blocks the final active or clocked-in person without audit or roster writes', () => {
+  const finalActive = createHarness({ includeStaffSheets: true, rosterAuditRows: [] });
+  const finalBefore = structuredClone(finalActive.sheets.get('Staff Clock Staff').values);
+  assert.deepEqual(finalActive.post(productionRosterMutation(finalActive, 'deactivate', {
+    staffId: 'mandy'
+  })), { ok: false, target: 'production', result: 'conflict', code: 'last_active' });
+  assert.deepEqual(finalActive.sheets.get('Staff Clock Staff').values, finalBefore);
+  assert.deepEqual(finalActive.sheets.get('Staff Roster Audit').values, [ROSTER_AUDIT_HEADERS]);
+  assert.equal(finalActive.sheetWrites, 0);
+
+  const clockedIn = createHarness({
+    includeStaffSheets: true,
+    staffRows: [...STAFF_ROWS, ['marvin', 'Marvin', true]],
+    timeRows: [staffTimeRow()],
+    rosterAuditRows: []
+  });
+  const clockedBefore = structuredClone(clockedIn.sheets.get('Staff Clock Staff').values);
+  assert.deepEqual(clockedIn.post(productionRosterMutation(clockedIn, 'deactivate', {
+    staffId: 'mandy'
+  })), { ok: false, target: 'production', result: 'conflict', code: 'clocked_in' });
+  assert.deepEqual(clockedIn.sheets.get('Staff Clock Staff').values, clockedBefore);
+  assert.deepEqual(clockedIn.sheets.get('Staff Roster Audit').values, [ROSTER_AUDIT_HEADERS]);
+  assert.equal(clockedIn.sheetWrites, 0);
+
+  const contradictoryClockIns = createHarness({
+    includeStaffSheets: true,
+    staffRows: [...STAFF_ROWS, ['marvin', 'Marvin', true]],
+    timeRows: [
+      staffTimeRow(),
+      staffTimeRow({
+        punchId: generatedStaffPunchId(499),
+        timestamp: '2026-08-19T10:00:00-04:00'
+      })
+    ],
+    rosterAuditRows: []
+  });
+  const contradictoryBefore = structuredClone(
+    contradictoryClockIns.sheets.get('Staff Clock Staff').values
+  );
+  assert.deepEqual(contradictoryClockIns.post(productionRosterMutation(
+    contradictoryClockIns,
+    'deactivate',
+    { staffId: 'mandy' }
+  )), { ok: false, target: 'production', result: 'conflict', code: 'clocked_in' });
+  assert.deepEqual(
+    contradictoryClockIns.sheets.get('Staff Clock Staff').values,
+    contradictoryBefore
+  );
+  assert.deepEqual(
+    contradictoryClockIns.sheets.get('Staff Roster Audit').values,
+    [ROSTER_AUDIT_HEADERS]
+  );
+  assert.equal(contradictoryClockIns.sheetWrites, 0);
+});
+
+test('production concurrent equivalent adds serialize to one roster row and one audit row', () => {
+  const harness = createHarness({
+    includeStaffSheets: true,
+    rosterAuditRows: [],
+    lockAvailable: [false, true, true]
+  });
+  const first = productionRosterMutation(harness, 'add', { staffName: 'Stuart Turner' });
+  const second = productionRosterMutation(harness, 'add', {
+    requestId: 'gib-m1-staff-request-40000000-0000-4000-8000-000000000004',
+    staffName: '  stuart   turner '
+  });
+  assert.equal(harness.post(first).result, 'failed');
+  assert.equal(harness.post(second).result, 'added');
+  assert.deepEqual(harness.post(first), {
+    ok: false,
+    target: 'production',
+    result: 'conflict',
+    code: 'duplicate_active'
+  });
+  assert.equal(harness.lockAttempts, 3);
+  assert.equal(harness.sheets.get('Staff Clock Staff').values
+    .filter(row => String(row[1]).toLowerCase() === 'stuart turner').length, 1);
+  assert.equal(harness.sheets.get('Staff Roster Audit').values.length, 2);
+});
+
+test('manual production roster-audit provisioner is unrouted, target-locked, bounded, and create-or-verify exact', () => {
+  const harness = createHarness({ includeStaffSheets: true });
+  const routed = harness.post({
+    token: harness.derivedToken,
+    adminActionToken: 'production-admin-token',
+    action: 'provisionGibM1ProductionRosterAudit',
+    target: 'production'
+  });
+  assert.equal(routed.ok, false);
+  assert.equal(routed.result, 'rejected');
+  assert.equal(harness.spreadsheetOpens, 0);
+  assert.equal(harness.sheets.has('Staff Roster Audit'), false);
+
+  const created = JSON.parse(JSON.stringify(
+    harness.apps.provisionGibM1ProductionRosterAudit()
+  ));
+  assert.deepEqual(created, {
+    ok: true,
+    created: true,
+    targetLocked: true,
+    spreadsheetVerified: true,
+    staffSchemaVerified: true,
+    staffCount: 1,
+    staffTimeSchemaVerified: true,
+    staffTimeCount: 0,
+    staffTimeAuditSchemaVerified: true,
+    staffTimeAuditCount: 0,
+    rosterAuditHeaderCount: 9,
+    rosterAuditCount: 0
+  });
+  assertBooleanCountResponse(created);
+  assert.deepEqual(harness.sheets.get('Staff Roster Audit').values, [ROSTER_AUDIT_HEADERS]);
+  assert.equal(harness.sheets.get('Staff Roster Audit').frozenRows, 1);
+  assert.doesNotMatch(JSON.stringify(created), /production-spreadsheet-id|RBJJ|Staff Roster Audit/u);
+
+  const verified = JSON.parse(JSON.stringify(
+    harness.apps.provisionGibM1ProductionRosterAudit()
+  ));
+  assert.equal(verified.created, false);
+  assert.equal(verified.rosterAuditCount, 0);
+
+  const unlocked = createHarness({
+    includeStaffSheets: true,
+    propertyValues: { GIB_M1_DEPLOYMENT_TARGET_LOCK: 'test' }
+  });
+  assert.throws(
+    () => unlocked.apps.provisionGibM1ProductionRosterAudit(),
+    /target/u
+  );
+  assert.equal(unlocked.spreadsheetOpens, 0);
+  assert.equal(unlocked.sheetWrites, 0);
+
+  const fakeStoredRoster = createHarness({
+    includeStaffSheets: true,
+    staffRows: [['do-not-pay-person', 'Do-Not-Pay Person', true]]
+  });
+  assert.throws(
+    () => fakeStoredRoster.apps.provisionGibM1ProductionRosterAudit(),
+    /outside its deployment target/u
+  );
+  assert.equal(fakeStoredRoster.sheets.has('Staff Roster Audit'), false);
+  assert.equal(fakeStoredRoster.sheetWrites, 0);
+
+  for (const headerValue of [
+    ' Request ID',
+    'Request ID ',
+    '\uff32\uff45\uff51\uff55\uff45\uff53\uff54 \uff29\uff24'
+  ]) {
+    const driftedHeaders = [...ROSTER_AUDIT_HEADERS];
+    driftedHeaders[0] = headerValue;
+    const drifted = createHarness({
+      includeStaffSheets: true,
+      rosterAuditRows: [],
+      rosterAuditHeaders: driftedHeaders
+    });
+    const rosterBefore = structuredClone(drifted.sheets.get('Staff Clock Staff').values);
+    assert.throws(
+      () => drifted.apps.provisionGibM1ProductionRosterAudit(),
+      /Staff Roster Audit headings do not match/u
+    );
+    assert.deepEqual(drifted.sheets.get('Staff Clock Staff').values, rosterBefore);
+    assert.equal(drifted.sheetWrites, 0);
+  }
+});
+
+test('production replay healing rechecks final-active, clocked-in, capacity, name, and ID safety', () => {
+  const auditOnlyAdd = rosterAuditRow();
+  const laterAuditOnlyAdd = rosterAuditRow({
+    requestId: ROSTER_DEACTIVATE_REQUEST_ID,
+    staffId: 'stuart-turner',
+    staffName: 'Stuart Turner'
+  });
+  const twoFailedRosterWrites = createHarness({
+    includeStaffSheets: true,
+    staffRows: [...STAFF_ROWS, ['marvin', 'Marvin', true]],
+    rosterAuditRows: [auditOnlyAdd, laterAuditOnlyAdd]
+  });
+  const twoFailedRosterBefore = structuredClone(
+    twoFailedRosterWrites.sheets.get('Staff Clock Staff').values
+  );
+  assert.equal(twoFailedRosterWrites.post(productionRosterMutation(
+    twoFailedRosterWrites,
+    'add',
+    { staffName: 'Stuart Turner' }
+  )).result, 'failed');
+  assert.deepEqual(
+    twoFailedRosterWrites.sheets.get('Staff Clock Staff').values,
+    twoFailedRosterBefore
+  );
+  assert.equal(twoFailedRosterWrites.sheetWrites, 0);
+
+  const auditOnlyDeactivate = rosterAuditRow({
+    requestId: ROSTER_DEACTIVATE_REQUEST_ID,
+    staffId: 'stuart-turner',
+    staffName: 'Stuart Turner',
+    action: 'deactivate'
+  });
+  const exactLaterTerminal = createHarness({
+    includeStaffSheets: true,
+    staffRows: [...STAFF_ROWS, ['marvin', 'Marvin', true], ['stuart-turner', 'Stuart Turner', false]],
+    rosterAuditRows: [auditOnlyAdd, auditOnlyDeactivate]
+  });
+  const exactTerminalWrites = exactLaterTerminal.sheetWrites;
+  assert.equal(exactLaterTerminal.post(productionRosterMutation(
+    exactLaterTerminal,
+    'add',
+    { staffName: 'Stuart Turner' }
+  )).result, 'added');
+  assert.equal(exactLaterTerminal.sheetWrites, exactTerminalWrites);
+
+  const auditedDeactivate = rosterAuditRow({
+    requestId: ROSTER_DEACTIVATE_REQUEST_ID,
+    staffId: 'mandy',
+    staffName: 'Mandy',
+    action: 'deactivate'
+  });
+  const finalActive = createHarness({
+    includeStaffSheets: true,
+    rosterAuditRows: [auditedDeactivate]
+  });
+  assert.equal(finalActive.post(productionRosterMutation(finalActive, 'deactivate', {
+    staffId: 'mandy'
+  })).result, 'failed');
+  assert.equal(finalActive.sheets.get('Staff Clock Staff').values[1][2], true);
+  assert.equal(finalActive.sheetWrites, 0);
+
+  const clockedIn = createHarness({
+    includeStaffSheets: true,
+    staffRows: [...STAFF_ROWS, ['marvin', 'Marvin', true]],
+    timeRows: [staffTimeRow()],
+    rosterAuditRows: [auditedDeactivate]
+  });
+  assert.equal(clockedIn.post(productionRosterMutation(clockedIn, 'deactivate', {
+    staffId: 'mandy'
+  })).result, 'failed');
+  assert.equal(clockedIn.sheets.get('Staff Clock Staff').values[1][2], true);
+  assert.equal(clockedIn.sheetWrites, 0);
+
+  const contradictoryReplay = createHarness({
+    includeStaffSheets: true,
+    staffRows: [...STAFF_ROWS, ['marvin', 'Marvin', true]],
+    timeRows: [
+      staffTimeRow(),
+      staffTimeRow({
+        punchId: generatedStaffPunchId(598),
+        timestamp: '2026-08-19T10:00:00-04:00'
+      })
+    ],
+    rosterAuditRows: [auditedDeactivate]
+  });
+  assert.equal(contradictoryReplay.post(productionRosterMutation(
+    contradictoryReplay,
+    'deactivate',
+    { staffId: 'mandy' }
+  )).result, 'failed');
+  assert.equal(contradictoryReplay.sheets.get('Staff Clock Staff').values[1][2], true);
+  assert.equal(contradictoryReplay.sheetWrites, 0);
+
+  const fullRoster = Array.from({ length: 100 }, (_unused, index) => [
+    `person-${index + 1}`,
+    `Person ${index + 1}`,
+    true
+  ]);
+  const capacity = createHarness({
+    includeStaffSheets: true,
+    staffRows: fullRoster,
+    rosterAuditRows: [rosterAuditRow()]
+  });
+  assert.equal(capacity.post(productionRosterMutation(capacity, 'add', {
+    staffName: 'Stuart Turner'
+  })).result, 'failed');
+  assert.equal(capacity.sheets.get('Staff Clock Staff').values.length, 101);
+  assert.equal(capacity.sheetWrites, 0);
+
+  const nameCollision = createHarness({
+    includeStaffSheets: true,
+    staffRows: [...STAFF_ROWS, ['different-id', 'Stuart Turner', true]],
+    rosterAuditRows: [rosterAuditRow()]
+  });
+  assert.equal(nameCollision.post(productionRosterMutation(nameCollision, 'add', {
+    staffName: 'Stuart Turner'
+  })).result, 'failed');
+  assert.equal(nameCollision.sheetWrites, 0);
+
+  const idCollision = createHarness({
+    includeStaffSheets: true,
+    staffRows: [...STAFF_ROWS, ['stuart-turner', 'Someone Else', true]],
+    rosterAuditRows: [rosterAuditRow()]
+  });
+  assert.equal(idCollision.post(productionRosterMutation(idCollision, 'add', {
+    staffName: 'Stuart Turner'
+  })).result, 'failed');
+  assert.equal(idCollision.sheetWrites, 0);
 });
 
 test('production accepts a real instructor and permanently replays one UUID only once', () => {

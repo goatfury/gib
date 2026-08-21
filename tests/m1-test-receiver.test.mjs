@@ -26,6 +26,23 @@ const SIGNIN_HEADERS = Object.freeze([
   'Notes',
   'Status'
 ]);
+const STAFF_HEADERS = Object.freeze(['Staff ID', 'Staff Name', 'Active']);
+const STAFF_SEED_ROWS = Object.freeze([
+  Object.freeze(['mandy-test', 'Mandy Test', true]),
+  Object.freeze(['front-desk-test-two', 'Front Desk Test Two', true]),
+  Object.freeze(['front-desk-test-three', 'Front Desk Test Three', true])
+]);
+const STAFF_ROSTER_AUDIT_HEADERS = Object.freeze([
+  'Request ID',
+  'Action Time',
+  'Admin Name',
+  'Staff ID',
+  'Staff Name',
+  'Action',
+  'Previous Active',
+  'New Active',
+  'Result'
+]);
 
 function makeSheet(initialRows = [], options = {}) {
   const values = initialRows.map(row => [...row]);
@@ -163,6 +180,8 @@ function receiverRequest(rows, overrides = {}) {
 
 function createHarness({
   initialRows = [SIGNIN_HEADERS],
+  staffRows = null,
+  staffRosterAuditRows = null,
   properties = {},
   driveMatchCount = 1,
   failAfterAppends = null,
@@ -171,6 +190,7 @@ function createHarness({
 } = {}) {
   const propertyValues = new Map(Object.entries({
     GIB_M1_TEST_SPREADSHEET_ID: 'unit-test-spreadsheet-id',
+    GIB_M1_DEPLOYMENT_TARGET_LOCK: 'test',
     GIB_M1_RECEIVER_TRANSPORT_TOKEN: 'unit-receiver-token',
     GIB_M1_LEGACY_KIOSK_TOKEN: 'unit-legacy-token',
     GIB_M1_ADMIN_ACTION_TOKEN: 'unit-admin-token',
@@ -191,6 +211,12 @@ function createHarness({
   });
 
   const sheets = new Map([['Signins', signins]]);
+  if (Array.isArray(staffRows)) {
+    sheets.set('Staff Clock Staff', makeSheet(staffRows));
+  }
+  if (Array.isArray(staffRosterAuditRows)) {
+    sheets.set('Staff Roster Audit', makeSheet(staffRosterAuditRows));
+  }
   const spreadsheet = {
     getId: () => 'unit-test-spreadsheet-id',
     getName: () => EXPECTED_TITLE,
@@ -212,6 +238,13 @@ function createHarness({
     getProperty: name => propertyValues.get(name) || '',
     setProperty(name, value) {
       propertyValues.set(name, String(value));
+      return this;
+    },
+    setProperties(values, deleteAllOthers = false) {
+      if (deleteAllOthers) propertyValues.clear();
+      for (const [name, value] of Object.entries(values)) {
+        propertyValues.set(name, String(value));
+      }
       return this;
     }
   };
@@ -283,6 +316,7 @@ function createHarness({
   return {
     apps: vmContext,
     signins,
+    sheets,
     propertyValues,
     driveQueries,
     get spreadsheetOpens() { return spreadsheetOpens; },
@@ -338,15 +372,149 @@ test('TEST runtime derives its server-only token and resolves the unique Sheet w
 test('provisioning resolves exactly one title, initializes headers, and returns no ID or token', () => {
   const harness = createHarness({ initialRows: [] });
   const result = harness.apps.provisionGibM1TestReceiver();
+  const staff = harness.sheets.get('Staff Clock Staff');
+  const staffRosterAudit = harness.sheets.get('Staff Roster Audit');
   assert.deepEqual([...harness.signins.values[0]], SIGNIN_HEADERS);
   assert.equal(harness.signins.frozenRows, 1);
+  assert.deepEqual(
+    staff.values,
+    [STAFF_HEADERS, ...STAFF_SEED_ROWS].map(row => [...row])
+  );
+  assert.equal(staff.frozenRows, 1);
+  assert.deepEqual(staffRosterAudit.values, [[...STAFF_ROSTER_AUDIT_HEADERS]]);
+  assert.equal(staffRosterAudit.frozenRows, 1);
   assert.equal(harness.propertyValues.get('GIB_M1_TEST_SPREADSHEET_ID'), 'unit-test-spreadsheet-id');
+  assert.equal(harness.propertyValues.get('GIB_M1_DEPLOYMENT_TARGET_LOCK'), 'test');
   assert.deepEqual(harness.driveQueries, [EXPECTED_TITLE]);
   assert.equal(result.target, 'test');
+  assert.equal(result.targetLocked, true);
   assert.equal(result.spreadsheetMatches, 1);
   assert.equal(result.headerCount, SIGNIN_HEADERS.length);
   assert.equal(result.dataRowCount, 0);
+  assert.equal(result.staffRosterAuditSheet, 'Staff Roster Audit');
+  assert.equal(result.staffRosterAuditCount, 0);
   assert.doesNotMatch(JSON.stringify(result), /unit-test-spreadsheet-id|unit-receiver-token/u);
+});
+
+test('provisioning preserves added and inactive TEST-safe roster rows while creating the exact roster audit tab', () => {
+  const mutableRoster = [
+    STAFF_HEADERS,
+    STAFF_SEED_ROWS[0],
+    [STAFF_SEED_ROWS[1][0], STAFF_SEED_ROWS[1][1], false],
+    STAFF_SEED_ROWS[2],
+    ['staff-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'QA Test Staff', true]
+  ].map(row => [...row]);
+  const harness = createHarness({
+    staffRows: mutableRoster,
+    properties: { GIB_M1_TEST_SPREADSHEET_ID: 'previous-private-id' }
+  });
+  const rosterBefore = structuredClone(harness.sheets.get('Staff Clock Staff').values);
+
+  const result = harness.apps.provisionGibM1TestReceiver();
+  const roster = harness.sheets.get('Staff Clock Staff');
+  const rosterAudit = harness.sheets.get('Staff Roster Audit');
+
+  assert.deepEqual(roster.values, rosterBefore, 'provisioning must not restore the original seed state');
+  assert.equal(roster.frozenRows, 1);
+  assert.deepEqual(rosterAudit.values, [[...STAFF_ROSTER_AUDIT_HEADERS]]);
+  assert.equal(rosterAudit.frozenRows, 1);
+  assert.equal(result.staffCount, mutableRoster.length - 1);
+  assert.equal(result.staffRosterAuditSheet, 'Staff Roster Audit');
+  assert.equal(result.staffRosterAuditCount, 0);
+  assert.equal(harness.propertyValues.get('GIB_M1_TEST_SPREADSHEET_ID'), 'unit-test-spreadsheet-id');
+  assert.doesNotMatch(JSON.stringify(result), /previous-private-id|unit-test-spreadsheet-id/u);
+});
+
+test('provisioning rejects malformed, real, duplicate, and all-inactive rosters without resetting rows', () => {
+  const cases = [
+    {
+      label: 'malformed Active value',
+      rows: [STAFF_HEADERS, ['qa-test-staff', 'QA Test Staff', 'TRUE']]
+    },
+    {
+      label: 'real production-like person',
+      rows: [STAFF_HEADERS, ['ordinary-person', 'Ordinary Person', true]]
+    },
+    {
+      label: 'noncanonical TEST marker',
+      rows: [STAFF_HEADERS, ['do-not-pay-staff', 'Do-Not-Pay Staff', true]]
+    },
+    {
+      label: 'duplicate Staff ID',
+      rows: [
+        STAFF_HEADERS,
+        ['duplicate-test', 'First QA Test', true],
+        ['duplicate-test', 'Second QA Test', true]
+      ]
+    },
+    {
+      label: 'duplicate normalized name',
+      rows: [
+        STAFF_HEADERS,
+        ['first-qa-test', 'QA Test Staff', true],
+        ['second-qa-test', 'qa test staff', true]
+      ]
+    },
+    {
+      label: 'all inactive',
+      rows: [
+        STAFF_HEADERS,
+        ['inactive-qa-test', 'Inactive QA Test', false],
+        ['former-staff-test', 'Former Staff Test', false]
+      ]
+    }
+  ];
+
+  for (const candidate of cases) {
+    const initial = candidate.rows.map(row => [...row]);
+    const harness = createHarness({
+      staffRows: initial,
+      properties: {
+        GIB_M1_TEST_SPREADSHEET_ID: 'previous-private-id',
+        GIB_M1_DEPLOYMENT_TARGET_LOCK: ''
+      }
+    });
+    const roster = harness.sheets.get('Staff Clock Staff');
+    const before = structuredClone(roster.values);
+
+    assert.throws(
+      () => harness.apps.provisionGibM1TestReceiver(),
+      /Staff Clock Staff/u,
+      candidate.label
+    );
+    assert.deepEqual(roster.values, before, `${candidate.label} must not be silently reset`);
+    assert.equal(
+      harness.propertyValues.get('GIB_M1_TEST_SPREADSHEET_ID'),
+      'previous-private-id',
+      `${candidate.label} must not publish a new TEST Sheet binding`
+    );
+    assert.equal(
+      harness.propertyValues.get('GIB_M1_DEPLOYMENT_TARGET_LOCK'),
+      '',
+      `${candidate.label} must not publish a TEST target lock`
+    );
+  }
+});
+
+test('provisioning rejects Staff Roster Audit schema drift without changing the mutable roster', () => {
+  const mutableRoster = [
+    STAFF_HEADERS,
+    ...STAFF_SEED_ROWS,
+    ['qa-test-staff', 'QA Test Staff', false]
+  ].map(row => [...row]);
+  const driftedHeaders = [...STAFF_ROSTER_AUDIT_HEADERS];
+  driftedHeaders[7] = 'Active';
+  const harness = createHarness({
+    staffRows: mutableRoster,
+    staffRosterAuditRows: [driftedHeaders]
+  });
+  const rosterBefore = structuredClone(harness.sheets.get('Staff Clock Staff').values);
+
+  assert.throws(
+    () => harness.apps.provisionGibM1TestReceiver(),
+    /Staff Roster Audit headings do not match/u
+  );
+  assert.deepEqual(harness.sheets.get('Staff Clock Staff').values, rosterBefore);
 });
 
 test('provisioning rejects duplicate exact-title spreadsheets without replacing the stored ID', () => {
@@ -361,6 +529,19 @@ test('provisioning rejects duplicate exact-title spreadsheets without replacing 
   );
   assert.equal(harness.propertyValues.get('GIB_M1_TEST_SPREADSHEET_ID'), 'previous-private-id');
   assert.equal(harness.spreadsheetOpens, 0);
+});
+
+test('TEST provisioning rejects a conflicting persisted production target before Drive or Sheet access', () => {
+  const harness = createHarness({
+    properties: { GIB_M1_DEPLOYMENT_TARGET_LOCK: 'production' }
+  });
+  assert.throws(
+    () => harness.apps.provisionGibM1TestReceiver(),
+    /target state conflicts/u
+  );
+  assert.deepEqual(harness.driveQueries, []);
+  assert.equal(harness.spreadsheetOpens, 0);
+  assert.equal(harness.propertyValues.get('GIB_M1_DEPLOYMENT_TARGET_LOCK'), 'production');
 });
 
 test('explicit kiosk action uses receiver transport auth while omitted action stays legacy-compatible', () => {

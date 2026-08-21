@@ -110,6 +110,18 @@ var GIB_M1_PRODUCTION_STAFF_AUDIT_HEADERS_ = [
   'Result',
   'Linked Punch ID'
 ];
+var GIB_M1_PRODUCTION_STAFF_ROSTER_AUDIT_SHEET_ = 'Staff Roster Audit';
+var GIB_M1_PRODUCTION_STAFF_ROSTER_AUDIT_HEADERS_ = [
+  'Request ID',
+  'Action Time',
+  'Admin Name',
+  'Staff ID',
+  'Staff Name',
+  'Action',
+  'Previous Active',
+  'New Active',
+  'Result'
+];
 
 function adReceiverV2_(e) {
   try {
@@ -125,6 +137,13 @@ function adReceiverV2_(e) {
     var action = cleanText_(body.action);
     var legacyKioskRequest = !action && Array.isArray(body.rows);
     if (!action && Array.isArray(body.rows)) action = 'kioskSignIn';
+
+    if (action === 'staffRosterList' || action === 'staffRosterMutate') {
+      if (!staffRosterRequestAllowed_(body)) return rejectedAuthResult_();
+      if (!adminActionAuthorized_(body)) return rejectedAuthResult_();
+      if (action === 'staffRosterList') return staffRosterListAction_(body);
+      return staffRosterMutateAction_(body);
+    }
 
     if (
       action === 'staffClockSnapshot'
@@ -321,6 +340,16 @@ function legacyKioskAuthorized_(body) {
   return Boolean(legacy)
     && configuredSecretsArePairwiseDistinct_([legacy, receiver, admin, recovery])
     && constantTimeTextEqual_(body && body.token, legacy);
+}
+
+function persistedDeploymentTargetLock_() {
+  try {
+    return PropertiesService
+      .getScriptProperties()
+      .getProperty(GIB_M1_TARGET_LOCK_PROPERTY_) || '';
+  } catch (error) {
+    return '';
+  }
 }
 
 function configuredDeploymentTarget_() {
@@ -1757,29 +1786,40 @@ function staffClockStaffState_(spreadsheet) {
   var all = [];
   var active = [];
   var byId = {};
-  var names = {};
-  source.values.slice(1).forEach(function(row) {
+  var byName = {};
+  source.values.slice(1).forEach(function(row, rowIndex) {
     if (!staffClockPopulatedRow_(row)) return;
+    var rawStaffId = row[0];
+    var rawStaffName = row[1];
     var staffId = safeExactText_(row[0], 80, false);
-    var staffName = safeExactText_(row[1], 100, false);
+    var staffName = safeText_(row[1], 100, false);
     var enabled = row[2];
     var obviousTestRosterValue = obviousTestValue_(staffId) || obviousTestValue_(staffName);
     if (
       !staffId
+      || typeof rawStaffId !== 'string'
+      || rawStaffId !== staffId
       || !GIB_M1_STAFF_ID_PATTERN_.test(staffId)
       || !staffName
+      || typeof rawStaffName !== 'string'
+      || rawStaffName !== staffName
       || (configuration.target === 'test' && !obviousTestValue_(staffName))
       || (configuration.target === 'production' && obviousTestRosterValue)
       || (enabled !== true && enabled !== false)
       || byId[staffId]
-      || names[normalizeEventText_(staffName)]
+      || byName[normalizeEventText_(staffName)]
     ) {
       throw new Error('Staff Clock Staff contains an invalid or duplicate row.');
     }
-    var item = { staffId: staffId, staffName: staffName, active: enabled };
+    var item = {
+      staffId: staffId,
+      staffName: staffName,
+      active: enabled,
+      sheetRow: rowIndex + 2
+    };
     all.push(item);
     byId[staffId] = item;
-    names[normalizeEventText_(staffName)] = true;
+    byName[normalizeEventText_(staffName)] = item;
     if (enabled) active.push({ staffId: staffId, staffName: staffName });
   });
   if (all.length > GIB_M1_STAFF_MAX_STAFF_) {
@@ -1790,7 +1830,590 @@ function staffClockStaffState_(spreadsheet) {
       ? 'Staff Clock Staff has no active TEST staff.'
       : 'Staff Clock Staff has no active production staff.');
   }
-  return { all: all, active: active, byId: byId };
+  return {
+    sheet: source.sheet,
+    all: all,
+    active: active,
+    byId: byId,
+    byName: byName
+  };
+}
+
+function staffRosterConfiguration_() {
+  var clockConfiguration = staffClockDeploymentConfiguration_();
+  if (!clockConfiguration) return null;
+  if (
+    clockConfiguration.target === 'test'
+    && typeof GIB_M1_TEST_STAFF_ROSTER_AUDIT_SHEET_ !== 'undefined'
+    && typeof GIB_M1_TEST_STAFF_ROSTER_AUDIT_HEADERS_ !== 'undefined'
+  ) {
+    return {
+      target: clockConfiguration.target,
+      auditSheet: GIB_M1_TEST_STAFF_ROSTER_AUDIT_SHEET_,
+      auditHeaders: GIB_M1_TEST_STAFF_ROSTER_AUDIT_HEADERS_
+    };
+  }
+  if (clockConfiguration.target === 'production') {
+    return {
+      target: clockConfiguration.target,
+      auditSheet: GIB_M1_PRODUCTION_STAFF_ROSTER_AUDIT_SHEET_,
+      auditHeaders: GIB_M1_PRODUCTION_STAFF_ROSTER_AUDIT_HEADERS_
+    };
+  }
+  return null;
+}
+
+function staffRosterRequestAllowed_(body) {
+  var configuration = staffRosterConfiguration_();
+  return Boolean(configuration)
+    && body
+    && body.target === configuration.target
+    && persistedDeploymentTargetLock_() === configuration.target
+    && deploymentTargetAllowed_(configuration.target);
+}
+
+function staffRosterRejected_() {
+  return jsonResult_({
+    ok: false,
+    result: 'rejected',
+    message: 'Staff Roster request was rejected.'
+  });
+}
+
+function staffRosterConflict_(code) {
+  var configuration = staffRosterConfiguration_();
+  return jsonResult_({
+    ok: false,
+    target: configuration ? configuration.target : '',
+    result: 'conflict',
+    code: code
+  });
+}
+
+function staffRosterObviousTestName_(value) {
+  return /\b(test|fake|demo|qa)\b|do[-/‐‑‒–—―−\s]+not[-/‐‑‒–—―−\s]+pay/i
+    .test(cleanText_(value));
+}
+
+function staffRosterName_(value, target) {
+  if (typeof value !== 'string') return '';
+  var name = safeText_(value, 100, false);
+  var isAllowedTestName = obviousTestValue_(name);
+  var isForbiddenProductionName = staffRosterObviousTestName_(name);
+  if (
+    !name
+    || !/\p{L}/u.test(name)
+    || !/^[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N} .'’-]*$/u.test(name)
+    || (target === 'test' && !isAllowedTestName)
+    || (target === 'production' && isForbiddenProductionName)
+    || (target !== 'test' && target !== 'production')
+  ) return '';
+  return name;
+}
+
+function staffRosterValidateTargetNames_(staffState, target) {
+  for (var index = 0; index < staffState.all.length; index += 1) {
+    var staffName = staffState.all[index].staffName;
+    if (staffRosterName_(staffName, target) !== staffName) {
+      throw new Error('Staff Roster contains a name outside its deployment target.');
+    }
+  }
+}
+
+function staffRosterNameKey_(value) {
+  return normalizeEventText_(value);
+}
+
+function staffRosterRequestValue_(body) {
+  var configuration = staffRosterConfiguration_();
+  if (!configuration) return null;
+  var operation = body && typeof body.operation === 'string'
+    ? body.operation
+    : '';
+  var requestId = safeExactText_(body && body.requestId, 180, false);
+  var adminName = safeText_(body && body.adminName, 80, false);
+  if (
+    (operation !== 'add' && operation !== 'deactivate' && operation !== 'reactivate')
+    || !GIB_M1_STAFF_REQUEST_ID_PATTERN_.test(requestId)
+    || GIB_M1_ADMIN_NAMES_.indexOf(adminName) === -1
+  ) return null;
+
+  if (operation === 'add') {
+    if (!staffClockExactKeys_(body, [
+      'action', 'target', 'token', 'adminActionToken', 'operation',
+      'requestId', 'adminName', 'staffName'
+    ])) return null;
+    var staffName = staffRosterName_(body && body.staffName, configuration.target);
+    if (!staffName || (body && body.staffId != null)) return null;
+    return {
+      operation: operation,
+      requestId: requestId,
+      adminName: adminName,
+      staffId: '',
+      staffName: staffName
+    };
+  }
+
+  if (!staffClockExactKeys_(body, [
+    'action', 'target', 'token', 'adminActionToken', 'operation',
+    'requestId', 'adminName', 'staffId'
+  ])) return null;
+  var staffId = safeExactText_(body && body.staffId, 80, false);
+  if (
+    !staffId
+    || !GIB_M1_STAFF_ID_PATTERN_.test(staffId)
+    || (body && body.staffName != null)
+  ) return null;
+  return {
+    operation: operation,
+    requestId: requestId,
+    adminName: adminName,
+    staffId: staffId,
+    staffName: ''
+  };
+}
+
+function staffRosterAuditRecordFromRow_(row, sheetRow, target) {
+  if (!staffClockPopulatedRow_(row)) return null;
+  var requestId = safeExactText_(row[0], 180, false);
+  var actionTime = staffClockTimestamp_(row[1]);
+  var adminName = safeText_(row[2], 80, false);
+  var staffId = safeExactText_(row[3], 80, false);
+  var staffName = staffRosterName_(row[4], target);
+  var action = exactText_(row[5]);
+  var previousActive = row[6];
+  var newActive = row[7];
+  var result = exactText_(row[8]);
+  var validAction = action === 'add'
+    || action === 'deactivate'
+    || action === 'reactivate';
+  var expectedResult = action === 'add'
+    ? 'added'
+    : (action === 'deactivate' ? 'deactivated' : 'reactivated');
+  var validActiveValues = action === 'add'
+    ? previousActive === '' && newActive === true
+    : previousActive === (action === 'deactivate')
+      && newActive === (action === 'reactivate');
+  if (
+    typeof row[0] !== 'string'
+    || row[0] !== requestId
+    || !GIB_M1_STAFF_REQUEST_ID_PATTERN_.test(requestId)
+    || typeof row[1] !== 'string'
+    || row[1] !== actionTime
+    || !actionTime
+    || typeof row[2] !== 'string'
+    || row[2] !== adminName
+    || GIB_M1_ADMIN_NAMES_.indexOf(adminName) === -1
+    || typeof row[3] !== 'string'
+    || row[3] !== staffId
+    || !GIB_M1_STAFF_ID_PATTERN_.test(staffId)
+    || typeof row[4] !== 'string'
+    || row[4] !== staffName
+    || !staffName
+    || typeof row[5] !== 'string'
+    || row[5] !== action
+    || !validAction
+    || !validActiveValues
+    || typeof row[8] !== 'string'
+    || row[8] !== result
+    || result !== expectedResult
+  ) return null;
+  return {
+    requestId: requestId,
+    actionTime: actionTime,
+    adminName: adminName,
+    staffId: staffId,
+    staffName: staffName,
+    action: action,
+    previousActive: action === 'add' ? null : previousActive,
+    newActive: newActive,
+    result: result,
+    sheetRow: sheetRow
+  };
+}
+
+function staffRosterAuditSheetValues_(spreadsheet, configuration) {
+  if (!configuration) throw new Error('Staff Roster is not configured for this deployment.');
+  var sheet = spreadsheet.getSheetByName(configuration.auditSheet);
+  if (!sheet) throw new Error(configuration.auditSheet + ' tab is missing.');
+  var values = sheet.getDataRange().getValues();
+  if (!values.length) throw new Error(configuration.auditSheet + ' headings are missing.');
+  var headings = values[0];
+  if (headings.length !== configuration.auditHeaders.length) {
+    throw new Error(configuration.auditSheet + ' headings do not match.');
+  }
+  for (var headerIndex = 0; headerIndex < configuration.auditHeaders.length; headerIndex += 1) {
+    if (
+      typeof headings[headerIndex] !== 'string'
+      || headings[headerIndex] !== configuration.auditHeaders[headerIndex]
+    ) throw new Error(configuration.auditSheet + ' headings do not match.');
+  }
+  return { sheet: sheet, values: values };
+}
+
+function staffRosterAuditState_(spreadsheet) {
+  var configuration = staffRosterConfiguration_();
+  if (!configuration) throw new Error('Staff Roster is not configured for this deployment.');
+  var source = staffRosterAuditSheetValues_(spreadsheet, configuration);
+  var records = [];
+  var byRequestId = {};
+  source.values.slice(1).forEach(function(row, rowIndex) {
+    if (!staffClockPopulatedRow_(row)) return;
+    var record = staffRosterAuditRecordFromRow_(
+      row,
+      rowIndex + 2,
+      configuration.target
+    );
+    if (!record || byRequestId[record.requestId]) {
+      throw new Error('Staff Roster Audit contains an invalid or duplicate row.');
+    }
+    records.push(record);
+    byRequestId[record.requestId] = record;
+  });
+  return { sheet: source.sheet, records: records, byRequestId: byRequestId };
+}
+
+function staffRosterAuditMatchesRequest_(record, value) {
+  return Boolean(record)
+    && record.requestId === value.requestId
+    && record.adminName === value.adminName
+    && record.action === value.operation
+    && (value.operation === 'add'
+      ? record.staffName === value.staffName
+      : record.staffId === value.staffId);
+}
+
+function staffRosterSuccess_(record, target) {
+  return {
+    ok: true,
+    target: target,
+    operation: record.action,
+    requestId: record.requestId,
+    result: record.result,
+    confirmation: {
+      adminName: record.adminName,
+      staffId: record.staffId,
+      staffName: record.staffName,
+      action: record.action,
+      previousActive: record.action === 'add' ? null : record.previousActive,
+      newActive: record.newActive
+    }
+  };
+}
+
+function staffRosterPrebuiltSuccess_(record) {
+  var configuration = staffRosterConfiguration_();
+  if (!configuration) throw new Error('Staff Roster is not configured for this deployment.');
+  var serialized = JSON.stringify(staffRosterSuccess_(record, configuration.target));
+  if (!serialized || serialized.length > 3000) {
+    throw new Error('Staff Roster confirmation could not be serialized.');
+  }
+  return ContentService
+    .createTextOutput(serialized)
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function staffRosterSameAuditRecord_(left, right) {
+  return Boolean(left) && Boolean(right)
+    && left.requestId === right.requestId
+    && left.actionTime === right.actionTime
+    && left.adminName === right.adminName
+    && left.staffId === right.staffId
+    && left.staffName === right.staffName
+    && left.action === right.action
+    && left.previousActive === right.previousActive
+    && left.newActive === right.newActive
+    && left.result === right.result
+    && left.sheetRow === right.sheetRow;
+}
+
+function staffRosterReadBackAudit_(state, expected) {
+  var configuration = staffRosterConfiguration_();
+  if (!configuration) throw new Error('Staff Roster is not configured for this deployment.');
+  var values = state.sheet
+    .getRange(expected.sheetRow, 1, 1, configuration.auditHeaders.length)
+    .getValues();
+  var readBack = values.length === 1
+    ? staffRosterAuditRecordFromRow_(values[0], expected.sheetRow, configuration.target)
+    : null;
+  if (!staffRosterSameAuditRecord_(readBack, expected)) {
+    throw new Error('Staff Roster Audit confirmation could not be verified.');
+  }
+  return readBack;
+}
+
+function staffRosterAppendAudit_(state, value) {
+  if (state.byRequestId[value.requestId]) {
+    throw new Error('Staff Roster Audit request ID already exists.');
+  }
+  var row = [
+    value.requestId,
+    value.actionTime,
+    value.adminName,
+    value.staffId,
+    value.staffName,
+    value.action,
+    value.action === 'add' ? '' : value.previousActive,
+    value.newActive,
+    value.result
+  ];
+  var nextRow = state.sheet.getLastRow() + 1;
+  if (nextRow > state.sheet.getMaxRows()) {
+    state.sheet.insertRowsAfter(state.sheet.getMaxRows(), nextRow - state.sheet.getMaxRows());
+  }
+  state.sheet.getRange(nextRow, 2, 1, 1).setNumberFormat('@');
+  state.sheet.getRange(nextRow, 1, 1, row.length).setValues([row]);
+  value.sheetRow = nextRow;
+  state.records.push(value);
+  state.byRequestId[value.requestId] = value;
+  return value;
+}
+
+function staffRosterAppendStaff_(staffState, value) {
+  var nextRow = staffState.sheet.getLastRow() + 1;
+  if (nextRow > staffState.sheet.getMaxRows()) {
+    staffState.sheet.insertRowsAfter(
+      staffState.sheet.getMaxRows(),
+      nextRow - staffState.sheet.getMaxRows()
+    );
+  }
+  staffState.sheet.getRange(nextRow, 1, 1, 3).setValues([[
+    value.staffId,
+    value.staffName,
+    true
+  ]]);
+  value.staffSheetRow = nextRow;
+}
+
+function staffRosterSetActive_(staffState, staff, active) {
+  staffState.sheet.getRange(staff.sheetRow, 3, 1, 1).setValue(active);
+  staff.active = active;
+}
+
+function staffRosterGeneratedId_(staffName, staffState) {
+  var nameKey = staffRosterNameKey_(staffName);
+  var digest = staffClockSha256Hex_('gib-m1-staff-roster-id-v1:' + nameKey).slice(0, 8);
+  var base = nameKey.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  base = base.slice(0, 80).replace(/-+$/g, '');
+  if (!base) base = 'staff-' + digest;
+  if (!staffState.byId[base]) return base;
+
+  var suffix = '-' + digest;
+  var candidate = base.slice(0, 80 - suffix.length).replace(/-+$/g, '') + suffix;
+  if (!staffState.byId[candidate]) return candidate;
+  for (var attempt = 2; attempt <= GIB_M1_STAFF_MAX_STAFF_; attempt += 1) {
+    var numberedSuffix = suffix + '-' + attempt;
+    candidate = base
+      .slice(0, 80 - numberedSuffix.length)
+      .replace(/-+$/g, '') + numberedSuffix;
+    if (!staffState.byId[candidate]) return candidate;
+  }
+  return '';
+}
+
+function staffRosterReadBackStaff_(staffState, expected, expectedActive) {
+  var values = staffState.sheet
+    .getRange(expected.staffSheetRow || expected.sheetRow, 1, 1, 3)
+    .getValues();
+  var row = values.length === 1 ? values[0] : [];
+  if (
+    typeof row[0] !== 'string'
+    || row[0] !== expected.staffId
+    || typeof row[1] !== 'string'
+    || row[1] !== expected.staffName
+    || row[2] !== expectedActive
+  ) throw new Error('Staff Roster change could not be verified.');
+}
+
+function staffRosterLaterTerminalAudit_(auditState, record) {
+  var terminal = null;
+  var expectedActive = record.newActive;
+  auditState.records.forEach(function(candidate) {
+    if (candidate.staffId !== record.staffId || candidate.sheetRow <= record.sheetRow) return;
+    if (
+      candidate.staffName !== record.staffName
+      || candidate.action === 'add'
+      || candidate.previousActive !== expectedActive
+    ) throw new Error('Staff Roster later audit state conflicts with the request.');
+    expectedActive = candidate.newActive;
+    terminal = candidate;
+  });
+  return terminal;
+}
+
+function staffRosterRequireTerminalState_(staffState, terminal) {
+  var staff = staffState.byId[terminal.staffId];
+  if (
+    !staff
+    || staff.staffName !== terminal.staffName
+    || staff.active !== terminal.newActive
+  ) throw new Error('Staff Roster terminal audit state does not match the roster.');
+}
+
+function staffRosterDeactivationBlockCode_(spreadsheet, staffState, staff) {
+  if (staffState.active.length <= 1) return 'last_active';
+  var timeState = staffClockReadTime_(spreadsheet, staffState);
+  var analysis = staffClockAnalyze_(staffState, timeState);
+  var staffAnalysis = analysis.byStaff[staff.staffId];
+  return staffAnalysis && (staffAnalysis.open || staffAnalysis.structuralContradiction)
+    ? 'clocked_in'
+    : '';
+}
+
+function staffRosterHealReplay_(spreadsheet, staffState, auditState, record) {
+  var laterTerminal = staffRosterLaterTerminalAudit_(auditState, record);
+  if (laterTerminal) {
+    staffRosterRequireTerminalState_(staffState, laterTerminal);
+    return;
+  }
+  var staff = staffState.byId[record.staffId];
+  if (record.action === 'add') {
+    if (!staff) {
+      if (
+        staffState.all.length >= GIB_M1_STAFF_MAX_STAFF_
+        || staffState.byId[record.staffId]
+        || staffState.byName[staffRosterNameKey_(record.staffName)]
+      ) {
+        throw new Error('Staff Roster replay state conflicts with the roster.');
+      }
+      staffRosterAppendStaff_(staffState, record);
+      SpreadsheetApp.flush();
+      staffRosterReadBackStaff_(staffState, record, true);
+    } else if (staff.staffName !== record.staffName || staff.active !== true) {
+      throw new Error('Staff Roster replay state conflicts with the roster.');
+    }
+    return;
+  }
+  if (!staff || staff.staffName !== record.staffName) {
+    throw new Error('Staff Roster replay state conflicts with the roster.');
+  }
+  if (staff.active === record.previousActive) {
+    if (
+      record.action === 'deactivate'
+      && staffRosterDeactivationBlockCode_(spreadsheet, staffState, staff)
+    ) throw new Error('Staff Roster replay deactivation is no longer safe.');
+    staffRosterSetActive_(staffState, staff, record.newActive);
+    SpreadsheetApp.flush();
+    staffRosterReadBackStaff_(staffState, staff, record.newActive);
+  } else if (staff.active !== record.newActive) {
+    throw new Error('Staff Roster replay state conflicts with the roster.');
+  }
+}
+
+function staffRosterListAction_(body) {
+  if (!staffRosterRequestAllowed_(body)) return rejectedAuthResult_();
+  return staffClockWithLock_('Staff Roster was busy. Nothing changed.', function() {
+    var spreadsheet = openExpectedSpreadsheet_(body);
+    var staffState = staffClockStaffState_(spreadsheet);
+    var configuration = staffRosterConfiguration_();
+    staffRosterValidateTargetNames_(staffState, configuration.target);
+    return jsonResult_({
+      ok: true,
+      target: configuration.target,
+      staff: staffState.all.map(function(staff) {
+        return {
+          staffId: staff.staffId,
+          staffName: staff.staffName,
+          active: staff.active
+        };
+      })
+    });
+  });
+}
+
+function staffRosterMutateAction_(body) {
+  if (!staffRosterRequestAllowed_(body)) return rejectedAuthResult_();
+  return staffClockWithLock_('Staff Roster was busy. Nothing changed.', function() {
+    var value = staffRosterRequestValue_(body);
+    if (!value) return staffRosterRejected_();
+    var spreadsheet = openExpectedSpreadsheet_(body);
+    var staffState = staffClockStaffState_(spreadsheet);
+    staffRosterValidateTargetNames_(staffState, staffRosterConfiguration_().target);
+    var auditState = staffRosterAuditState_(spreadsheet);
+    var replay = auditState.byRequestId[value.requestId];
+    if (replay) {
+      if (!staffRosterAuditMatchesRequest_(replay, value)) {
+        return staffRosterConflict_('request_conflict');
+      }
+      var replayResult = staffRosterPrebuiltSuccess_(replay);
+      staffRosterReadBackAudit_(auditState, replay);
+      staffRosterHealReplay_(spreadsheet, staffState, auditState, replay);
+      return replayResult;
+    }
+
+    if (value.operation === 'add') {
+      var duplicate = staffState.byName[staffRosterNameKey_(value.staffName)];
+      if (duplicate) {
+        return staffRosterConflict_(duplicate.active
+          ? 'duplicate_active'
+          : 'reactivate_required');
+      }
+      if (staffState.all.length >= GIB_M1_STAFF_MAX_STAFF_) {
+        return staffRosterConflict_('capacity');
+      }
+      value.staffId = staffRosterGeneratedId_(value.staffName, staffState);
+      if (!value.staffId) return staffRosterConflict_('capacity');
+      var addedAuditValue = {
+        requestId: value.requestId,
+        actionTime: staffClockNowTimestamp_(),
+        adminName: value.adminName,
+        staffId: value.staffId,
+        staffName: value.staffName,
+        action: 'add',
+        previousActive: null,
+        newActive: true,
+        result: 'added'
+      };
+      if (!addedAuditValue.actionTime) {
+        throw new Error('Staff Roster action time could not be created.');
+      }
+      var addedResult = staffRosterPrebuiltSuccess_(addedAuditValue);
+      var addedAudit = staffRosterAppendAudit_(auditState, addedAuditValue);
+      SpreadsheetApp.flush();
+      staffRosterReadBackAudit_(auditState, addedAudit);
+      staffRosterAppendStaff_(staffState, addedAudit);
+      SpreadsheetApp.flush();
+      staffRosterReadBackStaff_(staffState, addedAudit, true);
+      return addedResult;
+    }
+
+    var staff = staffState.byId[value.staffId];
+    if (!staff) return staffRosterConflict_('not_found');
+    if (value.operation === 'deactivate' && !staff.active) {
+      return staffRosterConflict_('already_inactive');
+    }
+    if (value.operation === 'reactivate' && staff.active) {
+      return staffRosterConflict_('already_active');
+    }
+    if (value.operation === 'deactivate') {
+      var blockCode = staffRosterDeactivationBlockCode_(spreadsheet, staffState, staff);
+      if (blockCode) return staffRosterConflict_(blockCode);
+    }
+
+    var newActive = value.operation === 'reactivate';
+    var statusAuditValue = {
+      requestId: value.requestId,
+      actionTime: staffClockNowTimestamp_(),
+      adminName: value.adminName,
+      staffId: staff.staffId,
+      staffName: staff.staffName,
+      action: value.operation,
+      previousActive: staff.active,
+      newActive: newActive,
+      result: newActive ? 'reactivated' : 'deactivated'
+    };
+    if (!statusAuditValue.actionTime) {
+      throw new Error('Staff Roster action time could not be created.');
+    }
+    var statusResult = staffRosterPrebuiltSuccess_(statusAuditValue);
+    var statusAudit = staffRosterAppendAudit_(auditState, statusAuditValue);
+    SpreadsheetApp.flush();
+    staffRosterReadBackAudit_(auditState, statusAudit);
+    staffRosterSetActive_(staffState, staff, newActive);
+    SpreadsheetApp.flush();
+    staffRosterReadBackStaff_(staffState, staff, newActive);
+    return statusResult;
+  });
 }
 
 function staffClockTimestamp_(value) {
@@ -3435,6 +4058,91 @@ function staffTimeVoidAction_(body) {
   });
 }
 
+/*
+ * Manual release prerequisite only. This function is intentionally not routed
+ * through doPost/adReceiverV2_. A later production release run may invoke it
+ * directly from the locked production Apps Script project after independent
+ * review; ordinary web requests can never create or repair production tabs.
+ */
+function provisionGibM1ProductionRosterAudit() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) throw new Error('Production roster-audit provisioning is busy.');
+  try {
+    if (
+      typeof GIB_M1_ALLOWED_TARGET === 'undefined'
+      || GIB_M1_ALLOWED_TARGET !== 'production'
+      || typeof GIB_M1_PRODUCTION_SPREADSHEET_PROPERTY_ === 'undefined'
+      || typeof GIB_M1_PRODUCTION_SPREADSHEET_TITLE_ === 'undefined'
+      || typeof SPREADSHEET_ID === 'undefined'
+      || typeof EXPECTED_SPREADSHEET_NAME === 'undefined'
+      || GIB_M1_PRODUCTION_SPREADSHEET_TITLE_ !== 'RBJJ M1 — PRODUCTION'
+      || EXPECTED_SPREADSHEET_NAME !== GIB_M1_PRODUCTION_SPREADSHEET_TITLE_
+    ) throw new Error('Production roster-audit provisioning target is invalid.');
+
+    var properties = PropertiesService.getScriptProperties();
+    var storedTarget = properties.getProperty(GIB_M1_TARGET_LOCK_PROPERTY_);
+    var storedSpreadsheetId = properties
+      .getProperty(GIB_M1_PRODUCTION_SPREADSHEET_PROPERTY_);
+    if (
+      storedTarget !== 'production'
+      || typeof storedSpreadsheetId !== 'string'
+      || !storedSpreadsheetId
+      || storedSpreadsheetId !== SPREADSHEET_ID
+      || properties.getProperty('GIB_M1_TEST_SPREADSHEET_ID')
+      || configuredDeploymentTarget_() !== 'production'
+    ) throw new Error('Production roster-audit private target state is invalid.');
+
+    var spreadsheet = SpreadsheetApp.openById(storedSpreadsheetId);
+    if (
+      spreadsheet.getId() !== storedSpreadsheetId
+      || spreadsheet.getName() !== GIB_M1_PRODUCTION_SPREADSHEET_TITLE_
+    ) throw new Error('Production roster-audit spreadsheet identity is invalid.');
+
+    var staffState = staffClockStaffState_(spreadsheet);
+    var rosterConfiguration = staffRosterConfiguration_();
+    if (
+      !rosterConfiguration
+      || rosterConfiguration.target !== 'production'
+      || rosterConfiguration.auditSheet !== 'Staff Roster Audit'
+      || rosterConfiguration.auditHeaders.length !== 9
+    ) throw new Error('Production roster-audit schema is invalid.');
+    staffRosterValidateTargetNames_(staffState, rosterConfiguration.target);
+    var timeState = staffClockReadTime_(spreadsheet, staffState);
+    var timeAuditState = staffClockReadAudit_(spreadsheet, staffState, timeState);
+
+    var rosterAuditSheet = spreadsheet.getSheetByName(rosterConfiguration.auditSheet);
+    var created = false;
+    if (!rosterAuditSheet) {
+      rosterAuditSheet = spreadsheet.insertSheet(rosterConfiguration.auditSheet);
+      rosterAuditSheet
+        .getRange(1, 1, 1, rosterConfiguration.auditHeaders.length)
+        .setValues([rosterConfiguration.auditHeaders]);
+      created = true;
+    }
+    var rosterAuditState = staffRosterAuditState_(spreadsheet);
+    rosterAuditSheet.setFrozenRows(1);
+    SpreadsheetApp.flush();
+    rosterAuditState = staffRosterAuditState_(spreadsheet);
+
+    return {
+      ok: true,
+      created: created,
+      targetLocked: true,
+      spreadsheetVerified: true,
+      staffSchemaVerified: true,
+      staffCount: staffState.all.length,
+      staffTimeSchemaVerified: true,
+      staffTimeCount: timeState.records.length,
+      staffTimeAuditSchemaVerified: true,
+      staffTimeAuditCount: timeAuditState.records.length,
+      rosterAuditHeaderCount: rosterConfiguration.auditHeaders.length,
+      rosterAuditCount: rosterAuditState.records.length
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function gibM1ExactSpreadsheetFiles_(title) {
   var expectedTitle = exactText_(title);
   if (!expectedTitle) throw new Error('Spreadsheet title is not configured.');
@@ -3520,7 +4228,12 @@ function gibM1EnsureSigninsSchema_(spreadsheet, sheetName, headers, initializeIf
 }
 
 function gibM1ProvisionSpreadsheet_(options) {
-  var target = cleanText_(options && options.target).toLowerCase();
+  var target = options && typeof options.target === 'string'
+    ? options.target
+    : '';
+  var declaredTarget = typeof GIB_M1_ALLOWED_TARGET === 'undefined'
+    ? ''
+    : GIB_M1_ALLOWED_TARGET;
   var title = exactText_(options && options.title);
   var sheetName = exactText_(options && options.sheetName);
   var propertyName = exactText_(options && options.spreadsheetProperty);
@@ -3530,7 +4243,7 @@ function gibM1ProvisionSpreadsheet_(options) {
   var closesProvisioning = Boolean(provisioningClosedProperty || provisioningClosedValue);
   var headers = options && options.headers;
   if (
-    target !== configuredDeploymentTarget_()
+    target !== declaredTarget
     || (target !== 'test' && target !== 'production')
     || !title
     || !sheetName
