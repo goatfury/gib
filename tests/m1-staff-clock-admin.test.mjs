@@ -424,7 +424,11 @@ test('Staff time reuses the existing secured Admin request path and loads only a
   assert.match(pagingSource, /validStaffTimeReviewStartResponse\(initial\)/u);
   const loadSource = sourceBetween(adminHtml, 'async function loadStaffTime(', 'async function submitStaffCorrection(');
   assert.match(loadSource, /loadStaffTimeReviewView\(generation\)/u);
-  const initializeSource = sourceBetween(adminHtml, 'async function initialize(', "$('#loginButton')");
+  const initializeSource = sourceBetween(
+    adminHtml,
+    'async function initialize(',
+    "$('#loginButton').addEventListener('click'"
+  );
   assert.doesNotMatch(initializeSource, /loadReview|loadStaffTime/u);
   assert.match(initializeSource, /setLoggedOut\(\)/u);
   assert.doesNotMatch(adminHtml, /localStorage|sessionStorage/u);

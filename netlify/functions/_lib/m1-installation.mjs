@@ -14,5 +14,6 @@ export function staffClockEnabled(installationId) {
 }
 
 export function remoteScheduleEnabled(installationId) {
-  return deploymentInstallationProfile(installationId)?.scheduleSource.mode === 'rev-website';
+  const mode = deploymentInstallationProfile(installationId)?.scheduleSource.mode;
+  return mode === 'rev-website' || mode === 'richmond-website';
 }

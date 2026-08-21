@@ -11,7 +11,8 @@ export async function handleAdminLogout(request, dependencies = {}) {
   }
   const config = runtimeConfig(dependencies.env || process.env, {
     admin: true,
-    requestUrl: request.url
+    requestUrl: request.url,
+    installationId: dependencies.installationId
   });
   const auth = requireAdmin(request, config, dependencies.now || Date.now());
   if (auth.response) return auth.response;

@@ -35,6 +35,7 @@ const serverProfile = readFileSync(
 );
 const PREVIEW_ORIGIN = 'https://deploy-preview-77--gib-live.netlify.app';
 const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
+const RICHMOND_ORIGIN = 'https://gib-richmond-test.netlify.app';
 
 const COMPLETE_ENV = Object.freeze({
   GIB_TEST_WEBHOOK_URL: 'https://script.google.com/macros/s/SYNTHETIC_TEST_RECEIVER_123456/exec',
@@ -50,11 +51,21 @@ const COMPLETE_ENV = Object.freeze({
   GIB_M1_PRODUCTION_INSTALL_CAPABILITY_SECRET: 'production-install-secret-1234567890abcdef'
 });
 
+const RICHMOND_ENV = Object.freeze({
+  ...COMPLETE_ENV,
+  GIB_M1_INSTALLATION: 'richmond',
+  GIB_M1_ENVIRONMENT: 'test',
+  GIB_RICHMOND_TEST_WEBHOOK_URL: 'https://script.google.com/macros/s/SYNTHETIC_RICHMOND_RECEIVER_123456/exec',
+  GIB_RICHMOND_TEST_WEBHOOK_TOKEN: 'richmond-webhook-token-1234567890abcdef',
+  GIB_RICHMOND_TEST_ADMIN_ACTION_TOKEN: 'richmond-admin-token-1234567890abcdef'
+});
+
 function sameOriginRequest(path, options = {}) {
-  return new Request(`${PREVIEW_ORIGIN}${path}`, {
+  const origin = options.origin || PREVIEW_ORIGIN;
+  return new Request(`${origin}${path}`, {
     method: options.method || 'GET',
     headers: {
-      Origin: PREVIEW_ORIGIN,
+      Origin: origin,
       'Sec-Fetch-Site': 'same-origin',
       ...(options.body ? { 'Content-Type': 'application/json' } : {})
     },
@@ -62,7 +73,7 @@ function sameOriginRequest(path, options = {}) {
   });
 }
 
-test('Rev stays the exact default while Richmond is a fixed local-only installation', () => {
+test('Rev stays the exact default while Richmond is a fixed isolated TEST installation', () => {
   const rev = installationProfile('rev');
   const richmond = installationProfile('richmond');
 
@@ -82,17 +93,19 @@ test('Rev stays the exact default while Richmond is a fixed local-only installat
     installationId: 'richmond',
     gymName: 'Richmond BJJ',
     siteCode: 'Richmond',
-    deviceLabel: 'Richmond TEST preview device',
+    deviceLabel: 'Richmond TEST Browser',
     storagePrefix: 'gib_m1_richmond_',
-    scheduleSource: { mode: 'test-only', endpoint: '' },
+    environment: 'test',
+    allowedOrigin: RICHMOND_ORIGIN,
+    scheduleSource: { mode: 'richmond-website', endpoint: '/api/m1-schedule' },
     featureFlags: { staffClock: false },
-    backend: { enabled: false, transportTarget: 'none' }
+    backend: { enabled: true, transportTarget: 'richmond-test' }
   });
   assert.equal(deploymentInstallationProfile(), rev);
   assert.equal(deploymentInstallationProfile('richmond'), richmond);
   assert.equal(validInstallationProfile({ ...richmond, siteCode: 'Rev' }), false);
-  assert.equal(remoteBackendEnabled('richmond'), false);
-  assert.equal(remoteScheduleEnabled('richmond'), false);
+  assert.equal(remoteBackendEnabled('richmond'), true);
+  assert.equal(remoteScheduleEnabled('richmond'), true);
   assert.equal(staffClockEnabled('richmond'), false);
 });
 
@@ -184,81 +197,102 @@ test('the generated browser profile is frozen and cannot be selected by URL or s
   assert.match(netlifyConfig, /command = "npm run build"/u);
 });
 
-test('Richmond client is fixed to Site Richmond, TEST schedule, local review, and no automatic transport', () => {
+test('Richmond client is fixed to its site, official schedule, remote Daily Review, and TEST transport', () => {
   assert.match(kioskHtml, /function getSiteCode\(\) \{\s*if \(IS_RICHMOND\) return INSTALLATION\.siteCode;/u);
-  assert.match(kioskHtml, /RICHMOND TEST ONLY — QA Preview Class/u);
+  assert.match(kioskHtml, /https:\/\/www\.richmondbjj\.com\/schedule/u);
+  assert.match(kioskHtml, /11:15 AM–1:00 PM Brazilian Jiu-Jitsu Fundamentals/u);
   assert.match(kioskHtml, /html\[data-m1-installation="richmond"\] body\.kiosk-mode header #hdrGym/u);
   assert.match(kioskHtml, /Richmond BJJ'\} · TEST Preview/u);
-  assert.match(kioskHtml, /function startCanonicalScheduleRefresh\(\) \{\s*if \(IS_RICHMOND\)/u);
+  assert.doesNotMatch(kioskHtml, /RICHMOND TEST ONLY — QA Preview Class/u);
+  assert.doesNotMatch(kioskHtml, /phase: 'disabled'/u);
   assert.match(kioskHtml, /if \(BACKEND_ENABLED && localStorage\.getItem\(SYNC_AUTO_KEY\) === 'true'\)/u);
-  assert.match(kioskHtml, /if \(!BACKEND_ENABLED\) \{[\s\S]*Local only — rows kept/u);
-  assert.match(kioskHtml, /function addRichmondForgottenSignin\(\)[\s\S]*'Site': INSTALLATION\.siteCode[\s\S]*appendBatchToState/u);
-  assert.match(kioskHtml, /Forgotten Sign-In \/ Daily Review · local preview/u);
+  assert.match(kioskHtml, /if \(IS_RICHMOND && localStorage\.getItem\(SYNC_AUTO_KEY\) === null\)[\s\S]*localStorage\.setItem\(SYNC_AUTO_KEY, 'true'\)/u);
+  assert.match(kioskHtml, /window\.addEventListener\('online',[\s\S]*loadSyncQueue\(\)\.length[\s\S]*syncNow\(\)/u);
+  assert.match(kioskHtml, /navigator\.onLine !== false[\s\S]*window\.setTimeout\(syncNow, 0\)/u);
+  assert.match(kioskHtml, /\$\('#dailyReviewLink'\)\.href = '\/m1\/admin\/'/u);
+  assert.match(kioskHtml, /Rows sync only to the dedicated Richmond TEST Sheet/u);
   assert.match(staffClient, /installationProfile\.installationId === 'rev'[\s\S]*featureFlags\?\.staffClock === true[\s\S]*initializeStaffClockClient\(\)/u);
   assert.match(kioskHtml, /html:not\(\[data-m1-staff-clock="true"\]\) #staffClock/u);
 });
 
-test('Richmond disables TEST and production runtime configuration even when Rev secrets exist', () => {
-  const env = { ...COMPLETE_ENV, GIB_M1_INSTALLATION: 'richmond' };
-  assert.equal(runtimeConfig(env, {
+test('Richmond runtime accepts only its dedicated TEST origin and credentials', () => {
+  assert.equal(runtimeConfig({ ...COMPLETE_ENV, GIB_M1_INSTALLATION: 'richmond' }, {
+    requestUrl: `${RICHMOND_ORIGIN}/api/m1-kiosk-sync`,
+    installationId: 'richmond'
+  }), null);
+  const config = runtimeConfig(RICHMOND_ENV, {
+    requestUrl: `${RICHMOND_ORIGIN}/api/m1-kiosk-sync`,
+    installationId: 'richmond'
+  });
+  assert.equal(config.target, 'test');
+  assert.equal(config.installationId, 'richmond');
+  assert.equal(config.environment, 'test');
+  assert.equal(runtimeConfig(RICHMOND_ENV, {
     requestUrl: `${PREVIEW_ORIGIN}/api/m1-kiosk-sync`,
     installationId: 'richmond'
   }), null);
-  assert.equal(productionRuntimeConfig(env, { installationId: 'richmond' }), null);
+  assert.equal(productionRuntimeConfig(RICHMOND_ENV, { installationId: 'richmond' }), null);
 });
 
-test('Richmond server routes fail closed before TEST, production, Staff Clock, schedule, or Admin transport', async () => {
-  const env = { ...COMPLETE_ENV, GIB_M1_INSTALLATION: 'richmond' };
+test('Richmond server routes use only Richmond TEST transport while Staff Clock stays disabled', async () => {
+  const env = RICHMOND_ENV;
   let fetchCalls = 0;
-  let storeCalls = 0;
-  const fetch = async () => {
+  let forwarded = null;
+  const fetch = async (_url, options) => {
     fetchCalls += 1;
-    throw new Error('transport must not be called');
+    forwarded = JSON.parse(options.body);
+    return new Response(JSON.stringify({
+      ok: true,
+      target: 'test',
+      results: [{
+        rowId: 'gib-m1-11111111-1111-4111-8111-111111111111',
+        result: 'added',
+        linkedRecordId: 'gib-m1-11111111-1111-4111-8111-111111111111'
+      }]
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
 
   const kiosk = await handleKioskSync(
     sameOriginRequest('/api/m1-kiosk-sync', {
+      origin: RICHMOND_ORIGIN,
       method: 'POST',
-      body: { rows: [{ forged: 'Rev' }] }
+      body: { rows: [{
+        RowID: 'gib-m1-11111111-1111-4111-8111-111111111111',
+        Timestamp: '2026-08-21 12:00:00',
+        Date: '2026-08-21',
+        'Class Label': '6:00 AM–7:00 AM Muay Thai Fundamentals',
+        'Duration (hr)': 1,
+        Instructor: 'Richmond QA Test',
+        Site: 'Richmond',
+        Device: 'Richmond TEST Browser',
+        Build: 'RICHMOND TEST',
+        Notes: 'QA TEST'
+      }] }
     }),
-    { env, fetch, installationId: 'richmond' }
+    { env, fetch, installationId: 'richmond', dateNow: new Date('2026-08-21T16:00:00Z') }
   );
-  assert.equal(kiosk.status, 503);
-  assert.match((await kiosk.json()).message, /no configured backend transport/iu);
+  assert.equal(kiosk.status, 200);
+  assert.equal((await kiosk.json()).results[0].result, 'added');
+  assert.equal(forwarded.installation, 'richmond');
+  assert.equal(forwarded.environment, 'test');
+  assert.equal(forwarded.rows[0].Site, 'Richmond');
 
   const staff = await handleStaffClock(
-    sameOriginRequest('/api/m1-staff-clock', { method: 'POST' }),
+    sameOriginRequest('/api/m1-staff-clock', { origin: RICHMOND_ORIGIN, method: 'POST' }),
     { env, fetch, installationId: 'richmond' }
   );
   assert.equal(staff.status, 404);
   assert.match((await staff.json()).message, /disabled/iu);
 
-  const schedule = await handleM1Schedule(
-    sameOriginRequest('/api/m1-schedule'),
-    {
-      env,
-      installationId: 'richmond',
-      deployContext: 'deploy-preview',
-      published: false,
-      fetchImpl: fetch,
-      store: {
-        async get() { storeCalls += 1; },
-        async set() { storeCalls += 1; }
-      }
-    }
-  );
-  assert.equal(schedule.status, 503);
-  assert.match((await schedule.json()).message, /deployment-local TEST schedule/iu);
-
   const admin = await handleAdminLogin(
     sameOriginRequest('/.netlify/functions/m1-admin-login', {
+      origin: RICHMOND_ORIGIN,
       method: 'POST',
       body: { adminName: 'Andrew Smith', passphrase: '', testShortcut: true }
     }),
     { env, installationId: 'richmond' }
   );
-  assert.equal(admin.status, 503);
-  assert.equal(admin.headers.get('set-cookie'), null);
-  assert.equal(fetchCalls, 0);
-  assert.equal(storeCalls, 0);
+  assert.equal(admin.status, 200);
+  assert.match(admin.headers.get('set-cookie'), /gib_m1_admin_session=/u);
+  assert.equal(fetchCalls, 1);
 });

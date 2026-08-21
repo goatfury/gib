@@ -107,6 +107,9 @@ function kioskValidationRuntime(extras = {}) {
       Friday: 2, Saturday: 2, Sunday: 1
     });
     const CANONICAL_SCHEDULE_CACHE_KEY = 'gib_m1_canonical_schedule_cache_v1';
+    const CANONICAL_SCHEDULE_SITE = 'Rev';
+    const CANONICAL_SCHEDULE_VERSION_PREFIX = 'revbjj';
+    const CANONICAL_SCHEDULE_LIVE_SOURCE_TYPE = 'wordpress-rest';
     const CANONICAL_SCHEDULE_SOURCE_URL = 'https://revolutionbjj.com/schedule/';
     const CANONICAL_SCHEDULE_UPSTREAM_URL = 'https://revolutionbjj.com/wp-json/wp/v2/pages?slug=schedule&status=publish&_fields=id,type,slug,status,link,title,modified,modified_gmt,content';
     const CHECKED_IN_SCHEDULE_VERSION = '2026-08-11';
@@ -147,6 +150,8 @@ function adminValidationRuntime(extras = {}) {
     const SCHEDULE_DAYS = Object.freeze(['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']);
     const SCHEDULE_SOURCE_URL = 'https://revolutionbjj.com/schedule/';
     const SCHEDULE_UPSTREAM_URL = 'https://revolutionbjj.com/wp-json/wp/v2/pages?slug=schedule&status=publish&_fields=id,type,slug,status,link,title,modified,modified_gmt,content';
+    const SCHEDULE_LIVE_SOURCE_TYPE = 'wordpress-rest';
+    const SCHEDULE_VERSION_PREFIX = 'revbjj';
     const SCHEDULE_VERSION_PATTERN = /^revbjj-([a-f0-9]{16})$/;
     const SCHEDULE_HASH_PATTERN = /^[a-f0-9]{64}$/;
     const SCHEDULE_STATUS_REASON_PATTERN = /^[a-z0-9-]{1,80}$/;
@@ -256,8 +261,8 @@ function kioskOverrideRuntime(storage, canonical = null) {
 }
 
 test('kiosk bootstrap and Daily Review share one checked-in Rev schedule contract', () => {
-  const marker = 'const DEFAULT_SCHEDULE = ';
-  const bootstrapSource = sourceBetween(kiosk, marker, '// Additional default schedule');
+  const marker = 'const DEFAULT_SCHEDULE_REV = ';
+  const bootstrapSource = sourceBetween(kiosk, marker, 'const DEFAULT_SCHEDULE_RICHMOND = ');
   const objectLiteral = bootstrapSource.slice(marker.length).trim().replace(/;$/u, '');
   const kioskBootstrap = vm.runInNewContext(`(${objectLiteral})`);
   assert.deepEqual(JSON.parse(JSON.stringify(kioskBootstrap)), shared.days);
@@ -266,7 +271,10 @@ test('kiosk bootstrap and Daily Review share one checked-in Rev schedule contrac
   assert.equal(Object.values(shared.days).flat().length, 55);
   assert.match(kiosk, /CANONICAL_SCHEDULE_ENDPOINT = INSTALLATION\.scheduleSource\.endpoint/u);
   assert.match(admin, /schedule: '\/api\/m1-schedule'/u);
-  assert.match(admin, /scheduleBootstrap: '\/m1\/shared-schedule\.json'/u);
+  assert.match(
+    admin,
+    /scheduleBootstrap:\s*IS_RICHMOND \? '\/m1\/richmond-schedule\.json' : '\/m1\/shared-schedule\.json'/u
+  );
   assert.match(admin, /loadCheckedInScheduleBootstrap/u);
 });
 

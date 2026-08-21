@@ -875,7 +875,7 @@ body.admin-mode .container { max-width: 1120px; }
 }
 
 </style>
-<script src="./installation-profile.generated.js?v=2026-08-21-richmond-m1-run1-r1"></script>
+<script src="./installation-profile.generated.js?v=2026-08-21-richmond-m1-run2-r1"></script>
 </head>
 <body>
 <div class="container">
@@ -1355,10 +1355,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-21-richmond-m1-run1-r1';
+} from './sync-core.mjs?v=2026-08-21-richmond-m1-run2-r1';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-08-21-richmond-m1-run1-r1';
+const OFFLINE_SHELL_REVISION = '2026-08-21-richmond-m1-run2-r1';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -1374,11 +1374,13 @@ if ('serviceWorker' in navigator) {
         installationId: 'richmond',
         gymName: 'Richmond BJJ',
         siteCode: 'Richmond',
-        deviceLabel: 'Richmond TEST preview device',
+        deviceLabel: 'Richmond TEST Browser',
         storagePrefix: 'gib_m1_richmond_',
-        scheduleSource: { mode: 'test-only', endpoint: '' },
+        environment: 'test',
+        allowedOrigin: 'https://gib-richmond-test.netlify.app',
+        scheduleSource: { mode: 'richmond-website', endpoint: '/api/m1-schedule' },
         featureFlags: { staffClock: false },
-        backend: { enabled: false, transportTarget: 'none' }
+        backend: { enabled: true, transportTarget: 'richmond-test' }
       }
     : INSTALLATION?.installationId === 'rev'
       ? {
@@ -1415,7 +1417,7 @@ if ('serviceWorker' in navigator) {
   const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
   const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
   const TEST_BUILD = IS_RICHMOND
-    ? '2026-08-21 RICHMOND M1 RUN 1 TEST-only'
+    ? '2026-08-21 RICHMOND M1 RUN 2 TEST'
     : '2026-08-18 M1B TEST staff-clock-operational-candidate';
   const PRODUCTION_BUILD = '2026-08-19 M1B PRODUCTION staff-clock';
   const BUILD = IS_RICHMOND
@@ -1526,16 +1528,23 @@ function refreshNameDatalist() {
   const SCHEDULE_MODE_KEY = installationStorageKey('gib_m1_schedule_mode_v1');
   const CANONICAL_SCHEDULE_CACHE_KEY = installationStorageKey('gib_m1_canonical_schedule_cache_v1');
   const CANONICAL_SCHEDULE_ENDPOINT = INSTALLATION.scheduleSource.endpoint;
-  const CANONICAL_SCHEDULE_SOURCE_URL = 'https://revolutionbjj.com/schedule/';
-  const CANONICAL_SCHEDULE_UPSTREAM_URL = 'https://revolutionbjj.com/wp-json/wp/v2/pages?slug=schedule&status=publish&_fields=id,type,slug,status,link,title,modified,modified_gmt,content';
-  const CHECKED_IN_SCHEDULE_VERSION = '2026-08-11';
+  const CANONICAL_SCHEDULE_SOURCE_URL = IS_RICHMOND
+    ? 'https://www.richmondbjj.com/schedule'
+    : 'https://revolutionbjj.com/schedule/';
+  const CANONICAL_SCHEDULE_UPSTREAM_URL = IS_RICHMOND
+    ? 'https://www.richmondbjj.com/schedule'
+    : 'https://revolutionbjj.com/wp-json/wp/v2/pages?slug=schedule&status=publish&_fields=id,type,slug,status,link,title,modified,modified_gmt,content';
+  const CANONICAL_SCHEDULE_SITE = INSTALLATION.siteCode;
+  const CANONICAL_SCHEDULE_VERSION_PREFIX = IS_RICHMOND ? 'richmondbjj' : 'revbjj';
+  const CANONICAL_SCHEDULE_LIVE_SOURCE_TYPE = IS_RICHMOND ? 'squarespace-html' : 'wordpress-rest';
+  const CHECKED_IN_SCHEDULE_VERSION = IS_RICHMOND ? '2026-06-06' : '2026-08-11';
   const SCHEDULE_FETCH_TIMEOUT_MS = 10_000;
   const CANONICAL_SCHEDULE_REFRESH_INTERVAL_MS = 10 * 60 * 1_000;
   const MAX_SCHEDULE_RESPONSE_CHARS = 100_000;
   const MAX_CLASS_LABEL_LENGTH = 200;
   const MAX_CLASSES_PER_DAY = 24;
-  const MIN_TOTAL_CLASSES = 30;
-  const MAX_TOTAL_CLASSES = 100;
+  const MIN_TOTAL_CLASSES = IS_RICHMOND ? 10 : 30;
+  const MAX_TOTAL_CLASSES = IS_RICHMOND ? 50 : 100;
 
   // Sync keys
   const LOCAL_STATE_KEY  = installationStorageKey('gib_m1_local_state_v2');
@@ -1552,18 +1561,20 @@ function refreshNameDatalist() {
     : ['rbjj_signins_v2', 'rbjj_signins_roster_mode_v1'];
 
   const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-  const MIN_CLASSES_BY_DAY = Object.freeze({
-    Monday: 5,
-    Tuesday: 5,
-    Wednesday: 5,
-    Thursday: 5,
-    Friday: 2,
-    Saturday: 2,
-    Sunday: 1
-  });
+  const MIN_CLASSES_BY_DAY = Object.freeze(IS_RICHMOND
+    ? Object.fromEntries(DAYS.map(day => [day, 1]))
+    : {
+        Monday: 5,
+        Tuesday: 5,
+        Wednesday: 5,
+        Thursday: 5,
+        Friday: 2,
+        Saturday: 2,
+        Sunday: 1
+      });
 
   // Default schedule snapshot (Rev)
-  const DEFAULT_SCHEDULE = {
+  const DEFAULT_SCHEDULE_REV = {
     'Monday': [
       '6:00 AM BJJ (Level 2)', '12:00 PM BJJ Kimuras (Level 2)', '4:30 PM Kids’ BJJ',
       '4:30 PM BJJ (Level 1)', '5:30 PM BJJ (Level 2)', '5:30 PM Muay Thai Drills', '5:30 PM Focus Class (Level 4) – tripod passing (changes every quarter)',
@@ -1603,63 +1614,49 @@ function refreshNameDatalist() {
     ]
   };
 
-  // Additional default schedule for Richmond BJJ.  This snapshot was copied from
-  // the Richmond BJJ Academy schedule page as of late‑2025.  Each line
-  // represents a class with a time and description.  You can edit this
-  // constant if the Richmond schedule changes in the future.  It is only
-  // loaded when the admin clicks “Load Richmond BJJ schedule” in the
-  // schedule editor.
   const DEFAULT_SCHEDULE_RICHMOND = {
     'Monday': [
-      '6:00-7:00 AM – Muay Thai Fundamentals',
-      '7:00-8:00 AM – Brazilian Jiu-Jitsu No-Gi',
-      '6:00-7:00 PM – Muay Thai Fundamentals',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu Fundamentals'
+      '6:00 AM–7:00 AM Muay Thai Fundamentals',
+      '7:00 AM–8:00 AM Brazilian Jiu-Jitsu No-Gi',
+      '6:00 PM–7:00 PM Muay Thai Fundamentals',
+      '7:15 PM–9:00 PM Brazilian Jiu-Jitsu Fundamentals'
     ],
     'Tuesday': [
-      '6:00-7:00 AM – Muay Thai Mixed Levels',
-      '7:00-8:00 AM – Brazilian Jiu-Jitsu Gi',
-      '6:00-7:00 PM – Muay Thai Mixed Levels',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu Fundamentals',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu Mixed Levels'
+      '6:00 AM–7:00 AM Muay Thai Mixed Levels',
+      '7:00 AM–8:00 AM Brazilian Jiu-Jitsu Gi',
+      '6:00 PM–7:00 PM Muay Thai Mixed Levels',
+      '7:15 PM–9:00 PM Brazilian Jiu-Jitsu Mixed Levels'
     ],
     'Wednesday': [
-      '6:00-7:00 AM – Muay Thai Fundamentals',
-      '7:00-8:00 AM – Brazilian Jiu-Jitsu No-Gi',
-      '6:00-7:00 PM – Muay Thai Fundamentals',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu No-Gi Fundamentals'
+      '6:00 AM–7:00 AM Muay Thai Fundamentals',
+      '7:00 AM–8:00 AM Brazilian Jiu-Jitsu No-Gi',
+      '6:00 PM–7:00 PM Muay Thai Fundamentals',
+      '7:15 PM–9:00 PM Brazilian Jiu-Jitsu No-Gi Fundamentals'
     ],
     'Thursday': [
-      '6:00-7:00 AM – Muay Thai Mixed Levels',
-      '7:00-8:00 AM – Brazilian Jiu-Jitsu Gi',
-      '6:00-7:00 PM – Muay Thai Mixed Levels',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu Fundamentals',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu Mixed Levels'
+      '6:00 AM–7:00 AM Muay Thai Mixed Levels',
+      '7:00 AM–8:00 AM Brazilian Jiu-Jitsu Gi',
+      '6:00 PM–7:00 PM Muay Thai Mixed Levels',
+      '7:15 PM–9:00 PM Brazilian Jiu-Jitsu Mixed Levels'
     ],
     'Friday': [
-      '6:00-7:00 AM – Muay Thai Fundamentals',
-      '7:00-8:00 AM – Brazilian Jiu-Jitsu No-Gi',
-      '6:00-7:00 PM – Muay Thai Open Mat',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu Fundamentals'
+      '6:00 AM–7:00 AM Muay Thai Fundamentals',
+      '7:00 AM–8:00 AM Brazilian Jiu-Jitsu No-Gi',
+      '6:00 PM–7:00 PM Muay Thai Open Mat',
+      '7:15 PM–9:00 PM Brazilian Jiu-Jitsu Fundamentals'
     ],
     'Saturday': [
-      '10:00-11:00 AM – Muay Thai Fundamentals',
-      '11:15-1:00 PM – Brazilian Jiu-Jitsu Fundamentals'
+      '10:00 AM–11:00 AM Muay Thai Fundamentals',
+      '11:15 AM–1:00 PM Brazilian Jiu-Jitsu Fundamentals'
     ],
     'Sunday': [
-      '10:00-11:00 AM – Ladies Muay Thai'
+      '10:00 AM–11:00 AM Ladies Muay Thai'
     ]
   };
 
-  const RICHMOND_TEST_SCHEDULE = Object.freeze({
-    Monday: Object.freeze(['9:00 AM RICHMOND TEST ONLY — QA Preview Class']),
-    Tuesday: Object.freeze(['9:00 AM RICHMOND TEST ONLY — QA Preview Class']),
-    Wednesday: Object.freeze(['9:00 AM RICHMOND TEST ONLY — QA Preview Class']),
-    Thursday: Object.freeze(['9:00 AM RICHMOND TEST ONLY — QA Preview Class']),
-    Friday: Object.freeze(['9:00 AM RICHMOND TEST ONLY — QA Preview Class']),
-    Saturday: Object.freeze(['9:00 AM RICHMOND TEST ONLY — QA Preview Class']),
-    Sunday: Object.freeze(['9:00 AM RICHMOND TEST ONLY — QA Preview Class'])
-  });
+  const DEFAULT_SCHEDULE = IS_RICHMOND
+    ? DEFAULT_SCHEDULE_RICHMOND
+    : DEFAULT_SCHEDULE_REV;
 
   // Elements
   const $ = (sel) => document.querySelector(sel);
@@ -2088,30 +2085,29 @@ function refreshNameDatalist() {
 
   async function validateCanonicalSchedule(payload) {
     if (!isPlainObject(payload)) throw new Error('Schedule response is not an object.');
-    if (payload.timezone !== TZ || payload.site !== 'Rev') {
+    if (payload.timezone !== TZ || payload.site !== CANONICAL_SCHEDULE_SITE) {
       throw new Error('Schedule response is for the wrong site or timezone.');
     }
-    if (!/^revbjj-[a-f0-9]{16}$/u.test(payload.version || '')) {
+    if (payload.version !== `${CANONICAL_SCHEDULE_VERSION_PREFIX}-${String(payload.contentHash || '').slice(0, 16)}`) {
       throw new Error('Schedule version is invalid.');
     }
     if (!/^[a-f0-9]{64}$/u.test(payload.contentHash || '')) {
       throw new Error('Schedule content hash is invalid.');
-    }
-    if (payload.version !== `revbjj-${payload.contentHash.slice(0, 16)}`) {
-      throw new Error('Schedule version does not match its content hash.');
     }
     const days = validateCanonicalDays(payload.days);
     if (await canonicalDaysHash(days) !== payload.contentHash) {
       throw new Error('Schedule content hash does not match its classes.');
     }
     const sourceType = payload.source?.type;
-    const wordpressSource = sourceType === 'wordpress-rest';
+    const liveSource = sourceType === CANONICAL_SCHEDULE_LIVE_SOURCE_TYPE;
     const bootstrapSource = sourceType === 'checked-in-bootstrap';
-    const sourceMetadataValid = wordpressSource
+    const sourceMetadataValid = liveSource
       ? (
-          Number.isInteger(payload.source?.pageId)
-          && payload.source.pageId > 0
-          && validWordPressModifiedDate(payload.source.modifiedAt)
+          IS_RICHMOND
+            ? payload.source?.pageId === null && validFullIsoDate(payload.source.modifiedAt)
+            : Number.isInteger(payload.source?.pageId)
+              && payload.source.pageId > 0
+              && validWordPressModifiedDate(payload.source.modifiedAt)
         )
       : (
           bootstrapSource
@@ -2119,16 +2115,16 @@ function refreshNameDatalist() {
           && payload.source?.pageId === null
         );
     const sourceFallbackCombinationValid = payload.current
-      ? (payload.fallback === 'none' && wordpressSource)
+      ? (payload.fallback === 'none' && liveSource)
       : (
-          (payload.fallback === 'last-known-good' && wordpressSource)
+          (payload.fallback === 'last-known-good' && liveSource)
           || (payload.fallback === 'bootstrap' && bootstrapSource)
         );
     if (
       !isPlainObject(payload.source)
       || payload.source.url !== CANONICAL_SCHEDULE_SOURCE_URL
       || payload.source.upstreamUrl !== CANONICAL_SCHEDULE_UPSTREAM_URL
-      || (!wordpressSource && !bootstrapSource)
+      || (!liveSource && !bootstrapSource)
       || !sourceMetadataValid
       || !validFullIsoDate(payload.fetchedAt)
       || typeof payload.current !== 'boolean'
@@ -2161,7 +2157,7 @@ function refreshNameDatalist() {
         upstreamUrl: payload.source.upstreamUrl,
         type: payload.source.type,
         modifiedAt: payload.source.modifiedAt,
-        pageId: wordpressSource ? payload.source.pageId : null
+        pageId: liveSource && !IS_RICHMOND ? payload.source.pageId : null
       },
       fetchedAt: payload.fetchedAt,
       current: payload.current,
@@ -2194,7 +2190,7 @@ function refreshNameDatalist() {
     if (!existing) return 1;
     if (candidate.contentHash === existing.contentHash) {
       if (
-        existing.source.type === 'wordpress-rest'
+        existing.source.type === CANONICAL_SCHEDULE_LIVE_SOURCE_TYPE
         && candidate.source.type === 'checked-in-bootstrap'
       ) return -1;
       return 0;
@@ -2212,8 +2208,8 @@ function refreshNameDatalist() {
     const servedAt = new Date().toISOString();
     return validateCanonicalSchedule({
       timezone: TZ,
-      site: 'Rev',
-      version: `revbjj-${contentHash.slice(0, 16)}`,
+      site: CANONICAL_SCHEDULE_SITE,
+      version: `${CANONICAL_SCHEDULE_VERSION_PREFIX}-${contentHash.slice(0, 16)}`,
       contentHash,
       days,
       source: {
@@ -2239,6 +2235,7 @@ function refreshNameDatalist() {
   }
 
   function loadLocalScheduleOverride() {
+    if (IS_RICHMOND) return null;
     const saved = safeParse(SCHEDULE_KEY, null);
     return saved && isPlainObject(saved.days) ? saved : null;
   }
@@ -2252,19 +2249,6 @@ function refreshNameDatalist() {
   }
 
   function loadSchedule() {
-    if (IS_RICHMOND) {
-      const days = {};
-      DAYS.forEach(day => { days[day] = RICHMOND_TEST_SCHEDULE[day].slice(); });
-      return {
-        days,
-        source: 'richmond-test-only',
-        updatedAt: null,
-        override: false,
-        mode: 'test-only',
-        canonical: null,
-        cacheOrigin: 'deployment-profile'
-      };
-    }
     const saved = loadLocalScheduleOverride();
     if (saved) {
       // Canonicalize keys if needed
@@ -2341,9 +2325,6 @@ function refreshNameDatalist() {
   }
 
   function scheduleStatusMessage(schedule) {
-    if (IS_RICHMOND) {
-      return 'RICHMOND TEST ONLY schedule · local preview data · no production schedule or backend is connected.';
-    }
     if (schedule.override) {
       const mode = schedule.mode === 'url' ? 'URL' : schedule.mode;
       const saved = formatScheduleTimestamp(schedule.updatedAt);
@@ -2417,9 +2398,6 @@ function refreshNameDatalist() {
   }
 
   function adminScheduleSummary(schedule = loadSchedule()) {
-    if (IS_RICHMOND) {
-      return { text: 'Richmond TEST-only mini schedule · local preview', tone: 'warn' };
-    }
     if (schedule.override) {
       const source = schedule.mode === 'url'
         ? 'URL'
@@ -2501,21 +2479,20 @@ function refreshNameDatalist() {
     const last = localStorage.getItem(SYNC_LAST_KEY) || '';
     const lastDate = last ? new Date(last) : null;
     const hasValidLastSync = Boolean(lastDate && Number.isFinite(lastDate.getTime()));
-    const lastText = IS_RICHMOND
-      ? 'Local-only preview; no backend connected.'
-      : hasValidLastSync
+    const lastText = hasValidLastSync
       ? lastDate.toLocaleString()
       : 'No confirmed sync yet.';
     setAdminSummaryValue(
       '#adminSummaryLastSync',
       '#adminSummaryLastSyncCard',
       lastText,
-      IS_RICHMOND ? 'warn' : (hasValidLastSync ? 'good' : '')
+      hasValidLastSync ? 'good' : ''
     );
 
     const cfg = loadDevice();
-    const deviceLabel = (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim()
-      || (cfg?.location || '').trim();
+    const deviceLabel = IS_RICHMOND
+      ? INSTALLATION.deviceLabel
+      : (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim() || (cfg?.location || '').trim();
     setAdminSummaryValue(
       '#adminSummaryDevice',
       '#adminSummaryDeviceCard',
@@ -3166,16 +3143,6 @@ function refreshNameDatalist() {
   }
 
   async function refreshCanonicalScheduleNow() {
-    if (IS_RICHMOND) {
-      canonicalScheduleRuntime = {
-        phase: 'disabled',
-        error: '',
-        attemptedAt: null,
-        receivedAt: null
-      };
-      renderScheduleStatuses(loadSchedule());
-      return false;
-    }
     if (loadLocalScheduleOverride()) {
       canonicalScheduleRuntime = {
         phase: 'override',
@@ -3292,16 +3259,6 @@ function refreshNameDatalist() {
   }
 
   function startCanonicalScheduleRefresh() {
-    if (IS_RICHMOND) {
-      canonicalScheduleRuntime = {
-        phase: 'disabled',
-        error: '',
-        attemptedAt: null,
-        receivedAt: null
-      };
-      renderScheduleStatuses(loadSchedule());
-      return;
-    }
     window.setInterval(refreshCanonicalSchedule, CANONICAL_SCHEDULE_REFRESH_INTERVAL_MS);
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') refreshCanonicalScheduleIfDue();
@@ -3337,7 +3294,7 @@ function refreshNameDatalist() {
     const classInput = $('#richmondReviewClass');
     if (!dateInput.value) dateInput.value = fmtDate(new Date());
     const day = dayNameForDateKey(dateInput.value);
-    const labels = RICHMOND_TEST_SCHEDULE[day] || [];
+    const labels = DEFAULT_SCHEDULE_RICHMOND[day] || [];
     const prior = classInput.value;
     classInput.replaceChildren(...labels.map(label => {
       const option = document.createElement('option');
@@ -3356,7 +3313,7 @@ function refreshNameDatalist() {
     const duration = Number($('#richmondReviewDuration').value);
     const reason = ($('#richmondReviewReason').value || '').trim().replace(/\s+/gu, ' ');
     const day = dayNameForDateKey(date);
-    const allowedClass = (RICHMOND_TEST_SCHEDULE[day] || []).includes(classLabel);
+    const allowedClass = (DEFAULT_SCHEDULE_RICHMOND[day] || []).includes(classLabel);
     if (
       !/^\d{4}-\d{2}-\d{2}$/u.test(date)
       || date > fmtDate(new Date())
@@ -3791,14 +3748,18 @@ function refreshNameDatalist() {
       alert('Please enter a name and select one or more classes.');
       return;
     }
+    if (IS_RICHMOND && !/\b(?:qa|test|fake|demo)\b/iu.test(name)) {
+      signInLocked = false;
+      alert('Richmond TEST requires a clearly fake instructor name containing TEST, QA, FAKE, or DEMO.');
+      return;
+    }
     const now = new Date();
     const timestamp = fmtTS(now);
     const date = fmtDate(now);
     let batchId = '';
-    const deviceLabel = (
-      localStorage.getItem(DEVICE_LABEL_KEY)
-      || (IS_RICHMOND ? INSTALLATION.deviceLabel : '')
-    ).trim();
+    const deviceLabel = IS_RICHMOND
+      ? INSTALLATION.deviceLabel
+      : (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim();
     const ledgerRows = [];
     const queuedRows = [];
 
@@ -3911,9 +3872,13 @@ function refreshNameDatalist() {
       && localStorage.getItem(SYNC_AUTO_KEY) === 'true';
     $('#cfgAutoSync').disabled = !BACKEND_ENABLED;
     $('#btnSyncNow').disabled = !BACKEND_ENABLED;
+    $('#cfgDeviceLabel').disabled = IS_RICHMOND;
   }
   function saveSyncSettings() {
-    localStorage.setItem(DEVICE_LABEL_KEY, ($('#cfgDeviceLabel').value || '').trim());
+    localStorage.setItem(
+      DEVICE_LABEL_KEY,
+      IS_RICHMOND ? INSTALLATION.deviceLabel : ($('#cfgDeviceLabel').value || '').trim()
+    );
     if (BACKEND_ENABLED) {
       localStorage.setItem(SYNC_AUTO_KEY, $('#cfgAutoSync').checked ? 'true' : 'false');
     } else {
@@ -3926,9 +3891,7 @@ function refreshNameDatalist() {
     const last = localStorage.getItem(SYNC_LAST_KEY) || '';
     const err = localStorage.getItem(SYNC_ERROR_KEY) || '';
     const parts = [];
-    parts.push(IS_RICHMOND
-      ? `${q.length} row${q.length === 1 ? '' : 's'} held locally · Richmond TEST backend not configured`
-      : `${q.length} row${q.length === 1 ? '' : 's'} waiting to sync`);
+    parts.push(`${q.length} row${q.length === 1 ? '' : 's'} waiting to sync`);
     if (last) {
       const lastDate = new Date(last);
       parts.push(Number.isFinite(lastDate.getTime())
@@ -4087,8 +4050,7 @@ function refreshNameDatalist() {
     $('#cfgSiteCode').value = (cfg && cfg.siteCode) ? cfg.siteCode : '';
     $('#cfgGymName').disabled = IS_RICHMOND;
     $('#cfgSiteCode').disabled = IS_RICHMOND;
-    $('#richmondLocalReviewSection').hidden = !IS_RICHMOND;
-    if (IS_RICHMOND) refreshRichmondReviewClasses();
+    $('#richmondLocalReviewSection').hidden = true;
     updateAdminPinUI();
 
     // Schedule editor
@@ -4135,12 +4097,6 @@ function refreshNameDatalist() {
   $('#btnAdminLogout').addEventListener('click', showKiosk);
   $('#dailyReviewLink').addEventListener('click', event => {
     if (!IS_RICHMOND) return;
-    event.preventDefault();
-    const review = $('#richmondLocalReviewSection');
-    review.hidden = false;
-    review.open = true;
-    refreshRichmondReviewClasses();
-    $('#richmondReviewInstructor').focus();
   });
   $('#recentSigninsLink').addEventListener('click', () => {
     $('#recentSignins').open = true;
@@ -4419,15 +4375,15 @@ function refreshNameDatalist() {
 
   // Init
   if (IS_RICHMOND) {
-    $('#dailyReviewLink').href = '#richmondLocalReviewSection';
-    $('#dailyReviewLink').textContent = 'Forgotten Sign-In / Daily Review · local preview';
-    $('#richmondReviewDate').value = fmtDate(new Date());
+    $('#dailyReviewLink').href = '/m1/admin/';
+    $('#dailyReviewLink').textContent = 'Forgotten Sign-In / Daily Review';
+    $('#richmondLocalReviewSection').hidden = true;
     $('#scheduleEditorCard').hidden = true;
     $('#manualScheduleSettings').hidden = true;
     $('#staffClock').hidden = true;
     $('#staffTimeSection').hidden = true;
-    $('#syncSettingsCard').querySelector('h3').textContent = 'Local queue identity';
-    $('#syncSettingsCard').querySelector('.subtle').textContent = 'Richmond Run 1 keeps every row on this device. No TEST or production backend is connected.';
+    $('#syncSettingsCard').querySelector('h3').textContent = 'Richmond TEST sync';
+    $('#syncSettingsCard').querySelector('.subtle').textContent = 'Rows sync only to the dedicated Richmond TEST Sheet.';
   } else {
     $('#staffClock').hidden = !STAFF_CLOCK_ENABLED;
     $('#staffTimeSection').hidden = !STAFF_CLOCK_ENABLED;
@@ -4452,8 +4408,25 @@ function refreshNameDatalist() {
   dayRolloverController.start();
   dayRolloverController.checkNow();
   // Load sync settings and refresh status on first load
+  if (IS_RICHMOND && localStorage.getItem(SYNC_AUTO_KEY) === null) {
+    localStorage.setItem(SYNC_AUTO_KEY, 'true');
+  }
   loadSyncSettings();
   updateSyncStatus();
+  if (IS_RICHMOND) {
+    window.addEventListener('online', () => {
+      if (localStorage.getItem(SYNC_AUTO_KEY) === 'true' && loadSyncQueue().length) {
+        syncNow();
+      }
+    });
+    if (
+      navigator.onLine !== false
+      && localStorage.getItem(SYNC_AUTO_KEY) === 'true'
+      && loadSyncQueue().length
+    ) {
+      window.setTimeout(syncNow, 0);
+    }
+  }
   refreshNameDatalist();
   startCanonicalScheduleRefresh();
   const requestedInitialView = new URLSearchParams(window.location.search).get('view');
@@ -4461,6 +4434,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-08-21-richmond-m1-run1-r1"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-08-21-richmond-m1-run2-r1"></script>
 </body>
 </html>

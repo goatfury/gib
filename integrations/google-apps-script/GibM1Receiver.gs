@@ -301,6 +301,13 @@ function configuredReceiverSecret_() {
   return '';
 }
 
+function configuredAdminActionSecret_() {
+  if (typeof gibM1DerivedAdminActionSecret_ === 'function') {
+    return exactText_(gibM1DerivedAdminActionSecret_());
+  }
+  return scriptProperty_(GIB_M1_ADMIN_ACTION_PROPERTY_);
+}
+
 function configuredSecretsArePairwiseDistinct_(values) {
   var nonempty = values.filter(Boolean);
   for (var i = 0; i < nonempty.length; i += 1) {
@@ -316,7 +323,7 @@ function legacyKioskAuthorized_(body) {
   if (configured && configured !== 'test') return false;
   var legacy = scriptProperty_(GIB_M1_LEGACY_KIOSK_PROPERTY_);
   var receiver = configuredReceiverSecret_();
-  var admin = scriptProperty_(GIB_M1_ADMIN_ACTION_PROPERTY_);
+  var admin = configuredAdminActionSecret_();
   var recovery = scriptProperty_(GIB_M1_RECOVERY_PROPERTY_);
   return Boolean(legacy)
     && configuredSecretsArePairwiseDistinct_([legacy, receiver, admin, recovery])
@@ -351,7 +358,7 @@ function receiverKioskAuthorized_(body) {
   ) return false;
   var receiver = configuredReceiverSecret_();
   var legacy = scriptProperty_(GIB_M1_LEGACY_KIOSK_PROPERTY_);
-  var admin = scriptProperty_(GIB_M1_ADMIN_ACTION_PROPERTY_);
+  var admin = configuredAdminActionSecret_();
   var recovery = scriptProperty_(GIB_M1_RECOVERY_PROPERTY_);
   return Boolean(receiver)
     && configuredSecretsArePairwiseDistinct_([receiver, legacy, admin, recovery])
@@ -365,7 +372,7 @@ function adminActionAuthorized_(body) {
     || !deploymentTargetAllowed_(target)
   ) return false;
   var receiver = configuredReceiverSecret_();
-  var admin = scriptProperty_(GIB_M1_ADMIN_ACTION_PROPERTY_);
+  var admin = configuredAdminActionSecret_();
   var legacy = scriptProperty_(GIB_M1_LEGACY_KIOSK_PROPERTY_);
   var recovery = scriptProperty_(GIB_M1_RECOVERY_PROPERTY_);
   return Boolean(receiver) && Boolean(admin)
@@ -383,7 +390,7 @@ function recoveryAuthorized_(body) {
   var receiver = configuredReceiverSecret_();
   var recovery = scriptProperty_(GIB_M1_RECOVERY_PROPERTY_);
   var legacy = scriptProperty_(GIB_M1_LEGACY_KIOSK_PROPERTY_);
-  var admin = scriptProperty_(GIB_M1_ADMIN_ACTION_PROPERTY_);
+  var admin = configuredAdminActionSecret_();
   return Boolean(receiver) && Boolean(recovery)
     && configuredSecretsArePairwiseDistinct_([receiver, recovery, legacy, admin])
     && constantTimeTextEqual_(body && body.token, receiver)

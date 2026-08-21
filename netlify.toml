@@ -7,7 +7,7 @@
   node_bundler = "esbuild"
 
 [functions."m1-schedule"]
-  included_files = ["m1/shared-schedule.json"]
+  included_files = ["m1/shared-schedule.json", "m1/richmond-schedule.json"]
 
 [context."agent/m1-richmond-installation-preview".environment]
   GIB_M1_INSTALLATION = "richmond"

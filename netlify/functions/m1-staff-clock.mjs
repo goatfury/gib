@@ -99,6 +99,9 @@ function duplicatePunchIds(punches) {
 }
 
 export async function handleStaffClock(request, dependencies = {}) {
+  if (!staffClockEnabled(dependencies.installationId)) {
+    return jsonResponse(404, { ok: false, message: 'Staff Clock is disabled for this installation.' });
+  }
   const target = validPreviewSameOriginRequest(request)
     ? 'test'
     : validExactProductionRequest(request, STAFF_CLOCK_PATH)
@@ -109,9 +112,6 @@ export async function handleStaffClock(request, dependencies = {}) {
   }
 
   const env = dependencies.env || process.env;
-  if (!staffClockEnabled(dependencies.installationId)) {
-    return jsonResponse(404, { ok: false, message: 'Staff Clock is disabled for this installation.' });
-  }
   let runtime = null;
   let productionDeviceCredential = '';
   if (target === 'production') {

@@ -4,6 +4,7 @@ import {
   postGoogle,
   readJson,
   runtimeConfig,
+  validTestSameOriginRequest,
   validNonFutureDate
 } from './_lib/m1-common.mjs';
 import {
@@ -12,7 +13,10 @@ import {
   productionRuntimeConfig,
   validExactProductionRequest
 } from './_lib/m1-production-runtime.mjs';
-import { remoteBackendEnabled } from './_lib/m1-installation.mjs';
+import {
+  deploymentInstallationProfile,
+  remoteBackendEnabled
+} from './_lib/m1-installation.mjs';
 
 export const KIOSK_SYNC_PATH = '/api/m1-kiosk-sync';
 export const MAX_KIOSK_SYNC_ROWS = 50;
@@ -29,7 +33,6 @@ export const config = {
 };
 
 const MAX_REQUEST_BYTES = 256_000;
-const DEPLOY_PREVIEW_HOST = /^(?:deploy-preview-\d+|[0-9a-f]{24})--gib-live\.netlify\.app$/u;
 const ROW_ID_PATTERN = /^gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2} (?:[01]\d|2[0-3]):[0-5]\d:)([0-9]|[0-5]\d)$/u;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
@@ -58,37 +61,6 @@ function exactObjectKeys(value, expected) {
   const keys = Object.keys(value).sort();
   return keys.length === expected.length
     && keys.every((key, index) => key === expected[index]);
-}
-
-function validPreviewSameOriginRequest(request) {
-  let url;
-  try {
-    url = new URL(request.url);
-  } catch {
-    return false;
-  }
-
-  if (
-    url.protocol !== 'https:'
-    || url.port
-    || url.username
-    || url.password
-    || url.pathname !== KIOSK_SYNC_PATH
-    || url.search
-    || url.hash
-    || !DEPLOY_PREVIEW_HOST.test(url.hostname)
-  ) {
-    return false;
-  }
-
-  const hostHeader = request.headers.get('host');
-  if (hostHeader && hostHeader.toLocaleLowerCase('en-US') !== url.host.toLocaleLowerCase('en-US')) {
-    return false;
-  }
-  if (request.headers.get('origin') !== url.origin) return false;
-
-  const fetchSite = request.headers.get('sec-fetch-site');
-  return !fetchSite || fetchSite === 'same-origin';
 }
 
 function exactText(value, maxLength, allowBlank = false) {
@@ -123,7 +95,7 @@ function canonicalTimestamp(value) {
   return match ? `${match[1]}${match[2].padStart(2, '0')}` : null;
 }
 
-function validateRow(input, now, requireObviousTestValue = true) {
+function validateRow(input, now, requireObviousTestValue = true, profile = null) {
   if (!validRowShape(input)) return null;
 
   const rowId = typeof input.RowID === 'string' && ROW_ID_PATTERN.test(input.RowID)
@@ -152,6 +124,11 @@ function validateRow(input, now, requireObviousTestValue = true) {
     || !instructor
     || (requireObviousTestValue && !obviousTestValue(instructor))
     || !site
+    || (profile?.installationId === 'richmond' && site !== profile.siteCode)
+    || (
+      profile?.installationId === 'richmond'
+      && device !== profile.deviceLabel
+    )
     || device == null
     || build == null
     || notes == null
@@ -237,8 +214,8 @@ function sanitizeGoogleResults(google, forwardedRows, expectedTarget = 'test') {
   return forwardedRows.map(row => observed.get(row.RowID));
 }
 
-function previewRuntimeConfig(env, requestUrl) {
-  const fullConfig = runtimeConfig(env, { requestUrl });
+function previewRuntimeConfig(env, requestUrl, installationId) {
+  const fullConfig = runtimeConfig(env, { requestUrl, installationId });
   return fullConfig
     ? Object.freeze({ ...fullConfig, adminActionToken: '' })
     : null;
@@ -251,9 +228,14 @@ function successResponse(target, results) {
 }
 
 export async function handleKioskSync(request, dependencies = {}) {
-  const target = validPreviewSameOriginRequest(request)
+  const profile = deploymentInstallationProfile(dependencies.installationId);
+  const target = validTestSameOriginRequest(
+    request,
+    KIOSK_SYNC_PATH,
+    profile?.installationId
+  )
     ? 'test'
-    : validExactProductionRequest(request, KIOSK_SYNC_PATH)
+    : profile?.installationId === 'rev' && validExactProductionRequest(request, KIOSK_SYNC_PATH)
       ? 'production'
       : '';
   if (!target) {
@@ -313,7 +295,12 @@ export async function handleKioskSync(request, dependencies = {}) {
   }
 
   const now = dependencies.dateNow || new Date();
-  const validatedRows = inputRows.map(row => validateRow(row, now, target === 'test'));
+  const validatedRows = inputRows.map(row => validateRow(
+    row,
+    now,
+    target === 'test',
+    profile
+  ));
   const forwardedRows = validatedRows.filter(Boolean);
   const localResults = validatedRows.map((row, index) => row ? null : rejectedResult(inputRows[index]));
 
@@ -323,7 +310,9 @@ export async function handleKioskSync(request, dependencies = {}) {
       : {});
   }
 
-  if (target === 'test') runtime = previewRuntimeConfig(env, request.url);
+  if (target === 'test') {
+    runtime = previewRuntimeConfig(env, request.url, profile?.installationId);
+  }
   if (!runtime || (target === 'test' && runtime.preview !== true)) {
     return jsonResponse(503, {
       ok: false,

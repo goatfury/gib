@@ -18,6 +18,7 @@ import {
   sanitizeStaffTimeVoidResult
 } from './_lib/m1-staff-clock-contracts.mjs';
 import { validExactProductionRequest } from './_lib/m1-production-runtime.mjs';
+import { staffClockEnabled } from './_lib/m1-installation.mjs';
 
 export const ADMIN_STAFF_TIME_PATH = '/.netlify/functions/m1-admin-staff-time';
 export const ADMIN_STAFF_TIME_SITE = 'Rev';
@@ -77,6 +78,9 @@ function adminFailureResponse(google, operation) {
 }
 
 export async function handleAdminStaffTime(request, dependencies = {}) {
+  if (!staffClockEnabled(dependencies.installationId)) {
+    return jsonResponse(404, { ok: false, message: 'Staff Clock is disabled for this installation.' });
+  }
   const target = validPreviewSameOriginRequest(request)
     ? 'test'
     : validExactProductionRequest(request, ADMIN_STAFF_TIME_PATH)
@@ -90,7 +94,8 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
 
   const runtime = runtimeConfig(dependencies.env || process.env, {
     admin: true,
-    requestUrl: request.url
+    requestUrl: request.url,
+    installationId: dependencies.installationId
   });
   if (!runtime || runtime.target !== target) {
     return jsonResponse(503, { ok: false, message: 'Staff time Admin is not configured.' });

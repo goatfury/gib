@@ -1,0 +1,45 @@
+{
+  "timezone": "America/New_York",
+  "site": "Richmond",
+  "version": "2026-06-06",
+  "source": "https://www.richmondbjj.com/schedule",
+  "days": {
+    "Monday": [
+      "6:00 AM–7:00 AM Muay Thai Fundamentals",
+      "7:00 AM–8:00 AM Brazilian Jiu-Jitsu No-Gi",
+      "6:00 PM–7:00 PM Muay Thai Fundamentals",
+      "7:15 PM–9:00 PM Brazilian Jiu-Jitsu Fundamentals"
+    ],
+    "Tuesday": [
+      "6:00 AM–7:00 AM Muay Thai Mixed Levels",
+      "7:00 AM–8:00 AM Brazilian Jiu-Jitsu Gi",
+      "6:00 PM–7:00 PM Muay Thai Mixed Levels",
+      "7:15 PM–9:00 PM Brazilian Jiu-Jitsu Mixed Levels"
+    ],
+    "Wednesday": [
+      "6:00 AM–7:00 AM Muay Thai Fundamentals",
+      "7:00 AM–8:00 AM Brazilian Jiu-Jitsu No-Gi",
+      "6:00 PM–7:00 PM Muay Thai Fundamentals",
+      "7:15 PM–9:00 PM Brazilian Jiu-Jitsu No-Gi Fundamentals"
+    ],
+    "Thursday": [
+      "6:00 AM–7:00 AM Muay Thai Mixed Levels",
+      "7:00 AM–8:00 AM Brazilian Jiu-Jitsu Gi",
+      "6:00 PM–7:00 PM Muay Thai Mixed Levels",
+      "7:15 PM–9:00 PM Brazilian Jiu-Jitsu Mixed Levels"
+    ],
+    "Friday": [
+      "6:00 AM–7:00 AM Muay Thai Fundamentals",
+      "7:00 AM–8:00 AM Brazilian Jiu-Jitsu No-Gi",
+      "6:00 PM–7:00 PM Muay Thai Open Mat",
+      "7:15 PM–9:00 PM Brazilian Jiu-Jitsu Fundamentals"
+    ],
+    "Saturday": [
+      "10:00 AM–11:00 AM Muay Thai Fundamentals",
+      "11:15 AM–1:00 PM Brazilian Jiu-Jitsu Fundamentals"
+    ],
+    "Sunday": [
+      "10:00 AM–11:00 AM Ladies Muay Thai"
+    ]
+  }
+}

@@ -4,7 +4,10 @@ import {
   randomBytes,
   timingSafeEqual
 } from 'node:crypto';
-import { remoteBackendEnabled } from './m1-installation.mjs';
+import {
+  deploymentInstallationProfile,
+  remoteBackendEnabled
+} from './m1-installation.mjs';
 
 export const ADMIN_NAMES = Object.freeze(['Andrew Smith', 'Stuart Turner']);
 export const ADMIN_COOKIE = 'gib_m1_admin_session';
@@ -15,6 +18,8 @@ export const M1_PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
 
 const M1_DEPLOY_PREVIEW_HOST = /^deploy-preview-\d+--gib-live\.netlify\.app$/i;
 const M1_IMMUTABLE_DEPLOY_HOST = /^[0-9a-f]{24}--gib-live\.netlify\.app$/i;
+const RICHMOND_TEST_HOST = 'gib-richmond-test.netlify.app';
+const RICHMOND_IMMUTABLE_DEPLOY_HOST = /^[0-9a-f]{24}--gib-richmond-test\.netlify\.app$/i;
 
 export function clean(value) {
   return String(value == null ? '' : value)
@@ -23,7 +28,7 @@ export function clean(value) {
     .replace(/\s+/g, ' ');
 }
 
-export function runtimeTarget(requestUrl = '') {
+export function runtimeTarget(requestUrl = '', installationId) {
   try {
     const url = new URL(requestUrl);
     if (
@@ -32,6 +37,13 @@ export function runtimeTarget(requestUrl = '') {
       || url.username
       || url.password
     ) return '';
+    const profile = deploymentInstallationProfile(installationId);
+    if (profile?.installationId === 'richmond') {
+      return url.hostname === RICHMOND_TEST_HOST
+        || RICHMOND_IMMUTABLE_DEPLOY_HOST.test(url.hostname)
+        ? 'test'
+        : '';
+    }
     if (url.origin === M1_PRODUCTION_ORIGIN) return 'production';
     if (
       M1_DEPLOY_PREVIEW_HOST.test(url.hostname)
@@ -45,6 +57,26 @@ export function runtimeTarget(requestUrl = '') {
 
 export function isDeployPreview(_env = process.env, requestUrl = '') {
   return runtimeTarget(requestUrl) === 'test';
+}
+
+export function validTestSameOriginRequest(request, path, installationId) {
+  let url;
+  try {
+    url = new URL(request.url);
+  } catch {
+    return false;
+  }
+  if (
+    runtimeTarget(request.url, installationId) !== 'test'
+    || url.pathname !== path
+    || url.search
+    || url.hash
+  ) return false;
+  const host = request.headers.get('host');
+  if (host && host.toLocaleLowerCase('en-US') !== url.host.toLocaleLowerCase('en-US')) return false;
+  if (request.headers.get('origin') !== url.origin) return false;
+  const fetchSite = request.headers.get('sec-fetch-site');
+  return !fetchSite || fetchSite === 'same-origin';
 }
 
 export function validAdminPassphrase(value) {
@@ -104,10 +136,66 @@ function derivedPreviewSessionSecret(adminActionToken) {
     .digest('base64url');
 }
 
+function richmondRuntimeConfig(env, options, profile, target) {
+  if (target !== 'test' || clean(env.GIB_M1_ENVIRONMENT) !== 'test') return null;
+  const webhookUrl = validGoogleWebhook(env.GIB_RICHMOND_TEST_WEBHOOK_URL);
+  const webhookToken = clean(env.GIB_RICHMOND_TEST_WEBHOOK_TOKEN);
+  const adminActionToken = clean(env.GIB_RICHMOND_TEST_ADMIN_ACTION_TOKEN);
+  const otherWebhookUrls = [
+    env.GIB_TEST_WEBHOOK_URL,
+    env.GIB_M1_PRODUCTION_WEBHOOK_URL,
+    env.GIB_M1_WEBHOOK_URL
+  ].map(validGoogleWebhook).filter(Boolean);
+  const otherSecrets = [
+    env.GIB_TEST_WEBHOOK_TOKEN,
+    env.GIB_TEST_ADMIN_ACTION_TOKEN,
+    env.GIB_TEST_LEGACY_KIOSK_TOKEN,
+    env.GIB_M1_PRODUCTION_WEBHOOK_TOKEN,
+    env.GIB_M1_ADMIN_ACTION_TOKEN,
+    env.GIB_M1_ADMIN_PASSPHRASE,
+    env.GIB_M1_LEGACY_KIOSK_TOKEN,
+    env.GIB_M1_WEBHOOK_TOKEN,
+    env.GIB_M1_RECOVERY_TOKEN,
+    env.GIB_M1_PRODUCTION_DEVICE_TOKEN,
+    env.GIB_M1_PRODUCTION_INSTALL_CAPABILITY_SECRET
+  ].map(clean).filter(Boolean);
+  if (
+    !webhookUrl
+    || otherWebhookUrls.includes(webhookUrl)
+    || webhookToken.length < 32
+    || webhookToken.length > 512
+    || equalsAnySecret(webhookToken, otherSecrets)
+    || (adminActionToken && equalsAnySecret(adminActionToken, otherSecrets))
+    || !configuredSecretsArePairwiseDistinct([webhookToken, adminActionToken, ...otherSecrets])
+    || (
+      options.admin === true
+      && (adminActionToken.length < 32 || adminActionToken.length > 512)
+    )
+  ) return null;
+  return Object.freeze({
+    target: 'test',
+    preview: true,
+    installationId: profile.installationId,
+    environment: profile.environment,
+    webhookUrl,
+    webhookToken,
+    adminActionToken,
+    adminPassphrase: '',
+    sessionSecret: options.admin === true
+      ? derivedPreviewSessionSecret(adminActionToken)
+      : ''
+  });
+}
+
 export function runtimeConfig(env = process.env, options = {}) {
   if (!remoteBackendEnabled(options.installationId)) return null;
-  const target = runtimeTarget(options.requestUrl);
+  const profile = deploymentInstallationProfile(options.installationId);
+  if (!profile) return null;
+  const target = runtimeTarget(options.requestUrl, profile.installationId);
   if (!target) return null;
+  if (profile.installationId === 'richmond') {
+    return richmondRuntimeConfig(env, options, profile, target);
+  }
   const preview = target === 'test';
   const webhookUrl = validGoogleWebhook(
     preview ? env.GIB_TEST_WEBHOOK_URL : env.GIB_M1_PRODUCTION_WEBHOOK_URL
@@ -285,6 +373,10 @@ export async function postGoogle(config, action, data, fetchImpl = fetch) {
       action,
       target: config.target || (config.preview ? 'test' : 'production')
     };
+    if (config.installationId === 'richmond') {
+      body.installation = 'richmond';
+      body.environment = 'test';
+    }
     // Preserve the proven TEST wire contract (including its empty Admin field)
     // and production Admin actions, while the production kiosk forwards only
     // rows plus its pinned kiosk authentication, action, and target.

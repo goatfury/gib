@@ -18,14 +18,16 @@ const PROFILES = Object.freeze({
     installationId: 'richmond',
     gymName: 'Richmond BJJ',
     siteCode: 'Richmond',
-    deviceLabel: 'Richmond TEST preview device',
+    deviceLabel: 'Richmond TEST Browser',
     storagePrefix: 'gib_m1_richmond_',
+    environment: 'test',
+    allowedOrigin: 'https://gib-richmond-test.netlify.app',
     scheduleSource: Object.freeze({
-      mode: 'test-only',
-      endpoint: ''
+      mode: 'richmond-website',
+      endpoint: '/api/m1-schedule'
     }),
     featureFlags: Object.freeze({ staffClock: false }),
-    backend: Object.freeze({ enabled: false, transportTarget: 'none' })
+    backend: Object.freeze({ enabled: true, transportTarget: 'richmond-test' })
   })
 });
 
