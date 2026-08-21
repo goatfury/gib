@@ -4,6 +4,7 @@ import {
   randomBytes,
   timingSafeEqual
 } from 'node:crypto';
+import { remoteBackendEnabled } from './m1-installation.mjs';
 
 export const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
 export const PRODUCTION_HOST = 'gib-live.netlify.app';
@@ -139,6 +140,7 @@ export function validExactProductionRequest(request, path) {
 }
 
 export function productionRuntimeConfig(env = process.env) {
+  if (!remoteBackendEnabled(env)) return null;
   const origin = exactString(env.GIB_M1_PRODUCTION_ORIGIN);
   const webhookUrl = validGoogleWebhook(env.GIB_M1_PRODUCTION_WEBHOOK_URL);
   const webhookToken = validSecret(env.GIB_M1_PRODUCTION_WEBHOOK_TOKEN);

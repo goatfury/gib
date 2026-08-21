@@ -21,6 +21,7 @@ const BASELINE_BUTTON_IDS = Object.freeze([
   'btnKiosk',
   'btnAdminPinToggle',
   'btnAdminLogout',
+  'btnRichmondForgottenSignin',
   'btnSaveAdminPin',
   'btnSaveDevice',
   'btnResetDevice',
@@ -53,6 +54,11 @@ const BASELINE_FIELD_IDS = Object.freeze([
   'nameDatalist',
   'notesInput',
   'staffClockName',
+  'richmondReviewDate',
+  'richmondReviewClass',
+  'richmondReviewInstructor',
+  'richmondReviewDuration',
+  'richmondReviewReason',
   'adminPinInput',
   'cfgGymName',
   'cfgLocation',
@@ -383,11 +389,13 @@ function createSummaryRuntime({ storageEntries = {}, queue = [], device = null, 
   let networkCalls = 0;
   const model = { schedule: null, device };
   const context = vm.createContext({
+    IS_RICHMOND: false,
     $: selector => elements.get(String(selector).replace(/^#/u, '')) || null,
     DEVICE_LABEL_KEY: 'gib_m1_device_label_v1',
     LOCAL_STATE_KEY: 'gib_m1_local_state_v2',
     SIGNINS_KEY: 'gib_m1_signins_v1',
     SYNC_QUEUE_KEY: 'gib_m1_sync_queue_v1',
+    SYNC_LAST_KEY: 'gib_m1_sync_last',
     fetch() { networkCalls += 1; throw new Error('network forbidden'); },
     loadDevice: () => model.device,
     loadSchedule: () => model.schedule,
@@ -515,6 +523,7 @@ test('opening Admin and toggling disclosures preserve current local state', () =
   const before = storage.snapshot();
   const ids = [
     'kiosk', 'admin', 'cfgGymName', 'cfgLocation', 'cfgSiteCode', 'debugBox', 'adminHeading',
+    'richmondLocalReviewSection',
     'recentSignins', 'staffTimeSection', 'temporaryClassesSection', 'weeklyScheduleSection', 'advancedSettings', 'dangerZone'
   ];
   const elements = new Map(ids.map(id => [id, {
@@ -528,6 +537,7 @@ test('opening Admin and toggling disclosures preserve current local state', () =
   const calls = [];
   let networkCalls = 0;
   const context = vm.createContext({
+    IS_RICHMOND: false,
     $: selector => elements.get(String(selector).replace(/^#/u, '')) || null,
     document: { body: { classList: bodyClasses } },
     window: { setTimeout(callback) { callback(); } },
@@ -832,6 +842,7 @@ test('Reset discloses its full scope, cancel mutates nothing, and confirm preser
   let confirmation = '';
   let uiRefreshes = 0;
   const context = vm.createContext({
+    IS_RICHMOND: false,
     DEVICE_KEY: 'gib_m1_device_v1',
     SCHEDULE_KEY: 'gib_m1_schedule_v1',
     DURATION_RULES_KEY: 'gib_m1_duration_rules_v1',
@@ -989,6 +1000,7 @@ test('legacy-only ledgers remain visible and survive Reset before verified reloa
       let confirmResult = false;
       let generatedId = 0;
       const context = vm.createContext({
+        IS_RICHMOND: false,
         SIGNINS_KEY: 'gib_m1_signins_v1',
         SYNC_QUEUE_KEY: 'gib_m1_sync_queue_v1',
         LOCAL_STATE_KEY: 'gib_m1_local_state_v2',

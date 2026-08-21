@@ -642,6 +642,7 @@ test('actual rollover renderer leaves every protected local-data byte and device
   });
   const windowTarget = new FakeEventTarget();
   const context = vm.createContext({
+    IS_RICHMOND: false,
     localStorage,
     document: documentTarget,
     SCHEDULE_KEY: 'gib_m1_schedule_v1',
@@ -890,6 +891,7 @@ test('turning auto-sync OFF before a pending timer fires prevents the send', () 
   let pendingTimer = null;
   let syncCalls = 0;
   const context = vm.createContext({
+    BACKEND_ENABLED: true,
     SYNC_AUTO_KEY: 'gib_m1_sync_auto_v1',
     localStorage: { getItem: key => storage.get(key) ?? null },
     syncNow: () => { syncCalls += 1; },

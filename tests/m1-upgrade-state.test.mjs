@@ -5,6 +5,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 import * as syncCore from '../m1/sync-core.mjs';
+import { installationProfile } from '../m1/installation-profile-core.mjs';
 
 const kioskHtml = readFileSync(new URL('../m1/index.html', import.meta.url), 'utf8');
 const sharedSchedule = JSON.parse(readFileSync(
@@ -645,6 +646,7 @@ function runCandidateBootstrap({ storageState, cookieState, schedulePayload }) {
     AbortController,
     Blob,
     Date: FixedDate,
+    M1_INSTALLATION_PROFILE: installationProfile('rev'),
     Intl,
     Response,
     TextEncoder,

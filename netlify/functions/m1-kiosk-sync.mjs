@@ -12,6 +12,7 @@ import {
   productionRuntimeConfig,
   validExactProductionRequest
 } from './_lib/m1-production-runtime.mjs';
+import { remoteBackendEnabled } from './_lib/m1-installation.mjs';
 
 export const KIOSK_SYNC_PATH = '/api/m1-kiosk-sync';
 export const MAX_KIOSK_SYNC_ROWS = 50;
@@ -263,6 +264,12 @@ export async function handleKioskSync(request, dependencies = {}) {
   }
 
   const env = dependencies.env || process.env;
+  if (!remoteBackendEnabled(env)) {
+    return jsonResponse(503, {
+      ok: false,
+      message: 'This installation has no configured backend transport. Rows remain local.'
+    });
+  }
   let runtime;
   let productionDeviceCredential = '';
   if (target === 'production') {

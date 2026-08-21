@@ -1,4 +1,5 @@
 [build]
+  command = "npm run build"
   publish = "."
   functions = "netlify/functions"
 
@@ -7,3 +8,6 @@
 
 [functions."m1-schedule"]
   included_files = ["m1/shared-schedule.json"]
+
+[context."agent/m1-richmond-installation-preview".environment]
+  GIB_M1_INSTALLATION = "richmond"

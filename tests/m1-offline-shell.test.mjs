@@ -166,6 +166,10 @@ test('kiosk import, worker registration, scope, and no-store header share one re
   );
   assert.match(
     kioskHtml,
+    new RegExp(`<script src="\\./installation-profile\\.generated\\.js\\?v=${revision}"></script>`, 'u')
+  );
+  assert.match(
+    kioskHtml,
     new RegExp(`<script type="module" src="\\./staff-clock-client\\.mjs\\?v=${revision}"></script>`, 'u')
   );
   assert.match(
@@ -197,6 +201,7 @@ test('install atomically precaches only the revision-matched shell and activatio
     harness.addAllCalls[0].requests.map(value => value.url),
     [
       `${ORIGIN}/m1/index.html`,
+      `${ORIGIN}/m1/installation-profile.generated.js?v=${harness.revision}`,
       `${ORIGIN}/m1/sync-core.mjs?v=${harness.revision}`,
       `${ORIGIN}/m1/staff-clock-core.mjs?v=${harness.revision}`,
       `${ORIGIN}/m1/staff-clock-client.mjs?v=${harness.revision}`
@@ -242,6 +247,9 @@ test('network wins online while current-revision navigation and module reload fr
   const offlineCore = await harness.dispatchFetch(request(
     `${ORIGIN}/m1/sync-core.mjs?v=${harness.revision}`
   ));
+  const offlineProfile = await harness.dispatchFetch(request(
+    `${ORIGIN}/m1/installation-profile.generated.js?v=${harness.revision}`
+  ));
   const offlineStaffCore = await harness.dispatchFetch(request(
     `${ORIGIN}/m1/staff-clock-core.mjs?v=${harness.revision}`
   ));
@@ -251,6 +259,7 @@ test('network wins online while current-revision navigation and module reload fr
   assert.equal(offlineRoot.url, `${ORIGIN}/m1/index.html`);
   assert.equal(offlineIndex.url, `${ORIGIN}/m1/index.html`);
   assert.equal(offlineCore.url, `${ORIGIN}/m1/sync-core.mjs?v=${harness.revision}`);
+  assert.equal(offlineProfile.url, `${ORIGIN}/m1/installation-profile.generated.js?v=${harness.revision}`);
   assert.equal(offlineStaffCore.url, `${ORIGIN}/m1/staff-clock-core.mjs?v=${harness.revision}`);
   assert.equal(offlineStaffClient.url, `${ORIGIN}/m1/staff-clock-client.mjs?v=${harness.revision}`);
 
@@ -273,6 +282,7 @@ test('API, Admin, auxiliary, stale-version, cross-origin, and non-GET traffic by
     request(`${ORIGIN}/m1/tablet-install.html`, { mode: 'navigate' }),
     request(`${ORIGIN}/m1/production-diagnostic.html`, { mode: 'navigate' }),
     request(`${ORIGIN}/m1/shared-schedule.json`),
+    request(`${ORIGIN}/m1/installation-profile.generated.js?v=older-revision`),
     request(`${ORIGIN}/m1/sync-core.mjs?v=older-revision`),
     request(`${ORIGIN}/m1/staff-clock-core.mjs?v=older-revision`),
     request(`${ORIGIN}/m1/staff-clock-client.mjs?v=older-revision`),

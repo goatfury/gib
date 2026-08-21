@@ -10,6 +10,7 @@ import {
   validatePlausibleScheduleTransition,
   validateScheduleContract
 } from './_lib/m1-schedule-core.mjs';
+import { remoteScheduleEnabled } from './_lib/m1-installation.mjs';
 
 export const SCHEDULE_PATH = '/api/m1-schedule';
 export const REFRESH_INTERVAL_MS = 5 * 60 * 1_000;
@@ -406,6 +407,9 @@ export async function handleM1Schedule(request, dependencies = {}) {
   const deployContext = deployContextFor(request, dependencies);
   const published = dependencies.published ?? dependencies.context?.deploy?.published ?? false;
   const env = dependencies.env || process.env;
+  if (!remoteScheduleEnabled(env)) {
+    return errorResponse(503, 'This installation uses a deployment-local TEST schedule.', method);
+  }
   if (!allowedDeploymentRequest(request, deployContext, published, env)) {
     return errorResponse(503, 'The website schedule service is not enabled in this deployment.', method);
   }

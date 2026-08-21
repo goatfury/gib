@@ -6,8 +6,10 @@ import vm from 'node:vm';
 
 import { createDayRolloverController } from '../m1/sync-core.mjs';
 
-const kiosk = readFileSync(new URL('../m1/index.html', import.meta.url), 'utf8');
-const admin = readFileSync(new URL('../m1/admin/index.html', import.meta.url), 'utf8');
+const kiosk = readFileSync(new URL('../m1/index.html', import.meta.url), 'utf8')
+  .replace(/\r\n?/gu, '\n');
+const admin = readFileSync(new URL('../m1/admin/index.html', import.meta.url), 'utf8')
+  .replace(/\r\n?/gu, '\n');
 const service = readFileSync(new URL('../netlify/functions/m1-schedule.mjs', import.meta.url), 'utf8');
 const shared = JSON.parse(readFileSync(new URL('../m1/shared-schedule.json', import.meta.url), 'utf8'));
 
@@ -79,6 +81,8 @@ function browserContext(extras = {}) {
     URL,
     crypto: webcrypto,
     console: { warn() {}, error() {} },
+    IS_RICHMOND: false,
+    BACKEND_ENABLED: true,
     structuredClone,
     ...extras
   });
@@ -260,7 +264,7 @@ test('kiosk bootstrap and Daily Review share one checked-in Rev schedule contrac
   assert.equal(shared.timezone, 'America/New_York');
   assert.equal(shared.site, 'Rev');
   assert.equal(Object.values(shared.days).flat().length, 55);
-  assert.match(kiosk, /CANONICAL_SCHEDULE_ENDPOINT = '\/api\/m1-schedule'/u);
+  assert.match(kiosk, /CANONICAL_SCHEDULE_ENDPOINT = INSTALLATION\.scheduleSource\.endpoint/u);
   assert.match(admin, /schedule: '\/api\/m1-schedule'/u);
   assert.match(admin, /scheduleBootstrap: '\/m1\/shared-schedule\.json'/u);
   assert.match(admin, /loadCheckedInScheduleBootstrap/u);

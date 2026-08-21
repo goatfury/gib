@@ -4,6 +4,7 @@ import {
   randomBytes,
   timingSafeEqual
 } from 'node:crypto';
+import { remoteBackendEnabled } from './m1-installation.mjs';
 
 export const ADMIN_NAMES = Object.freeze(['Andrew Smith', 'Stuart Turner']);
 export const ADMIN_COOKIE = 'gib_m1_admin_session';
@@ -104,6 +105,7 @@ function derivedPreviewSessionSecret(adminActionToken) {
 }
 
 export function runtimeConfig(env = process.env, options = {}) {
+  if (!remoteBackendEnabled(env)) return null;
   const target = runtimeTarget(options.requestUrl);
   if (!target) return null;
   const preview = target === 'test';
