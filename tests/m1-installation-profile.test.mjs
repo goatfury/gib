@@ -12,7 +12,7 @@ import {
 } from '../m1/installation-profile-core.mjs';
 import { appendBatchToState, blankLocalState } from '../m1/sync-core.mjs';
 import {
-  installationProfileForEnvironment,
+  deploymentInstallationProfile,
   remoteBackendEnabled,
   remoteScheduleEnabled,
   staffClockEnabled
@@ -29,6 +29,10 @@ const kioskHtml = readFileSync(new URL('m1/index.html', ROOT), 'utf8');
 const staffClient = readFileSync(new URL('m1/staff-clock-client.mjs', ROOT), 'utf8');
 const netlifyConfig = readFileSync(new URL('netlify.toml', ROOT), 'utf8');
 const buildTool = readFileSync(new URL('tools/build-m1-installation-profile.mjs', ROOT), 'utf8');
+const serverProfile = readFileSync(
+  new URL('netlify/functions/_lib/m1-installation.generated.mjs', ROOT),
+  'utf8'
+);
 const PREVIEW_ORIGIN = 'https://deploy-preview-77--gib-live.netlify.app';
 const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
 
@@ -84,13 +88,12 @@ test('Rev stays the exact default while Richmond is a fixed local-only installat
     featureFlags: { staffClock: false },
     backend: { enabled: false, transportTarget: 'none' }
   });
-  assert.equal(installationProfileForEnvironment({}), rev);
-  assert.equal(installationProfileForEnvironment({ GIB_M1_INSTALLATION: 'richmond' }), richmond);
-  assert.equal(installationProfileForEnvironment({ GIB_M1_INSTALLATION: 'unknown' }), null);
+  assert.equal(deploymentInstallationProfile(), rev);
+  assert.equal(deploymentInstallationProfile('richmond'), richmond);
   assert.equal(validInstallationProfile({ ...richmond, siteCode: 'Rev' }), false);
-  assert.equal(remoteBackendEnabled({ GIB_M1_INSTALLATION: 'richmond' }), false);
-  assert.equal(remoteScheduleEnabled({ GIB_M1_INSTALLATION: 'richmond' }), false);
-  assert.equal(staffClockEnabled({ GIB_M1_INSTALLATION: 'richmond' }), false);
+  assert.equal(remoteBackendEnabled('richmond'), false);
+  assert.equal(remoteScheduleEnabled('richmond'), false);
+  assert.equal(staffClockEnabled('richmond'), false);
 });
 
 test('Richmond maps every browser key into its own namespace and ignores Rev state on reload', () => {
@@ -175,6 +178,8 @@ test('the generated browser profile is frozen and cannot be selected by URL or s
   assert.doesNotMatch(profileGate, /URLSearchParams|location\.(?:search|hash)|localStorage/u);
   assert.match(profileGate, /JSON\.stringify\(INSTALLATION\) !== JSON\.stringify\(expectedInstallation\)/u);
   assert.match(buildTool, /process\.env\.GIB_M1_INSTALLATION \|\| 'rev'/u);
+  assert.match(buildTool, /m1-installation\.generated\.mjs/u);
+  assert.match(serverProfile, /DEPLOYMENT_INSTALLATION_ID = ["']rev["']/u);
   assert.match(netlifyConfig, /\[context\."agent\/m1-richmond-installation-preview"\.environment\][\s\S]*GIB_M1_INSTALLATION = "richmond"/u);
   assert.match(netlifyConfig, /command = "npm run build"/u);
 });
@@ -195,8 +200,11 @@ test('Richmond client is fixed to Site Richmond, TEST schedule, local review, an
 
 test('Richmond disables TEST and production runtime configuration even when Rev secrets exist', () => {
   const env = { ...COMPLETE_ENV, GIB_M1_INSTALLATION: 'richmond' };
-  assert.equal(runtimeConfig(env, { requestUrl: `${PREVIEW_ORIGIN}/api/m1-kiosk-sync` }), null);
-  assert.equal(productionRuntimeConfig(env), null);
+  assert.equal(runtimeConfig(env, {
+    requestUrl: `${PREVIEW_ORIGIN}/api/m1-kiosk-sync`,
+    installationId: 'richmond'
+  }), null);
+  assert.equal(productionRuntimeConfig(env, { installationId: 'richmond' }), null);
 });
 
 test('Richmond server routes fail closed before TEST, production, Staff Clock, schedule, or Admin transport', async () => {
@@ -213,14 +221,14 @@ test('Richmond server routes fail closed before TEST, production, Staff Clock, s
       method: 'POST',
       body: { rows: [{ forged: 'Rev' }] }
     }),
-    { env, fetch }
+    { env, fetch, installationId: 'richmond' }
   );
   assert.equal(kiosk.status, 503);
   assert.match((await kiosk.json()).message, /no configured backend transport/iu);
 
   const staff = await handleStaffClock(
     sameOriginRequest('/api/m1-staff-clock', { method: 'POST' }),
-    { env, fetch }
+    { env, fetch, installationId: 'richmond' }
   );
   assert.equal(staff.status, 404);
   assert.match((await staff.json()).message, /disabled/iu);
@@ -229,6 +237,7 @@ test('Richmond server routes fail closed before TEST, production, Staff Clock, s
     sameOriginRequest('/api/m1-schedule'),
     {
       env,
+      installationId: 'richmond',
       deployContext: 'deploy-preview',
       published: false,
       fetchImpl: fetch,
@@ -246,7 +255,7 @@ test('Richmond server routes fail closed before TEST, production, Staff Clock, s
       method: 'POST',
       body: { adminName: 'Andrew Smith', passphrase: '', testShortcut: true }
     }),
-    { env }
+    { env, installationId: 'richmond' }
   );
   assert.equal(admin.status, 503);
   assert.equal(admin.headers.get('set-cookie'), null);

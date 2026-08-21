@@ -139,8 +139,8 @@ export function validExactProductionRequest(request, path) {
     && request.headers.get('sec-fetch-site') === 'same-origin';
 }
 
-export function productionRuntimeConfig(env = process.env) {
-  if (!remoteBackendEnabled(env)) return null;
+export function productionRuntimeConfig(env = process.env, options = {}) {
+  if (!remoteBackendEnabled(options.installationId)) return null;
   const origin = exactString(env.GIB_M1_PRODUCTION_ORIGIN);
   const webhookUrl = validGoogleWebhook(env.GIB_M1_PRODUCTION_WEBHOOK_URL);
   const webhookToken = validSecret(env.GIB_M1_PRODUCTION_WEBHOOK_TOKEN);

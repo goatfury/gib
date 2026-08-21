@@ -13,8 +13,15 @@ if (!profile) {
 
 const source = browserInstallationProfileSource(profile);
 
-await writeFile(
-  new URL('../m1/installation-profile.generated.js', import.meta.url),
-  source,
-  'utf8'
-);
+await Promise.all([
+  writeFile(
+    new URL('../m1/installation-profile.generated.js', import.meta.url),
+    source,
+    'utf8'
+  ),
+  writeFile(
+    new URL('../netlify/functions/_lib/m1-installation.generated.mjs', import.meta.url),
+    `export const DEPLOYMENT_INSTALLATION_ID = ${JSON.stringify(profile.installationId)};\n`,
+    'utf8'
+  )
+]);

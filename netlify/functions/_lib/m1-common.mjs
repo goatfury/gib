@@ -105,7 +105,7 @@ function derivedPreviewSessionSecret(adminActionToken) {
 }
 
 export function runtimeConfig(env = process.env, options = {}) {
-  if (!remoteBackendEnabled(env)) return null;
+  if (!remoteBackendEnabled(options.installationId)) return null;
   const target = runtimeTarget(options.requestUrl);
   if (!target) return null;
   const preview = target === 'test';

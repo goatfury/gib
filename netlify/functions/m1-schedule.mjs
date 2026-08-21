@@ -407,7 +407,7 @@ export async function handleM1Schedule(request, dependencies = {}) {
   const deployContext = deployContextFor(request, dependencies);
   const published = dependencies.published ?? dependencies.context?.deploy?.published ?? false;
   const env = dependencies.env || process.env;
-  if (!remoteScheduleEnabled(env)) {
+  if (!remoteScheduleEnabled(dependencies.installationId)) {
     return errorResponse(503, 'This installation uses a deployment-local TEST schedule.', method);
   }
   if (!allowedDeploymentRequest(request, deployContext, published, env)) {

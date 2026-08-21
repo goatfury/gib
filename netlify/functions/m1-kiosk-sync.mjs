@@ -264,7 +264,7 @@ export async function handleKioskSync(request, dependencies = {}) {
   }
 
   const env = dependencies.env || process.env;
-  if (!remoteBackendEnabled(env)) {
+  if (!remoteBackendEnabled(dependencies.installationId)) {
     return jsonResponse(503, {
       ok: false,
       message: 'This installation has no configured backend transport. Rows remain local.'

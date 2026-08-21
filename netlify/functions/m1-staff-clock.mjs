@@ -109,7 +109,7 @@ export async function handleStaffClock(request, dependencies = {}) {
   }
 
   const env = dependencies.env || process.env;
-  if (!staffClockEnabled(env)) {
+  if (!staffClockEnabled(dependencies.installationId)) {
     return jsonResponse(404, { ok: false, message: 'Staff Clock is disabled for this installation.' });
   }
   let runtime = null;
