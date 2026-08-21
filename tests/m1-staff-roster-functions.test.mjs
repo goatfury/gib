@@ -95,24 +95,31 @@ async function responseBody(response) {
   return JSON.parse(await response.text());
 }
 
-function rosterGoogle(overrides = {}) {
-  return {
-    ok: true,
-    target: 'test',
-    staff: [
+function rosterGoogle(target = 'test', overrides = {}) {
+  const staff = target === 'test'
+    ? [
       { staffId: 'mandy-test', staffName: 'Mandy Test', active: true },
       { staffId: 'former-staff-test', staffName: 'Former Staff Test', active: false }
-    ],
+    ]
+    : [
+      { staffId: 'mandy', staffName: 'Mandy', active: true },
+      { staffId: 'marvin', staffName: 'Marvin', active: true }
+    ];
+  return {
+    ok: true,
+    target,
+    staff,
     ...overrides
   };
 }
 
-function mutationValues(operation) {
+function mutationValues(operation, target = 'test') {
+  const staffName = target === 'test' ? 'QA Test Staff' : 'Mandy';
   if (operation === 'add') {
     return {
       requestId: ADD_REQUEST_ID,
       result: 'added',
-      staffName: 'QA Test Staff',
+      staffName,
       previousActive: null,
       newActive: true
     };
@@ -121,7 +128,7 @@ function mutationValues(operation) {
     return {
       requestId: DEACTIVATE_REQUEST_ID,
       result: 'deactivated',
-      staffName: 'QA Test Staff',
+      staffName,
       previousActive: true,
       newActive: false
     };
@@ -129,17 +136,17 @@ function mutationValues(operation) {
   return {
     requestId: REACTIVATE_REQUEST_ID,
     result: 'reactivated',
-    staffName: 'QA Test Staff',
+    staffName,
     previousActive: false,
     newActive: true
   };
 }
 
-function mutationGoogle(operation, overrides = {}) {
-  const values = mutationValues(operation);
+function mutationGoogle(operation, target = 'test', overrides = {}) {
+  const values = mutationValues(operation, target);
   return {
     ok: true,
-    target: 'test',
+    target,
     operation,
     requestId: values.requestId,
     result: values.result,
@@ -155,11 +162,11 @@ function mutationGoogle(operation, overrides = {}) {
   };
 }
 
-function dependencies(fetchImpl) {
-  return { env: ENV, now: NOW_MS, fetch: fetchImpl };
+function dependencies(fetchImpl, env = ENV) {
+  return { env, now: NOW_MS, fetch: fetchImpl };
 }
 
-test('Staff roster list uses the exact preview-only route and authenticated Admin transport', async () => {
+test('Staff roster list uses exact preview routes and isolated authenticated TEST transport', async () => {
   for (const origin of [PREVIEW_ORIGIN, IMMUTABLE_ORIGIN]) {
     let upstream;
     const response = await handleAdminStaffRoster(adminRequest({
@@ -190,6 +197,58 @@ test('Staff roster list uses the exact preview-only route and authenticated Admi
   }
 });
 
+test('exact canonical production Admin can list and mutate with only production transport', async () => {
+  const operations = ['list', 'add', 'deactivate', 'reactivate'];
+  for (const operation of operations) {
+    const values = operation === 'list' ? null : mutationValues(operation, 'production');
+    const body = operation === 'list'
+      ? { operation }
+      : operation === 'add'
+        ? { operation, requestId: values.requestId, staffName: values.staffName }
+        : { operation, requestId: values.requestId, staffId: STAFF_ID };
+    let upstream;
+    const response = await handleAdminStaffRoster(adminRequest({
+      origin: PRODUCTION_ORIGIN,
+      sessionOrigin: PRODUCTION_ORIGIN,
+      adminName: 'Stuart Turner',
+      body
+    }), dependencies(async (url, options) => {
+      upstream = { url, body: JSON.parse(options.body) };
+      return googleResponse(operation === 'list'
+        ? rosterGoogle('production')
+        : mutationGoogle(operation, 'production', {
+          confirmation: {
+            ...mutationGoogle(operation, 'production').confirmation,
+            adminName: 'Stuart Turner'
+          }
+        }));
+    }));
+
+    assert.equal(response.status, 200, operation);
+    const browser = await responseBody(response);
+    assert.equal(browser.ok, true);
+    assert.equal(browser.test, false);
+    assert.equal(browser.adminName, 'Stuart Turner');
+    assert.equal(upstream.url, PRODUCTION_WEBHOOK_URL);
+    assert.equal(upstream.body.target, 'production');
+    assert.equal(upstream.body.token, PRODUCTION_WEBHOOK_TOKEN);
+    assert.equal(upstream.body.adminActionToken, PRODUCTION_ADMIN_TOKEN);
+    const wire = JSON.stringify(upstream);
+    assert.equal(wire.includes(TEST_WEBHOOK_URL), false);
+    assert.equal(wire.includes(TEST_WEBHOOK_TOKEN), false);
+    assert.equal(wire.includes(TEST_ADMIN_TOKEN), false);
+    if (operation === 'list') {
+      assert.equal(upstream.body.action, 'staffRosterList');
+      assert.deepEqual(browser.staff, rosterGoogle('production').staff);
+    } else {
+      assert.equal(upstream.body.action, 'staffRosterMutate');
+      assert.equal(browser.operation, operation);
+      assert.equal(browser.requestId, values.requestId);
+      assert.equal(browser.confirmation.staffName, 'Mandy');
+    }
+  }
+});
+
 test('Staff roster requires the current Admin cookie and matching memory-only request token', async () => {
   let calls = 0;
   const fetchImpl = async () => {
@@ -217,6 +276,67 @@ test('Staff roster requires the current Admin cookie and matching memory-only re
     message: 'Admin login must be renewed for this page.'
   });
   assert.equal(calls, 0, 'unauthorized roster requests must stop before Google');
+});
+
+test('TEST and production Admin sessions cannot cross-authorize', async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return googleResponse(rosterGoogle());
+  };
+  const productionCookieOnPreview = await handleAdminStaffRoster(adminRequest({
+    sessionOrigin: PRODUCTION_ORIGIN
+  }), dependencies(fetchImpl));
+  const testCookieOnProduction = await handleAdminStaffRoster(adminRequest({
+    origin: PRODUCTION_ORIGIN,
+    sessionOrigin: PREVIEW_ORIGIN
+  }), dependencies(fetchImpl));
+
+  for (const response of [productionCookieOnPreview, testCookieOnProduction]) {
+    assert.equal(response.status, 401);
+    assert.deepEqual(await responseBody(response), {
+      ok: false,
+      message: 'Admin login required.'
+    });
+  }
+  assert.equal(calls, 0);
+});
+
+test('cross-scoped credentials and Apps Script endpoints fail configuration before Google', async () => {
+  const cases = [
+    {
+      origin: PREVIEW_ORIGIN,
+      env: { ...ENV, GIB_TEST_WEBHOOK_URL: PRODUCTION_WEBHOOK_URL }
+    },
+    {
+      origin: PRODUCTION_ORIGIN,
+      env: { ...ENV, GIB_M1_PRODUCTION_WEBHOOK_URL: TEST_WEBHOOK_URL }
+    },
+    {
+      origin: PREVIEW_ORIGIN,
+      env: { ...ENV, GIB_TEST_ADMIN_ACTION_TOKEN: PRODUCTION_ADMIN_TOKEN }
+    },
+    {
+      origin: PRODUCTION_ORIGIN,
+      env: { ...ENV, GIB_M1_ADMIN_ACTION_TOKEN: TEST_ADMIN_TOKEN }
+    }
+  ];
+  let calls = 0;
+  for (const candidate of cases) {
+    const response = await handleAdminStaffRoster(adminRequest({
+      origin: candidate.origin,
+      includeAuth: false
+    }), dependencies(async () => {
+      calls += 1;
+      return googleResponse(rosterGoogle());
+    }, candidate.env));
+    assert.equal(response.status, 503);
+    assert.deepEqual(await responseBody(response), {
+      ok: false,
+      message: 'Staff Roster Admin is not configured.'
+    });
+  }
+  assert.equal(calls, 0);
 });
 
 test('add normalizes the only user-entered field and pins Admin attribution server-side', async () => {
@@ -254,6 +374,47 @@ test('add normalizes the only user-entered field and pins Admin attribution serv
     result: 'added',
     confirmation: mutationGoogle('add').confirmation
   });
+});
+
+test('name policy requires obvious fake names in TEST and forbids them in production', async () => {
+  const obviousFakeNames = [
+    'QA Staff',
+    'Test Staff',
+    'Fake Staff',
+    'Demo Staff',
+    'Do Not Pay Staff',
+    'Do-Not-Pay Staff'
+  ];
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return googleResponse(mutationGoogle('add'));
+  };
+
+  const realInTest = await handleAdminStaffRoster(adminRequest({
+    body: { operation: 'add', requestId: ADD_REQUEST_ID, staffName: 'Mandy' }
+  }), dependencies(fetchImpl));
+  assert.equal(realInTest.status, 400);
+
+  const noncanonicalFakeInTest = await handleAdminStaffRoster(adminRequest({
+    body: { operation: 'add', requestId: ADD_REQUEST_ID, staffName: 'Do-Not-Pay Staff' }
+  }), dependencies(fetchImpl));
+  assert.equal(noncanonicalFakeInTest.status, 400);
+
+  for (const staffName of obviousFakeNames) {
+    const fakeInProduction = await handleAdminStaffRoster(adminRequest({
+      origin: PRODUCTION_ORIGIN,
+      sessionOrigin: PRODUCTION_ORIGIN,
+      body: { operation: 'add', requestId: ADD_REQUEST_ID, staffName }
+    }), dependencies(fetchImpl));
+    assert.equal(fakeInProduction.status, 400, staffName);
+    assert.deepEqual(await responseBody(fakeInProduction), {
+      ok: false,
+      result: 'rejected',
+      message: 'The Staff Roster request was rejected.'
+    });
+  }
+  assert.equal(calls, 0);
 });
 
 test('deactivate and reactivate forward only the stable Staff ID and require exact confirmations', async () => {
@@ -299,6 +460,15 @@ test('malformed, dangerous, real-person, and noncanonical requests stop before G
     {},
     { operation: 'unknown' },
     { operation: 'list', extra: true },
+    { operation: 'list', target: 'production' },
+    { operation: 'list', environment: 'production' },
+    { operation: 'list', test: false },
+    { operation: 'list', sheetId: 'private-sheet-id' },
+    { operation: 'list', sheetUrl: 'https://docs.google.com/private' },
+    { operation: 'list', webhookUrl: TEST_WEBHOOK_URL },
+    { operation: 'list', deploymentId: 'private-deployment-id' },
+    { operation: 'list', token: TEST_WEBHOOK_TOKEN },
+    { operation: 'list', adminActionToken: TEST_ADMIN_TOKEN },
     { operation: 'add', requestId: ADD_REQUEST_ID, staffName: '' },
     { operation: 'add', requestId: ADD_REQUEST_ID, staffName: 'Mandy' },
     { operation: 'add', requestId: ADD_REQUEST_ID, staffName: '=QA Test Staff' },
@@ -337,6 +507,14 @@ test('strict roster replies reject target, field, identity, name, and Active dri
     { ...rosterGoogle(), staff: [{ staffId: 'qa-test', staffName: 'QA Test Staff', active: 'TRUE' }] },
     {
       ...rosterGoogle(),
+      staff: Array.from({ length: 101 }, (_, index) => ({
+        staffId: `qa-test-${index}`,
+        staffName: `QA Test Staff ${index}`,
+        active: index === 0
+      }))
+    },
+    {
+      ...rosterGoogle(),
       staff: [
         { staffId: 'duplicate-test', staffName: 'First QA Test', active: true },
         { staffId: 'duplicate-test', staffName: 'Second QA Test', active: false }
@@ -360,6 +538,36 @@ test('strict roster replies reject target, field, identity, name, and Active dri
     const body = await responseBody(response);
     assert.equal(body.ok, false);
     assert.equal(Object.hasOwn(body, 'staff'), false);
+  }
+});
+
+test('readable roster confirmations enforce the server-selected target name policy', async () => {
+  const cases = [
+    {
+      request: adminRequest(),
+      reply: rosterGoogle('test', {
+        staff: [{ staffId: 'mandy', staffName: 'Mandy', active: true }]
+      })
+    },
+    {
+      request: adminRequest({
+        origin: PRODUCTION_ORIGIN,
+        sessionOrigin: PRODUCTION_ORIGIN
+      }),
+      reply: rosterGoogle('production', {
+        staff: [{ staffId: 'qa-test', staffName: 'QA Test Staff', active: true }]
+      })
+    }
+  ];
+  for (const candidate of cases) {
+    const response = await handleAdminStaffRoster(
+      candidate.request,
+      dependencies(async () => googleResponse(candidate.reply))
+    );
+    assert.equal(response.status, 502);
+    const browser = await responseBody(response);
+    assert.equal(browser.ok, false);
+    assert.equal(Object.hasOwn(browser, 'staff'), false);
   }
 });
 
@@ -398,21 +606,166 @@ test('mutation replies fail closed on operation, replay identity, attribution, a
   }
 });
 
-test('production and inexact browser boundaries reject roster access before Google', async () => {
+test('mutation confirmation names are exact and target-aware', async () => {
+  const productionRequest = body => adminRequest({
+    origin: PRODUCTION_ORIGIN,
+    sessionOrigin: PRODUCTION_ORIGIN,
+    body
+  });
+  const cases = [
+    {
+      request: adminRequest({
+        body: {
+          operation: 'deactivate',
+          requestId: DEACTIVATE_REQUEST_ID,
+          staffId: STAFF_ID
+        }
+      }),
+      reply: mutationGoogle('deactivate', 'test', {
+        confirmation: {
+          ...mutationGoogle('deactivate').confirmation,
+          staffName: 'Mandy'
+        }
+      })
+    },
+    {
+      request: productionRequest({
+        operation: 'deactivate',
+        requestId: DEACTIVATE_REQUEST_ID,
+        staffId: STAFF_ID
+      }),
+      reply: mutationGoogle('deactivate', 'production', {
+        confirmation: {
+          ...mutationGoogle('deactivate', 'production').confirmation,
+          staffName: 'QA Test Staff'
+        }
+      })
+    },
+    {
+      request: productionRequest({
+        operation: 'add',
+        requestId: ADD_REQUEST_ID,
+        staffName: 'Mandy'
+      }),
+      reply: mutationGoogle('add', 'production', {
+        confirmation: {
+          ...mutationGoogle('add', 'production').confirmation,
+          staffName: 'Marvin'
+        }
+      })
+    }
+  ];
+
+  for (const candidate of cases) {
+    const response = await handleAdminStaffRoster(
+      candidate.request,
+      dependencies(async () => googleResponse(candidate.reply))
+    );
+    assert.equal(response.status, 502);
+    const browser = await responseBody(response);
+    assert.equal(browser.ok, false);
+    assert.equal(Object.hasOwn(browser, 'confirmation'), false);
+  }
+});
+
+test('conflicts require an exact target-aware confirmation and stay target-neutral', async () => {
+  for (const target of ['test', 'production']) {
+    const origin = target === 'test' ? PREVIEW_ORIGIN : PRODUCTION_ORIGIN;
+    const staffName = target === 'test' ? 'QA Test Staff' : 'Mandy';
+    const request = () => adminRequest({
+      origin,
+      sessionOrigin: origin,
+      body: { operation: 'add', requestId: ADD_REQUEST_ID, staffName }
+    });
+    const exact = {
+      ok: false,
+      target,
+      result: 'conflict',
+      code: 'capacity'
+    };
+    const accepted = await handleAdminStaffRoster(
+      request(),
+      dependencies(async () => googleResponse(exact))
+    );
+    assert.equal(accepted.status, 409);
+    assert.deepEqual(await responseBody(accepted), {
+      ok: false,
+      test: target === 'test',
+      result: 'conflict',
+      code: 'capacity',
+      message: 'The Staff Roster has reached its safe staff limit.'
+    });
+
+    const invalid = [
+      { ...exact, target: target === 'test' ? 'production' : 'test' },
+      { ...exact, code: 'unknown_conflict' },
+      { ...exact, message: 'private upstream detail' },
+      { ...exact, extra: true }
+    ];
+    for (const reply of invalid) {
+      const response = await handleAdminStaffRoster(
+        request(),
+        dependencies(async () => googleResponse(reply))
+      );
+      assert.equal(response.status, 502);
+      const browser = await responseBody(response);
+      assert.equal(browser.ok, false);
+      assert.equal(Object.hasOwn(browser, 'result'), false);
+    }
+  }
+});
+
+test('inexact preview and production browser boundaries reject before Google', async () => {
   const invalidRequests = [
-    adminRequest({
-      origin: PRODUCTION_ORIGIN,
-      sessionOrigin: PRODUCTION_ORIGIN
-    }),
     adminRequest({ includeAuth: false, requestOrigin: 'https://attacker.example' }),
     adminRequest({ includeAuth: false, host: 'attacker.example' }),
     adminRequest({ includeAuth: false, fetchSite: 'cross-site' }),
+    adminRequest({ includeAuth: false, includeHost: false }),
+    adminRequest({ includeAuth: false, includeFetchSite: false }),
     adminRequest({ includeAuth: false, path: `${ROSTER_PATH}/extra` }),
     adminRequest({ includeAuth: false, path: `${ROSTER_PATH}?scope=test` }),
     adminRequest({
       includeAuth: false,
       origin: 'http://deploy-preview-63--gib-live.netlify.app',
       requestOrigin: 'http://deploy-preview-63--gib-live.netlify.app'
+    }),
+    adminRequest({
+      includeAuth: false,
+      origin: 'https://branch-name--gib-live.netlify.app'
+    }),
+    adminRequest({
+      includeAuth: false,
+      origin: 'https://gib-live.netlify.app.attacker.example'
+    }),
+    adminRequest({
+      includeAuth: false,
+      origin: PRODUCTION_ORIGIN,
+      host: 'GIB-LIVE.NETLIFY.APP:443'
+    }),
+    adminRequest({
+      includeAuth: false,
+      origin: PRODUCTION_ORIGIN,
+      requestOrigin: PREVIEW_ORIGIN
+    }),
+    adminRequest({
+      includeAuth: false,
+      origin: PRODUCTION_ORIGIN,
+      fetchSite: 'none'
+    }),
+    adminRequest({
+      includeAuth: false,
+      origin: PRODUCTION_ORIGIN,
+      includeHost: false
+    }),
+    adminRequest({
+      includeAuth: false,
+      origin: PRODUCTION_ORIGIN,
+      includeFetchSite: false
+    }),
+    adminRequest({
+      includeAuth: false,
+      origin: PRODUCTION_ORIGIN,
+      path: `${ROSTER_PATH}?target=production`
     })
   ];
   let calls = 0;
@@ -475,6 +828,119 @@ test('unreachable, unreadable, rejected, and drifting Google replies stay fail-c
     assert.equal(response.headers.get('cache-control'), 'no-store, max-age=0');
     const text = await response.text();
     assert.equal(JSON.parse(text).ok, false);
+    for (const secret of forbidden) assert.equal(text.includes(secret), false);
+  }
+});
+
+test('mutation timeout after send reports an unconfirmed outcome and requires the same request ID', async () => {
+  let upstream;
+  const response = await handleAdminStaffRoster(
+    adminRequest({
+      body: {
+        operation: 'add',
+        requestId: ADD_REQUEST_ID,
+        staffName: 'QA Test Staff'
+      }
+    }),
+    dependencies(async (url, options) => {
+      upstream = { url, body: JSON.parse(options.body) };
+      const timeout = new Error('synthetic timeout after request send');
+      timeout.name = 'TimeoutError';
+      throw timeout;
+    })
+  );
+
+  assert.equal(upstream.url, TEST_WEBHOOK_URL);
+  assert.equal(upstream.body.requestId, ADD_REQUEST_ID);
+  assert.equal(response.status, 504);
+  assert.deepEqual(await responseBody(response), {
+    ok: false,
+    code: 'STAFF_ROSTER_ADD_UNREACHABLE',
+    message: 'Staff Roster change outcome is unconfirmed. Retry this exact action with the same request ID.'
+  });
+});
+
+test('read-only roster list reachability failure remains definitive that nothing changed', async () => {
+  const response = await handleAdminStaffRoster(
+    adminRequest(),
+    dependencies(async () => {
+      throw new Error('synthetic pre-list reachability failure');
+    })
+  );
+
+  assert.equal(response.status, 504);
+  assert.deepEqual(await responseBody(response), {
+    ok: false,
+    code: 'STAFF_ROSTER_LIST_UNREACHABLE',
+    message: 'Staff Roster could not reach Google. Nothing changed.'
+  });
+});
+
+test('valid roster-shaped configured secrets are contained before any browser success', async () => {
+  const cases = [
+    {
+      request: adminRequest(),
+      reply: rosterGoogle('test', {
+        staff: [{
+          staffId: TEST_ADMIN_TOKEN,
+          staffName: 'QA Test Staff',
+          active: true
+        }]
+      })
+    },
+    {
+      request: adminRequest({
+        origin: PRODUCTION_ORIGIN,
+        sessionOrigin: PRODUCTION_ORIGIN
+      }),
+      reply: rosterGoogle('production', {
+        staff: [{
+          staffId: PRODUCTION_WEBHOOK_TOKEN,
+          staffName: `Mandy ${PRODUCTION_PASSPHRASE}`,
+          active: true
+        }]
+      })
+    },
+    {
+      request: adminRequest({
+        origin: PRODUCTION_ORIGIN,
+        sessionOrigin: PRODUCTION_ORIGIN,
+        body: {
+          operation: 'add',
+          requestId: ADD_REQUEST_ID,
+          staffName: 'Mandy'
+        }
+      }),
+      reply: mutationGoogle('add', 'production', {
+        confirmation: {
+          ...mutationGoogle('add', 'production').confirmation,
+          staffId: PRODUCTION_ADMIN_TOKEN
+        }
+      })
+    }
+  ];
+  const forbidden = [
+    TEST_WEBHOOK_URL,
+    TEST_WEBHOOK_TOKEN,
+    TEST_ADMIN_TOKEN,
+    PRODUCTION_WEBHOOK_URL,
+    PRODUCTION_WEBHOOK_TOKEN,
+    PRODUCTION_ADMIN_TOKEN,
+    PRODUCTION_PASSPHRASE
+  ];
+
+  for (const candidate of cases) {
+    const response = await handleAdminStaffRoster(
+      candidate.request,
+      dependencies(async () => googleResponse(candidate.reply))
+    );
+    assert.equal(response.status, 502);
+    const text = await response.text();
+    assert.deepEqual(JSON.parse(text), {
+      ok: false,
+      code: 'STAFF_ROSTER_PRIVATE_VALUE',
+      message: 'Staff Roster did not return a safe readable confirmation. Success is not being reported.'
+    });
     for (const secret of forbidden) assert.equal(text.includes(secret), false);
   }
 });

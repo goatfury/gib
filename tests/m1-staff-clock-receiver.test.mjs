@@ -263,6 +263,7 @@ function createHarness({
   };
   const properties = new Map(Object.entries({
     GIB_M1_TEST_SPREADSHEET_ID: 'unit-test-spreadsheet-id',
+    GIB_M1_DEPLOYMENT_TARGET_LOCK: 'test',
     GIB_M1_RECEIVER_TRANSPORT_TOKEN: 'unit-receiver-token',
     GIB_M1_LEGACY_KIOSK_TOKEN: 'unit-legacy-token',
     GIB_M1_ADMIN_ACTION_TOKEN: 'unit-admin-token',
@@ -315,7 +316,14 @@ function createHarness({
     PropertiesService: {
       getScriptProperties: () => ({
         getProperty: name => properties.get(name) || '',
-        setProperty(name, value) { properties.set(name, String(value)); return this; }
+        setProperty(name, value) { properties.set(name, String(value)); return this; },
+        setProperties(values, deleteAllOthers = false) {
+          if (deleteAllOthers) properties.clear();
+          for (const [name, value] of Object.entries(values)) {
+            properties.set(name, String(value));
+          }
+          return this;
+        }
       })
     },
     ScriptApp: { getScriptId: () => 'private-unit-script-id' },
@@ -473,6 +481,8 @@ test('TEST provisioner creates the exact Staff Clock and roster-audit tabs with 
   assert.equal(result.staffTimeCount, 0);
   assert.equal(result.staffAuditCount, 0);
   assert.equal(result.staffRosterAuditCount, 0);
+  assert.equal(result.targetLocked, true);
+  assert.equal(harness.properties.get('GIB_M1_DEPLOYMENT_TARGET_LOCK'), 'test');
   assert.deepEqual(harness.signins.values, signinsBefore);
   assert.deepEqual(harness.adminAudit.values, adminAuditBefore);
 });
@@ -538,6 +548,11 @@ test('authenticated TEST roster list returns active and inactive staff without w
     assert.deepEqual(rejected.sheets.get('Staff Clock Staff').operations, []);
     assert.deepEqual(rejected.sheets.get('Staff Roster Audit').operations, []);
   }
+
+  const unlocked = createHarness({ staffRows });
+  unlocked.properties.delete('GIB_M1_DEPLOYMENT_TARGET_LOCK');
+  assert.equal(unlocked.post(adminBody('staffRosterList')).result, 'rejected');
+  assert.equal(unlocked.spreadsheetOpens, 0);
 });
 
 test('add normalizes names, generates a stable server ID, and resolves ID collisions deterministically', () => {
@@ -645,6 +660,7 @@ test('duplicate names, malformed mutations, and lock contention cannot alter TES
     rosterMutation('add', { staffName: '   ' }),
     rosterMutation('add', { staffName: '=QA Test Formula' }),
     rosterMutation('add', { staffName: '<script>QA Test Staff</script>' }),
+    rosterMutation('add', { staffName: 'Do-Not-Pay Staff' }),
     rosterMutation('add', { staffName: `QA Test ${'x'.repeat(200)}` }),
     rosterMutation('add', { requestId: 'not-a-permanent-request-id', staffName: 'QA Test Staff' }),
     rosterMutation('add', { adminName: 'Unauthorized Test Admin', staffName: 'QA Test Staff' }),

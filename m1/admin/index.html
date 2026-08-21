@@ -583,15 +583,15 @@
         </summary>
         <div class="staff-time-body">
           <p class="muted staff-roster-intro">Active staff appear in Staff Clock. Inactive staff stay here with their Staff Time history intact.</p>
-          <div id="staffRosterMessage" class="message" role="alert"></div>
+          <div id="staffRosterMessage" class="message" role="status" aria-live="polite" aria-atomic="true"></div>
 
           <form id="staffRosterAddForm" class="staff-fix-form" novalidate aria-busy="false">
             <h3>Add staff member</h3>
-            <p class="muted" style="font-size:.8rem">Use an obvious TEST-only identity, such as QA Test Staff.</p>
+            <p id="staffRosterAddHint" class="muted" style="font-size:.8rem" aria-live="polite">Name rules and roster capacity appear after Admin sign-in.</p>
             <div class="staff-roster-add-grid">
               <div class="field">
                 <label for="staffRosterName">Display name</label>
-                <input id="staffRosterName" name="staffName" maxlength="100" autocomplete="off" required placeholder="Staff member name">
+                <input id="staffRosterName" name="staffName" maxlength="100" autocomplete="off" required aria-describedby="staffRosterAddHint" placeholder="Staff member name">
               </div>
               <button id="staffRosterSubmit" class="btn primary" type="submit">Add staff member</button>
             </div>
@@ -752,6 +752,10 @@
       const STAFF_TIME_RECORD_LIMIT = 500;
       const STAFF_TIME_ATTENTION_LIMIT = 600;
       const STAFF_TIME_AUDIT_LIMIT = 500;
+      const STAFF_ROSTER_CAPACITY = 100;
+      const STAFF_ROSTER_PENDING_HISTORY_KEY = '__gibM1StaffRosterPendingV1';
+      const STAFF_ROSTER_PENDING_VERSION = 1;
+      const STAFF_ROSTER_PENDING_MAX_AGE_MS = 30 * 60 * 1_000;
       const MIN_CLASSES_BY_DAY = Object.freeze({
         Monday: 5,
         Tuesday: 5,
@@ -776,9 +780,15 @@
       let currentAdminName = '';
       let testMode = false;
       let adminRequestToken = '';
+      let initializationPromise = null;
+      let loginAttemptInFlight = false;
       let currentStaffRoster = null;
       let staffRosterLoadGeneration = 0;
+      let staffRosterSessionGeneration = 0;
+      let staffRosterMutationGeneration = 0;
       let staffRosterMutationInFlight = false;
+      let staffRosterStateFresh = false;
+      let pendingStaffRosterMutation = null;
       let currentStaffTime = null;
       let staffTimeLoadGeneration = 0;
       let diagnosticWindow = null;
@@ -1527,8 +1537,48 @@
       function validStaffRosterName(value) {
         return validStaffName(value)
           && /^[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N} .'\u2019-]*$/u.test(value)
-          && /\p{L}/u.test(value)
-          && /\b(test|fake|demo|qa)\b|do not pay/iu.test(value);
+          && /\p{L}/u.test(value);
+      }
+
+      function obviousTestStaffRosterName(value) {
+        return /\b(test|fake|demo|qa)\b|do(?:[\s\u2010-\u2015-]+)not(?:[\s\u2010-\u2015-]+)pay/iu.test(value);
+      }
+
+      function allowedTestStaffRosterName(value) {
+        return /\b(test|fake|demo|qa)\b|do not pay/iu.test(value);
+      }
+
+      function validStaffRosterNameForMode(value) {
+        return validStaffRosterName(value)
+          && (testMode ? allowedTestStaffRosterName(value) : !obviousTestStaffRosterName(value));
+      }
+
+      function staffRosterNameRejectionMessage() {
+        return testMode
+          ? 'Use a valid obvious TEST name, such as QA Test Staff.'
+          : 'Use a real staff name. TEST, fake, demo, QA, and do-not-pay names are not allowed in production.';
+      }
+
+      function staffRosterCapacityMessage() {
+        return `The ${testMode ? 'TEST' : 'production'} Staff Roster has reached its ${STAFF_ROSTER_CAPACITY}-record limit. No additional staff can be added.`;
+      }
+
+      function staffRosterAddHintText(staffCount = null) {
+        const nameRule = testMode
+          ? 'Use an obvious TEST-only identity, such as QA Test Staff.'
+          : "Use the staff member's real display name. TEST, fake, demo, QA, and do-not-pay names are rejected.";
+        if (!Number.isSafeInteger(staffCount) || staffCount < 0) {
+          return `${nameRule} Capacity: up to ${STAFF_ROSTER_CAPACITY} roster records.`;
+        }
+        const remaining = Math.max(0, STAFF_ROSTER_CAPACITY - staffCount);
+        return remaining === 0
+          ? `${nameRule} ${staffRosterCapacityMessage()}`
+          : `${nameRule} ${remaining} of ${STAFF_ROSTER_CAPACITY} roster spots remaining.`;
+      }
+
+      function updateStaffRosterAddHint() {
+        const staffCount = Array.isArray(currentStaffRoster) ? currentStaffRoster.length : null;
+        $('#staffRosterAddHint').textContent = staffRosterAddHintText(staffCount);
       }
 
       function staffRosterNameKey(value) {
@@ -1554,7 +1604,7 @@
       function validStaffRosterPerson(value) {
         return exactObjectKeys(value, ['staffId', 'staffName', 'active'])
           && validStaffRosterId(value.staffId)
-          && validStaffRosterName(value.staffName)
+          && validStaffRosterNameForMode(value.staffName)
           && typeof value.active === 'boolean';
       }
 
@@ -1562,7 +1612,8 @@
         if (
           !exactObjectKeys(value, ['ok', 'test', 'adminName', 'staff'])
           || value.ok !== true
-          || value.test !== true
+          || typeof value.test !== 'boolean'
+          || value.test !== testMode
           || value.adminName !== currentAdminName
           || !Array.isArray(value.staff)
           || value.staff.length < 1
@@ -1603,12 +1654,13 @@
           !expected
           || !resultForOperation[expected.operation]
           || !STAFF_REQUEST_ID_PATTERN.test(expected.requestId || '')
-          || !validStaffRosterName(expected.staffName)
+          || !validStaffRosterNameForMode(expected.staffName)
           || !exactObjectKeys(value, [
             'ok', 'test', 'adminName', 'operation', 'requestId', 'result', 'confirmation'
           ])
           || value.ok !== true
-          || value.test !== true
+          || typeof value.test !== 'boolean'
+          || value.test !== testMode
           || value.adminName !== currentAdminName
           || value.operation !== expected.operation
           || value.requestId !== expected.requestId
@@ -2557,9 +2609,13 @@
       }
 
       function setLoggedOut(message = '') {
+        const hadAuthenticatedAdminSession = Boolean(currentAdminName || adminRequestToken);
+        if (hadAuthenticatedAdminSession) clearPendingStaffRosterMutation();
         clearDiagnosticRun(true);
         reviewLoadGeneration += 1;
         staffRosterLoadGeneration += 1;
+        staffRosterSessionGeneration += 1;
+        staffRosterMutationGeneration += 1;
         staffTimeLoadGeneration += 1;
         currentRecords = [];
         currentWarnings = [];
@@ -2567,6 +2623,7 @@
         persistentReviewOutcome = null;
         currentStaffRoster = null;
         staffRosterMutationInFlight = false;
+        staffRosterStateFresh = false;
         currentStaffTime = null;
         currentAdminName = '';
         testMode = false;
@@ -2588,8 +2645,9 @@
         $('#staffRosterInactiveList').replaceChildren();
         $('#staffRosterAddForm').reset();
         clearStaffRosterAddIdentity($('#staffRosterAddForm'));
-        setStaffRosterControlsDisabled(false);
+        setStaffRosterControlsDisabled(true, false);
         $('#staffRosterSubmit').textContent = 'Add staff member';
+        $('#staffRosterAddHint').textContent = 'Name rules and roster capacity appear after Admin sign-in.';
         showMessage($('#staffRosterMessage'), '');
         showMessage($('#staffRosterStatus'), '');
         $('#staffTimeSummary').textContent = 'Not loaded';
@@ -2608,25 +2666,66 @@
       }
 
       function setLoggedIn(data) {
-        currentAdminName = data.adminName;
-        testMode = data.test === true;
+        const nextAdminName = data.adminName;
+        const nextTestMode = data.test === true;
+        const rosterSessionTransition = (
+          currentAdminName !== nextAdminName
+          || testMode !== nextTestMode
+          || $('#appPanel').hidden
+          || $('#staff-roster').hidden
+        );
+        if (rosterSessionTransition) {
+          staffRosterLoadGeneration += 1;
+          staffRosterSessionGeneration += 1;
+          staffRosterMutationGeneration += 1;
+          staffRosterMutationInFlight = false;
+          staffRosterStateFresh = false;
+          currentStaffRoster = null;
+        }
+        currentAdminName = nextAdminName;
+        testMode = nextTestMode;
+        if (rosterSessionTransition) restorePendingStaffRosterMutation();
         $('#loginPanel').hidden = true;
         $('#appPanel').hidden = false;
-        $('#staff-roster').hidden = !testMode;
-        if (testMode) $('#staff-roster').open = true;
+        $('#staff-roster').hidden = false;
+        if (rosterSessionTransition) {
+          $('#staff-roster').open = true;
+          $('#staffRosterSummary').textContent = 'Not loaded';
+          setStaffRosterControlsDisabled(true, false);
+          presentPendingStaffRosterMutation();
+        }
+        updateStaffRosterAddHint();
         $('#sessionLabel').textContent = `${currentAdminName} · ${testMode ? 'TEST copied Sheet' : 'Production-ready session'}`;
       }
 
+      function setLoginControlsDisabled(disabled) {
+        $('#loginAdminName').disabled = disabled;
+        $('#loginPassphrase').disabled = disabled;
+        $('#loginButton').disabled = disabled;
+        $('#testLoginButton').disabled = disabled;
+      }
+
       async function login(testShortcut) {
+        if (loginAttemptInFlight) return false;
         showMessage($('#loginMessage'), '');
         const adminName = $('#loginAdminName').value;
         if (!adminName) {
           showMessage($('#loginMessage'), 'Choose Andrew Smith or Stuart Turner.');
-          return;
+          return false;
         }
-        const button = testShortcut ? $('#testLoginButton') : $('#loginButton');
-        button.disabled = true;
+        loginAttemptInFlight = true;
+        setLoginControlsDisabled(true);
+        showMessage($('#loginMessage'), 'Preparing Admin login…', 'working');
         try {
+          const initialized = initializationPromise && await initializationPromise;
+          if (!initialized) {
+            showMessage(
+              $('#loginMessage'),
+              'The canonical Rev schedule could not be loaded. Admin login is unavailable; reload this page to try again.'
+            );
+            return false;
+          }
+          showMessage($('#loginMessage'), 'Signing in…', 'working');
           const data = await requestJson(API.login, {
             adminName,
             passphrase: testShortcut ? '' : $('#loginPassphrase').value,
@@ -2640,12 +2739,15 @@
           setLoggedIn(data);
           await loadReview(defaultYesterday());
           await loadStaffTime();
-          if (testMode) await loadStaffRoster();
+          await loadStaffRoster();
           focusStaffTimeHash();
+          return true;
         } catch (error) {
           showMessage($('#loginMessage'), error.message);
+          return false;
         } finally {
-          button.disabled = false;
+          loginAttemptInFlight = false;
+          setLoginControlsDisabled(false);
         }
       }
 
@@ -2654,7 +2756,7 @@
         try { await requestJson(API.logout, {}); } catch {}
         $('#logoutButton').disabled = false;
         setLoggedOut('You are logged out.');
-        history.replaceState(null, '', location.pathname);
+        history.replaceState(history.state, '', location.pathname);
       }
 
       function defaultYesterday() {
@@ -2687,12 +2789,27 @@
           )) || null;
       }
 
-      function setStaffRosterControlsDisabled(disabled) {
+      function setStaffRosterControlsDisabled(disabled, busy = disabled) {
+        if (pendingStaffRosterMutation && !validPendingStaffRosterMutation(pendingStaffRosterMutation)) {
+          clearPendingStaffRosterMutation();
+        }
         const form = $('#staffRosterAddForm');
-        form.setAttribute('aria-busy', disabled ? 'true' : 'false');
-        Array.from(form.elements).forEach(control => { control.disabled = disabled; });
+        form.setAttribute('aria-busy', busy ? 'true' : 'false');
+        const addBlockedByPending = Boolean(
+          pendingStaffRosterMutation
+          && pendingStaffRosterMutation.operation !== 'add'
+        );
+        Array.from(form.elements).forEach(control => {
+          control.disabled = disabled || addBlockedByPending;
+        });
         $('#staff-roster').querySelectorAll('[data-staff-roster-operation]').forEach(button => {
-          button.disabled = disabled;
+          const person = currentStaffRoster?.find(item => item.staffId === button.dataset.staffId);
+          const pendingAllowsButton = !pendingStaffRosterMutation || pendingStaffRosterMutationMatches(
+            button.dataset.staffRosterOperation,
+            button.dataset.staffId,
+            person?.staffName
+          );
+          button.disabled = disabled || !pendingAllowsButton;
         });
       }
 
@@ -2723,6 +2840,8 @@
           { sensitivity: 'base' }
         );
         currentStaffRoster = data.staff.map(person => Object.freeze({ ...person }));
+        staffRosterStateFresh = true;
+        updateStaffRosterAddHint();
         const active = currentStaffRoster.filter(person => person.active).sort(byName);
         const inactive = currentStaffRoster.filter(person => !person.active).sort(byName);
         $('#staffRosterSummary').textContent = `${active.length} active · ${inactive.length} inactive`;
@@ -2936,8 +3055,196 @@
         return `gib-m1-staff-request-${newStaffUuid()}`;
       }
 
+      function validPendingStaffRosterMutation(value, now = Date.now()) {
+        if (!exactObjectKeys(value, [
+          'version',
+          'adminName',
+          'test',
+          'operation',
+          'requestId',
+          'identity',
+          'staffName',
+          'createdAt'
+        ])) return false;
+        if (
+          value.version !== STAFF_ROSTER_PENDING_VERSION
+          || value.adminName !== currentAdminName
+          || value.test !== testMode
+          || !['add', 'deactivate', 'reactivate'].includes(value.operation)
+          || !STAFF_REQUEST_ID_PATTERN.test(value.requestId)
+          || !Number.isSafeInteger(value.createdAt)
+          || value.createdAt <= 0
+          || value.createdAt > now + 5_000
+          || now - value.createdAt > STAFF_ROSTER_PENDING_MAX_AGE_MS
+          || !validStaffRosterNameForMode(value.staffName)
+        ) return false;
+        return value.operation === 'add'
+          ? staffRosterNameKey(value.staffName) === value.identity
+          : validStaffRosterId(value.identity);
+      }
+
+      function clearPendingStaffRosterMutation() {
+        pendingStaffRosterMutation = null;
+        try {
+          const current = history.state;
+          if (!current || typeof current !== 'object' || Array.isArray(current)) return;
+          if (!Object.hasOwn(current, STAFF_ROSTER_PENDING_HISTORY_KEY)) return;
+          const next = { ...current };
+          delete next[STAFF_ROSTER_PENDING_HISTORY_KEY];
+          history.replaceState(next, '');
+        } catch {}
+      }
+
+      function restorePendingStaffRosterMutation() {
+        pendingStaffRosterMutation = null;
+        let candidate = null;
+        try {
+          const current = history.state;
+          if (
+            !current
+            || typeof current !== 'object'
+            || Array.isArray(current)
+            || !Object.hasOwn(current, STAFF_ROSTER_PENDING_HISTORY_KEY)
+          ) return null;
+          candidate = current[STAFF_ROSTER_PENDING_HISTORY_KEY];
+        } catch {
+          return null;
+        }
+        if (!validPendingStaffRosterMutation(candidate)) {
+          clearPendingStaffRosterMutation();
+          return null;
+        }
+        pendingStaffRosterMutation = Object.freeze({ ...candidate });
+        return pendingStaffRosterMutation;
+      }
+
+      function persistPendingStaffRosterMutation(operation, requestId, identity, staffName) {
+        let existing = pendingStaffRosterMutation;
+        if (existing && !validPendingStaffRosterMutation(existing)) {
+          clearPendingStaffRosterMutation();
+          existing = null;
+        }
+        if (existing && (
+          existing.operation !== operation
+          || existing.requestId !== requestId
+          || existing.identity !== identity
+          || existing.staffName !== staffName
+        )) {
+          throw new Error(
+            `First confirm or retry the unresolved ${existing.operation} for ${existing.staffName}. Nothing was sent.`
+          );
+        }
+        const candidate = {
+          version: STAFF_ROSTER_PENDING_VERSION,
+          adminName: currentAdminName,
+          test: testMode,
+          operation,
+          requestId,
+          identity,
+          staffName,
+          createdAt: existing
+            && existing.operation === operation
+            && existing.requestId === requestId
+            && existing.identity === identity
+            && existing.staffName === staffName
+            ? existing.createdAt
+            : Date.now()
+        };
+        if (!validPendingStaffRosterMutation(candidate)) {
+          throw new Error('This browser could not safely identify the pending Staff Roster request. Nothing was sent.');
+        }
+        try {
+          const current = history.state;
+          const next = current && typeof current === 'object' && !Array.isArray(current)
+            ? { ...current }
+            : {};
+          next[STAFF_ROSTER_PENDING_HISTORY_KEY] = candidate;
+          history.replaceState(next, '');
+        } catch {
+          throw new Error('This browser could not safely preserve the pending Staff Roster request. Nothing was sent.');
+        }
+        pendingStaffRosterMutation = Object.freeze({ ...candidate });
+      }
+
+      function pendingStaffRosterMutationMatches(operation, identity, staffName) {
+        if (pendingStaffRosterMutation && !validPendingStaffRosterMutation(pendingStaffRosterMutation)) {
+          clearPendingStaffRosterMutation();
+        }
+        return Boolean(
+          pendingStaffRosterMutation
+          && pendingStaffRosterMutation.operation === operation
+          && pendingStaffRosterMutation.identity === identity
+          && pendingStaffRosterMutation.staffName === staffName
+        );
+      }
+
+      function presentPendingStaffRosterMutation() {
+        const pending = pendingStaffRosterMutation;
+        if (!pending || !validPendingStaffRosterMutation(pending)) return;
+        if (pending.operation === 'add') {
+          const form = $('#staffRosterAddForm');
+          clearStaffRosterAddIdentity(form);
+          form.elements.staffName.value = pending.staffName;
+        }
+        const action = pending.operation === 'add'
+          ? 'add'
+          : pending.operation === 'deactivate' ? 'deactivation' : 'reactivation';
+        const exactNameCopy = pending.operation === 'add'
+          ? ` The exact saved name, ${pending.staffName}, was restored.`
+          : '';
+        showMessage(
+          $('#staffRosterStatus'),
+          `A previous ${action} for ${pending.staffName} has an uncertain outcome.${exactNameCopy} Retry only that same change; unrelated roster changes are blocked until the source roster confirms it.`
+        );
+      }
+
+      function reconcilePendingStaffRosterMutation() {
+        const pending = pendingStaffRosterMutation;
+        if (!pending || !validPendingStaffRosterMutation(pending) || !Array.isArray(currentStaffRoster)) return;
+        const desiredStateIsCanonical = pending.operation === 'add'
+          ? currentStaffRoster.some(person => (
+              person.active
+              && person.staffName === pending.staffName
+              && staffRosterNameKey(person.staffName) === pending.identity
+            ))
+          : currentStaffRoster.some(person => (
+              person.staffId === pending.identity
+              && person.staffName === pending.staffName
+              && person.active === (pending.operation === 'reactivate')
+            ));
+        if (!desiredStateIsCanonical) {
+          presentPendingStaffRosterMutation();
+          return;
+        }
+        clearPendingStaffRosterMutation();
+        if (pending.operation === 'add') {
+          const form = $('#staffRosterAddForm');
+          clearStaffRosterAddIdentity(form);
+          if (form.elements.staffName.value === pending.staffName) form.elements.staffName.value = '';
+        }
+        showMessage(
+          $('#staffRosterStatus'),
+          `${pending.staffName} is already in the requested roster state. The pending retry was cleared.`,
+          'success'
+        );
+      }
+
+      function definitiveStaffRosterMutationFailure(error) {
+        return error && (error.status === 400 || error.status === 409);
+      }
+
       function staffRosterAddRequestIdFor(form, staffName) {
-        const fingerprint = normalize(staffName);
+        const fingerprint = staffRosterNameKey(staffName);
+        if (pendingStaffRosterMutationMatches('add', fingerprint, staffName)) {
+          form.dataset.staffRosterFingerprint = fingerprint;
+          form.dataset.staffRosterRequestId = pendingStaffRosterMutation.requestId;
+          return form.dataset.staffRosterRequestId;
+        }
+        if (pendingStaffRosterMutation) {
+          throw new Error(
+            `First confirm or retry the unresolved ${pendingStaffRosterMutation.operation} for ${pendingStaffRosterMutation.staffName}. Nothing was sent.`
+          );
+        }
         if (
           form.dataset.staffRosterFingerprint !== fingerprint
           || !STAFF_REQUEST_ID_PATTERN.test(form.dataset.staffRosterRequestId || '')
@@ -2953,8 +3260,18 @@
         delete form.dataset.staffRosterRequestId;
       }
 
-      function staffRosterActionRequestIdFor(button, operation, staffId) {
+      function staffRosterActionRequestIdFor(button, operation, staffId, staffName) {
         const fingerprint = `${operation}\u0000${staffId}`;
+        if (pendingStaffRosterMutationMatches(operation, staffId, staffName)) {
+          button.dataset.staffRosterFingerprint = fingerprint;
+          button.dataset.staffRosterRequestId = pendingStaffRosterMutation.requestId;
+          return button.dataset.staffRosterRequestId;
+        }
+        if (pendingStaffRosterMutation) {
+          throw new Error(
+            `First confirm or retry the unresolved ${pendingStaffRosterMutation.operation} for ${pendingStaffRosterMutation.staffName}. Nothing was sent.`
+          );
+        }
         if (
           button.dataset.staffRosterFingerprint !== fingerprint
           || !STAFF_REQUEST_ID_PATTERN.test(button.dataset.staffRosterRequestId || '')
@@ -2963,6 +3280,11 @@
           button.dataset.staffRosterRequestId = newStaffRequestId();
         }
         return button.dataset.staffRosterRequestId;
+      }
+
+      function clearStaffRosterActionIdentity(button) {
+        delete button.dataset.staffRosterFingerprint;
+        delete button.dataset.staffRosterRequestId;
       }
 
       function staffTimestampForInputs(dateString, timeString) {
@@ -3407,13 +3729,14 @@
       }
 
       async function loadStaffRoster(options = {}) {
-        if (!testMode || $('#appPanel').hidden) return false;
+        if (!currentAdminName || $('#appPanel').hidden || $('#staff-roster').hidden) return false;
         const generation = ++staffRosterLoadGeneration;
         const panel = $('#staff-roster');
+        staffRosterStateFresh = false;
+        setStaffRosterControlsDisabled(true, options.quiet !== true || staffRosterMutationInFlight);
         if (options.quiet !== true) {
           panel.classList.add('loading');
           panel.setAttribute('aria-busy', 'true');
-          setStaffRosterControlsDisabled(true);
           if (!currentStaffRoster) $('#staffRosterSummary').textContent = 'Loading…';
           showMessage($('#staffRosterMessage'), 'Loading Staff Roster…', 'working');
         }
@@ -3424,6 +3747,7 @@
             throw new Error('Staff Roster returned an incomplete response. Nothing changed.');
           }
           renderStaffRoster(data);
+          reconcilePendingStaffRosterMutation();
           showMessage($('#staffRosterMessage'), '');
           return true;
         } catch (error) {
@@ -3439,22 +3763,33 @@
           if (generation === staffRosterLoadGeneration) {
             panel.classList.remove('loading');
             panel.setAttribute('aria-busy', staffRosterMutationInFlight ? 'true' : 'false');
-            if (!staffRosterMutationInFlight) setStaffRosterControlsDisabled(false);
+            setStaffRosterControlsDisabled(
+              staffRosterMutationInFlight || !staffRosterStateFresh,
+              staffRosterMutationInFlight
+            );
           }
         }
       }
 
       async function submitStaffRosterAdd(form) {
         if (
-          !testMode
+          !currentAdminName
+          || $('#appPanel').hidden
+          || $('#staff-roster').hidden
+          || !staffRosterStateFresh
           || staffRosterMutationInFlight
           || form.getAttribute('aria-busy') === 'true'
         ) return;
         const input = form.elements.staffName;
         const staffName = clean(input.value);
         const status = $('#staffRosterStatus');
-        if (!validStaffRosterName(staffName)) {
-          showMessage(status, 'Use a valid obvious TEST name, such as QA Test Staff.');
+        if (!validStaffRosterNameForMode(staffName)) {
+          showMessage(status, staffRosterNameRejectionMessage());
+          input.focus();
+          return;
+        }
+        if (Array.isArray(currentStaffRoster) && currentStaffRoster.length >= STAFF_ROSTER_CAPACITY) {
+          showMessage(status, staffRosterCapacityMessage());
           input.focus();
           return;
         }
@@ -3467,30 +3802,66 @@
           return;
         }
         const request = Object.freeze({ operation: 'add', requestId, staffName });
-        let added = false;
+        try {
+          persistPendingStaffRosterMutation('add', requestId, staffRosterNameKey(staffName), staffName);
+        } catch (error) {
+          showMessage(status, error.message);
+          return;
+        }
+        const sessionGeneration = staffRosterSessionGeneration;
+        const mutationGeneration = ++staffRosterMutationGeneration;
+        const mutationIsCurrent = () => (
+          staffRosterMutationInFlight
+          && sessionGeneration === staffRosterSessionGeneration
+          && mutationGeneration === staffRosterMutationGeneration
+        );
+        let refreshConfirmed = false;
         staffRosterMutationInFlight = true;
         $('#staff-roster').setAttribute('aria-busy', 'true');
         setStaffRosterControlsDisabled(true);
         $('#staffRosterSubmit').textContent = 'Adding…';
         showMessage(status, `Adding ${staffName}…`, 'working');
+        staffRosterStateFresh = false;
         try {
           const data = await requestJson(API.staffRoster, request);
+          if (!mutationIsCurrent()) return;
           if (!validStaffRosterMutationResponse(data, request)) {
-            throw new Error('Staff Roster did not confirm the exact add. Retry keeps the same permanent request ID.');
+            throw new Error('Staff Roster did not confirm the exact add.');
           }
+          clearPendingStaffRosterMutation();
           clearStaffRosterAddIdentity(form);
           form.reset();
-          added = true;
-          showMessage(status, `${data.confirmation.staffName} added and active.`, 'success');
-          toast('Staff member added');
-          await Promise.all([
+          const [rosterRefresh] = await Promise.allSettled([
             loadStaffRoster({ quiet: true }),
             loadStaffTime({ quiet: true })
           ]);
+          if (!mutationIsCurrent()) return;
+          const refreshedPerson = currentStaffRoster?.find(person => (
+            person.staffId === data.confirmation.staffId
+          ));
+          refreshConfirmed = rosterRefresh.status === 'fulfilled'
+            && rosterRefresh.value === true
+            && refreshedPerson?.staffName === data.confirmation.staffName
+            && refreshedPerson.active === true;
+          if (!refreshConfirmed) {
+            staffRosterStateFresh = false;
+            showMessage(
+              status,
+              `The add for ${data.confirmation.staffName} was saved, but the refreshed Staff Roster could not be confirmed. Roster actions remain disabled; reload this page before making another change.`
+            );
+            return;
+          }
+          showMessage(status, `${data.confirmation.staffName} added and active.`, 'success');
+          toast('Staff member added');
         } catch (error) {
+          if (!mutationIsCurrent()) return;
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
           } else {
+            if (definitiveStaffRosterMutationFailure(error)) {
+              clearPendingStaffRosterMutation();
+              clearStaffRosterAddIdentity(form);
+            }
             const matchingPerson = currentStaffRoster?.find(person => (
               staffRosterNameKey(person.staffName) === staffRosterNameKey(staffName)
             ));
@@ -3499,22 +3870,34 @@
               ? `${matchingPerson.staffName} is already active on the roster.`
               : error.status === 409 && matchingPerson && conflictCode === 'reactivate_required'
                 ? `${matchingPerson.staffName} already exists but is inactive. Reactivate the existing record below.`
-                : error.message;
-            showMessage(status, message);
+                : error.status === 409 && conflictCode === 'capacity'
+                  ? staffRosterCapacityMessage()
+                  : error.message;
+            showMessage(
+              status,
+              `The add outcome for ${staffName} is uncertain. ${message} Roster actions remain disabled; reload this page to confirm the current roster before making another change.`
+            );
           }
         } finally {
-          staffRosterMutationInFlight = false;
-          if (testMode && !$('#appPanel').hidden) {
+          if (mutationIsCurrent()) {
+            staffRosterMutationInFlight = false;
             $('#staff-roster').setAttribute('aria-busy', 'false');
-            setStaffRosterControlsDisabled(false);
+            setStaffRosterControlsDisabled(!staffRosterStateFresh, false);
             $('#staffRosterSubmit').textContent = 'Add staff member';
-            if (added) input.focus();
+            if (refreshConfirmed) input.focus();
           }
         }
       }
 
       async function submitStaffRosterStatusChange(button) {
-        if (!testMode || staffRosterMutationInFlight || button.disabled) return;
+        if (
+          !currentAdminName
+          || $('#appPanel').hidden
+          || $('#staff-roster').hidden
+          || !staffRosterStateFresh
+          || staffRosterMutationInFlight
+          || button.disabled
+        ) return;
         const operation = String(button.dataset.staffRosterOperation || '');
         const staffId = String(button.dataset.staffId || '');
         const person = currentStaffRoster?.find(item => item.staffId === staffId);
@@ -3534,15 +3917,28 @@
         }
         let requestId;
         try {
-          requestId = staffRosterActionRequestIdFor(button, operation, staffId);
+          requestId = staffRosterActionRequestIdFor(button, operation, staffId, person.staffName);
         } catch (error) {
           showMessage(status, error.message);
           return;
         }
         const expected = Object.freeze({ operation, requestId, staffId, staffName: person.staffName });
         const request = Object.freeze({ operation, requestId, staffId });
+        try {
+          persistPendingStaffRosterMutation(operation, requestId, staffId, person.staffName);
+        } catch (error) {
+          showMessage(status, error.message);
+          return;
+        }
         const originalLabel = button.textContent;
-        let changed = false;
+        const sessionGeneration = staffRosterSessionGeneration;
+        const mutationGeneration = ++staffRosterMutationGeneration;
+        const mutationIsCurrent = () => (
+          staffRosterMutationInFlight
+          && sessionGeneration === staffRosterSessionGeneration
+          && mutationGeneration === staffRosterMutationGeneration
+        );
+        let refreshConfirmed = false;
         staffRosterMutationInFlight = true;
         $('#staff-roster').setAttribute('aria-busy', 'true');
         setStaffRosterControlsDisabled(true);
@@ -3552,37 +3948,64 @@
           `${operation === 'deactivate' ? 'Deactivating' : 'Reactivating'} ${person.staffName}…`,
           'working'
         );
+        staffRosterStateFresh = false;
         try {
           const data = await requestJson(API.staffRoster, request);
+          if (!mutationIsCurrent()) return;
           if (!validStaffRosterMutationResponse(data, expected)) {
-            throw new Error(`Staff Roster did not confirm the exact ${operation}. Retry keeps the same permanent request ID.`);
+            throw new Error(`Staff Roster did not confirm the exact ${operation}.`);
           }
-          changed = true;
+          clearPendingStaffRosterMutation();
+          clearStaffRosterActionIdentity(button);
+          const [rosterRefresh] = await Promise.allSettled([
+            loadStaffRoster({ quiet: true }),
+            loadStaffTime({ quiet: true })
+          ]);
+          if (!mutationIsCurrent()) return;
+          const refreshedPerson = currentStaffRoster?.find(item => item.staffId === staffId);
+          refreshConfirmed = rosterRefresh.status === 'fulfilled'
+            && rosterRefresh.value === true
+            && refreshedPerson?.staffName === person.staffName
+            && refreshedPerson.active === !expectedActive;
+          if (!refreshConfirmed) {
+            staffRosterStateFresh = false;
+            const actionNoun = operation === 'deactivate' ? 'deactivation' : 'reactivation';
+            showMessage(
+              status,
+              `The ${actionNoun} for ${person.staffName} was saved, but the refreshed Staff Roster could not be confirmed. Roster actions remain disabled; reload this page before making another change.`
+            );
+            return;
+          }
           const successMessage = operation === 'deactivate'
             ? `${person.staffName} deactivated and removed from Staff Clock choices.`
             : `${person.staffName} reactivated and available in Staff Clock.`;
           showMessage(status, successMessage, 'success');
           toast(operation === 'deactivate' ? 'Staff member deactivated' : 'Staff member reactivated');
-          await Promise.all([
-            loadStaffRoster({ quiet: true }),
-            loadStaffTime({ quiet: true })
-          ]);
         } catch (error) {
+          if (!mutationIsCurrent()) return;
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
           } else {
-            showMessage(status, error.message);
+            if (definitiveStaffRosterMutationFailure(error)) {
+              clearPendingStaffRosterMutation();
+              clearStaffRosterActionIdentity(button);
+            }
+            const actionNoun = operation === 'deactivate' ? 'deactivation' : 'reactivation';
+            showMessage(
+              status,
+              `The ${actionNoun} outcome for ${person.staffName} is uncertain. ${error.message} Roster actions remain disabled; reload this page to confirm the current roster before making another change.`
+            );
           }
         } finally {
-          staffRosterMutationInFlight = false;
-          button.textContent = originalLabel;
-          if (testMode && !$('#appPanel').hidden) {
+          if (mutationIsCurrent()) {
+            staffRosterMutationInFlight = false;
+            button.textContent = originalLabel;
             $('#staff-roster').setAttribute('aria-busy', 'false');
-            setStaffRosterControlsDisabled(false);
-            const focusTarget = changed
+            setStaffRosterControlsDisabled(!staffRosterStateFresh, false);
+            const focusTarget = refreshConfirmed
               ? staffRosterActionButton(staffId, operation === 'deactivate' ? 'reactivate' : 'deactivate')
               : button;
-            if (focusTarget) focusTarget.focus();
+            if (staffRosterStateFresh && focusTarget) focusTarget.focus();
           }
         }
       }
@@ -3998,11 +4421,13 @@
           // session cookie exists. Wait for the explicit login before Admin API calls.
           setLoggedOut();
           startCanonicalScheduleRefresh();
+          return true;
         } catch {
           schedule = null;
           $('#scheduleSource').textContent = 'Schedule status unavailable';
           $('#scheduleSource').classList.add('fallback');
-          setLoggedOut('The canonical Rev schedule could not be loaded.');
+          setLoggedOut('The canonical Rev schedule could not be loaded. Admin login is unavailable; reload this page to try again.');
+          return false;
         }
       }
 
@@ -4085,7 +4510,7 @@
         if (event.persisted && !$('#appPanel').hidden && schedule) {
           loadReview(currentDate || defaultYesterday());
           loadStaffTime();
-          if (testMode) loadStaffRoster();
+          loadStaffRoster();
         }
       });
       window.addEventListener('hashchange', focusStaffTimeHash);
@@ -4093,7 +4518,7 @@
       window.addEventListener('message', receiveTabletDiagnosticProofs);
       window.addEventListener('message', receiveSyncInstallationResult);
 
-      initialize();
+      initializationPromise = initialize();
     })();
   </script>
 </body>

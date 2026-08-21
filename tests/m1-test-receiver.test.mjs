@@ -190,6 +190,7 @@ function createHarness({
 } = {}) {
   const propertyValues = new Map(Object.entries({
     GIB_M1_TEST_SPREADSHEET_ID: 'unit-test-spreadsheet-id',
+    GIB_M1_DEPLOYMENT_TARGET_LOCK: 'test',
     GIB_M1_RECEIVER_TRANSPORT_TOKEN: 'unit-receiver-token',
     GIB_M1_LEGACY_KIOSK_TOKEN: 'unit-legacy-token',
     GIB_M1_ADMIN_ACTION_TOKEN: 'unit-admin-token',
@@ -237,6 +238,13 @@ function createHarness({
     getProperty: name => propertyValues.get(name) || '',
     setProperty(name, value) {
       propertyValues.set(name, String(value));
+      return this;
+    },
+    setProperties(values, deleteAllOthers = false) {
+      if (deleteAllOthers) propertyValues.clear();
+      for (const [name, value] of Object.entries(values)) {
+        propertyValues.set(name, String(value));
+      }
       return this;
     }
   };
@@ -376,8 +384,10 @@ test('provisioning resolves exactly one title, initializes headers, and returns 
   assert.deepEqual(staffRosterAudit.values, [[...STAFF_ROSTER_AUDIT_HEADERS]]);
   assert.equal(staffRosterAudit.frozenRows, 1);
   assert.equal(harness.propertyValues.get('GIB_M1_TEST_SPREADSHEET_ID'), 'unit-test-spreadsheet-id');
+  assert.equal(harness.propertyValues.get('GIB_M1_DEPLOYMENT_TARGET_LOCK'), 'test');
   assert.deepEqual(harness.driveQueries, [EXPECTED_TITLE]);
   assert.equal(result.target, 'test');
+  assert.equal(result.targetLocked, true);
   assert.equal(result.spreadsheetMatches, 1);
   assert.equal(result.headerCount, SIGNIN_HEADERS.length);
   assert.equal(result.dataRowCount, 0);
@@ -426,6 +436,10 @@ test('provisioning rejects malformed, real, duplicate, and all-inactive rosters 
       rows: [STAFF_HEADERS, ['ordinary-person', 'Ordinary Person', true]]
     },
     {
+      label: 'noncanonical TEST marker',
+      rows: [STAFF_HEADERS, ['do-not-pay-staff', 'Do-Not-Pay Staff', true]]
+    },
+    {
       label: 'duplicate Staff ID',
       rows: [
         STAFF_HEADERS,
@@ -455,7 +469,10 @@ test('provisioning rejects malformed, real, duplicate, and all-inactive rosters 
     const initial = candidate.rows.map(row => [...row]);
     const harness = createHarness({
       staffRows: initial,
-      properties: { GIB_M1_TEST_SPREADSHEET_ID: 'previous-private-id' }
+      properties: {
+        GIB_M1_TEST_SPREADSHEET_ID: 'previous-private-id',
+        GIB_M1_DEPLOYMENT_TARGET_LOCK: ''
+      }
     });
     const roster = harness.sheets.get('Staff Clock Staff');
     const before = structuredClone(roster.values);
@@ -470,6 +487,11 @@ test('provisioning rejects malformed, real, duplicate, and all-inactive rosters 
       harness.propertyValues.get('GIB_M1_TEST_SPREADSHEET_ID'),
       'previous-private-id',
       `${candidate.label} must not publish a new TEST Sheet binding`
+    );
+    assert.equal(
+      harness.propertyValues.get('GIB_M1_DEPLOYMENT_TARGET_LOCK'),
+      '',
+      `${candidate.label} must not publish a TEST target lock`
     );
   }
 });
@@ -507,6 +529,19 @@ test('provisioning rejects duplicate exact-title spreadsheets without replacing 
   );
   assert.equal(harness.propertyValues.get('GIB_M1_TEST_SPREADSHEET_ID'), 'previous-private-id');
   assert.equal(harness.spreadsheetOpens, 0);
+});
+
+test('TEST provisioning rejects a conflicting persisted production target before Drive or Sheet access', () => {
+  const harness = createHarness({
+    properties: { GIB_M1_DEPLOYMENT_TARGET_LOCK: 'production' }
+  });
+  assert.throws(
+    () => harness.apps.provisionGibM1TestReceiver(),
+    /target state conflicts/u
+  );
+  assert.deepEqual(harness.driveQueries, []);
+  assert.equal(harness.spreadsheetOpens, 0);
+  assert.equal(harness.propertyValues.get('GIB_M1_DEPLOYMENT_TARGET_LOCK'), 'production');
 });
 
 test('explicit kiosk action uses receiver transport auth while omitted action stays legacy-compatible', () => {

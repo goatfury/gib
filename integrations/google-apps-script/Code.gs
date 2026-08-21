@@ -212,6 +212,14 @@ function provisionGibM1TestReceiver() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) throw new Error('TEST receiver provisioning is busy.');
   try {
+    var properties = PropertiesService.getScriptProperties();
+    var storedTarget = properties.getProperty(GIB_M1_TARGET_LOCK_PROPERTY_) || '';
+    if (
+      (storedTarget && storedTarget !== GIB_M1_ALLOWED_TARGET)
+      || gibM1TestRosterText_(properties.getProperty('GIB_M1_PRODUCTION_SPREADSHEET_ID'))
+    ) {
+      throw new Error('Private TEST target state conflicts with this project.');
+    }
     var matches = gibM1ExactTestSpreadsheetFiles_();
     if (matches.length !== 1) {
       throw new Error('Expected exactly one Google Sheet with the configured TEST title.');
@@ -250,13 +258,28 @@ function provisionGibM1TestReceiver() {
     var staffCount = gibM1SeedTestStaff_(staff);
     SpreadsheetApp.flush();
 
-    PropertiesService
-      .getScriptProperties()
-      .setProperty(GIB_M1_TEST_SPREADSHEET_PROPERTY_, spreadsheet.getId());
+    var persisted = {};
+    persisted[GIB_M1_TEST_SPREADSHEET_PROPERTY_] = spreadsheet.getId();
+    persisted[GIB_M1_TARGET_LOCK_PROPERTY_] = GIB_M1_ALLOWED_TARGET;
+    if (typeof properties.setProperties === 'function') {
+      properties.setProperties(persisted, false);
+    } else {
+      // Compatibility for older property adapters. Apps Script itself uses the
+      // atomic setProperties path above.
+      properties.setProperty(GIB_M1_TEST_SPREADSHEET_PROPERTY_, spreadsheet.getId());
+      properties.setProperty(GIB_M1_TARGET_LOCK_PROPERTY_, GIB_M1_ALLOWED_TARGET);
+    }
+    if (
+      properties.getProperty(GIB_M1_TEST_SPREADSHEET_PROPERTY_) !== spreadsheet.getId()
+      || properties.getProperty(GIB_M1_TARGET_LOCK_PROPERTY_) !== GIB_M1_ALLOWED_TARGET
+    ) {
+      throw new Error('Private TEST target state could not be verified.');
+    }
 
     return {
       ok: true,
       target: GIB_M1_ALLOWED_TARGET,
+      targetLocked: true,
       spreadsheetTitle: GIB_M1_TEST_SPREADSHEET_TITLE_,
       spreadsheetMatches: matches.length,
       signinsSheet: GIB_M1_TEST_SIGNINS_SHEET_,
