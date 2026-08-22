@@ -7,7 +7,7 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-08-20-m1b-late-review-fixes-r2';
+} from './staff-clock-core.mjs?v=2026-08-21-richmond-m1-run2-r1';
 
 const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
 const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
@@ -1675,4 +1675,14 @@ function initializeStaffClockClient() {
   refreshStaffAdminWhenVisible();
 }
 
-initializeStaffClockClient();
+const installationProfile = globalThis.M1_INSTALLATION_PROFILE;
+if (
+  installationProfile?.schema === 'gib-m1-installation-profile/v1'
+  && installationProfile.installationId === 'rev'
+  && installationProfile.siteCode === 'Rev'
+  && installationProfile.featureFlags?.staffClock === true
+  && installationProfile.backend?.enabled === true
+  && installationProfile.backend?.transportTarget === 'rev'
+) {
+  initializeStaffClockClient();
+}

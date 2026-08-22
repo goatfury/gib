@@ -431,8 +431,8 @@
 <body>
   <main class="shell">
     <section id="loginPanel" class="panel login">
-      <div class="eyebrow">Gym in a Box · M1</div>
-      <h1>Admin — Daily Sign-in Review</h1>
+      <div id="loginEyebrow" class="eyebrow">Gym in a Box · M1</div>
+      <h1 id="loginHeading">Admin — Daily Sign-in Review</h1>
       <p class="muted">Choose who is reviewing, then sign in. Sessions close after 30 minutes.</p>
 
       <div class="field" style="margin-top:20px">
@@ -455,8 +455,8 @@
         </div>
       </div>
       <div id="testEntry" class="test-entry">
-        <strong>TEST ADMIN — Deploy Preview only</strong>
-        <p class="muted" style="margin:5px 0 10px">Uses the copied TEST Sheet and fake information. This path is rejected outside a Deploy Preview.</p>
+        <strong id="testEntryHeading">TEST ADMIN — Deploy Preview only</strong>
+        <p id="testEntryCopy" class="muted" style="margin:5px 0 10px">Uses the copied TEST Sheet and fake information. This path is rejected outside a Deploy Preview.</p>
         <button id="testLoginButton" class="btn warn" type="button">Enter TEST Admin</button>
       </div>
       <div id="loginMessage" class="message" role="alert"></div>
@@ -465,8 +465,8 @@
     <section id="appPanel" hidden>
       <header class="topbar">
         <div>
-          <div class="eyebrow">Gym in a Box · M1</div>
-          <h1>Daily Sign-in Review</h1>
+          <div id="appEyebrow" class="eyebrow">Gym in a Box · M1</div>
+          <h1 id="appHeading">Daily Sign-in Review</h1>
           <p id="sessionLabel" class="muted"></p>
         </div>
         <div class="topbar-actions">
@@ -497,7 +497,7 @@
         <section id="reviewSection" class="panel section">
           <div class="section-head">
             <div class="schedule-heading">
-              <h2>Scheduled Rev classes</h2>
+              <h2 id="scheduledClassesHeading">Scheduled Rev classes</h2>
               <p id="scheduleSource" class="schedule-source" role="status">Schedule status unavailable</p>
             </div>
             <span id="classCount" class="count"></span>
@@ -543,7 +543,7 @@
             <h3>Five recent active sign-ins</h3>
             <div id="recentResults" class="result-list"></div>
           </div>
-          <div class="limitation">
+          <div id="scheduleLimitation" class="limitation">
             Daily Review uses the current canonical regular weekly schedule from the Revolution BJJ website. Recorded sign-ins with historical, local-override, or Series labels remain visible as unmatched rather than being hidden.
           </div>
         </aside>
@@ -628,9 +628,45 @@
 
   <div id="toast" class="toast" role="status">Saved</div>
 
+  <script src="../installation-profile.generated.js"></script>
   <script>
     (() => {
       'use strict';
+
+      const INSTALLATION = globalThis.M1_INSTALLATION_PROFILE;
+      const expectedInstallation = INSTALLATION?.installationId === 'richmond'
+        ? {
+            schema: 'gib-m1-installation-profile/v1',
+            installationId: 'richmond',
+            gymName: 'Richmond BJJ',
+            siteCode: 'Richmond',
+            deviceLabel: 'Richmond TEST Browser',
+            storagePrefix: 'gib_m1_richmond_',
+            environment: 'test',
+            allowedOrigin: 'https://gib-richmond-test.netlify.app',
+            scheduleSource: { mode: 'richmond-website', endpoint: '/api/m1-schedule' },
+            featureFlags: { staffClock: false },
+            backend: { enabled: true, transportTarget: 'richmond-test' }
+          }
+        : INSTALLATION?.installationId === 'rev'
+          ? {
+              schema: 'gib-m1-installation-profile/v1',
+              installationId: 'rev',
+              gymName: 'Revolution BJJ',
+              siteCode: 'Rev',
+              deviceLabel: 'Revolution BJJ front desk',
+              storagePrefix: 'gib_m1_',
+              scheduleSource: { mode: 'rev-website', endpoint: '/api/m1-schedule' },
+              featureFlags: { staffClock: true },
+              backend: { enabled: true, transportTarget: 'rev' }
+            }
+          : null;
+      if (!expectedInstallation || JSON.stringify(INSTALLATION) !== JSON.stringify(expectedInstallation)) {
+        document.body.textContent = 'This installation is unavailable. Nothing was loaded or sent.';
+        return;
+      }
+      const IS_RICHMOND = INSTALLATION.installationId === 'richmond';
+      const STAFF_CLOCK_ENABLED = INSTALLATION.featureFlags.staffClock === true;
 
       const API = Object.freeze({
         login: '/.netlify/functions/m1-admin-login',
@@ -640,7 +676,7 @@
         add: '/.netlify/functions/m1-admin-add',
         staffTime: '/.netlify/functions/m1-admin-staff-time',
         schedule: '/api/m1-schedule',
-        scheduleBootstrap: '/m1/shared-schedule.json',
+        scheduleBootstrap: IS_RICHMOND ? '/m1/richmond-schedule.json' : '/m1/shared-schedule.json',
         tabletDiagnostic: '/api/m1-tablet-diagnostic-verifier'
       });
       const ADMIN_REQUEST_HEADER = 'X-GIB-M1-Admin-Request-Token';
@@ -655,9 +691,11 @@
       const PROOF_PATTERN = /^[a-f0-9]{64}$/;
       const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
       const DEPLOY_PREVIEW_ORIGIN_PATTERN = /^https:\/\/deploy-preview-\d+--gib-live\.netlify\.app$/;
-      const TEST_ADMIN_HOST_PATTERN = /^(?:deploy-preview-\d+|[a-f0-9]{24})--gib-live\.netlify\.app$/i;
+      const TEST_ADMIN_HOST_PATTERN = IS_RICHMOND
+        ? /^(?:gib-richmond-test|[a-f0-9]{24}--gib-richmond-test)\.netlify\.app$/i
+        : /^(?:deploy-preview-\d+|[a-f0-9]{24})--gib-live\.netlify\.app$/i;
       const TIME_ZONE = 'America/New_York';
-      const SITE = 'Rev';
+      const SITE = INSTALLATION.siteCode;
       const REVIEW_NOTES_MAX_LENGTH = 800;
       const ADMIN_DURATION_OPTIONS = Object.freeze([1, 0.5]);
       const SCHEDULE_DAYS = Object.freeze([
@@ -669,16 +707,18 @@
         'Saturday',
         'Sunday'
       ]);
-      const SCHEDULE_SOURCE_URL = 'https://revolutionbjj.com/schedule/';
-      const SCHEDULE_UPSTREAM_URL = 'https://revolutionbjj.com/wp-json/wp/v2/pages?slug=schedule&status=publish&_fields=id,type,slug,status,link,title,modified,modified_gmt,content';
-      const SCHEDULE_VERSION_PATTERN = /^revbjj-([a-f0-9]{16})$/;
+      const SCHEDULE_SOURCE_URL = IS_RICHMOND ? 'https://www.richmondbjj.com/schedule' : 'https://revolutionbjj.com/schedule/';
+      const SCHEDULE_UPSTREAM_URL = IS_RICHMOND ? 'https://www.richmondbjj.com/schedule' : 'https://revolutionbjj.com/wp-json/wp/v2/pages?slug=schedule&status=publish&_fields=id,type,slug,status,link,title,modified,modified_gmt,content';
+      const SCHEDULE_LIVE_SOURCE_TYPE = IS_RICHMOND ? 'squarespace-html' : 'wordpress-rest';
+      const SCHEDULE_VERSION_PREFIX = IS_RICHMOND ? 'richmondbjj' : 'revbjj';
+      const SCHEDULE_VERSION_PATTERN = IS_RICHMOND ? /^richmondbjj-([a-f0-9]{16})$/ : /^revbjj-([a-f0-9]{16})$/;
       const SCHEDULE_HASH_PATTERN = /^[a-f0-9]{64}$/;
       const SCHEDULE_STATUS_REASON_PATTERN = /^[a-z0-9-]{1,80}$/;
       const SCHEDULE_REFRESH_INTERVAL_MS = 10 * 60 * 1_000;
       const SCHEDULE_REQUEST_TIMEOUT_MS = 10_000;
       const MAX_CLASSES_PER_DAY = 24;
-      const MIN_TOTAL_CLASSES = 30;
-      const MAX_TOTAL_CLASSES = 100;
+      const MIN_TOTAL_CLASSES = IS_RICHMOND ? 10 : 30;
+      const MAX_TOTAL_CLASSES = IS_RICHMOND ? 50 : 100;
       const MAX_CLASS_LABEL_LENGTH = 200;
       const STAFF_PUNCH_ID_PATTERN = /^gib-m1-staff-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
       const STAFF_REQUEST_ID_PATTERN = /^gib-m1-staff-request-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -689,15 +729,17 @@
       const STAFF_TIME_RECORD_LIMIT = 500;
       const STAFF_TIME_ATTENTION_LIMIT = 600;
       const STAFF_TIME_AUDIT_LIMIT = 500;
-      const MIN_CLASSES_BY_DAY = Object.freeze({
-        Monday: 5,
-        Tuesday: 5,
-        Wednesday: 5,
-        Thursday: 5,
-        Friday: 2,
-        Saturday: 2,
-        Sunday: 1
-      });
+      const MIN_CLASSES_BY_DAY = Object.freeze(IS_RICHMOND
+        ? Object.fromEntries(SCHEDULE_DAYS.map(day => [day, 1]))
+        : {
+            Monday: 5,
+            Tuesday: 5,
+            Wednesday: 5,
+            Thursday: 5,
+            Friday: 2,
+            Saturday: 2,
+            Sunday: 1
+          });
       const inFlightAdditions = new Set();
       let schedule = null;
       let scheduleRefreshPromise = null;
@@ -853,16 +895,20 @@
         if (
           !isObject(value.source)
           || value.source.url !== SCHEDULE_SOURCE_URL
-          || !['wordpress-rest', 'checked-in-bootstrap'].includes(value.source.type)
+          || ![SCHEDULE_LIVE_SOURCE_TYPE, 'checked-in-bootstrap'].includes(value.source.type)
           || value.source.upstreamUrl !== SCHEDULE_UPSTREAM_URL
           || typeof value.source.modifiedAt !== 'string'
-          || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?$/.test(value.source.modifiedAt)
+          || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z)?$/.test(value.source.modifiedAt)
         ) {
           throw new Error('Canonical schedule source is invalid.');
         }
         if (
-          value.source.type === 'wordpress-rest'
-          && (!Number.isInteger(value.source.pageId) || value.source.pageId < 1)
+          value.source.type === SCHEDULE_LIVE_SOURCE_TYPE
+          && (
+            IS_RICHMOND
+              ? value.source.pageId !== null
+              : !Number.isInteger(value.source.pageId) || value.source.pageId < 1
+          )
         ) {
           throw new Error('Canonical schedule page identity is invalid.');
         }
@@ -877,7 +923,7 @@
           || (value.current && value.fallback !== 'none')
           || (!value.current && value.fallback === 'none')
           || (value.fallback === 'bootstrap' && value.source.type !== 'checked-in-bootstrap')
-          || (value.fallback !== 'bootstrap' && value.source.type !== 'wordpress-rest')
+          || (value.fallback !== 'bootstrap' && value.source.type !== SCHEDULE_LIVE_SOURCE_TYPE)
           || (
             value.status.reason !== null
             && (
@@ -955,7 +1001,7 @@
         return validateScheduleResponse({
           timezone: value.timezone,
           site: value.site,
-          version: `revbjj-${contentHash.slice(0, 16)}`,
+          version: `${SCHEDULE_VERSION_PREFIX}-${contentHash.slice(0, 16)}`,
           contentHash,
           days: value.days,
           source: {
@@ -985,7 +1031,7 @@
         if (!element || !schedule) return;
         const source = schedule.source.type === 'checked-in-bootstrap'
           ? 'checked-in bootstrap'
-          : 'Revolution BJJ website';
+          : `${INSTALLATION.gymName} website`;
         const state = schedule.current
           ? 'current'
           : (schedule.fallback === 'last-known-good' ? 'last validated fallback' : 'bootstrap fallback');
@@ -2432,7 +2478,7 @@
         testMode = data.test === true;
         $('#loginPanel').hidden = true;
         $('#appPanel').hidden = false;
-        $('#sessionLabel').textContent = `${currentAdminName} · ${testMode ? 'TEST copied Sheet' : 'Production-ready session'}`;
+        $('#sessionLabel').textContent = `${currentAdminName} · ${IS_RICHMOND ? 'Richmond TEST Sheet' : testMode ? 'TEST copied Sheet' : 'Production-ready session'}`;
       }
 
       async function login(testShortcut) {
@@ -2457,8 +2503,10 @@
           $('#loginPassphrase').value = '';
           setLoggedIn(data);
           await loadReview(defaultYesterday());
-          await loadStaffTime();
-          focusStaffTimeHash();
+          if (STAFF_CLOCK_ENABLED) {
+            await loadStaffTime();
+            focusStaffTimeHash();
+          }
         } catch (error) {
           showMessage($('#loginMessage'), error.message);
         } finally {
@@ -3120,6 +3168,7 @@
       }
 
       function focusStaffTimeHash() {
+        if (!STAFF_CLOCK_ENABLED) return;
         if (location.hash !== '#staff-time' || $('#appPanel').hidden) return;
         const panel = $('#staff-time');
         panel.open = true;
@@ -3524,14 +3573,28 @@
       }
 
       async function initialize() {
+        if (IS_RICHMOND) {
+          document.title = 'Richmond BJJ — TEST Daily Review';
+          $('#loginEyebrow').textContent = 'Richmond BJJ · TEST';
+          $('#loginHeading').textContent = 'Richmond TEST — Daily Sign-in Review';
+          $('#appEyebrow').textContent = 'Richmond BJJ · TEST';
+          $('#appHeading').textContent = 'Richmond TEST Daily Sign-in Review';
+          $('#scheduledClassesHeading').textContent = 'Scheduled Richmond classes';
+          $('#scheduleLimitation').textContent = 'Daily Review uses the current regular weekly schedule from the Richmond BJJ website. Recorded sign-ins with older or special-event labels remain visible as unmatched.';
+          $('#testEntryHeading').textContent = 'RICHMOND TEST ADMIN';
+          $('#testEntryCopy').textContent = 'Uses only the dedicated Richmond TEST Sheet and clearly fake TEST information.';
+          $('#loginPassphrase').closest('.field').hidden = true;
+          $('#loginButton').hidden = true;
+        }
         $('#calendarDate').max = nyDate();
         $('#searchDate').max = nyDate();
         const deployPreviewHost = TEST_ADMIN_HOST_PATTERN.test(location.hostname);
         $('#testEntry').style.display = deployPreviewHost ? 'block' : 'none';
-        const diagnosticOriginAllowed = validTabletDiagnosticOrigin();
+        const diagnosticOriginAllowed = !IS_RICHMOND && validTabletDiagnosticOrigin();
         $('#installSyncSettingsButton').hidden = true;
         $('#tabletDiagnosticButton').hidden = !diagnosticOriginAllowed;
-        $('#tabletDiagnosticOriginMessage').hidden = diagnosticOriginAllowed;
+        $('#tabletDiagnosticOriginMessage').hidden = diagnosticOriginAllowed || IS_RICHMOND;
+        $('#staff-time').hidden = !STAFF_CLOCK_ENABLED;
         try {
           if (!await refreshCanonicalSchedule({ bootstrapWhenUnavailable: true })) {
             throw new Error('Canonical schedule unavailable.');
@@ -3544,7 +3607,7 @@
           schedule = null;
           $('#scheduleSource').textContent = 'Schedule status unavailable';
           $('#scheduleSource').classList.add('fallback');
-          setLoggedOut('The canonical Rev schedule could not be loaded.');
+          setLoggedOut(`The ${INSTALLATION.gymName} schedule could not be loaded.`);
         }
       }
 
@@ -3613,7 +3676,7 @@
       window.addEventListener('pageshow', event => {
         if (event.persisted && !$('#appPanel').hidden && schedule) {
           loadReview(currentDate || defaultYesterday());
-          loadStaffTime();
+          if (STAFF_CLOCK_ENABLED) loadStaffTime();
         }
       });
       window.addEventListener('hashchange', focusStaffTimeHash);

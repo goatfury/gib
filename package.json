@@ -2,6 +2,7 @@
   "name": "gib-production-candidate",
   "private": true,
   "scripts": {
+    "build": "node tools/build-m1-installation-profile.mjs",
     "test": "node --test tests/m1-*.test.mjs"
   },
   "dependencies": {

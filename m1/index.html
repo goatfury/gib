@@ -541,6 +541,24 @@ input, textarea, select {
 }
 .staff-clock-controls[hidden],
 .staff-clock-confirmation[hidden] { display: none; }
+
+html:not([data-m1-staff-clock="true"]) #staffClock,
+html:not([data-m1-staff-clock="true"]) #staffTimeSection {
+  display: none !important;
+}
+
+html[data-m1-installation="richmond"] body.kiosk-mode header #hdrGym {
+  display: block;
+}
+
+.installation-blocked {
+  width: min(680px, calc(100% - 28px));
+  margin: 48px auto;
+  padding: 24px;
+  border: 1px solid var(--warn);
+  border-radius: 16px;
+  background: var(--panel);
+}
 body.admin-mode #staffClock { display: none; }
 
 .staff-time-admin-grid {
@@ -857,6 +875,7 @@ body.admin-mode .container { max-width: 1120px; }
 }
 
 </style>
+<script src="./installation-profile.generated.js?v=2026-08-21-richmond-m1-run2-r1"></script>
 </head>
 <body>
 <div class="container">
@@ -999,6 +1018,44 @@ body.admin-mode .container { max-width: 1120px; }
     <details id="recentSignins" class="admin-disclosure" open>
       <summary>Recent sign-ins</summary>
       <div id="recentSigninsSlot" class="admin-disclosure-body"></div>
+    </details>
+
+    <details id="richmondLocalReviewSection" class="admin-disclosure" hidden open>
+      <summary>Forgotten Sign-In / Daily Review · Richmond local preview</summary>
+      <div class="admin-disclosure-body">
+        <div class="subtle">TEST-only. Adds a Richmond row to this browser’s local ledger and waiting queue; nothing is sent.</div>
+        <div class="grid twoEq" style="margin-top:12px;">
+          <div>
+            <label for="richmondReviewDate">Date</label>
+            <input id="richmondReviewDate" type="date" />
+          </div>
+          <div>
+            <label for="richmondReviewClass">TEST class</label>
+            <select id="richmondReviewClass"></select>
+          </div>
+        </div>
+        <div class="grid twoEq" style="margin-top:12px;">
+          <div>
+            <label for="richmondReviewInstructor">Instructor</label>
+            <input id="richmondReviewInstructor" type="text" autocomplete="off" placeholder="QA instructor name" />
+          </div>
+          <div>
+            <label for="richmondReviewDuration">Duration</label>
+            <select id="richmondReviewDuration">
+              <option value="1">1 hour</option>
+              <option value="0.5">0.5 hour</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:12px;">
+          <label for="richmondReviewReason">Reason</label>
+          <input id="richmondReviewReason" type="text" maxlength="240" placeholder="QA TEST forgotten sign-in" />
+        </div>
+        <div class="inline" style="margin-top:12px;">
+          <button id="btnRichmondForgottenSignin" class="btn brand" type="button">Add local forgotten sign-in</button>
+          <div id="richmondReviewStatus" class="statusRow" role="status" aria-live="polite"></div>
+        </div>
+      </div>
     </details>
 
     <details id="staffTimeSection" class="admin-disclosure staff-time-disclosure" open>
@@ -1298,10 +1355,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-20-m1b-late-review-fixes-r2';
+} from './sync-core.mjs?v=2026-08-21-richmond-m1-run2-r1';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-08-20-m1b-late-review-fixes-r2';
+const OFFLINE_SHELL_REVISION = '2026-08-21-richmond-m1-run2-r1';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -1310,21 +1367,88 @@ if ('serviceWorker' in navigator) {
 }
 
 (() => {
+  const INSTALLATION = globalThis.M1_INSTALLATION_PROFILE;
+  const expectedInstallation = INSTALLATION?.installationId === 'richmond'
+    ? {
+        schema: 'gib-m1-installation-profile/v1',
+        installationId: 'richmond',
+        gymName: 'Richmond BJJ',
+        siteCode: 'Richmond',
+        deviceLabel: 'Richmond TEST Browser',
+        storagePrefix: 'gib_m1_richmond_',
+        environment: 'test',
+        allowedOrigin: 'https://gib-richmond-test.netlify.app',
+        scheduleSource: { mode: 'richmond-website', endpoint: '/api/m1-schedule' },
+        featureFlags: { staffClock: false },
+        backend: { enabled: true, transportTarget: 'richmond-test' }
+      }
+    : INSTALLATION?.installationId === 'rev'
+      ? {
+          schema: 'gib-m1-installation-profile/v1',
+          installationId: 'rev',
+          gymName: 'Revolution BJJ',
+          siteCode: 'Rev',
+          deviceLabel: 'Revolution BJJ front desk',
+          storagePrefix: 'gib_m1_',
+          scheduleSource: { mode: 'rev-website', endpoint: '/api/m1-schedule' },
+          featureFlags: { staffClock: true },
+          backend: { enabled: true, transportTarget: 'rev' }
+        }
+      : null;
+  if (!expectedInstallation || JSON.stringify(INSTALLATION) !== JSON.stringify(expectedInstallation)) {
+    document.body.replaceChildren();
+    const blocked = document.createElement('main');
+    blocked.className = 'installation-blocked';
+    const heading = document.createElement('h1');
+    heading.textContent = 'Installation unavailable';
+    const message = document.createElement('p');
+    message.textContent = 'This deployment does not have a valid Gym in a Box installation profile. No sign-in was loaded or sent.';
+    blocked.append(heading, message);
+    document.body.append(blocked);
+    return;
+  }
+
+  const IS_RICHMOND = INSTALLATION.installationId === 'richmond';
+  const STAFF_CLOCK_ENABLED = INSTALLATION.featureFlags.staffClock === true;
+  const BACKEND_ENABLED = INSTALLATION.backend.enabled === true;
+
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
   const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
   const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
-  const TEST_BUILD = '2026-08-18 M1B TEST staff-clock-operational-candidate';
+  const TEST_BUILD = IS_RICHMOND
+    ? '2026-08-21 RICHMOND M1 RUN 2 TEST'
+    : '2026-08-18 M1B TEST staff-clock-operational-candidate';
   const PRODUCTION_BUILD = '2026-08-19 M1B PRODUCTION staff-clock';
-  const BUILD = IS_PRODUCTION_ORIGIN ? PRODUCTION_BUILD : TEST_BUILD;
-  if (IS_PRODUCTION_ORIGIN) {
+  const BUILD = IS_RICHMOND
+    ? TEST_BUILD
+    : (IS_PRODUCTION_ORIGIN ? PRODUCTION_BUILD : TEST_BUILD);
+  if (IS_PRODUCTION_ORIGIN && !IS_RICHMOND) {
     document.title = 'GiB · Module 1 · Instructor Sign-In → Payroll (2026-08-19 M1B PRODUCTION staff-clock)';
     document.getElementById('buildId').textContent = PRODUCTION_BUILD;
     document.getElementById('buildStampLarge').textContent = `Build ${PRODUCTION_BUILD}`;
   }
+  if (IS_RICHMOND) {
+    document.title = 'Richmond BJJ · Instructor Sign-In · TEST Preview';
+    document.getElementById('buildId').textContent = TEST_BUILD;
+    document.getElementById('buildStampLarge').textContent = `Build ${TEST_BUILD}`;
+  }
   const TZ = 'America/New_York';
+  function installationStorageKey(revKey) {
+    const key = String(revKey || '');
+    if (!/^gib_m1_[a-z0-9_]+$/u.test(key)) throw new Error('Invalid M1 storage key.');
+    return IS_RICHMOND
+      ? `${INSTALLATION.storagePrefix}${key.slice('gib_m1_'.length)}`
+      : key;
+  }
+  function ownsInstallationStorageKey(key) {
+    const candidate = String(key || '');
+    return IS_RICHMOND
+      ? candidate.startsWith(INSTALLATION.storagePrefix)
+      : candidate.startsWith('gib_m1_') && !candidate.startsWith('gib_m1_richmond_');
+  }
 // --- Instructor name suggestions (local roster) ---
-const NAME_ROSTER_KEY = 'gib_m1_instructor_names_v1';
+const NAME_ROSTER_KEY = installationStorageKey('gib_m1_instructor_names_v1');
 
 function normName(s) {
   return String(s || '').trim().replace(/\s+/g, ' ');
@@ -1365,7 +1489,9 @@ function seedRosterFromExistingSignins() {
   } catch(e) {}
 
   // Fallback: try common keys
-  const keysToTry = ['gib_m1_signins_v1','rbjj_signins_v2','gib_m1_signins','rbjj_signins'];
+  const keysToTry = IS_RICHMOND
+    ? [installationStorageKey('gib_m1_signins_v1')]
+    : ['gib_m1_signins_v1','rbjj_signins_v2','gib_m1_signins','rbjj_signins'];
   for (const k of keysToTry) {
     try {
       const rows = JSON.parse(localStorage.getItem(k) || '[]');
@@ -1390,52 +1516,65 @@ function refreshNameDatalist() {
 }
 
   // Storage keys (new)
-  const SIGNINS_KEY = 'gib_m1_signins_v1';
-  const SCHEDULE_KEY = 'gib_m1_schedule_v1';
-  const DEVICE_KEY  = 'gib_m1_device_v1';
-  const ADMIN_PIN_KEY = 'gib_m1_admin_pin_v1';
-  const DURATION_RULES_KEY = 'gib_m1_duration_rules_v1';
-  const SERIES_KEY = 'gib_m1_series_v1';
+  const SIGNINS_KEY = installationStorageKey('gib_m1_signins_v1');
+  const SCHEDULE_KEY = installationStorageKey('gib_m1_schedule_v1');
+  const DEVICE_KEY  = installationStorageKey('gib_m1_device_v1');
+  const ADMIN_PIN_KEY = installationStorageKey('gib_m1_admin_pin_v1');
+  const DURATION_RULES_KEY = installationStorageKey('gib_m1_duration_rules_v1');
+  const SERIES_KEY = installationStorageKey('gib_m1_series_v1');
   // Existing local schedule keys are overrides. The shared website cache stays
   // separate so an old manual, URL, or disabled override is never overwritten.
-  const SCHEDULE_URL_KEY  = 'gib_m1_schedule_url_v1';
-  const SCHEDULE_MODE_KEY = 'gib_m1_schedule_mode_v1';
-  const CANONICAL_SCHEDULE_CACHE_KEY = 'gib_m1_canonical_schedule_cache_v1';
-  const CANONICAL_SCHEDULE_ENDPOINT = '/api/m1-schedule';
-  const CANONICAL_SCHEDULE_SOURCE_URL = 'https://revolutionbjj.com/schedule/';
-  const CANONICAL_SCHEDULE_UPSTREAM_URL = 'https://revolutionbjj.com/wp-json/wp/v2/pages?slug=schedule&status=publish&_fields=id,type,slug,status,link,title,modified,modified_gmt,content';
-  const CHECKED_IN_SCHEDULE_VERSION = '2026-08-11';
+  const SCHEDULE_URL_KEY  = installationStorageKey('gib_m1_schedule_url_v1');
+  const SCHEDULE_MODE_KEY = installationStorageKey('gib_m1_schedule_mode_v1');
+  const CANONICAL_SCHEDULE_CACHE_KEY = installationStorageKey('gib_m1_canonical_schedule_cache_v1');
+  const CANONICAL_SCHEDULE_ENDPOINT = INSTALLATION.scheduleSource.endpoint;
+  const CANONICAL_SCHEDULE_SOURCE_URL = IS_RICHMOND
+    ? 'https://www.richmondbjj.com/schedule'
+    : 'https://revolutionbjj.com/schedule/';
+  const CANONICAL_SCHEDULE_UPSTREAM_URL = IS_RICHMOND
+    ? 'https://www.richmondbjj.com/schedule'
+    : 'https://revolutionbjj.com/wp-json/wp/v2/pages?slug=schedule&status=publish&_fields=id,type,slug,status,link,title,modified,modified_gmt,content';
+  const CANONICAL_SCHEDULE_SITE = INSTALLATION.siteCode;
+  const CANONICAL_SCHEDULE_VERSION_PREFIX = IS_RICHMOND ? 'richmondbjj' : 'revbjj';
+  const CANONICAL_SCHEDULE_LIVE_SOURCE_TYPE = IS_RICHMOND ? 'squarespace-html' : 'wordpress-rest';
+  const CHECKED_IN_SCHEDULE_VERSION = IS_RICHMOND ? '2026-06-06' : '2026-08-11';
   const SCHEDULE_FETCH_TIMEOUT_MS = 10_000;
   const CANONICAL_SCHEDULE_REFRESH_INTERVAL_MS = 10 * 60 * 1_000;
   const MAX_SCHEDULE_RESPONSE_CHARS = 100_000;
   const MAX_CLASS_LABEL_LENGTH = 200;
   const MAX_CLASSES_PER_DAY = 24;
-  const MIN_TOTAL_CLASSES = 30;
-  const MAX_TOTAL_CLASSES = 100;
+  const MIN_TOTAL_CLASSES = IS_RICHMOND ? 10 : 30;
+  const MAX_TOTAL_CLASSES = IS_RICHMOND ? 50 : 100;
 
   // Sync keys
-  const LOCAL_STATE_KEY  = 'gib_m1_local_state_v2';
-  const SYNC_QUEUE_KEY   = 'gib_m1_sync_queue_v1';
-  const SYNC_AUTO_KEY    = 'gib_m1_sync_auto_v1';
-  const DEVICE_LABEL_KEY = 'gib_m1_device_label_v1';
+  const LOCAL_STATE_KEY  = installationStorageKey('gib_m1_local_state_v2');
+  const SYNC_QUEUE_KEY   = installationStorageKey('gib_m1_sync_queue_v1');
+  const SYNC_AUTO_KEY    = installationStorageKey('gib_m1_sync_auto_v1');
+  const DEVICE_LABEL_KEY = installationStorageKey('gib_m1_device_label_v1');
+  const SYNC_LAST_KEY    = installationStorageKey('gib_m1_sync_last');
+  const SYNC_ERROR_KEY   = installationStorageKey('gib_m1_sync_error');
 
 
   // Back-compat keys (older builds we created)
-  const OLD_SIGNINS_KEYS = ['rbjj_signins_v2', 'rbjj_signins_roster_mode_v1'];
+  const OLD_SIGNINS_KEYS = IS_RICHMOND
+    ? []
+    : ['rbjj_signins_v2', 'rbjj_signins_roster_mode_v1'];
 
   const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-  const MIN_CLASSES_BY_DAY = Object.freeze({
-    Monday: 5,
-    Tuesday: 5,
-    Wednesday: 5,
-    Thursday: 5,
-    Friday: 2,
-    Saturday: 2,
-    Sunday: 1
-  });
+  const MIN_CLASSES_BY_DAY = Object.freeze(IS_RICHMOND
+    ? Object.fromEntries(DAYS.map(day => [day, 1]))
+    : {
+        Monday: 5,
+        Tuesday: 5,
+        Wednesday: 5,
+        Thursday: 5,
+        Friday: 2,
+        Saturday: 2,
+        Sunday: 1
+      });
 
   // Default schedule snapshot (Rev)
-  const DEFAULT_SCHEDULE = {
+  const DEFAULT_SCHEDULE_REV = {
     'Monday': [
       '6:00 AM BJJ (Level 2)', '12:00 PM BJJ Kimuras (Level 2)', '4:30 PM Kids’ BJJ',
       '4:30 PM BJJ (Level 1)', '5:30 PM BJJ (Level 2)', '5:30 PM Muay Thai Drills', '5:30 PM Focus Class (Level 4) – tripod passing (changes every quarter)',
@@ -1475,53 +1614,49 @@ function refreshNameDatalist() {
     ]
   };
 
-  // Additional default schedule for Richmond BJJ.  This snapshot was copied from
-  // the Richmond BJJ Academy schedule page as of late‑2025.  Each line
-  // represents a class with a time and description.  You can edit this
-  // constant if the Richmond schedule changes in the future.  It is only
-  // loaded when the admin clicks “Load Richmond BJJ schedule” in the
-  // schedule editor.
   const DEFAULT_SCHEDULE_RICHMOND = {
     'Monday': [
-      '6:00-7:00 AM – Muay Thai Fundamentals',
-      '7:00-8:00 AM – Brazilian Jiu-Jitsu No-Gi',
-      '6:00-7:00 PM – Muay Thai Fundamentals',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu Fundamentals'
+      '6:00 AM–7:00 AM Muay Thai Fundamentals',
+      '7:00 AM–8:00 AM Brazilian Jiu-Jitsu No-Gi',
+      '6:00 PM–7:00 PM Muay Thai Fundamentals',
+      '7:15 PM–9:00 PM Brazilian Jiu-Jitsu Fundamentals'
     ],
     'Tuesday': [
-      '6:00-7:00 AM – Muay Thai Mixed Levels',
-      '7:00-8:00 AM – Brazilian Jiu-Jitsu Gi',
-      '6:00-7:00 PM – Muay Thai Mixed Levels',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu Fundamentals',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu Mixed Levels'
+      '6:00 AM–7:00 AM Muay Thai Mixed Levels',
+      '7:00 AM–8:00 AM Brazilian Jiu-Jitsu Gi',
+      '6:00 PM–7:00 PM Muay Thai Mixed Levels',
+      '7:15 PM–9:00 PM Brazilian Jiu-Jitsu Mixed Levels'
     ],
     'Wednesday': [
-      '6:00-7:00 AM – Muay Thai Fundamentals',
-      '7:00-8:00 AM – Brazilian Jiu-Jitsu No-Gi',
-      '6:00-7:00 PM – Muay Thai Fundamentals',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu No-Gi Fundamentals'
+      '6:00 AM–7:00 AM Muay Thai Fundamentals',
+      '7:00 AM–8:00 AM Brazilian Jiu-Jitsu No-Gi',
+      '6:00 PM–7:00 PM Muay Thai Fundamentals',
+      '7:15 PM–9:00 PM Brazilian Jiu-Jitsu No-Gi Fundamentals'
     ],
     'Thursday': [
-      '6:00-7:00 AM – Muay Thai Mixed Levels',
-      '7:00-8:00 AM – Brazilian Jiu-Jitsu Gi',
-      '6:00-7:00 PM – Muay Thai Mixed Levels',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu Fundamentals',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu Mixed Levels'
+      '6:00 AM–7:00 AM Muay Thai Mixed Levels',
+      '7:00 AM–8:00 AM Brazilian Jiu-Jitsu Gi',
+      '6:00 PM–7:00 PM Muay Thai Mixed Levels',
+      '7:15 PM–9:00 PM Brazilian Jiu-Jitsu Mixed Levels'
     ],
     'Friday': [
-      '6:00-7:00 AM – Muay Thai Fundamentals',
-      '7:00-8:00 AM – Brazilian Jiu-Jitsu No-Gi',
-      '6:00-7:00 PM – Muay Thai Open Mat',
-      '7:15-9:00 PM – Brazilian Jiu-Jitsu Fundamentals'
+      '6:00 AM–7:00 AM Muay Thai Fundamentals',
+      '7:00 AM–8:00 AM Brazilian Jiu-Jitsu No-Gi',
+      '6:00 PM–7:00 PM Muay Thai Open Mat',
+      '7:15 PM–9:00 PM Brazilian Jiu-Jitsu Fundamentals'
     ],
     'Saturday': [
-      '10:00-11:00 AM – Muay Thai Fundamentals',
-      '11:15-1:00 PM – Brazilian Jiu-Jitsu Fundamentals'
+      '10:00 AM–11:00 AM Muay Thai Fundamentals',
+      '11:15 AM–1:00 PM Brazilian Jiu-Jitsu Fundamentals'
     ],
     'Sunday': [
-      '10:00-11:00 AM – Ladies Muay Thai'
+      '10:00 AM–11:00 AM Ladies Muay Thai'
     ]
   };
+
+  const DEFAULT_SCHEDULE = IS_RICHMOND
+    ? DEFAULT_SCHEDULE_RICHMOND
+    : DEFAULT_SCHEDULE_REV;
 
   // Elements
   const $ = (sel) => document.querySelector(sel);
@@ -1666,10 +1801,22 @@ function refreshNameDatalist() {
 
   // Device config
   function loadDevice() {
-    return safeParse(DEVICE_KEY, null);
+    const saved = safeParse(DEVICE_KEY, null);
+    if (!IS_RICHMOND) return saved;
+    return {
+      gymName: INSTALLATION.gymName,
+      location: String(saved?.location || INSTALLATION.deviceLabel),
+      siteCode: INSTALLATION.siteCode
+    };
   }
   function saveDevice(cfg) {
-    safeSet(DEVICE_KEY, cfg);
+    safeSet(DEVICE_KEY, IS_RICHMOND
+      ? {
+          gymName: INSTALLATION.gymName,
+          location: String(cfg?.location || INSTALLATION.deviceLabel).trim(),
+          siteCode: INSTALLATION.siteCode
+        }
+      : cfg);
   }
   function resetDevice() {
     // Clear device + schedule data + duration rules (for clean setup tests)
@@ -1678,15 +1825,27 @@ function refreshNameDatalist() {
     localStorage.removeItem(DURATION_RULES_KEY);
     localStorage.removeItem(SERIES_KEY);
     // Also clear a few older keys if present (safe no-ops)
-    localStorage.removeItem('gib_device');
-    localStorage.removeItem('rbjj_device');
-    localStorage.removeItem('rbjj_schedule');
-    localStorage.removeItem('rbjj_schedule_v1');
+    if (!IS_RICHMOND) {
+      localStorage.removeItem('gib_device');
+      localStorage.removeItem('rbjj_device');
+      localStorage.removeItem('rbjj_schedule');
+      localStorage.removeItem('rbjj_schedule_v1');
+    }
     // Wipe legacy gib_* and rbjj_* keys (except current sign-ins) that could confuse installs
     try {
       Object.keys(localStorage).forEach(k => {
+        if (IS_RICHMOND) {
+          if (
+            ownsInstallationStorageKey(k)
+            && k !== SIGNINS_KEY
+            && k !== SYNC_QUEUE_KEY
+            && k !== LOCAL_STATE_KEY
+          ) localStorage.removeItem(k);
+          return;
+        }
         if (
           (k.startsWith('gib_') || k.startsWith('rbjj_'))
+          && !k.startsWith('gib_m1_richmond_')
           && k !== SIGNINS_KEY
           && !OLD_SIGNINS_KEYS.includes(k)
           && k !== SYNC_QUEUE_KEY
@@ -1717,8 +1876,13 @@ function refreshNameDatalist() {
   function factoryReset() {
     try {
       Object.keys(localStorage).forEach(k => {
+        if (IS_RICHMOND) {
+          if (ownsInstallationStorageKey(k)) localStorage.removeItem(k);
+          return;
+        }
         if (
           (k.startsWith('gib_') || k.startsWith('rbjj_'))
+          && !k.startsWith('gib_m1_richmond_')
           && !k.startsWith('gib_m1b_')
         ) {
           localStorage.removeItem(k);
@@ -1756,6 +1920,7 @@ function refreshNameDatalist() {
   }
 
   function getSiteCode() {
+    if (IS_RICHMOND) return INSTALLATION.siteCode;
     const cfg = loadDevice();
     const siteCode = cfg && cfg.siteCode ? String(cfg.siteCode).trim() : '';
     return siteCode || 'Rev';
@@ -1777,7 +1942,9 @@ function refreshNameDatalist() {
       pill.classList.remove('gray');
       pill.querySelector('.dot').style.background = 'rgba(34,197,94,.85)';
       pillText.textContent = `${cfg.gymName || 'Gym'} · ${cfg.location || 'Location'}`;
-      hdrGym.textContent = cfg.gymName || 'Gym';
+      hdrGym.textContent = IS_RICHMOND
+        ? `${cfg.gymName || 'Richmond BJJ'} · TEST Preview`
+        : (cfg.gymName || 'Gym');
       hdrLoc.textContent = cfg.location ? `Location: ${cfg.location}` : 'Location set';
     } else {
       pill.classList.add('gray');
@@ -1918,30 +2085,29 @@ function refreshNameDatalist() {
 
   async function validateCanonicalSchedule(payload) {
     if (!isPlainObject(payload)) throw new Error('Schedule response is not an object.');
-    if (payload.timezone !== TZ || payload.site !== 'Rev') {
+    if (payload.timezone !== TZ || payload.site !== CANONICAL_SCHEDULE_SITE) {
       throw new Error('Schedule response is for the wrong site or timezone.');
     }
-    if (!/^revbjj-[a-f0-9]{16}$/u.test(payload.version || '')) {
+    if (payload.version !== `${CANONICAL_SCHEDULE_VERSION_PREFIX}-${String(payload.contentHash || '').slice(0, 16)}`) {
       throw new Error('Schedule version is invalid.');
     }
     if (!/^[a-f0-9]{64}$/u.test(payload.contentHash || '')) {
       throw new Error('Schedule content hash is invalid.');
-    }
-    if (payload.version !== `revbjj-${payload.contentHash.slice(0, 16)}`) {
-      throw new Error('Schedule version does not match its content hash.');
     }
     const days = validateCanonicalDays(payload.days);
     if (await canonicalDaysHash(days) !== payload.contentHash) {
       throw new Error('Schedule content hash does not match its classes.');
     }
     const sourceType = payload.source?.type;
-    const wordpressSource = sourceType === 'wordpress-rest';
+    const liveSource = sourceType === CANONICAL_SCHEDULE_LIVE_SOURCE_TYPE;
     const bootstrapSource = sourceType === 'checked-in-bootstrap';
-    const sourceMetadataValid = wordpressSource
+    const sourceMetadataValid = liveSource
       ? (
-          Number.isInteger(payload.source?.pageId)
-          && payload.source.pageId > 0
-          && validWordPressModifiedDate(payload.source.modifiedAt)
+          IS_RICHMOND
+            ? payload.source?.pageId === null && validFullIsoDate(payload.source.modifiedAt)
+            : Number.isInteger(payload.source?.pageId)
+              && payload.source.pageId > 0
+              && validWordPressModifiedDate(payload.source.modifiedAt)
         )
       : (
           bootstrapSource
@@ -1949,16 +2115,16 @@ function refreshNameDatalist() {
           && payload.source?.pageId === null
         );
     const sourceFallbackCombinationValid = payload.current
-      ? (payload.fallback === 'none' && wordpressSource)
+      ? (payload.fallback === 'none' && liveSource)
       : (
-          (payload.fallback === 'last-known-good' && wordpressSource)
+          (payload.fallback === 'last-known-good' && liveSource)
           || (payload.fallback === 'bootstrap' && bootstrapSource)
         );
     if (
       !isPlainObject(payload.source)
       || payload.source.url !== CANONICAL_SCHEDULE_SOURCE_URL
       || payload.source.upstreamUrl !== CANONICAL_SCHEDULE_UPSTREAM_URL
-      || (!wordpressSource && !bootstrapSource)
+      || (!liveSource && !bootstrapSource)
       || !sourceMetadataValid
       || !validFullIsoDate(payload.fetchedAt)
       || typeof payload.current !== 'boolean'
@@ -1991,7 +2157,7 @@ function refreshNameDatalist() {
         upstreamUrl: payload.source.upstreamUrl,
         type: payload.source.type,
         modifiedAt: payload.source.modifiedAt,
-        pageId: wordpressSource ? payload.source.pageId : null
+        pageId: liveSource && !IS_RICHMOND ? payload.source.pageId : null
       },
       fetchedAt: payload.fetchedAt,
       current: payload.current,
@@ -2024,7 +2190,7 @@ function refreshNameDatalist() {
     if (!existing) return 1;
     if (candidate.contentHash === existing.contentHash) {
       if (
-        existing.source.type === 'wordpress-rest'
+        existing.source.type === CANONICAL_SCHEDULE_LIVE_SOURCE_TYPE
         && candidate.source.type === 'checked-in-bootstrap'
       ) return -1;
       return 0;
@@ -2042,8 +2208,8 @@ function refreshNameDatalist() {
     const servedAt = new Date().toISOString();
     return validateCanonicalSchedule({
       timezone: TZ,
-      site: 'Rev',
-      version: `revbjj-${contentHash.slice(0, 16)}`,
+      site: CANONICAL_SCHEDULE_SITE,
+      version: `${CANONICAL_SCHEDULE_VERSION_PREFIX}-${contentHash.slice(0, 16)}`,
       contentHash,
       days,
       source: {
@@ -2069,6 +2235,7 @@ function refreshNameDatalist() {
   }
 
   function loadLocalScheduleOverride() {
+    if (IS_RICHMOND) return null;
     const saved = safeParse(SCHEDULE_KEY, null);
     return saved && isPlainObject(saved.days) ? saved : null;
   }
@@ -2309,17 +2476,23 @@ function refreshNameDatalist() {
       waiting ? 'warn' : 'good'
     );
 
-    const last = localStorage.getItem('gib_m1_sync_last') || '';
+    const last = localStorage.getItem(SYNC_LAST_KEY) || '';
     const lastDate = last ? new Date(last) : null;
     const hasValidLastSync = Boolean(lastDate && Number.isFinite(lastDate.getTime()));
     const lastText = hasValidLastSync
       ? lastDate.toLocaleString()
       : 'No confirmed sync yet.';
-    setAdminSummaryValue('#adminSummaryLastSync', '#adminSummaryLastSyncCard', lastText, hasValidLastSync ? 'good' : '');
+    setAdminSummaryValue(
+      '#adminSummaryLastSync',
+      '#adminSummaryLastSyncCard',
+      lastText,
+      hasValidLastSync ? 'good' : ''
+    );
 
     const cfg = loadDevice();
-    const deviceLabel = (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim()
-      || (cfg?.location || '').trim();
+    const deviceLabel = IS_RICHMOND
+      ? INSTALLATION.deviceLabel
+      : (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim() || (cfg?.location || '').trim();
     setAdminSummaryValue(
       '#adminSummaryDevice',
       '#adminSummaryDeviceCard',
@@ -3115,6 +3288,79 @@ function refreshNameDatalist() {
     persistLocalState({ ...state, ledger: rows });
   }
 
+  function refreshRichmondReviewClasses() {
+    if (!IS_RICHMOND) return;
+    const dateInput = $('#richmondReviewDate');
+    const classInput = $('#richmondReviewClass');
+    if (!dateInput.value) dateInput.value = fmtDate(new Date());
+    const day = dayNameForDateKey(dateInput.value);
+    const labels = DEFAULT_SCHEDULE_RICHMOND[day] || [];
+    const prior = classInput.value;
+    classInput.replaceChildren(...labels.map(label => {
+      const option = document.createElement('option');
+      option.value = label;
+      option.textContent = label;
+      return option;
+    }));
+    if (labels.includes(prior)) classInput.value = prior;
+  }
+
+  function addRichmondForgottenSignin() {
+    if (!IS_RICHMOND || BACKEND_ENABLED) return;
+    const date = ($('#richmondReviewDate').value || '').trim();
+    const classLabel = ($('#richmondReviewClass').value || '').trim();
+    const instructor = ($('#richmondReviewInstructor').value || '').trim().replace(/\s+/gu, ' ');
+    const duration = Number($('#richmondReviewDuration').value);
+    const reason = ($('#richmondReviewReason').value || '').trim().replace(/\s+/gu, ' ');
+    const day = dayNameForDateKey(date);
+    const allowedClass = (DEFAULT_SCHEDULE_RICHMOND[day] || []).includes(classLabel);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/u.test(date)
+      || date > fmtDate(new Date())
+      || !allowedClass
+      || !instructor
+      || instructor.length > 100
+      || !/\b(?:qa|test|fake|demo)\b/iu.test(instructor)
+      || !reason
+      || reason.length > 240
+      || ![0.5, 1].includes(duration)
+    ) {
+      $('#richmondReviewStatus').textContent = 'Use a current/past date, the TEST class, an obvious QA instructor name, duration, and reason.';
+      return;
+    }
+
+    const batchId = createPermanentRowId();
+    const rowId = createPermanentRowId();
+    const shared = {
+      'RowID': rowId,
+      'Timestamp': `${date} 12:00:00`,
+      'Date': date,
+      'Class Label': classLabel,
+      'Duration (hr)': duration,
+      'Instructor': instructor,
+      'Site': INSTALLATION.siteCode,
+      'Notes': `QA TEST forgotten sign-in · ${reason}`,
+      '__batchId': batchId
+    };
+    const state = appendBatchToState(
+      loadLocalState(),
+      [{ ...shared, Status: 'OK' }],
+      [{
+        ...shared,
+        Device: (localStorage.getItem(DEVICE_LABEL_KEY) || INSTALLATION.deviceLabel).trim(),
+        Build: BUILD
+      }]
+    );
+    persistLocalState(state);
+    upsertName(instructor);
+    refreshNameDatalist();
+    renderAdminTable();
+    updateSyncStatus();
+    $('#richmondReviewInstructor').value = '';
+    $('#richmondReviewReason').value = '';
+    $('#richmondReviewStatus').textContent = 'QA forgotten sign-in saved locally; row remains waiting.';
+  }
+
   // Sign-in confirmation modal state (kiosk sign-ins)
   let lastSigninBatchId = null;
   let signInCountdownId = null;
@@ -3502,11 +3748,18 @@ function refreshNameDatalist() {
       alert('Please enter a name and select one or more classes.');
       return;
     }
+    if (IS_RICHMOND && !/\b(?:qa|test|fake|demo)\b/iu.test(name)) {
+      signInLocked = false;
+      alert('Richmond TEST requires a clearly fake instructor name containing TEST, QA, FAKE, or DEMO.');
+      return;
+    }
     const now = new Date();
     const timestamp = fmtTS(now);
     const date = fmtDate(now);
     let batchId = '';
-    const deviceLabel = (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim();
+    const deviceLabel = IS_RICHMOND
+      ? INSTALLATION.deviceLabel
+      : (localStorage.getItem(DEVICE_LABEL_KEY) || '').trim();
     const ledgerRows = [];
     const queuedRows = [];
 
@@ -3561,9 +3814,9 @@ function refreshNameDatalist() {
     // separate events with a permanent opaque RowID shared by both local copies.
     updateSyncStatus();
     // Attempt auto-sync if configured
-    if (localStorage.getItem(SYNC_AUTO_KEY) === 'true') {
+    if (BACKEND_ENABLED && localStorage.getItem(SYNC_AUTO_KEY) === 'true') {
       window.setTimeout(() => {
-        if (localStorage.getItem(SYNC_AUTO_KEY) === 'true') syncNow();
+        if (BACKEND_ENABLED && localStorage.getItem(SYNC_AUTO_KEY) === 'true') syncNow();
       }, 15_500);
     }
   }
@@ -3613,18 +3866,30 @@ function refreshNameDatalist() {
     return loadLocalState().queue;
   }
   function loadSyncSettings() {
-    $('#cfgDeviceLabel').value = localStorage.getItem(DEVICE_LABEL_KEY) || '';
-    $('#cfgAutoSync').checked = (localStorage.getItem(SYNC_AUTO_KEY) === 'true');
+    $('#cfgDeviceLabel').value = localStorage.getItem(DEVICE_LABEL_KEY)
+      || (IS_RICHMOND ? INSTALLATION.deviceLabel : '');
+    $('#cfgAutoSync').checked = BACKEND_ENABLED
+      && localStorage.getItem(SYNC_AUTO_KEY) === 'true';
+    $('#cfgAutoSync').disabled = !BACKEND_ENABLED;
+    $('#btnSyncNow').disabled = !BACKEND_ENABLED;
+    $('#cfgDeviceLabel').disabled = IS_RICHMOND;
   }
   function saveSyncSettings() {
-    localStorage.setItem(DEVICE_LABEL_KEY, ($('#cfgDeviceLabel').value || '').trim());
-    localStorage.setItem(SYNC_AUTO_KEY, $('#cfgAutoSync').checked ? 'true' : 'false');
+    localStorage.setItem(
+      DEVICE_LABEL_KEY,
+      IS_RICHMOND ? INSTALLATION.deviceLabel : ($('#cfgDeviceLabel').value || '').trim()
+    );
+    if (BACKEND_ENABLED) {
+      localStorage.setItem(SYNC_AUTO_KEY, $('#cfgAutoSync').checked ? 'true' : 'false');
+    } else {
+      localStorage.removeItem(SYNC_AUTO_KEY);
+    }
     updateSyncStatus();
   }
   function updateSyncStatus() {
     const q = readAdminLocalStateSnapshot().queue;
-    const last = localStorage.getItem('gib_m1_sync_last') || '';
-    const err = localStorage.getItem('gib_m1_sync_error') || '';
+    const last = localStorage.getItem(SYNC_LAST_KEY) || '';
+    const err = localStorage.getItem(SYNC_ERROR_KEY) || '';
     const parts = [];
     parts.push(`${q.length} row${q.length === 1 ? '' : 's'} waiting to sync`);
     if (last) {
@@ -3639,6 +3904,12 @@ function refreshNameDatalist() {
   }
   async function syncNow() {
     if (syncInFlight) return;
+    if (!BACKEND_ENABLED) {
+      localStorage.setItem(SYNC_ERROR_KEY, 'Local-only preview; rows remain on this device.');
+      updateSyncStatus();
+      showToast('Local only — rows kept');
+      return;
+    }
     if (lastSigninBatchId && signInSecondsRemaining > 0) {
       showToast('Sync waits until the undo window closes');
       return;
@@ -3650,7 +3921,7 @@ function refreshNameDatalist() {
       return;
     }
     if (navigator.onLine === false) {
-      localStorage.setItem('gib_m1_sync_error', 'Offline; rows are still waiting.');
+      localStorage.setItem(SYNC_ERROR_KEY, 'Offline; rows are still waiting.');
       updateSyncStatus();
       showToast('Offline — rows kept');
       return;
@@ -3686,16 +3957,16 @@ function refreshNameDatalist() {
       );
       persistLocalState(latestApplied.state);
       if (latestApplied.confirmedRowIds.length) {
-        localStorage.setItem('gib_m1_sync_last', acknowledgedAt);
+        localStorage.setItem(SYNC_LAST_KEY, acknowledgedAt);
       }
-      localStorage.removeItem('gib_m1_sync_error');
+      localStorage.removeItem(SYNC_ERROR_KEY);
       updateSyncStatus();
       const waiting = loadSyncQueue().length;
       showToast(waiting
         ? `${latestApplied.confirmedRowIds.length} confirmed; ${waiting} waiting`
         : `${latestApplied.confirmedRowIds.length} confirmed`);
     } catch (error) {
-      localStorage.setItem('gib_m1_sync_error', 'No readable confirmation; rows are still waiting.');
+      localStorage.setItem(SYNC_ERROR_KEY, 'No readable confirmation; rows are still waiting.');
       updateSyncStatus();
       showToast('Not confirmed — rows kept');
     } finally {
@@ -3713,6 +3984,7 @@ function refreshNameDatalist() {
     const activeSeriesToday = seriesClassesForToday();
     const signins = readAdminLocalStateSnapshot().ledger;
     return {
+      installation: INSTALLATION.installationId,
       build: BUILD,
       url: location.href,
       time: new Date().toISOString(),
@@ -3728,7 +4000,10 @@ function refreshNameDatalist() {
       },
       scheduleUrl: localStorage.getItem(SCHEDULE_URL_KEY) || null,
       signinsCount: signins.length,
-      storageKeys: Object.keys(localStorage).filter(k => k.includes('gib_') || k.includes('rbjj_')).sort()
+      storageKeys: Object.keys(localStorage).filter(key => (
+        ownsInstallationStorageKey(key)
+        || (!IS_RICHMOND && key.startsWith('rbjj_'))
+      )).sort()
     };
   }
 
@@ -3773,6 +4048,9 @@ function refreshNameDatalist() {
     $('#cfgGymName').value = (cfg && cfg.gymName) ? cfg.gymName : '';
     $('#cfgLocation').value = (cfg && cfg.location) ? cfg.location : '';
     $('#cfgSiteCode').value = (cfg && cfg.siteCode) ? cfg.siteCode : '';
+    $('#cfgGymName').disabled = IS_RICHMOND;
+    $('#cfgSiteCode').disabled = IS_RICHMOND;
+    $('#richmondLocalReviewSection').hidden = true;
     updateAdminPinUI();
 
     // Schedule editor
@@ -3817,12 +4095,17 @@ function refreshNameDatalist() {
   $('#btnKiosk').addEventListener('click', showKiosk);
   $('#btnAdmin').addEventListener('click', openAdminWithGate);
   $('#btnAdminLogout').addEventListener('click', showKiosk);
+  $('#dailyReviewLink').addEventListener('click', event => {
+    if (!IS_RICHMOND) return;
+  });
   $('#recentSigninsLink').addEventListener('click', () => {
     $('#recentSignins').open = true;
   });
   $('#btnSignIn').addEventListener('click', signIn);
   $('#btnConfirmSignInUndo').addEventListener('click', undoLastSigninBatch);
   $('#btnConfirmSignInDone').addEventListener('click', confirmSigninDone);
+  $('#richmondReviewDate').addEventListener('change', refreshRichmondReviewClasses);
+  $('#btnRichmondForgottenSignin').addEventListener('click', addRichmondForgottenSignin);
 
   $('#btnAdminPinToggle').addEventListener('click', () => {
     const panel = $('#adminPinPanel');
@@ -3845,8 +4128,9 @@ function refreshNameDatalist() {
       siteCode: ($('#cfgSiteCode').value || '').trim()
     };
     saveDevice(cfg);
+    const savedCfg = loadDevice();
     applyDeviceToUI();
-    $('#deviceStatus').innerHTML = `Saved: <span class="kbd">${cfg.gymName}</span> · <span class="kbd">${cfg.location}</span> · Site <span class="kbd">${cfg.siteCode}</span>`;
+    $('#deviceStatus').innerHTML = `Saved: <span class="kbd">${savedCfg.gymName}</span> · <span class="kbd">${savedCfg.location}</span> · Site <span class="kbd">${savedCfg.siteCode}</span>`;
     renderAdminSummary();
     showToast('Device saved');
   });
@@ -4090,6 +4374,20 @@ function refreshNameDatalist() {
   });
 
   // Init
+  if (IS_RICHMOND) {
+    $('#dailyReviewLink').href = '/m1/admin/';
+    $('#dailyReviewLink').textContent = 'Forgotten Sign-In / Daily Review';
+    $('#richmondLocalReviewSection').hidden = true;
+    $('#scheduleEditorCard').hidden = true;
+    $('#manualScheduleSettings').hidden = true;
+    $('#staffClock').hidden = true;
+    $('#staffTimeSection').hidden = true;
+    $('#syncSettingsCard').querySelector('h3').textContent = 'Richmond TEST sync';
+    $('#syncSettingsCard').querySelector('.subtle').textContent = 'Rows sync only to the dedicated Richmond TEST Sheet.';
+  } else {
+    $('#staffClock').hidden = !STAFF_CLOCK_ENABLED;
+    $('#staffTimeSection').hidden = !STAFF_CLOCK_ENABLED;
+  }
   dayRolloverController = createDayRolloverController({
     getDateKey: () => fmtDate(new Date()),
     isFormInProgress: kioskFormInProgress,
@@ -4110,8 +4408,25 @@ function refreshNameDatalist() {
   dayRolloverController.start();
   dayRolloverController.checkNow();
   // Load sync settings and refresh status on first load
+  if (IS_RICHMOND && localStorage.getItem(SYNC_AUTO_KEY) === null) {
+    localStorage.setItem(SYNC_AUTO_KEY, 'true');
+  }
   loadSyncSettings();
   updateSyncStatus();
+  if (IS_RICHMOND) {
+    window.addEventListener('online', () => {
+      if (localStorage.getItem(SYNC_AUTO_KEY) === 'true' && loadSyncQueue().length) {
+        syncNow();
+      }
+    });
+    if (
+      navigator.onLine !== false
+      && localStorage.getItem(SYNC_AUTO_KEY) === 'true'
+      && loadSyncQueue().length
+    ) {
+      window.setTimeout(syncNow, 0);
+    }
+  }
   refreshNameDatalist();
   startCanonicalScheduleRefresh();
   const requestedInitialView = new URLSearchParams(window.location.search).get('view');
@@ -4119,6 +4434,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-08-20-m1b-late-review-fixes-r2"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-08-21-richmond-m1-run2-r1"></script>
 </body>
 </html>

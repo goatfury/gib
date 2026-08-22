@@ -14,6 +14,10 @@ const SCOPE_PATH = SCOPE_URL.pathname.endsWith('/')
   ? SCOPE_URL.pathname
   : `${SCOPE_URL.pathname}/`;
 const INDEX_URL = new URL('index.html', SCOPE_URL).href;
+const INSTALLATION_PROFILE_URL = new URL(
+  `installation-profile.generated.js?v=${encodeURIComponent(SHELL_REVISION)}`,
+  SCOPE_URL
+).href;
 const SYNC_CORE_URL = new URL(
   `sync-core.mjs?v=${encodeURIComponent(SHELL_REVISION)}`,
   SCOPE_URL
@@ -28,6 +32,7 @@ const STAFF_CLOCK_CLIENT_URL = new URL(
 ).href;
 const SHELL_REQUESTS = Object.freeze([
   INDEX_URL,
+  INSTALLATION_PROFILE_URL,
   SYNC_CORE_URL,
   STAFF_CLOCK_CORE_URL,
   STAFF_CLOCK_CLIENT_URL
@@ -67,7 +72,8 @@ function shellCacheKey(request) {
     return INDEX_URL;
   }
 
-  return url.href === SYNC_CORE_URL
+  return url.href === INSTALLATION_PROFILE_URL
+    || url.href === SYNC_CORE_URL
     || url.href === STAFF_CLOCK_CORE_URL
     || url.href === STAFF_CLOCK_CLIENT_URL
     ? url.href

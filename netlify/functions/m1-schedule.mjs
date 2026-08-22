@@ -10,6 +10,11 @@ import {
   validatePlausibleScheduleTransition,
   validateScheduleContract
 } from './_lib/m1-schedule-core.mjs';
+import {
+  deploymentInstallationProfile,
+  remoteScheduleEnabled
+} from './_lib/m1-installation.mjs';
+import { handleRichmondSchedule } from './_lib/m1-richmond-schedule.mjs';
 
 export const SCHEDULE_PATH = '/api/m1-schedule';
 export const REFRESH_INTERVAL_MS = 5 * 60 * 1_000;
@@ -395,6 +400,9 @@ export function validScheduleRequest(request) {
 }
 
 export async function handleM1Schedule(request, dependencies = {}) {
+  if (deploymentInstallationProfile(dependencies.installationId)?.installationId === 'richmond') {
+    return handleRichmondSchedule(request, dependencies);
+  }
   const method = String(request?.method || 'GET').toUpperCase();
   if (method !== 'GET' && method !== 'HEAD') {
     return errorResponse(405, 'Method not allowed.', method);
@@ -406,6 +414,9 @@ export async function handleM1Schedule(request, dependencies = {}) {
   const deployContext = deployContextFor(request, dependencies);
   const published = dependencies.published ?? dependencies.context?.deploy?.published ?? false;
   const env = dependencies.env || process.env;
+  if (!remoteScheduleEnabled(dependencies.installationId)) {
+    return errorResponse(503, 'This installation uses a deployment-local TEST schedule.', method);
+  }
   if (!allowedDeploymentRequest(request, deployContext, published, env)) {
     return errorResponse(503, 'The website schedule service is not enabled in this deployment.', method);
   }

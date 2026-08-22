@@ -22,6 +22,7 @@ import {
   productionRuntimeConfig,
   validExactProductionRequest
 } from './_lib/m1-production-runtime.mjs';
+import { staffClockEnabled } from './_lib/m1-installation.mjs';
 
 export const STAFF_CLOCK_PATH = '/api/m1-staff-clock';
 
@@ -98,6 +99,9 @@ function duplicatePunchIds(punches) {
 }
 
 export async function handleStaffClock(request, dependencies = {}) {
+  if (!staffClockEnabled(dependencies.installationId)) {
+    return jsonResponse(404, { ok: false, message: 'Staff Clock is disabled for this installation.' });
+  }
   const target = validPreviewSameOriginRequest(request)
     ? 'test'
     : validExactProductionRequest(request, STAFF_CLOCK_PATH)

@@ -1206,7 +1206,10 @@ test('Daily Review workflow is yesterday-first, date-selectable, complete, and e
   assert.match(adminHtml, /function validateScheduleResponse\(value\)/);
   assert.match(adminHtml, /id="scheduleSource"[^>]*role="status"/);
   assert.match(adminHtml, /Version: \$\{schedule\.version\}/);
-  assert.match(adminHtml, /scheduleBootstrap:\s*'\/m1\/shared-schedule\.json'/);
+  assert.match(
+    adminHtml,
+    /scheduleBootstrap:\s*IS_RICHMOND \? '\/m1\/richmond-schedule\.json' : '\/m1\/shared-schedule\.json'/
+  );
   assert.match(adminHtml, /function loadCheckedInScheduleBootstrap\(reason/);
   assert.match(adminHtml, /const SCHEDULE_REFRESH_INTERVAL_MS = 10 \* 60 \* 1_000;/);
   assert.match(adminHtml, /window\.setInterval\(refreshCanonicalSchedule, SCHEDULE_REFRESH_INTERVAL_MS\)/);
