@@ -9,6 +9,7 @@ import {
   validateRichmondTransition
 } from '../netlify/functions/_lib/m1-richmond-schedule-core.mjs';
 import {
+  RICHMOND_FAILURE_BACKOFF_MS,
   fetchRichmondCurrentSchedule,
   handleRichmondSchedule,
   resetRichmondScheduleMemoryForTests
@@ -153,6 +154,154 @@ test('Richmond schedule service publishes current official data and persists las
   assert.equal(body.source.url, RICHMOND_PUBLIC_SCHEDULE_URL);
   assert.equal(Object.values(body.days).flat().length, 23);
   assert.equal(store.value.contentHash, body.contentHash);
+});
+
+test('a Richmond conditional-write loser re-reads and serves the durable winner', async () => {
+  resetRichmondScheduleMemoryForTests();
+  const now = Date.parse('2026-08-21T16:16:00.000Z');
+  const previous = scheduleFromRichmondHtml(
+    officialHtml(),
+    new Date(now - 16 * 60 * 1_000).toISOString(),
+    '"old"'
+  );
+  const candidateHtml = officialHtml().replace('Muay Thai Open Mat', 'Muay Thai Candidate Open Mat');
+  const winnerHtml = officialHtml().replace('Muay Thai Open Mat', 'Muay Thai Winner Open Mat');
+  const candidate = scheduleFromRichmondHtml(candidateHtml, new Date(now).toISOString(), '"candidate"');
+  const winner = scheduleFromRichmondHtml(winnerHtml, new Date(now).toISOString(), '"winner"');
+  const store = new MemoryStore(previous);
+  const read = store.getWithMetadata.bind(store);
+  let reads = 0;
+  store.getWithMetadata = async (...args) => {
+    reads += 1;
+    return read(...args);
+  };
+  store.set = async () => {
+    store.value = winner;
+    store.etag = '"durable-winner"';
+    return { modified: false };
+  };
+
+  const response = await handleRichmondSchedule(scheduleRequest(), {
+    now,
+    store,
+    fetchImpl: async () => new Response(candidateHtml, {
+      status: 200,
+      headers: { 'Content-Type': 'text/html; charset=utf-8', ETag: '"candidate"' }
+    })
+  });
+  const body = await response.json();
+  assert.equal(reads, 2);
+  assert.equal(body.current, true);
+  assert.equal(body.fallback, 'none');
+  assert.equal(body.contentHash, winner.contentHash);
+  assert.notEqual(body.contentHash, candidate.contentHash);
+});
+
+test('an invalid or unreadable Richmond conflict winner fails back to the prior durable schedule', async () => {
+  const now = Date.parse('2026-08-21T16:16:00.000Z');
+  const previous = scheduleFromRichmondHtml(
+    officialHtml(),
+    new Date(now - 16 * 60 * 1_000).toISOString(),
+    '"old"'
+  );
+  const candidateHtml = officialHtml().replace('Muay Thai Open Mat', 'Muay Thai Candidate Open Mat');
+
+  for (const conflictState of ['invalid', 'unreadable']) {
+    resetRichmondScheduleMemoryForTests();
+    const store = new MemoryStore(previous);
+    const read = store.getWithMetadata.bind(store);
+    let conflict = false;
+    store.getWithMetadata = async (...args) => {
+      if (conflict && conflictState === 'unreadable') throw new Error('durable read failed');
+      return read(...args);
+    };
+    store.set = async () => {
+      conflict = true;
+      if (conflictState === 'invalid') store.value = { ...previous, site: 'Revolution' };
+      return { modified: false };
+    };
+
+    const response = await handleRichmondSchedule(scheduleRequest(), {
+      now,
+      store,
+      fetchImpl: async () => new Response(candidateHtml, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' }
+      })
+    });
+    const body = await response.json();
+    assert.equal(body.current, false, conflictState);
+    assert.equal(body.fallback, 'last-known-good', conflictState);
+    assert.equal(body.contentHash, previous.contentHash, conflictState);
+    assert.equal(body.status.reason, 'concurrent-refresh-winner-unavailable', conflictState);
+  }
+});
+
+test('a Richmond outage without last known good honors backoff before retrying upstream', async () => {
+  resetRichmondScheduleMemoryForTests();
+  const now = Date.parse('2026-08-21T16:00:00.000Z');
+  const memory = {
+    value: null,
+    storedAt: 0,
+    lastAttemptAt: 0,
+    lastFailureReason: '',
+    storageWarning: ''
+  };
+  const store = new MemoryStore();
+  let fetchCalls = 0;
+  const fetchImpl = async () => {
+    fetchCalls += 1;
+    if (fetchCalls === 1) throw new Error('offline');
+    return new Response(officialHtml(), {
+      status: 200,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' }
+    });
+  };
+
+  const first = await handleRichmondSchedule(scheduleRequest(), { now, memory, store, fetchImpl });
+  const firstBody = await first.json();
+  assert.equal(firstBody.fallback, 'bootstrap');
+  assert.equal(fetchCalls, 1);
+
+  const insideBackoff = await handleRichmondSchedule(scheduleRequest(), {
+    now: now + RICHMOND_FAILURE_BACKOFF_MS - 1,
+    memory,
+    store,
+    fetchImpl
+  });
+  const insideBackoffBody = await insideBackoff.json();
+  assert.equal(insideBackoffBody.fallback, 'bootstrap');
+  assert.equal(fetchCalls, 1);
+
+  const afterBackoff = await handleRichmondSchedule(scheduleRequest(), {
+    now: now + RICHMOND_FAILURE_BACKOFF_MS,
+    memory,
+    store,
+    fetchImpl
+  });
+  const afterBackoffBody = await afterBackoff.json();
+  assert.equal(afterBackoffBody.current, true);
+  assert.equal(afterBackoffBody.fallback, 'none');
+  assert.equal(fetchCalls, 2);
+});
+
+test('Richmond still serves a validated current schedule when durable storage is unavailable', async () => {
+  resetRichmondScheduleMemoryForTests();
+  const response = await handleRichmondSchedule(scheduleRequest(), {
+    now: Date.parse('2026-08-21T16:00:00.000Z'),
+    store: {
+      async get() { throw new Error('storage unavailable'); },
+      async set() { throw new Error('storage unavailable'); }
+    },
+    fetchImpl: async () => new Response(officialHtml(), {
+      status: 200,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' }
+    })
+  });
+  const body = await response.json();
+  assert.equal(body.current, true);
+  assert.equal(body.fallback, 'none');
+  assert.equal(body.status.storageWarning, 'last-known-good-storage-not-updated');
 });
 
 test('a failed refresh serves only Richmond last known good, then the checked-in Richmond bootstrap', async () => {
