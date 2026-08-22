@@ -9,6 +9,16 @@ import {
   readProductionInstallCapability,
   validExactProductionRequest
 } from './_lib/m1-production-runtime.mjs';
+import {
+  RICHMOND_PRODUCTION_INSTALL_STORE,
+  createRichmondProductionDeviceCredential,
+  readRichmondProductionInstallCapability,
+  richmondProductionDeviceCookieHeader,
+  richmondProductionInstallConsumptionKey,
+  richmondProductionInstallerConfig,
+  validExactRichmondProductionRequest
+} from './_lib/m1-richmond-production-runtime.mjs';
+import { deploymentInstallationProfile } from './_lib/m1-installation.mjs';
 
 export const TABLET_INSTALL_PATH = '/api/m1-tablet-install';
 
@@ -38,18 +48,18 @@ function unconfiguredInstallResponse() {
   });
 }
 
-async function defaultStore() {
+async function defaultStore(name = PRODUCTION_INSTALL_STORE) {
   const { getStore } = await import('@netlify/blobs');
   return getStore({
-    name: PRODUCTION_INSTALL_STORE,
+    name,
     consistency: 'strong'
   });
 }
 
-async function consumeCapability(token, now, dependencies) {
-  const store = dependencies.store || await defaultStore();
+async function consumeCapability(token, now, dependencies, options = {}) {
+  const store = dependencies.store || await defaultStore(options.storeName);
   if (!store || typeof store.set !== 'function') throw new Error('Replay store unavailable.');
-  const key = productionInstallConsumptionKey(token);
+  const key = options.consumptionKey(token);
   const result = await store.set(
     key,
     JSON.stringify({
@@ -62,7 +72,17 @@ async function consumeCapability(token, now, dependencies) {
 }
 
 export async function handleTabletInstall(request, dependencies = {}) {
-  if (!validExactProductionRequest(request, TABLET_INSTALL_PATH)) {
+  const profile = deploymentInstallationProfile(
+    dependencies.installationId,
+    dependencies.environment,
+    dependencies.activation
+  );
+  const richmondProduction = profile?.installationId === 'richmond'
+    && profile.environment === 'production';
+  const validRequest = richmondProduction
+    ? validExactRichmondProductionRequest(request, TABLET_INSTALL_PATH)
+    : validExactProductionRequest(request, TABLET_INSTALL_PATH);
+  if (!validRequest) {
     return rejectedInstallResponse();
   }
 
@@ -74,11 +94,19 @@ export async function handleTabletInstall(request, dependencies = {}) {
   ) return rejectedInstallResponse();
 
   const env = dependencies.env || process.env;
-  const runtime = productionInstallerConfig(env);
+  const runtime = richmondProduction
+    ? richmondProductionInstallerConfig(env, request.url, {
+      installationId: dependencies.installationId,
+      environment: dependencies.environment,
+      activation: dependencies.activation
+    })
+    : productionInstallerConfig(env);
   if (!runtime) return unconfiguredInstallResponse();
 
   const now = dependencies.now ?? Date.now();
-  const capability = readProductionInstallCapability(
+  const capability = (richmondProduction
+    ? readRichmondProductionInstallCapability
+    : readProductionInstallCapability)(
     parsed.value.capability,
     runtime,
     now
@@ -87,7 +115,14 @@ export async function handleTabletInstall(request, dependencies = {}) {
 
   let consumed;
   try {
-    consumed = await consumeCapability(parsed.value.capability, now, dependencies);
+    consumed = await consumeCapability(parsed.value.capability, now, dependencies, {
+      storeName: richmondProduction
+        ? RICHMOND_PRODUCTION_INSTALL_STORE
+        : PRODUCTION_INSTALL_STORE,
+      consumptionKey: richmondProduction
+        ? richmondProductionInstallConsumptionKey
+        : productionInstallConsumptionKey
+    });
   } catch {
     return unconfiguredInstallResponse();
   }
@@ -95,7 +130,9 @@ export async function handleTabletInstall(request, dependencies = {}) {
 
   let credential;
   try {
-    credential = createProductionDeviceCredential(
+    credential = (richmondProduction
+      ? createRichmondProductionDeviceCredential
+      : createProductionDeviceCredential)(
       runtime.deviceToken,
       dependencies.randomBytes,
       now
@@ -110,7 +147,9 @@ export async function handleTabletInstall(request, dependencies = {}) {
     ok: true,
     installed: true
   }, {
-    'Set-Cookie': productionDeviceCookieHeader(credential)
+    'Set-Cookie': (richmondProduction
+      ? richmondProductionDeviceCookieHeader
+      : productionDeviceCookieHeader)(credential)
   });
 }
 

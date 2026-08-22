@@ -14,6 +14,12 @@ import {
   validExactProductionRequest
 } from './_lib/m1-production-runtime.mjs';
 import {
+  richmondProductionDeviceAuthorization,
+  richmondProductionDeviceCookieHeader,
+  richmondProductionRuntimeConfig,
+  validExactRichmondProductionRequest
+} from './_lib/m1-richmond-production-runtime.mjs';
+import {
   deploymentInstallationProfile,
   remoteBackendEnabled
 } from './_lib/m1-installation.mjs';
@@ -123,6 +129,11 @@ function validateRow(input, now, requireObviousTestValue = true, profile = null)
     || duration > 8
     || !instructor
     || (requireObviousTestValue && !obviousTestValue(instructor))
+    || (
+      profile?.installationId === 'richmond'
+      && profile.environment === 'production'
+      && obviousTestValue(instructor)
+    )
     || !site
     || (profile?.installationId === 'richmond' && site !== profile.siteCode)
     || (
@@ -228,14 +239,24 @@ function successResponse(target, results) {
 }
 
 export async function handleKioskSync(request, dependencies = {}) {
-  const profile = deploymentInstallationProfile(dependencies.installationId);
+  const profile = deploymentInstallationProfile(
+    dependencies.installationId,
+    dependencies.environment,
+    dependencies.activation
+  );
   const target = validTestSameOriginRequest(
     request,
     KIOSK_SYNC_PATH,
-    profile?.installationId
+    profile?.installationId,
+    profile?.environment,
+    profile?.activation
   )
     ? 'test'
-    : profile?.installationId === 'rev' && validExactProductionRequest(request, KIOSK_SYNC_PATH)
+    : profile?.installationId === 'richmond'
+      && profile.environment === 'production'
+      && validExactRichmondProductionRequest(request, KIOSK_SYNC_PATH)
+      ? 'production'
+      : profile?.installationId === 'rev' && validExactProductionRequest(request, KIOSK_SYNC_PATH)
       ? 'production'
       : '';
   if (!target) {
@@ -246,7 +267,11 @@ export async function handleKioskSync(request, dependencies = {}) {
   }
 
   const env = dependencies.env || process.env;
-  if (!remoteBackendEnabled(dependencies.installationId)) {
+  if (!remoteBackendEnabled(
+    dependencies.installationId,
+    dependencies.environment,
+    dependencies.activation
+  )) {
     return jsonResponse(503, {
       ok: false,
       message: 'This installation has no configured backend transport. Rows remain local.'
@@ -254,19 +279,41 @@ export async function handleKioskSync(request, dependencies = {}) {
   }
   let runtime;
   let productionDeviceCredential = '';
+  let productionCookieHeader = productionDeviceCookieHeader;
   if (target === 'production') {
-    runtime = productionRuntimeConfig(env);
+    if (profile?.installationId === 'richmond') {
+      runtime = richmondProductionRuntimeConfig(env, request.url, {
+        installationId: dependencies.installationId,
+        environment: dependencies.environment,
+        activation: dependencies.activation
+      });
+      productionCookieHeader = richmondProductionDeviceCookieHeader;
+    } else {
+      runtime = productionRuntimeConfig(env);
+    }
     if (!runtime) {
       return jsonResponse(403, {
         ok: false,
         message: 'Production sync is not configured.'
       });
     }
-    const device = productionDeviceAuthorization(
+    if (profile?.installationId === 'richmond' && runtime.writesEnabled !== true) {
+      return jsonResponse(403, {
+        ok: false,
+        message: 'Richmond production activation is pending. Writes are disabled.'
+      });
+    }
+    const device = profile?.installationId === 'richmond'
+      ? richmondProductionDeviceAuthorization(
+        request,
+        runtime,
+        dependencies.now ?? Date.now()
+      )
+      : productionDeviceAuthorization(
       request,
       runtime,
       dependencies.now ?? Date.now()
-    );
+      );
     if (!device.authorized) {
       return jsonResponse(401, {
         ok: false,
@@ -306,7 +353,7 @@ export async function handleKioskSync(request, dependencies = {}) {
 
   if (!forwardedRows.length) {
     return jsonResponse(200, successResponse(target, localResults), target === 'production'
-      ? { 'Set-Cookie': productionDeviceCookieHeader(productionDeviceCredential) }
+      ? { 'Set-Cookie': productionCookieHeader(productionDeviceCredential) }
       : {});
   }
 
@@ -343,7 +390,7 @@ export async function handleKioskSync(request, dependencies = {}) {
     target,
     validatedRows.map((row, index) => row ? byRowId.get(row.RowID) : localResults[index])
   ), target === 'production'
-    ? { 'Set-Cookie': productionDeviceCookieHeader(productionDeviceCredential) }
+    ? { 'Set-Cookie': productionCookieHeader(productionDeviceCredential) }
     : {});
 }
 

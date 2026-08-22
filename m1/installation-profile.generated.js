@@ -30,5 +30,6 @@
     writable: false
   });
   document.documentElement.dataset.m1Installation = profile.installationId;
+  document.documentElement.dataset.m1Environment = profile.environment || '';
   document.documentElement.dataset.m1StaffClock = String(profile.featureFlags.staffClock);
 })();

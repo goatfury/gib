@@ -433,7 +433,8 @@
     <section id="loginPanel" class="panel login">
       <div id="loginEyebrow" class="eyebrow">Gym in a Box · M1</div>
       <h1 id="loginHeading">Admin — Daily Sign-in Review</h1>
-      <p class="muted">Choose who is reviewing, then sign in. Sessions close after 30 minutes.</p>
+      <p id="loginCopy" class="muted">Choose who is reviewing, then sign in. Sessions close after 30 minutes.</p>
+      <div id="productionLedgerStatus" class="message" role="status"></div>
 
       <div class="field" style="margin-top:20px">
         <label for="loginAdminName">Admin name</label>
@@ -443,14 +444,14 @@
           <option>Stuart Turner</option>
         </select>
       </div>
-      <div class="field">
+      <div id="passphraseField" class="field">
         <label for="loginPassphrase">Admin passphrase</label>
         <input id="loginPassphrase" type="password" autocomplete="current-password" placeholder="Four-word passphrase">
       </div>
       <div class="login-actions">
         <button id="loginButton" class="btn primary" type="button">Open Daily Review</button>
         <div class="return-links">
-          <a class="btn ghost" href="/m1/?view=admin" style="text-decoration:none">Local M1 Admin</a>
+          <a id="localAdminLink" class="btn ghost" href="/m1/?view=admin" style="text-decoration:none">Local M1 Admin</a>
           <a class="btn ghost" href="/m1/" style="text-decoration:none">Instructor Sign-In</a>
         </div>
       </div>
@@ -635,7 +636,28 @@
 
       const INSTALLATION = globalThis.M1_INSTALLATION_PROFILE;
       const expectedInstallation = INSTALLATION?.installationId === 'richmond'
-        ? {
+        ? INSTALLATION.environment === 'production'
+          && (
+            (INSTALLATION.activation === 'pending' && INSTALLATION.writesEnabled === false)
+            || (INSTALLATION.activation === 'active' && INSTALLATION.writesEnabled === true)
+          )
+          ? {
+              schema: 'gib-m1-installation-profile/v1',
+              installationId: 'richmond',
+              gymName: 'Richmond BJJ',
+              siteCode: 'Richmond',
+              deviceLabel: 'Richmond Front Desk Tablet',
+              storagePrefix: 'gib_m1_richmond_production_',
+              environment: 'production',
+              allowedOrigin: 'https://gib-richmond-live.netlify.app',
+              activation: INSTALLATION.activation,
+              writesEnabled: INSTALLATION.writesEnabled,
+              scheduleSource: { mode: 'richmond-website', endpoint: '/api/m1-schedule' },
+              featureFlags: { staffClock: false },
+              backend: { enabled: true, transportTarget: 'richmond-production' }
+            }
+          : INSTALLATION.environment === 'test'
+            ? {
             schema: 'gib-m1-installation-profile/v1',
             installationId: 'richmond',
             gymName: 'Richmond BJJ',
@@ -648,6 +670,7 @@
             featureFlags: { staffClock: false },
             backend: { enabled: true, transportTarget: 'richmond-test' }
           }
+            : null
         : INSTALLATION?.installationId === 'rev'
           ? {
               schema: 'gib-m1-installation-profile/v1',
@@ -666,7 +689,31 @@
         return;
       }
       const IS_RICHMOND = INSTALLATION.installationId === 'richmond';
+      const IS_RICHMOND_PRODUCTION = IS_RICHMOND && INSTALLATION.environment === 'production';
+      const ADMIN_MUTATIONS_ENABLED = !IS_RICHMOND_PRODUCTION
+        || (INSTALLATION.activation === 'active' && INSTALLATION.writesEnabled === true);
       const STAFF_CLOCK_ENABLED = INSTALLATION.featureFlags.staffClock === true;
+
+      function richmondProductionAdminCopy(mutationsEnabled) {
+        return mutationsEnabled
+          ? {
+              title: 'Richmond BJJ — Production Daily Review',
+              eyebrow: 'Richmond BJJ · PRODUCTION',
+              loginHeading: 'Richmond Production — Daily Sign-in Review',
+              appEyebrow: 'Richmond BJJ · PRODUCTION',
+              entryCopy: 'Production Daily Review is active for an authenticated Admin.',
+              loginCopy: 'Choose who is reviewing, then sign in. Sessions close after 30 minutes.'
+            }
+          : {
+              title: 'Richmond BJJ — Production Daily Review · Activation Pending',
+              eyebrow: 'Richmond BJJ · PRODUCTION · ACTIVATION PENDING',
+              loginHeading: 'Richmond Production — Read-only Daily Sign-in Review',
+              appEyebrow: 'Richmond BJJ · PRODUCTION · WRITES DISABLED',
+              entryCopy: 'The production ledger is read-only. All sign-in and Daily Review changes are disabled pending activation.',
+              loginCopy: 'Choose who is reviewing, then enter the Admin passphrase. Production remains read-only until activation.'
+            };
+      }
+      const RICHMOND_PRODUCTION_ADMIN_COPY = richmondProductionAdminCopy(ADMIN_MUTATIONS_ENABLED);
 
       const API = Object.freeze({
         login: '/.netlify/functions/m1-admin-login',
@@ -674,6 +721,7 @@
         review: '/.netlify/functions/m1-admin-review',
         search: '/.netlify/functions/m1-admin-search',
         add: '/.netlify/functions/m1-admin-add',
+        productionStatus: '/api/m1-production-status',
         staffTime: '/.netlify/functions/m1-admin-staff-time',
         schedule: '/api/m1-schedule',
         scheduleBootstrap: IS_RICHMOND ? '/m1/richmond-schedule.json' : '/m1/shared-schedule.json',
@@ -692,7 +740,9 @@
       const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
       const DEPLOY_PREVIEW_ORIGIN_PATTERN = /^https:\/\/deploy-preview-\d+--gib-live\.netlify\.app$/;
       const TEST_ADMIN_HOST_PATTERN = IS_RICHMOND
-        ? /^(?:gib-richmond-test|[a-f0-9]{24}--gib-richmond-test)\.netlify\.app$/i
+        ? IS_RICHMOND_PRODUCTION
+          ? /^(?:gib-richmond-live|[a-f0-9]{24}--gib-richmond-live)\.netlify\.app$/i
+          : /^(?:gib-richmond-test|[a-f0-9]{24}--gib-richmond-test)\.netlify\.app$/i
         : /^(?:deploy-preview-\d+|[a-f0-9]{24})--gib-live\.netlify\.app$/i;
       const TIME_ZONE = 'America/New_York';
       const SITE = INSTALLATION.siteCode;
@@ -2478,7 +2528,11 @@
         testMode = data.test === true;
         $('#loginPanel').hidden = true;
         $('#appPanel').hidden = false;
-        $('#sessionLabel').textContent = `${currentAdminName} · ${IS_RICHMOND ? 'Richmond TEST Sheet' : testMode ? 'TEST copied Sheet' : 'Production-ready session'}`;
+        $('#sessionLabel').textContent = `${currentAdminName} · ${IS_RICHMOND
+          ? IS_RICHMOND_PRODUCTION
+            ? `Richmond production Sheet · ${ADMIN_MUTATIONS_ENABLED ? 'active session' : 'read-only pending activation'}`
+            : 'Richmond TEST Sheet'
+          : testMode ? 'TEST copied Sheet' : 'Production-ready session'}`;
       }
 
       async function login(testShortcut) {
@@ -2498,6 +2552,9 @@
           });
           if (!/^[A-Za-z0-9_-]{32,256}$/.test(String(data.requestToken || ''))) {
             throw new Error('Admin login must be renewed for this page.');
+          }
+          if (IS_RICHMOND_PRODUCTION && !ADMIN_MUTATIONS_ENABLED && data.readOnly !== true) {
+            throw new Error('The production review did not confirm read-only access.');
           }
           adminRequestToken = data.requestToken;
           $('#loginPassphrase').value = '';
@@ -2959,6 +3016,8 @@
       }
 
       function classRow(label, index, matches) {
+        const mutationsEnabled = typeof ADMIN_MUTATIONS_ENABLED === 'undefined'
+          || ADMIN_MUTATIONS_ENABLED;
         const instructors = [...new Set(matches.map(record => clean(record.instructor)).filter(Boolean))];
         const row = makeElement('article', 'class-row');
         row.dataset.classIndex = String(index);
@@ -2983,10 +3042,18 @@
           summary.append(makeElement('div', 'blank', 'No sign-in recorded'));
         }
 
-        const toggle = makeElement('button', 'btn add-toggle forgotten-action', 'Add forgotten instructor');
-        toggle.type = 'button';
-        toggle.dataset.classIndex = String(index);
-        main.append(summary, toggle);
+        if (mutationsEnabled) {
+          const toggle = makeElement('button', 'btn add-toggle forgotten-action', 'Add forgotten instructor');
+          toggle.type = 'button';
+          toggle.dataset.classIndex = String(index);
+          main.append(summary, toggle);
+        } else {
+          main.append(summary, makeElement(
+            'div',
+            'blank',
+            'Changes unavailable while Richmond production activation is pending.'
+          ));
+        }
         row.append(main);
         if (
           persistentReviewOutcome
@@ -3004,7 +3071,7 @@
           outcome.append(makeElement('strong', '', title), makeElement('span', '', detail));
           row.append(outcome);
         }
-        row.append(buildAddForm(label, index));
+        if (mutationsEnabled) row.append(buildAddForm(label, index));
         return row;
       }
 
@@ -3449,6 +3516,13 @@
       }
 
       async function addInstructor(form) {
+        if (
+          typeof ADMIN_MUTATIONS_ENABLED !== 'undefined'
+          && !ADMIN_MUTATIONS_ENABLED
+        ) {
+          showMessage(form.querySelector('.add-status'), 'Richmond production changes are disabled pending activation.');
+          return;
+        }
         const addition = readAdditionForm(form);
         if (!addition) {
           showMessage(form.querySelector('.add-status'), 'Enter the instructor and a clear reason. Choose the duration explicitly.');
@@ -3572,23 +3646,72 @@
         }
       }
 
+      function validProductionLedgerStatus(value) {
+        return exactObjectKeys(value, ['ok', 'empty', 'writesEnabled'])
+          && value.ok === true
+          && typeof value.empty === 'boolean'
+          && value.writesEnabled === false;
+      }
+
+      async function loadProductionLedgerStatus() {
+        const status = $('#productionLedgerStatus');
+        showMessage(status, 'Checking the protected production ledger…', 'working');
+        try {
+          const data = await requestJson(API.productionStatus, {});
+          if (!validProductionLedgerStatus(data)) {
+            throw new Error('Production ledger status is unavailable.');
+          }
+          showMessage(
+            status,
+            data.empty
+              ? 'Today’s production Daily Review is empty — no sign-ins or audit actions for today.'
+              : 'Today’s production Daily Review contains data. Sign in to review it.',
+            data.empty ? 'success' : 'error'
+          );
+        } catch {
+          showMessage(status, 'Production ledger status is unavailable.');
+        }
+      }
+
       async function initialize() {
         if (IS_RICHMOND) {
-          document.title = 'Richmond BJJ — TEST Daily Review';
-          $('#loginEyebrow').textContent = 'Richmond BJJ · TEST';
-          $('#loginHeading').textContent = 'Richmond TEST — Daily Sign-in Review';
-          $('#appEyebrow').textContent = 'Richmond BJJ · TEST';
-          $('#appHeading').textContent = 'Richmond TEST Daily Sign-in Review';
+          const pendingProduction = IS_RICHMOND_PRODUCTION && !ADMIN_MUTATIONS_ENABLED;
+          document.title = IS_RICHMOND_PRODUCTION
+            ? RICHMOND_PRODUCTION_ADMIN_COPY.title
+            : 'Richmond BJJ — TEST Daily Review';
+          $('#loginEyebrow').textContent = IS_RICHMOND_PRODUCTION
+            ? RICHMOND_PRODUCTION_ADMIN_COPY.eyebrow
+            : 'Richmond BJJ · TEST';
+          $('#loginHeading').textContent = IS_RICHMOND_PRODUCTION
+            ? RICHMOND_PRODUCTION_ADMIN_COPY.loginHeading
+            : 'Richmond TEST — Daily Sign-in Review';
+          $('#appEyebrow').textContent = IS_RICHMOND_PRODUCTION
+            ? RICHMOND_PRODUCTION_ADMIN_COPY.appEyebrow
+            : 'Richmond BJJ · TEST';
+          $('#appHeading').textContent = IS_RICHMOND_PRODUCTION
+            ? 'Richmond Production Daily Sign-in Review'
+            : 'Richmond TEST Daily Sign-in Review';
           $('#scheduledClassesHeading').textContent = 'Scheduled Richmond classes';
           $('#scheduleLimitation').textContent = 'Daily Review uses the current regular weekly schedule from the Richmond BJJ website. Recorded sign-ins with older or special-event labels remain visible as unmatched.';
-          $('#testEntryHeading').textContent = 'RICHMOND TEST ADMIN';
-          $('#testEntryCopy').textContent = 'Uses only the dedicated Richmond TEST Sheet and clearly fake TEST information.';
-          $('#loginPassphrase').closest('.field').hidden = true;
-          $('#loginButton').hidden = true;
+          $('#testEntryHeading').textContent = IS_RICHMOND_PRODUCTION
+            ? 'RICHMOND PRODUCTION'
+            : 'RICHMOND TEST ADMIN';
+          $('#testEntryCopy').textContent = IS_RICHMOND_PRODUCTION
+            ? RICHMOND_PRODUCTION_ADMIN_COPY.entryCopy
+            : 'Uses only the dedicated Richmond TEST Sheet and clearly fake TEST information.';
+          $('#passphraseField').hidden = !IS_RICHMOND_PRODUCTION;
+          $('#loginButton').hidden = !IS_RICHMOND_PRODUCTION;
+          $('#loginButton').textContent = 'Open Daily Review';
+          $('#loginCopy').textContent = IS_RICHMOND_PRODUCTION
+            ? RICHMOND_PRODUCTION_ADMIN_COPY.loginCopy
+            : 'Choose who is reviewing, then sign in. Sessions close after 30 minutes.';
+          $('#localAdminLink').hidden = IS_RICHMOND_PRODUCTION;
+          if (!pendingProduction) showMessage($('#productionLedgerStatus'), '');
         }
         $('#calendarDate').max = nyDate();
         $('#searchDate').max = nyDate();
-        const deployPreviewHost = TEST_ADMIN_HOST_PATTERN.test(location.hostname);
+        const deployPreviewHost = !IS_RICHMOND_PRODUCTION
+          && TEST_ADMIN_HOST_PATTERN.test(location.hostname);
         $('#testEntry').style.display = deployPreviewHost ? 'block' : 'none';
         const diagnosticOriginAllowed = !IS_RICHMOND && validTabletDiagnosticOrigin();
         $('#installSyncSettingsButton').hidden = true;
@@ -3602,6 +3725,9 @@
           // A fresh page has no memory-only Admin request token, even if an old
           // session cookie exists. Wait for the explicit login before Admin API calls.
           setLoggedOut();
+          if (IS_RICHMOND_PRODUCTION && !ADMIN_MUTATIONS_ENABLED) {
+            await loadProductionLedgerStatus();
+          }
           startCanonicalScheduleRefresh();
         } catch {
           schedule = null;

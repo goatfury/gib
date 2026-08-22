@@ -20,6 +20,8 @@ const M1_DEPLOY_PREVIEW_HOST = /^deploy-preview-\d+--gib-live\.netlify\.app$/i;
 const M1_IMMUTABLE_DEPLOY_HOST = /^[0-9a-f]{24}--gib-live\.netlify\.app$/i;
 const RICHMOND_TEST_HOST = 'gib-richmond-test.netlify.app';
 const RICHMOND_IMMUTABLE_DEPLOY_HOST = /^[0-9a-f]{24}--gib-richmond-test\.netlify\.app$/i;
+const RICHMOND_PRODUCTION_HOST = 'gib-richmond-live.netlify.app';
+const RICHMOND_PRODUCTION_IMMUTABLE_DEPLOY_HOST = /^[0-9a-f]{24}--gib-richmond-live\.netlify\.app$/i;
 
 export function clean(value) {
   return String(value == null ? '' : value)
@@ -28,7 +30,7 @@ export function clean(value) {
     .replace(/\s+/g, ' ');
 }
 
-export function runtimeTarget(requestUrl = '', installationId) {
+export function runtimeTarget(requestUrl = '', installationId, environment, activation) {
   try {
     const url = new URL(requestUrl);
     if (
@@ -37,10 +39,16 @@ export function runtimeTarget(requestUrl = '', installationId) {
       || url.username
       || url.password
     ) return '';
-    const profile = deploymentInstallationProfile(installationId);
+    const profile = deploymentInstallationProfile(installationId, environment, activation);
     if (profile?.installationId === 'richmond') {
+      if (profile.environment === 'production') {
+        return url.hostname === RICHMOND_PRODUCTION_HOST
+          || RICHMOND_PRODUCTION_IMMUTABLE_DEPLOY_HOST.test(url.hostname)
+          ? 'production'
+          : '';
+      }
       return url.hostname === RICHMOND_TEST_HOST
-        || RICHMOND_IMMUTABLE_DEPLOY_HOST.test(url.hostname)
+          || RICHMOND_IMMUTABLE_DEPLOY_HOST.test(url.hostname)
         ? 'test'
         : '';
     }
@@ -59,7 +67,7 @@ export function isDeployPreview(_env = process.env, requestUrl = '') {
   return runtimeTarget(requestUrl) === 'test';
 }
 
-export function validTestSameOriginRequest(request, path, installationId) {
+export function validTestSameOriginRequest(request, path, installationId, environment, activation) {
   let url;
   try {
     url = new URL(request.url);
@@ -67,7 +75,7 @@ export function validTestSameOriginRequest(request, path, installationId) {
     return false;
   }
   if (
-    runtimeTarget(request.url, installationId) !== 'test'
+    runtimeTarget(request.url, installationId, environment, activation) !== 'test'
     || url.pathname !== path
     || url.search
     || url.hash
@@ -136,15 +144,41 @@ function derivedPreviewSessionSecret(adminActionToken) {
     .digest('base64url');
 }
 
+function derivedRichmondPendingSessionSecret(adminPassphrase) {
+  return createHmac('sha256', adminPassphrase)
+    // v2 invalidates every session issued by the pre-review pending-login path.
+    .update('gib-m1-richmond-production-admin-session:pending:v2', 'utf8')
+    .digest('base64url');
+}
+
 function richmondRuntimeConfig(env, options, profile, target) {
-  if (target !== 'test' || clean(env.GIB_M1_ENVIRONMENT) !== 'test') return null;
-  const webhookUrl = validGoogleWebhook(env.GIB_RICHMOND_TEST_WEBHOOK_URL);
-  const webhookToken = clean(env.GIB_RICHMOND_TEST_WEBHOOK_TOKEN);
-  const adminActionToken = clean(env.GIB_RICHMOND_TEST_ADMIN_ACTION_TOKEN);
+  const production = profile.environment === 'production';
+  if (
+    target !== profile.environment
+    || clean(env.GIB_M1_ENVIRONMENT) !== profile.environment
+  ) return null;
+  const webhookUrl = validGoogleWebhook(production
+    ? env.GIB_RICHMOND_PRODUCTION_WEBHOOK_URL
+    : env.GIB_RICHMOND_TEST_WEBHOOK_URL);
+  const webhookToken = clean(production
+    ? env.GIB_RICHMOND_PRODUCTION_WEBHOOK_TOKEN
+    : env.GIB_RICHMOND_TEST_WEBHOOK_TOKEN);
+  const adminActionToken = clean(production
+    ? env.GIB_RICHMOND_PRODUCTION_ADMIN_ACTION_TOKEN
+    : env.GIB_RICHMOND_TEST_ADMIN_ACTION_TOKEN);
+  const adminPassphrase = clean(production
+    ? env.GIB_RICHMOND_PRODUCTION_ADMIN_PASSPHRASE
+    : '');
+  const deviceToken = clean(production
+    ? env.GIB_RICHMOND_PRODUCTION_DEVICE_TOKEN
+    : '');
   const otherWebhookUrls = [
     env.GIB_TEST_WEBHOOK_URL,
     env.GIB_M1_PRODUCTION_WEBHOOK_URL,
-    env.GIB_M1_WEBHOOK_URL
+    env.GIB_M1_WEBHOOK_URL,
+    production
+      ? env.GIB_RICHMOND_TEST_WEBHOOK_URL
+      : env.GIB_RICHMOND_PRODUCTION_WEBHOOK_URL
   ].map(validGoogleWebhook).filter(Boolean);
   const otherSecrets = [
     env.GIB_TEST_WEBHOOK_TOKEN,
@@ -157,41 +191,88 @@ function richmondRuntimeConfig(env, options, profile, target) {
     env.GIB_M1_WEBHOOK_TOKEN,
     env.GIB_M1_RECOVERY_TOKEN,
     env.GIB_M1_PRODUCTION_DEVICE_TOKEN,
-    env.GIB_M1_PRODUCTION_INSTALL_CAPABILITY_SECRET
+    env.GIB_M1_PRODUCTION_INSTALL_CAPABILITY_SECRET,
+    production
+      ? env.GIB_RICHMOND_TEST_WEBHOOK_TOKEN
+      : env.GIB_RICHMOND_PRODUCTION_WEBHOOK_TOKEN,
+    production
+      ? env.GIB_RICHMOND_TEST_ADMIN_ACTION_TOKEN
+      : env.GIB_RICHMOND_PRODUCTION_ADMIN_ACTION_TOKEN,
+    production ? '' : env.GIB_RICHMOND_PRODUCTION_ADMIN_PASSPHRASE,
+    production ? '' : env.GIB_RICHMOND_PRODUCTION_DEVICE_TOKEN,
+    env.GIB_RICHMOND_PRODUCTION_INSTALL_CAPABILITY_SECRET
   ].map(clean).filter(Boolean);
+  const scopedOtherSecrets = otherSecrets;
   if (
     !webhookUrl
     || otherWebhookUrls.includes(webhookUrl)
     || webhookToken.length < 32
     || webhookToken.length > 512
-    || equalsAnySecret(webhookToken, otherSecrets)
-    || (adminActionToken && equalsAnySecret(adminActionToken, otherSecrets))
-    || !configuredSecretsArePairwiseDistinct([webhookToken, adminActionToken, ...otherSecrets])
+    || equalsAnySecret(webhookToken, scopedOtherSecrets)
+    || (adminActionToken && equalsAnySecret(adminActionToken, scopedOtherSecrets))
+    || (adminPassphrase && equalsAnySecret(adminPassphrase, scopedOtherSecrets))
+    || (deviceToken && equalsAnySecret(deviceToken, scopedOtherSecrets))
+    || !configuredSecretsArePairwiseDistinct([
+      webhookToken,
+      adminActionToken,
+      adminPassphrase,
+      deviceToken,
+      ...scopedOtherSecrets
+    ])
     || (
       options.admin === true
-      && (adminActionToken.length < 32 || adminActionToken.length > 512)
+      && (
+        adminActionToken.length < 32
+        || adminActionToken.length > 512
+        || (production && !validAdminPassphrase(adminPassphrase))
+      )
     )
+    || (production && (deviceToken.length < 32 || deviceToken.length > 512))
   ) return null;
+  const writesEnabled = production
+    && profile.activation === 'active'
+    && profile.writesEnabled === true
+    && env.GIB_RICHMOND_PRODUCTION_ACTIVATION === 'active'
+    && env.GIB_RICHMOND_PRODUCTION_WRITE_ENABLED === 'true';
   return Object.freeze({
-    target: 'test',
-    preview: true,
+    target,
+    preview: !production,
     installationId: profile.installationId,
     environment: profile.environment,
     webhookUrl,
     webhookToken,
     adminActionToken,
-    adminPassphrase: '',
+    adminPassphrase,
+    deviceToken,
+    writesEnabled,
     sessionSecret: options.admin === true
-      ? derivedPreviewSessionSecret(adminActionToken)
+      ? production
+        ? writesEnabled
+          ? adminPassphrase
+          : derivedRichmondPendingSessionSecret(adminPassphrase)
+        : derivedPreviewSessionSecret(adminActionToken)
       : ''
   });
 }
 
 export function runtimeConfig(env = process.env, options = {}) {
-  if (!remoteBackendEnabled(options.installationId)) return null;
-  const profile = deploymentInstallationProfile(options.installationId);
+  if (!remoteBackendEnabled(
+    options.installationId,
+    options.environment,
+    options.activation
+  )) return null;
+  const profile = deploymentInstallationProfile(
+    options.installationId,
+    options.environment,
+    options.activation
+  );
   if (!profile) return null;
-  const target = runtimeTarget(options.requestUrl, profile.installationId);
+  const target = runtimeTarget(
+    options.requestUrl,
+    profile.installationId,
+    profile.environment,
+    profile.activation
+  );
   if (!target) return null;
   if (profile.installationId === 'richmond') {
     return richmondRuntimeConfig(env, options, profile, target);
@@ -375,7 +456,7 @@ export async function postGoogle(config, action, data, fetchImpl = fetch) {
     };
     if (config.installationId === 'richmond') {
       body.installation = 'richmond';
-      body.environment = 'test';
+      body.environment = config.environment;
     }
     // Preserve the proven TEST wire contract (including its empty Admin field)
     // and production Admin actions, while the production kiosk forwards only

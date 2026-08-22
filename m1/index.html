@@ -935,6 +935,7 @@ body.admin-mode .container { max-width: 1120px; }
     <div style="margin-top: 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
       <button id="btnSignIn" class="btn brand" type="button">Sign In</button>
     </div>
+    <div id="activationPending" class="statusRow" role="status" hidden></div>
   </section>
 
   <section id="staffClock" class="card staff-clock" aria-labelledby="staffClockHeading">
@@ -1369,7 +1370,28 @@ if ('serviceWorker' in navigator) {
 (() => {
   const INSTALLATION = globalThis.M1_INSTALLATION_PROFILE;
   const expectedInstallation = INSTALLATION?.installationId === 'richmond'
-    ? {
+    ? INSTALLATION.environment === 'production'
+      && (
+        (INSTALLATION.activation === 'pending' && INSTALLATION.writesEnabled === false)
+        || (INSTALLATION.activation === 'active' && INSTALLATION.writesEnabled === true)
+      )
+      ? {
+          schema: 'gib-m1-installation-profile/v1',
+          installationId: 'richmond',
+          gymName: 'Richmond BJJ',
+          siteCode: 'Richmond',
+          deviceLabel: 'Richmond Front Desk Tablet',
+          storagePrefix: 'gib_m1_richmond_production_',
+          environment: 'production',
+          allowedOrigin: 'https://gib-richmond-live.netlify.app',
+          activation: INSTALLATION.activation,
+          writesEnabled: INSTALLATION.writesEnabled,
+          scheduleSource: { mode: 'richmond-website', endpoint: '/api/m1-schedule' },
+          featureFlags: { staffClock: false },
+          backend: { enabled: true, transportTarget: 'richmond-production' }
+        }
+      : INSTALLATION.environment === 'test'
+        ? {
         schema: 'gib-m1-installation-profile/v1',
         installationId: 'richmond',
         gymName: 'Richmond BJJ',
@@ -1382,6 +1404,7 @@ if ('serviceWorker' in navigator) {
         featureFlags: { staffClock: false },
         backend: { enabled: true, transportTarget: 'richmond-test' }
       }
+        : null
     : INSTALLATION?.installationId === 'rev'
       ? {
           schema: 'gib-m1-installation-profile/v1',
@@ -1409,8 +1432,31 @@ if ('serviceWorker' in navigator) {
   }
 
   const IS_RICHMOND = INSTALLATION.installationId === 'richmond';
+  const IS_RICHMOND_PRODUCTION = IS_RICHMOND && INSTALLATION.environment === 'production';
+  const RICHMOND_WRITES_ENABLED = IS_RICHMOND_PRODUCTION
+    && INSTALLATION.activation === 'active'
+    && INSTALLATION.writesEnabled === true;
   const STAFF_CLOCK_ENABLED = INSTALLATION.featureFlags.staffClock === true;
   const BACKEND_ENABLED = INSTALLATION.backend.enabled === true;
+
+  function richmondProductionKioskCopy(writesEnabled) {
+    return writesEnabled
+      ? {
+          build: '2026-08-22 RICHMOND M1 PRODUCTION',
+          title: 'Richmond BJJ · Instructor Sign-In',
+          heading: 'PRODUCTION',
+          sync: 'Authorized production sign-ins sync only to the Richmond production ledger.',
+          activation: ''
+        }
+      : {
+          build: '2026-08-22 RICHMOND M1 PRODUCTION CANDIDATE — WRITES DISABLED',
+          title: 'Richmond BJJ · Instructor Sign-In · Activation Pending',
+          heading: 'PRODUCTION · ACTIVATION PENDING',
+          sync: 'Production writes are disabled pending activation. No sign-in will be created locally or sent.',
+          activation: 'Activation pending — Instructor Sign-In and all production writes are unavailable.'
+        };
+  }
+  const RICHMOND_PRODUCTION_COPY = richmondProductionKioskCopy(RICHMOND_WRITES_ENABLED);
 
   // Update the build stamp so testers can verify they have the latest version.
   // NOTE: bump this whenever you make changes to the kiosk or admin.
@@ -1419,9 +1465,10 @@ if ('serviceWorker' in navigator) {
   const TEST_BUILD = IS_RICHMOND
     ? '2026-08-21 RICHMOND M1 RUN 2 TEST'
     : '2026-08-18 M1B TEST staff-clock-operational-candidate';
+  const RICHMOND_PRODUCTION_BUILD = RICHMOND_PRODUCTION_COPY.build;
   const PRODUCTION_BUILD = '2026-08-19 M1B PRODUCTION staff-clock';
   const BUILD = IS_RICHMOND
-    ? TEST_BUILD
+    ? (IS_RICHMOND_PRODUCTION ? RICHMOND_PRODUCTION_BUILD : TEST_BUILD)
     : (IS_PRODUCTION_ORIGIN ? PRODUCTION_BUILD : TEST_BUILD);
   if (IS_PRODUCTION_ORIGIN && !IS_RICHMOND) {
     document.title = 'GiB · Module 1 · Instructor Sign-In → Payroll (2026-08-19 M1B PRODUCTION staff-clock)';
@@ -1429,9 +1476,11 @@ if ('serviceWorker' in navigator) {
     document.getElementById('buildStampLarge').textContent = `Build ${PRODUCTION_BUILD}`;
   }
   if (IS_RICHMOND) {
-    document.title = 'Richmond BJJ · Instructor Sign-In · TEST Preview';
-    document.getElementById('buildId').textContent = TEST_BUILD;
-    document.getElementById('buildStampLarge').textContent = `Build ${TEST_BUILD}`;
+    document.title = IS_RICHMOND_PRODUCTION
+      ? RICHMOND_PRODUCTION_COPY.title
+      : 'Richmond BJJ · Instructor Sign-In · TEST Preview';
+    document.getElementById('buildId').textContent = BUILD;
+    document.getElementById('buildStampLarge').textContent = `Build ${BUILD}`;
   }
   const TZ = 'America/New_York';
   function installationStorageKey(revKey) {
@@ -1445,6 +1494,8 @@ if ('serviceWorker' in navigator) {
     const candidate = String(key || '');
     return IS_RICHMOND
       ? candidate.startsWith(INSTALLATION.storagePrefix)
+        && (INSTALLATION.environment !== 'test'
+          || !candidate.startsWith('gib_m1_richmond_production_'))
       : candidate.startsWith('gib_m1_') && !candidate.startsWith('gib_m1_richmond_');
   }
 // --- Instructor name suggestions (local roster) ---
@@ -1943,7 +1994,9 @@ function refreshNameDatalist() {
       pill.querySelector('.dot').style.background = 'rgba(34,197,94,.85)';
       pillText.textContent = `${cfg.gymName || 'Gym'} · ${cfg.location || 'Location'}`;
       hdrGym.textContent = IS_RICHMOND
-        ? `${cfg.gymName || 'Richmond BJJ'} · TEST Preview`
+        ? IS_RICHMOND_PRODUCTION
+          ? `${cfg.gymName || 'Richmond BJJ'} · ${RICHMOND_PRODUCTION_COPY.heading}`
+          : `${cfg.gymName || 'Richmond BJJ'} · TEST Preview`
         : (cfg.gymName || 'Gym');
       hdrLoc.textContent = cfg.location ? `Location: ${cfg.location}` : 'Location set';
     } else {
@@ -3739,6 +3792,11 @@ function refreshNameDatalist() {
   function signIn() {
     if (signInLocked) return;
     signInLocked = true;
+    if (IS_RICHMOND_PRODUCTION && !RICHMOND_WRITES_ENABLED) {
+      signInLocked = false;
+      alert('Richmond production activation is pending. Instructor Sign-In is unavailable.');
+      return;
+    }
     const name = ($('#nameInput').value || '').trim();
     const classes = selectedClasses();
     const site = getSiteCode();
@@ -3748,7 +3806,7 @@ function refreshNameDatalist() {
       alert('Please enter a name and select one or more classes.');
       return;
     }
-    if (IS_RICHMOND && !/\b(?:qa|test|fake|demo)\b/iu.test(name)) {
+    if (IS_RICHMOND && !IS_RICHMOND_PRODUCTION && !/\b(?:qa|test|fake|demo)\b/iu.test(name)) {
       signInLocked = false;
       alert('Richmond TEST requires a clearly fake instructor name containing TEST, QA, FAKE, or DEMO.');
       return;
@@ -4074,6 +4132,11 @@ function refreshNameDatalist() {
   }
 
   function openAdminWithGate() {
+    const profile = globalThis.M1_INSTALLATION_PROFILE;
+    if (profile?.installationId === 'richmond' && profile?.environment === 'production') {
+      location.href = '/m1/admin/';
+      return true;
+    }
     if (!requestAdminAccess()) return false;
     showAdmin();
     return true;
@@ -4382,8 +4445,23 @@ function refreshNameDatalist() {
     $('#manualScheduleSettings').hidden = true;
     $('#staffClock').hidden = true;
     $('#staffTimeSection').hidden = true;
-    $('#syncSettingsCard').querySelector('h3').textContent = 'Richmond TEST sync';
-    $('#syncSettingsCard').querySelector('.subtle').textContent = 'Rows sync only to the dedicated Richmond TEST Sheet.';
+    $('#syncSettingsCard').querySelector('h3').textContent = IS_RICHMOND_PRODUCTION
+      ? 'Richmond production sync'
+      : 'Richmond TEST sync';
+    $('#syncSettingsCard').querySelector('.subtle').textContent = IS_RICHMOND_PRODUCTION
+      ? RICHMOND_PRODUCTION_COPY.sync
+      : 'Rows sync only to the dedicated Richmond TEST Sheet.';
+    if (IS_RICHMOND_PRODUCTION && !RICHMOND_WRITES_ENABLED) {
+      const pending = $('#activationPending');
+      pending.hidden = false;
+      pending.textContent = RICHMOND_PRODUCTION_COPY.activation;
+      $('#btnSignIn').disabled = true;
+      $('#nameInput').disabled = true;
+      $('#notesInput').disabled = true;
+      $('#toggleClasses').disabled = true;
+      $('#cfgAutoSync').checked = false;
+      $('#cfgAutoSync').disabled = true;
+    }
   } else {
     $('#staffClock').hidden = !STAFF_CLOCK_ENABLED;
     $('#staffTimeSection').hidden = !STAFF_CLOCK_ENABLED;
@@ -4409,11 +4487,13 @@ function refreshNameDatalist() {
   dayRolloverController.checkNow();
   // Load sync settings and refresh status on first load
   if (IS_RICHMOND && localStorage.getItem(SYNC_AUTO_KEY) === null) {
-    localStorage.setItem(SYNC_AUTO_KEY, 'true');
+    if (!IS_RICHMOND_PRODUCTION || RICHMOND_WRITES_ENABLED) {
+      localStorage.setItem(SYNC_AUTO_KEY, 'true');
+    }
   }
   loadSyncSettings();
   updateSyncStatus();
-  if (IS_RICHMOND) {
+  if (IS_RICHMOND && (!IS_RICHMOND_PRODUCTION || RICHMOND_WRITES_ENABLED)) {
     window.addEventListener('online', () => {
       if (localStorage.getItem(SYNC_AUTO_KEY) === 'true' && loadSyncQueue().length) {
         syncNow();
