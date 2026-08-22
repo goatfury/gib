@@ -18,7 +18,9 @@ export async function handleAdminLogin(request, dependencies = {}) {
   const config = runtimeConfig(env, {
     admin: true,
     requestUrl: request.url,
-    installationId: dependencies.installationId
+    installationId: dependencies.installationId,
+    environment: dependencies.environment,
+    activation: dependencies.activation
   });
   if (!config) {
     return jsonResponse(503, { ok: false, message: 'Admin service is not configured for this environment.' });
@@ -30,6 +32,9 @@ export async function handleAdminLogin(request, dependencies = {}) {
   }
 
   const testShortcut = parsed.value.testShortcut === true;
+  const readOnly = config.installationId === 'richmond'
+    && config.environment === 'production'
+    && config.writesEnabled === false;
   const accepted = config.preview
     ? testShortcut
     : !testShortcut && constantTimeEqual(parsed.value.passphrase, config.adminPassphrase);
@@ -48,6 +53,7 @@ export async function handleAdminLogin(request, dependencies = {}) {
     ok: true,
     adminName,
     test: config.preview,
+    readOnly,
     requestToken,
     expiresInSeconds: 1_800
   }, {

@@ -400,8 +400,18 @@ export function validScheduleRequest(request) {
 }
 
 export async function handleM1Schedule(request, dependencies = {}) {
-  if (deploymentInstallationProfile(dependencies.installationId)?.installationId === 'richmond') {
-    return handleRichmondSchedule(request, dependencies);
+  const profile = deploymentInstallationProfile(
+    dependencies.installationId,
+    dependencies.environment,
+    dependencies.activation
+  );
+  if (profile?.installationId === 'richmond') {
+    return handleRichmondSchedule(request, {
+      ...dependencies,
+      installationId: profile.installationId,
+      environment: profile.environment,
+      activation: profile.activation
+    });
   }
   const method = String(request?.method || 'GET').toUpperCase();
   if (method !== 'GET' && method !== 'HEAD') {

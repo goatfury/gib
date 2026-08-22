@@ -10,11 +10,14 @@ import {
   validateRichmondDays,
   validateRichmondTransition
 } from './m1-richmond-schedule-core.mjs';
+import { deploymentInstallationProfile } from './m1-installation.mjs';
 
 export const RICHMOND_REFRESH_INTERVAL_MS = 15 * 60 * 1_000;
 export const RICHMOND_FAILURE_BACKOFF_MS = 60 * 1_000;
 export const RICHMOND_LAST_KNOWN_GOOD_STORE = 'gib-m1-richmond-schedule-v1';
 export const RICHMOND_LAST_KNOWN_GOOD_KEY = 'richmond-weekly-last-validated';
+export const RICHMOND_PRODUCTION_LAST_KNOWN_GOOD_STORE = 'gib-m1-richmond-production-schedule-v1';
+export const RICHMOND_PRODUCTION_LAST_KNOWN_GOOD_KEY = 'richmond-production-weekly-last-validated';
 
 let richmondMemory = {
   value: null,
@@ -196,7 +199,20 @@ export async function fetchRichmondCurrentSchedule(fetchImpl, now, previous = nu
   );
 }
 
-function validRequest(request) {
+function scheduleProfile(dependencies = {}) {
+  if (
+    dependencies.installationId == null
+    && dependencies.environment == null
+    && dependencies.activation == null
+  ) return deploymentInstallationProfile('richmond');
+  return deploymentInstallationProfile(
+    dependencies.installationId,
+    dependencies.environment,
+    dependencies.activation
+  );
+}
+
+function validRequest(request, dependencies) {
   let url;
   try {
     url = new URL(request.url);
@@ -208,10 +224,13 @@ function validRequest(request) {
     || url.port || url.username || url.password
     || url.pathname !== '/api/m1-schedule'
     || url.search || url.hash
-    || !(
-      url.hostname === 'gib-richmond-test.netlify.app'
-      || /^[0-9a-f]{24}--gib-richmond-test\.netlify\.app$/iu.test(url.hostname)
-    )
+    || scheduleProfile(dependencies)?.installationId !== 'richmond'
+  ) return false;
+  const expectedHost = new URL(scheduleProfile(dependencies).allowedOrigin).hostname;
+  if (
+    url.hostname !== expectedHost
+    && !new RegExp(`^[0-9a-f]{24}--${expectedHost.replace(/\./gu, '\\.')}$`, 'iu')
+      .test(url.hostname)
   ) return false;
   const origin = request.headers.get('origin');
   if (origin && origin !== url.origin) return false;
@@ -219,43 +238,59 @@ function validRequest(request) {
   return !fetchSite || fetchSite === 'same-origin' || fetchSite === 'none';
 }
 
-async function defaultStore(blobsOverride) {
+function scheduleStoreIdentity(dependencies = {}) {
+  const production = scheduleProfile(dependencies)?.environment === 'production';
+  return production
+    ? {
+      name: RICHMOND_PRODUCTION_LAST_KNOWN_GOOD_STORE,
+      key: RICHMOND_PRODUCTION_LAST_KNOWN_GOOD_KEY
+    }
+    : {
+      name: RICHMOND_LAST_KNOWN_GOOD_STORE,
+      key: RICHMOND_LAST_KNOWN_GOOD_KEY
+    };
+}
+
+async function defaultStore(blobsOverride, name) {
   const { getStore } = blobsOverride || await import('@netlify/blobs');
-  return getStore({ name: RICHMOND_LAST_KNOWN_GOOD_STORE, consistency: 'strong' });
+  return getStore({ name, consistency: 'strong' });
 }
 
 async function resolveStore(dependencies) {
   if (Object.hasOwn(dependencies, 'store')) return dependencies.store;
   try {
-    return await defaultStore(dependencies.blobs);
+    return await defaultStore(
+      dependencies.blobs,
+      scheduleStoreIdentity(dependencies).name
+    );
   } catch {
     return null;
   }
 }
 
-async function readStored(store) {
+async function readStored(store, key) {
   if (!store || typeof store.get !== 'function') return null;
   try {
     if (typeof store.getWithMetadata === 'function') {
-      const result = await store.getWithMetadata(RICHMOND_LAST_KNOWN_GOOD_KEY, {
+      const result = await store.getWithMetadata(key, {
         type: 'json', consistency: 'strong'
       });
       return result?.data
         ? { value: validateStoredSchedule(result.data), etag: result.etag || '' }
         : null;
     }
-    const value = await store.get(RICHMOND_LAST_KNOWN_GOOD_KEY, { type: 'json', consistency: 'strong' });
+    const value = await store.get(key, { type: 'json', consistency: 'strong' });
     return value ? { value: validateStoredSchedule(value), etag: '' } : null;
   } catch {
     return null;
   }
 }
 
-async function saveStored(store, value, previous) {
+async function saveStored(store, key, value, previous) {
   if (!store || typeof store.set !== 'function') return 'unavailable';
   try {
     const options = previous?.etag ? { onlyIfMatch: previous.etag } : { onlyIfNew: true };
-    const result = await store.set(RICHMOND_LAST_KNOWN_GOOD_KEY, JSON.stringify(value), options);
+    const result = await store.set(key, JSON.stringify(value), options);
     return result?.modified === false ? 'conflict' : 'persisted';
   } catch {
     return 'unavailable';
@@ -265,7 +300,7 @@ async function saveStored(store, value, previous) {
 export async function handleRichmondSchedule(request, dependencies = {}) {
   const method = String(request?.method || 'GET').toUpperCase();
   if (method !== 'GET' && method !== 'HEAD') return errorResponse(405, 'Method not allowed.', method);
-  if (!validRequest(request)) return errorResponse(404, 'Not found.', method);
+  if (!validRequest(request, dependencies)) return errorResponse(404, 'Not found.', method);
   const now = dependencies.now ?? Date.now();
   const memory = dependencies.memory || richmondMemory;
   if (
@@ -280,7 +315,8 @@ export async function handleRichmondSchedule(request, dependencies = {}) {
   }
 
   const store = await resolveStore(dependencies);
-  const stored = await readStored(store);
+  const storeIdentity = scheduleStoreIdentity(dependencies);
+  const stored = await readStored(store, storeIdentity.key);
   const previous = memory.value || stored?.value || null;
   if (
     previous && Number.isFinite(Date.parse(previous.fetchedAt))
@@ -323,11 +359,11 @@ export async function handleRichmondSchedule(request, dependencies = {}) {
     const current = await fetchRichmondCurrentSchedule(dependencies.fetchImpl || fetch, now, previous);
     validateRichmondTransition(current.days, APPROVED_DAYS);
     if (previous) validateRichmondTransition(current.days, previous.days);
-    const persistence = await saveStored(store, current, stored);
+    const persistence = await saveStored(store, storeIdentity.key, current, stored);
     let served = current;
     let reason = null;
     if (persistence === 'conflict') {
-      const durableWinner = await readStored(store);
+      const durableWinner = await readStored(store, storeIdentity.key);
       if (!durableWinner) {
         throw new RichmondScheduleSourceError('concurrent-refresh-winner-unavailable');
       }

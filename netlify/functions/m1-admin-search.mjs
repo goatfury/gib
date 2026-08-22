@@ -47,7 +47,9 @@ export async function handleAdminSearch(request, dependencies = {}) {
   const config = runtimeConfig(dependencies.env || process.env, {
     admin: true,
     requestUrl: request.url,
-    installationId: dependencies.installationId
+    installationId: dependencies.installationId,
+    environment: dependencies.environment,
+    activation: dependencies.activation
   });
   const auth = requireAdmin(request, config, dependencies.now || Date.now());
   if (auth.response) return auth.response;
@@ -67,6 +69,13 @@ export async function handleAdminSearch(request, dependencies = {}) {
   }
   if (config.preview && !obviousTestValue(instructor)) {
     return jsonResponse(400, { ok: false, message: 'Use clearly fake TEST instructor information.' });
+  }
+  if (
+    config.installationId === 'richmond'
+    && config.environment === 'production'
+    && obviousTestValue(instructor)
+  ) {
+    return jsonResponse(400, { ok: false, message: 'TEST, QA, fake, and demo names are not accepted in production.' });
   }
 
   const google = await postGoogle(
