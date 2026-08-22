@@ -252,13 +252,13 @@ async function readStored(store) {
 }
 
 async function saveStored(store, value, previous) {
-  if (!store || typeof store.set !== 'function') return false;
+  if (!store || typeof store.set !== 'function') return 'unavailable';
   try {
     const options = previous?.etag ? { onlyIfMatch: previous.etag } : { onlyIfNew: true };
     const result = await store.set(RICHMOND_LAST_KNOWN_GOOD_KEY, JSON.stringify(value), options);
-    return result?.modified !== false;
+    return result?.modified === false ? 'conflict' : 'persisted';
   } catch {
-    return false;
+    return 'unavailable';
   }
 }
 
@@ -295,15 +295,26 @@ export async function handleRichmondSchedule(request, dependencies = {}) {
     }, method);
   }
   if (
-    previous && memory.lastFailureReason
+    memory.lastFailureReason
     && now - memory.lastAttemptAt >= 0
     && now - memory.lastAttemptAt < RICHMOND_FAILURE_BACKOFF_MS
   ) {
-    return scheduleResponse(previous, {
-      current: false, fallback: 'last-known-good', reason: memory.lastFailureReason,
-      storageWarning: memory.storageWarning || null,
-      servedAt: new Date(now).toISOString()
-    }, method);
+    if (previous) {
+      return scheduleResponse(previous, {
+        current: false, fallback: 'last-known-good', reason: memory.lastFailureReason,
+        storageWarning: memory.storageWarning || null,
+        servedAt: new Date(now).toISOString()
+      }, method);
+    }
+    try {
+      const bootstrap = bootstrapFallback(now);
+      return scheduleResponse(bootstrap, {
+        current: false, fallback: 'bootstrap', reason: memory.lastFailureReason,
+        storageWarning: null, servedAt: new Date(now).toISOString()
+      }, method);
+    } catch {
+      return errorResponse(503, 'No validated schedule is available.', method);
+    }
   }
 
   memory.lastAttemptAt = now;
@@ -312,13 +323,27 @@ export async function handleRichmondSchedule(request, dependencies = {}) {
     const current = await fetchRichmondCurrentSchedule(dependencies.fetchImpl || fetch, now, previous);
     validateRichmondTransition(current.days, APPROVED_DAYS);
     if (previous) validateRichmondTransition(current.days, previous.days);
-    const persisted = await saveStored(store, current, stored);
-    memory.value = current;
+    const persistence = await saveStored(store, current, stored);
+    let served = current;
+    let reason = null;
+    if (persistence === 'conflict') {
+      const durableWinner = await readStored(store);
+      if (!durableWinner) {
+        throw new RichmondScheduleSourceError('concurrent-refresh-winner-unavailable');
+      }
+      validateRichmondTransition(durableWinner.value.days, APPROVED_DAYS);
+      if (previous) validateRichmondTransition(durableWinner.value.days, previous.days);
+      served = durableWinner.value;
+      reason = 'concurrent-refresh-winner';
+    }
+    memory.value = served;
     memory.storedAt = now;
     memory.lastFailureReason = '';
-    memory.storageWarning = persisted ? '' : 'last-known-good-storage-not-updated';
-    return scheduleResponse(current, {
-      current: true, fallback: 'none', reason: null,
+    memory.storageWarning = persistence === 'unavailable'
+      ? 'last-known-good-storage-not-updated'
+      : '';
+    return scheduleResponse(served, {
+      current: true, fallback: 'none', reason,
       storageWarning: memory.storageWarning || null,
       servedAt: new Date(now).toISOString()
     }, method);
