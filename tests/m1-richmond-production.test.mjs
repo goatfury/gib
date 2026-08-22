@@ -8,6 +8,8 @@ import {
   scopedStorageKey
 } from '../m1/installation-profile-core.mjs';
 import {
+  obviousRichmondProductionTestValue,
+  obviousTestValue,
   readAdminSession,
   runtimeConfig
 } from '../netlify/functions/_lib/m1-common.mjs';
@@ -160,6 +162,65 @@ test('Richmond production profile is fixed, pending, and storage-isolated from T
   assert.equal(ownsInstallationStorageKey(production, 'gib_m1_richmond_sync_queue_v1'), false);
   assert.equal(ownsInstallationStorageKey(richmondTest, 'gib_m1_richmond_production_sync_queue_v1'), false);
   assert.equal(ownsInstallationStorageKey(rev, 'gib_m1_richmond_production_sync_queue_v1'), false);
+});
+
+test('Netlify Richmond production rejects delimited fake-name markers without rejecting embedded letters', async () => {
+  const rejectedNames = [
+    'QA_Test',
+    'Fake_Student',
+    'QA1',
+    'qA',
+    'Demo Instructor',
+    'Student-tEsT',
+    'Coach.dEmO',
+    '9fAkE'
+  ];
+  const acceptedNames = [
+    'Qadir Smith',
+    'Stefano Testa',
+    'Mina Faker',
+    'Demos Brown',
+    'Nina Contesta',
+    'Testé Martin'
+  ];
+
+  rejectedNames.forEach(name => assert.equal(obviousRichmondProductionTestValue(name), true, name));
+  acceptedNames.forEach(name => assert.equal(obviousRichmondProductionTestValue(name), false, name));
+  ['QA_Test', 'Fake_Student', 'QA1'].forEach(name => assert.equal(
+    obviousTestValue(name),
+    false,
+    `TEST behavior changed for ${name}`
+  ));
+
+  const now = Date.parse('2026-08-21T16:00:00Z');
+  const credential = createRichmondProductionDeviceCredential(
+    ACTIVE_ENV.GIB_RICHMOND_PRODUCTION_DEVICE_TOKEN,
+    () => Buffer.alloc(32, 7),
+    now
+  );
+  const cookie = richmondProductionDeviceCookieHeader(credential).split(';')[0];
+  let fetchCalls = 0;
+
+  for (const instructor of ['QA_Test', 'Fake_Student', 'QA1']) {
+    const response = await handleKioskSync(request('/api/m1-kiosk-sync', {
+      body: { rows: [{ ...row(), Instructor: instructor }] },
+      cookie
+    }), {
+      ...PRODUCTION_DEPENDENCIES,
+      activation: 'active',
+      env: ACTIVE_ENV,
+      now,
+      dateNow: new Date(now),
+      fetch: async () => {
+        fetchCalls += 1;
+        throw new Error('rejected names must not reach Apps Script');
+      }
+    });
+    assert.equal(response.status, 200, instructor);
+    const result = await response.json();
+    assert.equal(result.results[0].result, 'rejected', instructor);
+  }
+  assert.equal(fetchCalls, 0);
 });
 
 test('production and TEST origins and credentials cannot cross-authorize', () => {

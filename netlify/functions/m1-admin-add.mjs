@@ -2,6 +2,7 @@ import {
   clean,
   googleFailureClass,
   jsonResponse,
+  obviousRichmondProductionTestValue,
   obviousTestValue,
   postGoogle,
   readJson,
@@ -82,7 +83,7 @@ function validateAddition(input, config, now) {
   if (
     config.installationId === 'richmond'
     && config.environment === 'production'
-    && obviousTestValue(value.instructor)
+    && obviousRichmondProductionTestValue(value.instructor)
   ) return null;
   return value;
 }

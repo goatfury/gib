@@ -293,6 +293,51 @@ test('production envelope rejects TEST, Rev, wrong site/device, Staff Clock, and
   });
 });
 
+test('Apps Script Richmond production rejects delimited fake-name markers without rejecting embedded letters', () => {
+  const harness = createHarness();
+  const rejectedNames = [
+    'QA_Test',
+    'Fake_Student',
+    'QA1',
+    'qA',
+    'Demo Instructor',
+    'Student-tEsT',
+    'Coach.dEmO',
+    '9fAkE'
+  ];
+  const acceptedNames = [
+    'Qadir Smith',
+    'Stefano Testa',
+    'Mina Faker',
+    'Demos Brown',
+    'Nina Contesta',
+    'Testé Martin'
+  ];
+
+  rejectedNames.forEach(name => assert.equal(
+    harness.context.gibM1RichmondProductionObviousTestValue_(name),
+    true,
+    name
+  ));
+  acceptedNames.forEach(name => assert.equal(
+    harness.context.gibM1RichmondProductionObviousTestValue_(name),
+    false,
+    name
+  ));
+
+  ['QA_Test', 'Fake_Student', 'QA1'].forEach(instructor => {
+    const bypassHarness = createHarness();
+    const response = bypassHarness.post(productionRequest('instructorSearch', {
+      instructor,
+      date: '2026-08-21'
+    }));
+    assert.equal(response.result, 'rejected', instructor);
+    assert.equal(bypassHarness.spreadsheetOpens, 0, instructor);
+    assert.equal(bypassHarness.signins.values.length, 1, instructor);
+    assert.equal(bypassHarness.audit.values.length, 1, instructor);
+  });
+});
+
 test('the Apps Script write gate must be explicitly enabled after provisioning', () => {
   const harness = createHarness();
   const request = productionRequest('kioskSignIn', { rows: [kioskRow()] });

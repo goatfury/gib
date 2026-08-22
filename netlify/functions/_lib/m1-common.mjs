@@ -685,6 +685,10 @@ export function obviousTestValue(value) {
   return /\b(test|fake|demo|qa)\b|do not pay/i.test(clean(value));
 }
 
+export function obviousRichmondProductionTestValue(value) {
+  return /(?:^|[^\p{L}])(?:qa|test|fake|demo)(?=$|[^\p{L}])|do not pay/iu.test(clean(value));
+}
+
 export function safeText(value, maxLength) {
   const text = clean(value);
   if (!text || text.length > maxLength || /^[=+\-@]/.test(text)) return '';

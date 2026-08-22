@@ -3,6 +3,7 @@ import {
   googleFailureClass,
   jsonResponse,
   nyDate,
+  obviousRichmondProductionTestValue,
   obviousTestValue,
   postGoogle,
   readJson,
@@ -73,7 +74,7 @@ export async function handleAdminSearch(request, dependencies = {}) {
   if (
     config.installationId === 'richmond'
     && config.environment === 'production'
-    && obviousTestValue(instructor)
+    && obviousRichmondProductionTestValue(instructor)
   ) {
     return jsonResponse(400, { ok: false, message: 'TEST, QA, fake, and demo names are not accepted in production.' });
   }

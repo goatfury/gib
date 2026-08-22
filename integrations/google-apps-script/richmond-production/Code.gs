@@ -101,7 +101,7 @@ function gibM1RichmondProductionEnvelopeValid_(body) {
 }
 
 function gibM1RichmondProductionObviousTestValue_(value) {
-  return /\b(?:qa|test|fake|demo)\b|do not pay/i.test(cleanText_(value));
+  return /(?:^|[^\p{L}])(?:qa|test|fake|demo)(?=$|[^\p{L}])|do not pay/iu.test(cleanText_(value));
 }
 
 function gibM1RichmondProductionActionValid_(body) {

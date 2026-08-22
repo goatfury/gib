@@ -1,5 +1,6 @@
 import {
   jsonResponse,
+  obviousRichmondProductionTestValue,
   obviousTestValue,
   postGoogle,
   readJson,
@@ -132,7 +133,7 @@ function validateRow(input, now, requireObviousTestValue = true, profile = null)
     || (
       profile?.installationId === 'richmond'
       && profile.environment === 'production'
-      && obviousTestValue(instructor)
+      && obviousRichmondProductionTestValue(instructor)
     )
     || !site
     || (profile?.installationId === 'richmond' && site !== profile.siteCode)
