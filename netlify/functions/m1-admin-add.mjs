@@ -2,6 +2,7 @@ import {
   clean,
   googleFailureClass,
   jsonResponse,
+  obviousRichmondProductionTestValue,
   obviousTestValue,
   postGoogle,
   readJson,
@@ -79,6 +80,11 @@ function validateAddition(input, config, now) {
     return null;
   }
   if (config.preview && !obviousTestValue(value.instructor)) return null;
+  if (
+    config.installationId === 'richmond'
+    && config.environment === 'production'
+    && obviousRichmondProductionTestValue(value.instructor)
+  ) return null;
   return value;
 }
 
@@ -89,8 +95,21 @@ export async function handleAdminAdd(request, dependencies = {}) {
   const config = runtimeConfig(dependencies.env || process.env, {
     admin: true,
     requestUrl: request.url,
-    installationId: dependencies.installationId
+    installationId: dependencies.installationId,
+    environment: dependencies.environment,
+    activation: dependencies.activation
   });
+  if (
+    config?.installationId === 'richmond'
+    && config.environment === 'production'
+    && config.writesEnabled !== true
+  ) {
+    return jsonResponse(403, {
+      ok: false,
+      result: 'rejected',
+      message: 'Richmond production activation is pending. Daily Review changes are disabled.'
+    });
+  }
   const auth = requireAdmin(request, config, dependencies.now || Date.now());
   if (auth.response) return auth.response;
 

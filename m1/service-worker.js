@@ -1,7 +1,11 @@
 'use strict';
 
-const CACHE_PREFIX = 'gib-m1-shell-';
 const workerUrl = new URL(self.location.href);
+const RICHMOND_PRODUCTION_HOST = /^(?:[0-9a-f]{24}--)?gib-richmond-live\.netlify\.app$/iu
+  .test(workerUrl.hostname);
+const CACHE_PREFIX = RICHMOND_PRODUCTION_HOST
+  ? 'gib-m1-richmond-production-shell-'
+  : 'gib-m1-shell-';
 const SHELL_REVISION = workerUrl.searchParams.get('v') || '';
 
 if (!/^[a-z0-9._-]{1,64}$/iu.test(SHELL_REVISION)) {
