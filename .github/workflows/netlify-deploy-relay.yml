@@ -1,0 +1,98 @@
+name: Temporary Richmond Netlify deploy relay
+
+on:
+  push:
+    branches:
+      - agent/netlify-deploy-relay
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out exact Richmond release source
+        uses: actions/checkout@v4
+        with:
+          ref: e0c8f0727286e5c55821dd80efe0e3d1af8c5d7b
+          persist-credentials: false
+
+      - name: Generate ephemeral relay key
+        run: |
+          set -euo pipefail
+          umask 077
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:16384 -out /tmp/netlify-relay-private.pem
+          openssl pkey -in /tmp/netlify-relay-private.pem -pubout -out netlify-relay-public.pem
+
+      - name: Publish relay public key
+        uses: actions/upload-artifact@v4
+        with:
+          name: netlify-relay-public-${{ github.run_id }}
+          path: netlify-relay-public.pem
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Wait for encrypted capability and deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          COMMENTS_API="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/70/comments"
+          proxy_path=""
+
+          for attempt in $(seq 1 180); do
+            comments="$(curl -fsSL \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${COMMENTS_API}?per_page=100")"
+            comment_id="$(printf '%s' "$comments" | jq -r '[.[] | select(.body | startswith("NETLIFY_RELAY_RSA_V1:"))] | last | .id // empty')"
+            if [ -n "$comment_id" ]; then
+              body="$(printf '%s' "$comments" | jq -r --argjson id "$comment_id" '.[] | select(.id == $id) | .body')"
+              ciphertext="${body#NETLIFY_RELAY_RSA_V1:}"
+
+              curl -fsSL -X DELETE \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "${COMMENTS_API}/${comment_id}" >/dev/null
+
+              printf '%s' "$ciphertext" | base64 -d > /tmp/netlify-relay.bin
+              openssl pkeyutl -decrypt \
+                -inkey /tmp/netlify-relay-private.pem \
+                -in /tmp/netlify-relay.bin \
+                -out /tmp/netlify-proxy.txt \
+                -pkeyopt rsa_padding_mode:oaep \
+                -pkeyopt rsa_oaep_md:sha256
+              proxy_path="$(cat /tmp/netlify-proxy.txt)"
+              case "$proxy_path" in
+                https://netlify-mcp.netlify.app/proxy/*) ;;
+                *) echo "Encrypted relay payload was invalid." >&2; exit 1 ;;
+              esac
+              break
+            fi
+            sleep 5
+          done
+
+          if [ -z "$proxy_path" ]; then
+            echo "Timed out waiting for encrypted deploy capability." >&2
+            exit 1
+          fi
+
+          npx -y @netlify/mcp@latest \
+            --site-id 9b7757a9-70f4-4977-9ca2-270b41e34007 \
+            --proxy-path "$proxy_path"
+
+          rm -f /tmp/netlify-relay-private.pem /tmp/netlify-relay.bin /tmp/netlify-proxy.txt
+
+          jq -n --arg body "Richmond deploy completed from release commit e0c8f0727286e5c55821dd80efe0e3d1af8c5d7b." '{body:$body}' \
+            | curl -fsSL -X POST \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                -H "Content-Type: application/json" \
+                --data-binary @- \
+                "$COMMENTS_API" >/dev/null
