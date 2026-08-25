@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import vm from 'node:vm';
 
 import {
   RICHMOND_PRODUCTION_DEVICE_COOKIE,
@@ -16,10 +18,30 @@ import {
 } from '../netlify/functions/m1-tablet-status.mjs';
 
 const ORIGIN = 'https://gib-richmond-live.netlify.app';
+const REV_ORIGIN = 'https://gib-live.netlify.app';
 const NOW_MS = Date.parse('2026-08-25T16:00:00Z');
 const NOW_SECONDS = Math.floor(NOW_MS / 1_000);
 const RUN_ID = 'richmond-fire-install-20260825';
 const INSTALL_SECRET = 'richmond-pending-install-secret-0011223344556677';
+const INSTALL_PAGE_PATH = '/m1/tablet-install.html';
+const INSTALL_PAGE_HTML = readFileSync(
+  new URL('../m1/tablet-install.html', import.meta.url),
+  'utf8'
+);
+const INSTALL_PAGE_SCRIPT_MATCH = INSTALL_PAGE_HTML.match(/<script>([\s\S]*?)<\/script>/u);
+assert.ok(INSTALL_PAGE_SCRIPT_MATCH, 'The shipped tablet installer script must exist.');
+const INSTALL_PAGE_SCRIPT = INSTALL_PAGE_SCRIPT_MATCH[1];
+
+const REV_PRESERVED_STATE = Object.freeze({
+  gib_m1_local_state_v2: '{"rev":"local"}',
+  gib_m1_sync_queue_v1: '["rev-queue"]',
+  gib_m1_signins_v1: '["rev-signin"]'
+});
+const RICHMOND_PRESERVED_STATE = Object.freeze({
+  gib_m1_richmond_production_local_state_v2: '{"richmond":"local"}',
+  gib_m1_richmond_production_sync_queue_v1: '["richmond-queue"]',
+  gib_m1_richmond_production_signins_v1: '["richmond-signin"]'
+});
 
 const PENDING_ENV = Object.freeze({
   GIB_M1_INSTALLATION: 'richmond',
@@ -82,10 +104,164 @@ function oneTimeStore() {
   };
 }
 
+async function runShippedInstallPage({
+  origin,
+  token,
+  initialStorage = {},
+  pathname = INSTALL_PAGE_PATH,
+  search = '',
+  responseBody = { ok: true, installed: true },
+  responseStatus = 200
+}) {
+  const storage = new Map(Object.entries(initialStorage));
+  const fetchCalls = [];
+  const statusElement = { textContent: 'Checking the one-time setup link...' };
+  const location = {
+    origin,
+    pathname,
+    search,
+    hash: `#${token}`
+  };
+  const history = {
+    replaceState(_state, _title, path) {
+      assert.equal(path, INSTALL_PAGE_PATH);
+      location.pathname = path;
+      location.search = '';
+      location.hash = '';
+    }
+  };
+  const localStorage = {
+    getItem(key) {
+      return storage.has(key) ? storage.get(key) : null;
+    },
+    setItem(key, value) {
+      storage.set(key, String(value));
+    },
+    removeItem(key) {
+      storage.delete(key);
+    }
+  };
+  const context = {
+    window: { location, history },
+    document: {
+      getElementById(id) {
+        assert.equal(id, 'statusMessage');
+        return statusElement;
+      }
+    },
+    localStorage,
+    fetch: async (endpoint, options) => {
+      fetchCalls.push({ endpoint, options });
+      return new Response(JSON.stringify(responseBody), {
+        status: responseStatus,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    },
+    Response
+  };
+
+  vm.runInNewContext(INSTALL_PAGE_SCRIPT, context, {
+    filename: 'm1/tablet-install.html'
+  });
+  for (let pass = 0; pass < 12; pass += 1) {
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  return {
+    fetchCalls,
+    storage,
+    status: statusElement.textContent,
+    location
+  };
+}
+
 const PENDING_DEPENDENCIES = Object.freeze({
   installationId: 'richmond',
   environment: 'production',
   activation: 'pending'
+});
+
+test('the shipped browser page posts the Richmond capability and touches only Richmond storage', async () => {
+  const token = capability();
+  const initialStorage = {
+    ...REV_PRESERVED_STATE,
+    ...RICHMOND_PRESERVED_STATE,
+    gib_m1_sync_auto_v1: 'true',
+    gib_m1_richmond_production_sync_auto_v1: 'true'
+  };
+  const result = await runShippedInstallPage({
+    origin: ORIGIN,
+    token,
+    initialStorage
+  });
+
+  assert.equal(result.fetchCalls.length, 1);
+  const [{ endpoint, options }] = result.fetchCalls;
+  assert.equal(endpoint, TABLET_INSTALL_PATH);
+  assert.equal(options.method, 'POST');
+  assert.equal(options.mode, 'same-origin');
+  assert.equal(options.credentials, 'same-origin');
+  assert.equal(options.cache, 'no-store');
+  assert.equal(options.redirect, 'error');
+  assert.equal(options.referrerPolicy, 'no-referrer');
+  assert.deepEqual(JSON.parse(options.body), { capability: token });
+  assert.equal(result.location.hash, '');
+  assert.equal(result.status, 'Tablet authorization installed. Auto-sync is OFF.');
+  assert.equal(
+    result.storage.get('gib_m1_richmond_production_sync_auto_v1'),
+    'false'
+  );
+  assert.equal(result.storage.get('gib_m1_sync_auto_v1'), 'true');
+  for (const [key, value] of Object.entries(REV_PRESERVED_STATE)) {
+    assert.equal(result.storage.get(key), value, key);
+  }
+  for (const [key, value] of Object.entries(RICHMOND_PRESERVED_STATE)) {
+    assert.equal(result.storage.get(key), value, key);
+  }
+});
+
+test('the shared browser page still scopes the Revolution production install to Revolution storage', async () => {
+  const token = capability();
+  const result = await runShippedInstallPage({
+    origin: REV_ORIGIN,
+    token,
+    initialStorage: {
+      ...REV_PRESERVED_STATE,
+      ...RICHMOND_PRESERVED_STATE,
+      gib_m1_sync_auto_v1: 'true',
+      gib_m1_richmond_production_sync_auto_v1: 'true'
+    }
+  });
+
+  assert.equal(result.fetchCalls.length, 1);
+  assert.equal(result.storage.get('gib_m1_sync_auto_v1'), 'false');
+  assert.equal(
+    result.storage.get('gib_m1_richmond_production_sync_auto_v1'),
+    'true'
+  );
+  for (const [key, value] of Object.entries(REV_PRESERVED_STATE)) {
+    assert.equal(result.storage.get(key), value, key);
+  }
+  for (const [key, value] of Object.entries(RICHMOND_PRESERVED_STATE)) {
+    assert.equal(result.storage.get(key), value, key);
+  }
+});
+
+test('the shipped browser page rejects lookalike Richmond origins before any request or storage change', async () => {
+  const initialStorage = {
+    ...REV_PRESERVED_STATE,
+    ...RICHMOND_PRESERVED_STATE,
+    gib_m1_sync_auto_v1: 'true',
+    gib_m1_richmond_production_sync_auto_v1: 'true'
+  };
+  const result = await runShippedInstallPage({
+    origin: 'https://gib-richmond-live.netlify.app.evil.example',
+    token: capability(),
+    initialStorage
+  });
+
+  assert.equal(result.fetchCalls.length, 0);
+  assert.equal(result.status, 'Installation is unavailable at this location.');
+  assert.deepEqual(Object.fromEntries(result.storage), initialStorage);
 });
 
 test('Richmond tablet can be authorized while both production write gates remain off', async () => {
