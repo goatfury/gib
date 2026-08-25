@@ -26,14 +26,27 @@
       'use strict';
 
       const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
+      const RICHMOND_PRODUCTION_ORIGIN = 'https://gib-richmond-live.netlify.app';
       const EXPECTED_PATH = '/m1/tablet-install.html';
       const INSTALL_ENDPOINT = '/api/m1-tablet-install';
-      const AUTO_SYNC_KEY = 'gib_m1_sync_auto_v1';
-      const PRESERVED_STATE_KEYS = Object.freeze([
-        'gib_m1_local_state_v2',
-        'gib_m1_sync_queue_v1',
-        'gib_m1_signins_v1'
-      ]);
+      const PRODUCTION_PROFILES = Object.freeze({
+        [PRODUCTION_ORIGIN]: Object.freeze({
+          autoSyncKey: 'gib_m1_sync_auto_v1',
+          preservedStateKeys: Object.freeze([
+            'gib_m1_local_state_v2',
+            'gib_m1_sync_queue_v1',
+            'gib_m1_signins_v1'
+          ])
+        }),
+        [RICHMOND_PRODUCTION_ORIGIN]: Object.freeze({
+          autoSyncKey: 'gib_m1_richmond_production_sync_auto_v1',
+          preservedStateKeys: Object.freeze([
+            'gib_m1_richmond_production_local_state_v2',
+            'gib_m1_richmond_production_sync_queue_v1',
+            'gib_m1_richmond_production_signins_v1'
+          ])
+        })
+      });
       const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/;
 
       const status = message => {
@@ -46,24 +59,29 @@
         return actual.length === wanted.length
           && actual.every((key, index) => key === wanted[index]);
       };
-      const snapshotPreservedState = () => {
+      const snapshotPreservedState = profile => {
         const snapshot = new Map();
-        PRESERVED_STATE_KEYS.forEach(key => snapshot.set(key, localStorage.getItem(key)));
+        profile.preservedStateKeys.forEach(key => snapshot.set(key, localStorage.getItem(key)));
         return snapshot;
       };
-      const preservedStateMatches = snapshot => {
-        return PRESERVED_STATE_KEYS.every(key => localStorage.getItem(key) === snapshot.get(key));
+      const preservedStateMatches = (profile, snapshot) => {
+        return profile.preservedStateKeys.every(
+          key => localStorage.getItem(key) === snapshot.get(key)
+        );
       };
-      const forceAutoSyncOff = snapshot => {
-        localStorage.setItem(AUTO_SYNC_KEY, 'false');
-        return localStorage.getItem(AUTO_SYNC_KEY) === 'false'
-          && preservedStateMatches(snapshot);
+      const forceAutoSyncOff = (profile, snapshot) => {
+        localStorage.setItem(profile.autoSyncKey, 'false');
+        return localStorage.getItem(profile.autoSyncKey) === 'false'
+          && preservedStateMatches(profile, snapshot);
       };
 
       const run = async () => {
         const initialOrigin = window.location.origin;
         const initialPath = window.location.pathname;
         const initialSearch = window.location.search;
+        const profile = Object.hasOwn(PRODUCTION_PROFILES, initialOrigin)
+          ? PRODUCTION_PROFILES[initialOrigin]
+          : null;
         let capability = window.location.hash.startsWith('#')
           ? window.location.hash.slice(1)
           : '';
@@ -77,7 +95,7 @@
         }
 
         if (
-          initialOrigin !== PRODUCTION_ORIGIN
+          !profile
           || initialPath !== EXPECTED_PATH
           || initialSearch
         ) {
@@ -93,8 +111,8 @@
 
         let preservedState;
         try {
-          preservedState = snapshotPreservedState();
-          if (!forceAutoSyncOff(preservedState)) throw new Error('unsafe local state');
+          preservedState = snapshotPreservedState(profile);
+          if (!forceAutoSyncOff(profile, preservedState)) throw new Error('unsafe local state');
         } catch {
           capability = '';
           status('Installation stopped safely because auto-sync could not be confirmed OFF.');
@@ -146,7 +164,7 @@
         }
 
         try {
-          if (!forceAutoSyncOff(preservedState)) throw new Error('unsafe local state');
+          if (!forceAutoSyncOff(profile, preservedState)) throw new Error('unsafe local state');
         } catch {
           status('Installation stopped safely because auto-sync could not be confirmed OFF.');
           return;
