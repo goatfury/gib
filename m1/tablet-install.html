@@ -25,10 +25,12 @@
     (() => {
       'use strict';
 
+      const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
+      const RICHMOND_PRODUCTION_ORIGIN = 'https://gib-richmond-live.netlify.app';
       const EXPECTED_PATH = '/m1/tablet-install.html';
       const INSTALL_ENDPOINT = '/api/m1-tablet-install';
       const PRODUCTION_PROFILES = Object.freeze({
-        'https://gib-live.netlify.app': Object.freeze({
+        [PRODUCTION_ORIGIN]: Object.freeze({
           autoSyncKey: 'gib_m1_sync_auto_v1',
           preservedStateKeys: Object.freeze([
             'gib_m1_local_state_v2',
@@ -36,7 +38,7 @@
             'gib_m1_signins_v1'
           ])
         }),
-        'https://gib-richmond-live.netlify.app': Object.freeze({
+        [RICHMOND_PRODUCTION_ORIGIN]: Object.freeze({
           autoSyncKey: 'gib_m1_richmond_production_sync_auto_v1',
           preservedStateKeys: Object.freeze([
             'gib_m1_richmond_production_local_state_v2',
