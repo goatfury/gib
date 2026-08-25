@@ -79,9 +79,6 @@
         const initialOrigin = window.location.origin;
         const initialPath = window.location.pathname;
         const initialSearch = window.location.search;
-        const profile = Object.hasOwn(PRODUCTION_PROFILES, initialOrigin)
-          ? PRODUCTION_PROFILES[initialOrigin]
-          : null;
         let capability = window.location.hash.startsWith('#')
           ? window.location.hash.slice(1)
           : '';
@@ -93,6 +90,13 @@
           status('Installation was not completed.');
           return;
         }
+
+        const profile = Object.prototype.hasOwnProperty.call(
+          PRODUCTION_PROFILES,
+          initialOrigin
+        )
+          ? PRODUCTION_PROFILES[initialOrigin]
+          : null;
 
         if (
           !profile

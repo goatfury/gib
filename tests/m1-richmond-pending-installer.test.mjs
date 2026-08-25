@@ -31,6 +31,7 @@ const INSTALL_PAGE_HTML = readFileSync(
 const INSTALL_PAGE_SCRIPT_MATCH = INSTALL_PAGE_HTML.match(/<script>([\s\S]*?)<\/script>/u);
 assert.ok(INSTALL_PAGE_SCRIPT_MATCH, 'The shipped tablet installer script must exist.');
 const INSTALL_PAGE_SCRIPT = INSTALL_PAGE_SCRIPT_MATCH[1];
+assert.doesNotMatch(INSTALL_PAGE_SCRIPT, /\bObject\.hasOwn\(/u);
 
 const REV_PRESERVED_STATE = Object.freeze({
   gib_m1_local_state_v2: '{"rev":"local"}',
@@ -111,7 +112,8 @@ async function runShippedInstallPage({
   pathname = INSTALL_PAGE_PATH,
   search = '',
   responseBody = { ok: true, installed: true },
-  responseStatus = 200
+  responseStatus = 200,
+  disableObjectHasOwn = false
 }) {
   const storage = new Map(Object.entries(initialStorage));
   const fetchCalls = [];
@@ -160,6 +162,9 @@ async function runShippedInstallPage({
     Response
   };
 
+  if (disableObjectHasOwn) {
+    vm.runInNewContext('Object.hasOwn = undefined;', context);
+  }
   vm.runInNewContext(INSTALL_PAGE_SCRIPT, context, {
     filename: 'm1/tablet-install.html'
   });
@@ -219,6 +224,24 @@ test('the shipped browser page posts the Richmond capability and touches only Ri
   }
 });
 
+test('the shipped browser page scrubs and posts without Object.hasOwn support', async () => {
+  const token = capability();
+  const result = await runShippedInstallPage({
+    origin: ORIGIN,
+    token,
+    disableObjectHasOwn: true,
+    initialStorage: {
+      ...RICHMOND_PRESERVED_STATE,
+      gib_m1_richmond_production_sync_auto_v1: 'true'
+    }
+  });
+
+  assert.equal(result.location.hash, '');
+  assert.equal(result.fetchCalls.length, 1);
+  assert.deepEqual(JSON.parse(result.fetchCalls[0].options.body), { capability: token });
+  assert.equal(result.status, 'Tablet authorization installed. Auto-sync is OFF.');
+});
+
 test('the shared browser page still scopes the Revolution production install to Revolution storage', async () => {
   const token = capability();
   const result = await runShippedInstallPage({
@@ -246,7 +269,7 @@ test('the shared browser page still scopes the Revolution production install to 
   }
 });
 
-test('the shipped browser page rejects lookalike Richmond origins before any request or storage change', async () => {
+test('the shipped browser page rejects lookalike Richmond origins after scrubbing the capability', async () => {
   const initialStorage = {
     ...REV_PRESERVED_STATE,
     ...RICHMOND_PRESERVED_STATE,
@@ -259,6 +282,7 @@ test('the shipped browser page rejects lookalike Richmond origins before any req
     initialStorage
   });
 
+  assert.equal(result.location.hash, '');
   assert.equal(result.fetchCalls.length, 0);
   assert.equal(result.status, 'Installation is unavailable at this location.');
   assert.deepEqual(Object.fromEntries(result.storage), initialStorage);
