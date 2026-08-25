@@ -6,6 +6,7 @@ import {
 } from 'node:crypto';
 
 import { runtimeConfig } from './m1-common.mjs';
+import { deploymentInstallationProfile } from './m1-installation.mjs';
 
 export const RICHMOND_PRODUCTION_ORIGIN = 'https://gib-richmond-live.netlify.app';
 export const RICHMOND_PRODUCTION_HOST = 'gib-richmond-live.netlify.app';
@@ -108,11 +109,23 @@ export function richmondProductionRuntimeConfig(env, requestUrl, options = {}) {
 
 export function richmondProductionInstallerConfig(env, requestUrl, options = {}) {
   const runtime = richmondProductionRuntimeConfig(env, requestUrl, options);
+  const profile = deploymentInstallationProfile(
+    options.installationId,
+    options.environment,
+    options.activation
+  );
   const installSecret = validSecret(env.GIB_RICHMOND_PRODUCTION_INSTALL_CAPABILITY_SECRET);
   const runId = exactString(env.GIB_RICHMOND_PRODUCTION_INSTALL_RUN_ID);
+  const pendingInstall = profile?.installationId === 'richmond'
+    && profile.environment === 'production'
+    && profile.activation === 'pending'
+    && profile.writesEnabled === false
+    && runtime?.writesEnabled === false
+    && env.GIB_RICHMOND_PRODUCTION_ACTIVATION === 'pending'
+    && env.GIB_RICHMOND_PRODUCTION_WRITE_ENABLED === 'false';
   if (
     !runtime
-    || runtime.writesEnabled !== true
+    || !pendingInstall
     || !installSecret
     || !INSTALL_RUN_ID_PATTERN.test(runId)
     || equalSecret(installSecret, runtime.webhookToken)
