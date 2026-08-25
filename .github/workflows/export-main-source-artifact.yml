@@ -1,0 +1,29 @@
+name: Export main source artifact
+
+on:
+  push:
+    branches:
+      - agent/export-main-source-artifact
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@v4
+        with:
+          ref: e0c8f0727286e5c55821dd80efe0e3d1af8c5d7b
+          persist-credentials: false
+      - name: Upload source
+        uses: actions/upload-artifact@v4
+        with:
+          name: gib-main-source-e0c8f072
+          path: |
+            .
+            !.git/**
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
