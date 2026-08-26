@@ -1209,9 +1209,9 @@ function unreadableDateWarning_(record) {
   };
 }
 
-function publicRecord_(record) {
+function publicRecord_(record, options) {
   var reviewRequired = collisionReviewRecord_(record);
-  return {
+  var value = {
     displayId: reviewDisplayId_(record),
     recordId: exactText_(record.rowId).slice(0, GIB_M1_RECORD_ID_MAX_),
     timestamp: record.timestamp,
@@ -1227,6 +1227,15 @@ function publicRecord_(record) {
     reviewRequired: reviewRequired,
     reviewMessage: reviewRequired ? 'Possible Admin/kiosk duplicate — review before payroll.' : ''
   };
+  if (options && options.includeRichmondVoidEligibility === true) {
+    value.voidEligible = options.richmondWritesEnabled === true
+      && richmondInstructorSigninVoidEligible_(
+        record,
+        exactText_(record.rowId),
+        options.allRecords
+      );
+  }
+  return value;
 }
 
 function dailyReviewAction_(body) {
@@ -1236,6 +1245,12 @@ function dailyReviewAction_(body) {
   }
   var spreadsheet = openExpectedSpreadsheet_(body);
   var state = readSignins_(signinsSheet_(spreadsheet), { tolerantReview: true });
+  var includeRichmondVoidEligibility = richmondProductionDailyReviewVoidEligibilityContext_(
+    body,
+    spreadsheet
+  );
+  var richmondWritesEnabled = includeRichmondVoidEligibility
+    && gibM1RichmondProductionWritesEnabled_();
   var records = [];
   var warnings = [];
   state.records.forEach(function(record) {
@@ -1249,7 +1264,11 @@ function dailyReviewAction_(body) {
       warnings.push(unreadableWarning_(record));
       return;
     }
-    records.push(publicRecord_(record));
+    records.push(publicRecord_(record, {
+      includeRichmondVoidEligibility: includeRichmondVoidEligibility,
+      richmondWritesEnabled: richmondWritesEnabled,
+      allRecords: state.records
+    }));
   });
   var audit = readAdminAuditHistory_(spreadsheet, date);
   warnings = warnings.concat(audit.warnings);
@@ -1700,7 +1719,7 @@ function addMissedInstructorAction_(body) {
   }
 }
 
-function richmondProductionInstructorVoidEnabled_(body) {
+function richmondProductionInstructorVoidProfileValid_(body) {
   if (
     typeof GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ === 'undefined'
     || typeof GIB_M1_RICHMOND_PRODUCTION_ENVIRONMENT_ === 'undefined'
@@ -1708,12 +1727,12 @@ function richmondProductionInstructorVoidEnabled_(body) {
     || typeof GIB_M1_RICHMOND_PRODUCTION_DEVICE_ === 'undefined'
     || typeof GIB_M1_RICHMOND_PRODUCTION_SITE_ === 'undefined'
     || typeof GIB_M1_RICHMOND_PRODUCTION_AUDIT_HEADERS_ === 'undefined'
+    || typeof GIB_M1_RICHMOND_PRODUCTION_VOID_ELIGIBILITY_VERSION_ === 'undefined'
     || typeof GIB_M1_REQUIRE_EXACT_SIGNINS_SCHEMA === 'undefined'
     || typeof GIB_M1_STAFF_CLOCK_ENABLED === 'undefined'
     || typeof gibM1RichmondProductionWritesEnabled_ !== 'function'
   ) return false;
-  return cleanText_(body && body.action) === 'voidInstructorSignin'
-    && configuredDeploymentTarget_() === 'production'
+  return configuredDeploymentTarget_() === 'production'
     && constantTimeTextEqual_(body && body.target, 'production')
     && constantTimeTextEqual_(body && body.installation, GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_)
     && constantTimeTextEqual_(body && body.environment, GIB_M1_RICHMOND_PRODUCTION_ENVIRONMENT_)
@@ -1722,13 +1741,31 @@ function richmondProductionInstructorVoidEnabled_(body) {
     && GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_TITLE_ === 'Richmond BJJ M1 — PRODUCTION'
     && GIB_M1_RICHMOND_PRODUCTION_SITE_ === 'Richmond'
     && GIB_M1_RICHMOND_PRODUCTION_DEVICE_ === 'Richmond Front Desk Tablet'
+    && GIB_M1_RICHMOND_PRODUCTION_VOID_ELIGIBILITY_VERSION_ === 'richmond-instructor-void-v1'
     && GIB_M1_REQUIRE_EXACT_SIGNINS_SCHEMA === true
     && GIB_M1_STAFF_CLOCK_ENABLED === false
     && GIB_M1_RICHMOND_PRODUCTION_AUDIT_HEADERS_.length === GIB_M1_AUDIT_HEADERS_.length
     && GIB_M1_RICHMOND_PRODUCTION_AUDIT_HEADERS_.every(function(header, index) {
       return header === GIB_M1_AUDIT_HEADERS_[index];
-    })
+    });
+}
+
+function richmondProductionInstructorVoidEnabled_(body) {
+  return cleanText_(body && body.action) === 'voidInstructorSignin'
+    && richmondProductionInstructorVoidProfileValid_(body)
     && gibM1RichmondProductionWritesEnabled_();
+}
+
+function richmondProductionDailyReviewVoidEligibilityContext_(body, spreadsheet) {
+  return cleanText_(body && body.action) === 'dailyReview'
+    && richmondProductionInstructorVoidProfileValid_(body)
+    && constantTimeTextEqual_(
+      body && body.voidEligibilityVersion,
+      GIB_M1_RICHMOND_PRODUCTION_VOID_ELIGIBILITY_VERSION_
+    )
+    && spreadsheet
+    && typeof spreadsheet.getName === 'function'
+    && spreadsheet.getName() === GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_TITLE_;
 }
 
 function validateRichmondInstructorVoid_(body, spreadsheet) {
@@ -1758,8 +1795,7 @@ function validateRichmondInstructorVoid_(body, spreadsheet) {
   return value;
 }
 
-function validRichmondInstructorSigninForVoid_(record, rowId) {
-  var status = cleanText_(record && record.status);
+function validRichmondInstructorSigninForVoidBase_(record, rowId) {
   var timestamp = canonicalTimestamp_(record && record.timestamp);
   var date = displayDate_(record && record.date);
   var notes = safeText_(record && record.notes, 400, true);
@@ -1779,8 +1815,27 @@ function validRichmondInstructorSigninForVoid_(record, rowId) {
     && notes === exactText_(record && record.notes)
     && !adminAddedRecord_(record)
     && !collisionReviewRecord_(record)
-    && !manualRecord_(record)
+    && !manualRecord_(record);
+}
+
+function validRichmondInstructorSigninForVoid_(record, rowId) {
+  var status = cleanText_(record && record.status);
+  return validRichmondInstructorSigninForVoidBase_(record, rowId)
     && (status === 'OK' || status === 'VOID');
+}
+
+function uniqueRichmondInstructorSigninForVoid_(records, rowId) {
+  if (!Array.isArray(records) || !rowId) return null;
+  var matches = records.filter(function(candidate) {
+    return exactText_(candidate && candidate.rowId) === rowId;
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function richmondInstructorSigninVoidEligible_(record, rowId, records) {
+  return validRichmondInstructorSigninForVoidBase_(record, rowId)
+    && cleanText_(record && record.status) === 'OK'
+    && uniqueRichmondInstructorSigninForVoid_(records, rowId) === record;
 }
 
 function richmondInstructorVoidAuditValue_(value, record) {
@@ -1888,13 +1943,8 @@ function voidInstructorSigninAction_(body) {
 
     var sheet = signinsSheet_(spreadsheet);
     var state = readSignins_(sheet);
-    var matches = state.records.filter(function(record) {
-      return exactText_(record.rowId) === value.rowId;
-    });
-    if (
-      matches.length !== 1
-      || !validRichmondInstructorSigninForVoid_(matches[0], value.rowId)
-    ) {
+    var record = uniqueRichmondInstructorSigninForVoid_(state.records, value.rowId);
+    if (!record || !validRichmondInstructorSigninForVoid_(record, value.rowId)) {
       return jsonResult_({
         ok: false,
         result: 'rejected',
@@ -1902,7 +1952,6 @@ function voidInstructorSigninAction_(body) {
       });
     }
 
-    var record = matches[0];
     var auditSheet = spreadsheet.getSheetByName(GIB_M1_AUDIT_SHEET_);
     if (!auditSheet) throw new Error('Admin Audit tab is missing.');
     if (auditSheet.getLastColumn() !== GIB_M1_AUDIT_HEADERS_.length) {

@@ -27,6 +27,7 @@ const AUDIT_HEADERS = Object.freeze([
 const ROW_ID = 'gib-m1-11111111-1111-4111-8111-111111111111';
 const OTHER_ROW_ID = 'gib-m1-22222222-2222-4222-8222-222222222222';
 const REASON = 'Installation check — void after verification';
+const VOID_ELIGIBILITY_VERSION = 'richmond-instructor-void-v1';
 
 function derivedSecret(prefix, scriptId = 'richmond-signin-void-unit-script-id') {
   return createHash('sha256').update(`${prefix}:${scriptId}`, 'utf8').digest('base64url');
@@ -253,6 +254,13 @@ function createHarness({
     post(body) {
       const output = context.doPost({ postData: { contents: JSON.stringify(body) } });
       return JSON.parse(output.text);
+    },
+    voidEligible(record, records = [record]) {
+      return context.richmondInstructorSigninVoidEligible_(
+        record,
+        record && record.rowId,
+        records
+      );
     }
   };
 }
@@ -279,6 +287,86 @@ function voidRequest(overrides = {}) {
     ...overrides
   });
 }
+
+function dailyReview(harness) {
+  return harness.post(productionRequest('dailyReview', {
+    date: '2026-08-26',
+    voidEligibilityVersion: VOID_ELIGIBILITY_VERSION
+  }));
+}
+
+test('updated Apps Script preserves the legacy Daily Review shape until Netlify opts in', () => {
+  const harness = createHarness();
+  const legacy = harness.post(productionRequest('dailyReview', { date: '2026-08-26' }));
+  assert.equal(legacy.records.length, 1);
+  assert.equal(Object.hasOwn(legacy.records[0], 'voidEligible'), false);
+
+  const wrongCapability = harness.post(productionRequest('dailyReview', {
+    date: '2026-08-26',
+    voidEligibilityVersion: 'wrong-version'
+  }));
+  assert.equal(wrongCapability.ok, false);
+  assert.equal(wrongCapability.result, 'rejected');
+});
+
+test('Richmond Daily Review marks only an eligible production Kiosk sign-in voidable', () => {
+  const review = dailyReview(createHarness());
+  assert.equal(review.records.length, 1);
+  assert.equal(review.records[0].source, 'Kiosk');
+  assert.equal(review.records[0].recordId, ROW_ID);
+  assert.equal(review.records[0].voidEligible, true);
+});
+
+test('Richmond Daily Review marks collision-review rows ineligible for void', () => {
+  const review = dailyReview(createHarness({
+    rows: [signin({ device: 'Kiosk collision review', status: 'REVIEW' })]
+  }));
+  assert.equal(review.records.length, 1);
+  assert.equal(review.records[0].source, 'Collision review');
+  assert.equal(review.records[0].reviewRequired, true);
+  assert.equal(review.records[0].voidEligible, false);
+});
+
+test('Richmond Daily Review marks manual rows ineligible for void', () => {
+  const review = dailyReview(createHarness({ rows: [signin({ rowId: '' })] }));
+  assert.equal(review.records.length, 1);
+  assert.equal(review.records[0].source, 'Manual');
+  assert.equal(review.records[0].voidEligible, false);
+});
+
+test('Richmond Daily Review marks Staff Clock-shaped rows ineligible for void', () => {
+  const review = dailyReview(createHarness({
+    rows: [signin({
+      device: 'Richmond Staff Clock'
+    })]
+  }));
+  assert.equal(review.records.length, 1);
+  assert.equal(review.records[0].voidEligible, false);
+});
+
+test('already-voided Richmond rows are ineligible and absent from active Daily Review', () => {
+  const row = signin({ status: 'VOID' });
+  const harness = createHarness({ rows: [row] });
+  assert.equal(harness.voidEligible(row), false);
+  assert.deepEqual(dailyReview(harness).records, []);
+});
+
+test('Richmond Daily Review fails void eligibility closed at every remaining boundary', () => {
+  const cases = [
+    createHarness({ rows: [signin({ site: 'Rev' })] }),
+    createHarness({ rows: [signin({ rowId: 'not-a-production-row-id' })] }),
+    createHarness({ writesEnabled: false })
+  ];
+  cases.forEach(harness => {
+    const review = dailyReview(harness);
+    assert.equal(review.records.length, 1);
+    assert.equal(review.records[0].voidEligible, false);
+  });
+
+  const duplicate = dailyReview(createHarness({ rows: [signin(), signin()] }));
+  assert.equal(duplicate.records.length, 2);
+  assert.equal(duplicate.records.every(record => record.voidEligible === false), true);
+});
 
 test('Richmond instructor void writes one audit before one canonical status change and replays exactly', () => {
   const harness = createHarness();

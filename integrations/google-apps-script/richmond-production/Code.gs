@@ -16,6 +16,7 @@ var GIB_M1_RICHMOND_PRODUCTION_WRITES_ENABLED_ = 'GIB_M1_RICHMOND_PRODUCTION_WRI
 var GIB_M1_RICHMOND_PRODUCTION_DEVICE_ = 'Richmond Front Desk Tablet';
 var GIB_M1_RICHMOND_PRODUCTION_SITE_ = 'Richmond';
 var GIB_M1_RICHMOND_PRODUCTION_PROVISION_ACTION_ = 'provisionRichmondProduction';
+var GIB_M1_RICHMOND_PRODUCTION_VOID_ELIGIBILITY_VERSION_ = 'richmond-instructor-void-v1';
 var GIB_M1_RICHMOND_PRODUCTION_AUDIT_HEADERS_ = [
   'Action Number',
   'Admin Name',
@@ -135,6 +136,12 @@ function gibM1RichmondProductionActionValid_(body) {
   }
   if (action === 'instructorSearch') {
     return !gibM1RichmondProductionObviousTestValue_(body.instructor);
+  }
+  if (action === 'dailyReview' && Object.prototype.hasOwnProperty.call(body, 'voidEligibilityVersion')) {
+    return constantTimeTextEqual_(
+      body.voidEligibilityVersion,
+      GIB_M1_RICHMOND_PRODUCTION_VOID_ELIGIBILITY_VERSION_
+    );
   }
   return true;
 }

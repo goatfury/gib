@@ -15,6 +15,22 @@ const WARNING_CODES = Object.freeze({
   UNREADABLE_AUDIT: 'One Daily Review audit row for this date is incomplete and was not included.',
   AUDIT_UNAVAILABLE: 'Daily Review audit history could not be read.'
 });
+export const RICHMOND_INSTRUCTOR_SIGNIN_VOID_ELIGIBILITY_VERSION =
+  'richmond-instructor-void-v1';
+const REVIEW_RECORD_KEYS = Object.freeze([
+  'displayId',
+  'recordId',
+  'timestamp',
+  'date',
+  'classLabel',
+  'duration',
+  'instructor',
+  'site',
+  'notes',
+  'source',
+  'reviewRequired',
+  'reviewMessage'
+]);
 
 function exactKeys(value, expected) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -78,21 +94,11 @@ function normalizedEventText(value) {
     .replace(/[‐‑‒–—―−]/gu, '-');
 }
 
-export function sanitizeReviewRecord(input, expectedDate = '') {
-  if (!exactKeys(input, [
-    'displayId',
-    'recordId',
-    'timestamp',
-    'date',
-    'classLabel',
-    'duration',
-    'instructor',
-    'site',
-    'notes',
-    'source',
-    'reviewRequired',
-    'reviewMessage'
-  ])) return null;
+export function sanitizeReviewRecord(input, expectedDate = '', options = {}) {
+  const includeVoidEligibility = options.allowInstructorSigninVoid === true;
+  if (!exactKeys(input, includeVoidEligibility
+    ? [...REVIEW_RECORD_KEYS, 'voidEligible']
+    : REVIEW_RECORD_KEYS)) return null;
 
   const value = {
     displayId: text(input.displayId, 80),
@@ -106,7 +112,8 @@ export function sanitizeReviewRecord(input, expectedDate = '') {
     notes: text(input.notes, REVIEW_NOTES_MAX_LENGTH, true),
     source: text(input.source, 40),
     reviewRequired: input.reviewRequired,
-    reviewMessage: text(input.reviewMessage, 240, true)
+    reviewMessage: text(input.reviewMessage, 240, true),
+    ...(includeVoidEligibility ? { voidEligible: input.voidEligible } : {})
   };
   if (
     !DISPLAY_ID_PATTERN.test(value.displayId || '')
@@ -116,9 +123,16 @@ export function sanitizeReviewRecord(input, expectedDate = '') {
     || !positiveDuration(value.duration)
     || !RECORD_SOURCES.has(value.source)
     || typeof value.reviewRequired !== 'boolean'
+    || (includeVoidEligibility && typeof value.voidEligible !== 'boolean')
     || (value.source === 'Collision review') !== value.reviewRequired
     || (value.reviewRequired && !value.reviewMessage)
     || (!value.reviewRequired && value.reviewMessage)
+    || (includeVoidEligibility && value.voidEligible && (
+      value.source !== 'Kiosk'
+      || value.reviewRequired
+      || value.site !== 'Richmond'
+      || !SIGNIN_ROW_ID_PATTERN.test(value.recordId || '')
+    ))
     || Object.values(value).some(item => item == null)
   ) return null;
   return Object.freeze(value);
@@ -218,7 +232,7 @@ export function sanitizeDailyReviewPayload(input, expectedDate, options = {}) {
   const displayIds = new Set();
   const records = sanitizeUniqueArray(
     input.records,
-    value => sanitizeReviewRecord(value, expectedDate),
+    value => sanitizeReviewRecord(value, expectedDate, options),
     displayIds,
     'displayId'
   );

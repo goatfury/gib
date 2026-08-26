@@ -377,8 +377,66 @@ test('pending Daily Review status is authenticated server-side, sanitized for th
   assert.equal(forwarded.target, 'production');
   assert.equal(forwarded.installation, 'richmond');
   assert.equal(forwarded.environment, 'production');
+  assert.equal(forwarded.voidEligibilityVersion, 'richmond-instructor-void-v1');
   assert.equal(forwarded.token, PENDING_ENV.GIB_RICHMOND_PRODUCTION_WEBHOOK_TOKEN);
   assert.equal(forwarded.adminActionToken, PENDING_ENV.GIB_RICHMOND_PRODUCTION_ADMIN_ACTION_TOKEN);
+
+  const pendingRecord = {
+    displayId: 'sheet-row-2',
+    recordId: 'gib-m1-11111111-1111-4111-8111-111111111111',
+    timestamp: '2026-08-22 10:00:00',
+    date: '2026-08-22',
+    classLabel: '10:00 AM Richmond BJJ',
+    duration: 1,
+    instructor: 'Andrew Smith',
+    site: 'Richmond',
+    notes: '',
+    source: 'Kiosk',
+    reviewRequired: false,
+    reviewMessage: '',
+    voidEligible: false
+  };
+  const nonEmpty = await handleProductionStatus(request('/api/m1-production-status', {
+    body: {}
+  }), {
+    ...PRODUCTION_DEPENDENCIES,
+    activation: 'pending',
+    env: PENDING_ENV,
+    fetch: async () => new Response(JSON.stringify({
+      ok: true,
+      date: '2026-08-22',
+      records: [pendingRecord],
+      warnings: [],
+      auditHistory: []
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    dateNow: new Date('2026-08-22T16:00:00Z')
+  });
+  assert.equal(nonEmpty.status, 200);
+  assert.deepEqual(await nonEmpty.json(), {
+    ok: true,
+    empty: false,
+    writesEnabled: false
+  });
+
+  const missingEligibility = await handleProductionStatus(request('/api/m1-production-status', {
+    body: {}
+  }), {
+    ...PRODUCTION_DEPENDENCIES,
+    activation: 'pending',
+    env: PENDING_ENV,
+    fetch: async () => new Response(JSON.stringify({
+      ok: true,
+      date: '2026-08-22',
+      records: [{
+        ...pendingRecord,
+        voidEligible: undefined
+      }],
+      warnings: [],
+      auditHistory: []
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    dateNow: new Date('2026-08-22T16:00:00Z')
+  });
+  assert.equal(missingEligibility.status, 502);
 
   let activeFetchCalls = 0;
   const active = await handleProductionStatus(request('/api/m1-production-status', {

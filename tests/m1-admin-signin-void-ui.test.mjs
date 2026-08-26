@@ -37,6 +37,7 @@ function reviewRecord(overrides = {}) {
     source: 'Kiosk',
     reviewRequired: false,
     reviewMessage: '',
+    voidEligible: true,
     ...overrides
   };
 }
@@ -102,6 +103,7 @@ test('control is authenticated Richmond-production-only, row-derived, and uses t
   assert.match(eligibility, /IS_RICHMOND_PRODUCTION_ORIGIN/u);
   assert.match(eligibility, /ADMIN_MUTATIONS_ENABLED/u);
   assert.match(eligibility, /\['Andrew Smith', 'Stuart Turner'\]\.includes\(currentAdminName\)/u);
+  assert.match(eligibility, /record\.voidEligible === true/u);
   assert.match(eligibility, /RICHMOND_PRODUCTION_ROW_ID_PATTERN\.test\(record\.recordId\)/u);
 
   const recordRenderer = sourceBetween('function recordElement(', 'function warningElement(');
@@ -118,6 +120,37 @@ test('control is authenticated Richmond-production-only, row-derived, and uses t
   assert.doesNotMatch(adminHtml, new RegExp(TARGET_ROW_ID, 'u'));
   const flow = sourceBetween('function readSigninVoidRequest(', 'function uniqueRequestId(');
   assert.doesNotMatch(flow, /API\.staffTime|STAFF_CLOCK_ENABLED|staffTimeVoid/u);
+});
+
+test('server eligibility shows Void only for the eligible Kiosk row', () => {
+  const eligibility = sourceBetween('function signinVoidEligible(', 'function buildSigninVoidForm(');
+  const context = vm.createContext({
+    IS_RICHMOND_PRODUCTION_ORIGIN: true,
+    ADMIN_MUTATIONS_ENABLED: true,
+    currentAdminName: 'Andrew Smith',
+    validReviewRecord: () => true,
+    RICHMOND_PRODUCTION_ROW_ID_PATTERN: ROW_ID_PATTERN
+  });
+  new vm.Script(`${eligibility}\nthis.eligible = signinVoidEligible;`).runInContext(context);
+
+  assert.equal(context.eligible(reviewRecord()), true, 'eligible Kiosk row shows Void');
+  assert.equal(context.eligible(reviewRecord({
+    source: 'Collision review',
+    reviewRequired: true,
+    reviewMessage: 'Possible Admin/kiosk duplicate — review before payroll.',
+    voidEligible: false
+  })), false, 'collision-review row hides Void');
+  assert.equal(context.eligible(reviewRecord({
+    recordId: '',
+    source: 'Manual',
+    voidEligible: false
+  })), false, 'manual row hides Void');
+  assert.equal(context.eligible(reviewRecord({
+    voidEligible: false
+  })), false, 'Staff Clock row hides Void');
+  assert.equal(context.eligible(reviewRecord({
+    voidEligible: false
+  })), false, 'already-voided row hides Void');
 });
 
 test('permanent void request identity is bound deterministically to the exact RowID', () => {

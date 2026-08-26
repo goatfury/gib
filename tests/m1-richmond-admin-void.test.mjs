@@ -19,6 +19,7 @@ import {
   config as voidConfig,
   handleAdminVoid
 } from '../netlify/functions/m1-admin-void.mjs';
+import { handleAdminReview } from '../netlify/functions/m1-admin-review.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 const voidSource = readFileSync(new URL('netlify/functions/m1-admin-void.mjs', ROOT), 'utf8');
@@ -152,6 +153,46 @@ test('dedicated Richmond void route is literal, POST-only, and tightly rate-limi
   });
   assert.equal(response.status, 405);
   assert.equal(fetchCalls, 0);
+});
+
+test('Richmond Admin opts into the versioned server eligibility payload', async () => {
+  let forwarded = null;
+  const record = {
+    displayId: 'sheet-row-2',
+    recordId: ROW_ID,
+    timestamp: '2026-08-26 06:59:00',
+    date: '2026-08-26',
+    classLabel: '6:00 AM–7:00 AM Muay Thai Fundamentals',
+    duration: 1,
+    instructor: 'Andrew Smith',
+    site: 'Richmond',
+    notes: 'Install check only',
+    source: 'Kiosk',
+    reviewRequired: false,
+    reviewMessage: '',
+    voidEligible: true
+  };
+  const response = await handleAdminReview(request({
+    url: `${ORIGIN}/.netlify/functions/m1-admin-review`,
+    body: { date: '2026-08-26' }
+  }), {
+    ...ACTIVE_DEPENDENCIES,
+    dateNow: new Date(NOW_MS),
+    fetch: async (_url, init) => {
+      forwarded = JSON.parse(init.body);
+      return new Response(JSON.stringify({
+        ok: true,
+        date: '2026-08-26',
+        records: [record],
+        warnings: [],
+        auditHistory: []
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+  });
+  assert.equal(response.status, 200);
+  assert.equal(forwarded.action, 'dailyReview');
+  assert.equal(forwarded.voidEligibilityVersion, 'richmond-instructor-void-v1');
+  assert.equal((await responseBody(response)).records[0].voidEligible, true);
 });
 
 test('valid active Richmond Admin void forwards one exact authenticated semantic request', async () => {
@@ -374,6 +415,73 @@ test('unreachable and rejected Google responses never report success', async () 
   });
   assert.equal(rejected.status, 502);
   assert.equal((await responseBody(rejected)).code, 'ADMIN_VOID_REJECTED');
+});
+
+test('Richmond Daily Review preserves only the server-computed void eligibility boundary', () => {
+  const record = {
+    displayId: 'sheet-row-2',
+    recordId: ROW_ID,
+    timestamp: '2026-08-26 06:59:00',
+    date: '2026-08-26',
+    classLabel: '6:00 AM–7:00 AM Muay Thai Fundamentals',
+    duration: 1,
+    instructor: 'Andrew Smith',
+    site: 'Richmond',
+    notes: 'Install check only',
+    source: 'Kiosk',
+    reviewRequired: false,
+    reviewMessage: '',
+    voidEligible: true
+  };
+  const payload = value => ({
+    ok: true,
+    date: '2026-08-26',
+    records: [value],
+    warnings: [],
+    auditHistory: []
+  });
+  const richmondOptions = { allowInstructorSigninVoid: true };
+
+  const eligible = sanitizeDailyReviewPayload(payload(record), '2026-08-26', richmondOptions);
+  assert.equal(eligible.records[0].voidEligible, true);
+  assert.equal(sanitizeDailyReviewPayload(payload(record), '2026-08-26'), null);
+
+  const { voidEligible: _omitted, ...missingField } = record;
+  assert.equal(sanitizeDailyReviewPayload(payload(missingField), '2026-08-26', richmondOptions), null);
+  assert.ok(sanitizeDailyReviewPayload(payload(missingField), '2026-08-26'));
+  assert.equal(sanitizeDailyReviewPayload(payload({
+    ...record,
+    voidEligible: 'true'
+  }), '2026-08-26', richmondOptions), null);
+
+  const serverOnlyIneligible = sanitizeDailyReviewPayload(payload({
+    ...record,
+    voidEligible: false
+  }), '2026-08-26', richmondOptions);
+  assert.ok(serverOnlyIneligible);
+  assert.equal(serverOnlyIneligible.records[0].voidEligible, false);
+
+  const publiclyIneligible = [
+    {
+      ...record,
+      source: 'Collision review',
+      reviewRequired: true,
+      reviewMessage: 'Possible Admin/kiosk duplicate — review before payroll.',
+      voidEligible: false
+    },
+    { ...record, recordId: '', source: 'Manual', voidEligible: false },
+    { ...record, site: 'Rev', voidEligible: false },
+    { ...record, recordId: 'invalid-row-id', voidEligible: false }
+  ];
+  publiclyIneligible.forEach(value => {
+    const sanitized = sanitizeDailyReviewPayload(payload(value), '2026-08-26', richmondOptions);
+    assert.ok(sanitized);
+    assert.equal(sanitized.records[0].voidEligible, false);
+    assert.equal(sanitizeDailyReviewPayload(payload({
+      ...value,
+      voidEligible: true
+    }), '2026-08-26', richmondOptions), null);
+  });
 });
 
 test('shared Admin contracts expose void audit history without widening addition results', () => {
