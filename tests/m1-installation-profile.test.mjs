@@ -206,7 +206,7 @@ test('Richmond client is fixed to its site, official schedule, remote Daily Revi
   assert.doesNotMatch(kioskHtml, /RICHMOND TEST ONLY — QA Preview Class/u);
   assert.doesNotMatch(kioskHtml, /phase: 'disabled'/u);
   assert.match(kioskHtml, /if \(BACKEND_ENABLED && localStorage\.getItem\(SYNC_AUTO_KEY\) === 'true'\)/u);
-  assert.match(kioskHtml, /if \(IS_RICHMOND && localStorage\.getItem\(SYNC_AUTO_KEY\) === null\)[\s\S]*localStorage\.setItem\(SYNC_AUTO_KEY, 'true'\)/u);
+  assert.match(kioskHtml, /if \(IS_RICHMOND && !IS_RICHMOND_PRODUCTION && localStorage\.getItem\(SYNC_AUTO_KEY\) === null\)[\s\S]*localStorage\.setItem\(SYNC_AUTO_KEY, 'true'\)/u);
   assert.match(kioskHtml, /window\.addEventListener\('online',[\s\S]*loadSyncQueue\(\)\.length[\s\S]*syncNow\(\)/u);
   assert.match(kioskHtml, /navigator\.onLine !== false[\s\S]*window\.setTimeout\(syncNow, 0\)/u);
   assert.match(kioskHtml, /\$\('#dailyReviewLink'\)\.href = '\/m1\/admin\/'/u);

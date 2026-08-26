@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
+import { installationProfile } from '../m1/installation-profile-core.mjs';
 import {
   DAY_ROLLOVER_CHECK_INTERVAL_MS,
   appendBatchToState,
@@ -867,17 +868,66 @@ test('kiosk wires guarded New York day rollover without a refresh or storage mut
   );
 });
 
-test('kiosk selects production only from the exact canonical origin', () => {
+test('kiosk selects production transport only from the exact canonical origins', () => {
   assert.match(kioskHtml, /const PRODUCTION_ORIGIN = 'https:\/\/gib-live\.netlify\.app';/u);
   assert.match(kioskHtml, /const IS_PRODUCTION_ORIGIN = location\.origin === PRODUCTION_ORIGIN;/u);
+  assert.match(kioskHtml, /const RICHMOND_PRODUCTION_ORIGIN = 'https:\/\/gib-richmond-live\.netlify\.app';/u);
+  assert.match(
+    kioskHtml,
+    /const IS_RICHMOND_PRODUCTION_ORIGIN = IS_RICHMOND_PRODUCTION[\s\S]*location\.origin === RICHMOND_PRODUCTION_ORIGIN[\s\S]*INSTALLATION\.allowedOrigin === RICHMOND_PRODUCTION_ORIGIN;/u
+  );
+  assert.match(
+    kioskHtml,
+    /const IS_REVOLUTION_PRODUCTION_ORIGIN = !IS_RICHMOND[\s\S]*INSTALLATION\.installationId === 'rev'[\s\S]*IS_PRODUCTION_ORIGIN;/u
+  );
+  assert.match(
+    kioskHtml,
+    /const IS_PRODUCTION_SYNC_ORIGIN = IS_REVOLUTION_PRODUCTION_ORIGIN\s*\|\| IS_RICHMOND_PRODUCTION_ORIGIN;/u
+  );
   assert.doesNotMatch(kioskHtml, /endsWith\([^\n]*gib-live|includes\([^\n]*gib-live/u);
-  assert.match(kioskHtml, /requestAcknowledgements\(submittedRows, \{[\s\S]*?productionOrigin: IS_PRODUCTION_ORIGIN[\s\S]*?\}\);/u);
+  assert.match(kioskHtml, /requestAcknowledgements\(submittedRows, \{[\s\S]*?productionOrigin: IS_PRODUCTION_SYNC_ORIGIN[\s\S]*?\}\);/u);
   assert.equal(
-    [...kioskHtml.matchAll(/\{ productionOrigin: IS_PRODUCTION_ORIGIN \}/gu)].length,
-    2
+    [...kioskHtml.matchAll(/productionOrigin: IS_PRODUCTION_SYNC_ORIGIN/gu)].length,
+    3
   );
   assert.match(kioskHtml, /2026-08-18 M1B TEST staff-clock-operational-candidate/u);
   assert.match(kioskHtml, /secure host-only cookie/u);
+
+  const transportSource = kioskHtml.match(
+    /const PRODUCTION_ORIGIN = 'https:\/\/gib-live\.netlify\.app';[\s\S]*?const IS_PRODUCTION_SYNC_ORIGIN = IS_REVOLUTION_PRODUCTION_ORIGIN\s*\|\| IS_RICHMOND_PRODUCTION_ORIGIN;/u
+  )?.[0];
+  assert.ok(transportSource);
+  const selectsProductionTransport = Function(
+    'location',
+    'INSTALLATION',
+    'IS_RICHMOND',
+    'IS_RICHMOND_PRODUCTION',
+    `"use strict"; ${transportSource}; return IS_PRODUCTION_SYNC_ORIGIN;`
+  );
+  assert.equal(selectsProductionTransport(
+    { origin: 'https://gib-live.netlify.app' },
+    installationProfile('rev'),
+    false,
+    false
+  ), true);
+  assert.equal(selectsProductionTransport(
+    { origin: 'https://gib-richmond-live.netlify.app' },
+    installationProfile('richmond', 'production', 'active'),
+    true,
+    true
+  ), true);
+  assert.equal(selectsProductionTransport(
+    { origin: 'https://gib-live.netlify.app' },
+    installationProfile('richmond', 'production', 'active'),
+    true,
+    true
+  ), false);
+  assert.equal(selectsProductionTransport(
+    { origin: 'https://gib-richmond-live.netlify.app' },
+    installationProfile('rev'),
+    false,
+    false
+  ), false);
 });
 
 test('turning auto-sync OFF before a pending timer fires prevents the send', () => {
