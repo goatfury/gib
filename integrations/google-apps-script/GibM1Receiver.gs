@@ -177,12 +177,14 @@ function adReceiverV2_(e) {
       action === 'dailyReview'
       || action === 'instructorSearch'
       || action === 'addMissedInstructor'
+      || action === 'voidInstructorSignin'
     ) {
       if (!adminActionAuthorized_(body)) return rejectedAuthResult_();
     }
     if (action === 'dailyReview') return dailyReviewAction_(body);
     if (action === 'instructorSearch') return instructorSearchAction_(body);
     if (action === 'addMissedInstructor') return addMissedInstructorAction_(body);
+    if (action === 'voidInstructorSignin') return voidInstructorSigninAction_(body);
     if (
       action === 'recoveryList'
       || action === 'recoverSignins'
@@ -1207,9 +1209,9 @@ function unreadableDateWarning_(record) {
   };
 }
 
-function publicRecord_(record) {
+function publicRecord_(record, options) {
   var reviewRequired = collisionReviewRecord_(record);
-  return {
+  var value = {
     displayId: reviewDisplayId_(record),
     recordId: exactText_(record.rowId).slice(0, GIB_M1_RECORD_ID_MAX_),
     timestamp: record.timestamp,
@@ -1225,6 +1227,15 @@ function publicRecord_(record) {
     reviewRequired: reviewRequired,
     reviewMessage: reviewRequired ? 'Possible Admin/kiosk duplicate — review before payroll.' : ''
   };
+  if (options && options.includeRichmondVoidEligibility === true) {
+    value.voidEligible = options.richmondWritesEnabled === true
+      && richmondInstructorSigninVoidEligible_(
+        record,
+        exactText_(record.rowId),
+        options.allRecords
+      );
+  }
+  return value;
 }
 
 function dailyReviewAction_(body) {
@@ -1234,6 +1245,12 @@ function dailyReviewAction_(body) {
   }
   var spreadsheet = openExpectedSpreadsheet_(body);
   var state = readSignins_(signinsSheet_(spreadsheet), { tolerantReview: true });
+  var includeRichmondVoidEligibility = richmondProductionDailyReviewVoidEligibilityContext_(
+    body,
+    spreadsheet
+  );
+  var richmondWritesEnabled = includeRichmondVoidEligibility
+    && gibM1RichmondProductionWritesEnabled_();
   var records = [];
   var warnings = [];
   state.records.forEach(function(record) {
@@ -1247,7 +1264,11 @@ function dailyReviewAction_(body) {
       warnings.push(unreadableWarning_(record));
       return;
     }
-    records.push(publicRecord_(record));
+    records.push(publicRecord_(record, {
+      includeRichmondVoidEligibility: includeRichmondVoidEligibility,
+      richmondWritesEnabled: richmondWritesEnabled,
+      allRecords: state.records
+    }));
   });
   var audit = readAdminAuditHistory_(spreadsheet, date);
   warnings = warnings.concat(audit.warnings);
@@ -1295,6 +1316,18 @@ function instructorSearchAction_(body) {
 
 function obviousTestValue_(value) {
   return /\b(test|fake|demo|qa)\b|do not pay/i.test(cleanText_(value));
+}
+
+function richmondInstructorVoidAuditContractEnabled_() {
+  return typeof GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ !== 'undefined'
+    && typeof GIB_M1_RICHMOND_PRODUCTION_ENVIRONMENT_ !== 'undefined'
+    && typeof GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_TITLE_ !== 'undefined'
+    && typeof GIB_M1_STAFF_CLOCK_ENABLED !== 'undefined'
+    && configuredDeploymentTarget_() === 'production'
+    && GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ === 'richmond'
+    && GIB_M1_RICHMOND_PRODUCTION_ENVIRONMENT_ === 'production'
+    && GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_TITLE_ === 'Richmond BJJ M1 — PRODUCTION'
+    && GIB_M1_STAFF_CLOCK_ENABLED === false;
 }
 
 function adminAuditValues_(sheet) {
@@ -1349,9 +1382,14 @@ function readAdminAuditHistory_(spreadsheet, date) {
         || duration > 8
         || !exactText_(row[8])
         || exactText_(row[8]).length > GIB_M1_AUDIT_REASON_MAX_
-        || (result !== 'added' && result !== 'already exists')
+        || (
+          result !== 'added'
+          && result !== 'already exists'
+          && !(result === 'voided' && richmondInstructorVoidAuditContractEnabled_())
+        )
         || exactText_(row[10]).length > GIB_M1_RECORD_ID_MAX_
         || (result === 'added' && exactText_(row[10]).indexOf('gib-admin-') !== 0)
+        || (result === 'voided' && !GIB_M1_PRODUCTION_ROW_ID_PATTERN_.test(exactText_(row[10])))
       ) {
         warnings.push({
           displayId: auditId,
@@ -1423,7 +1461,11 @@ function nextAuditActionNumber_(sheet) {
 function appendAdminAudit_(sheet, value, result, linkedRecordId) {
   var linkedId = boundedAdminLinkedRecordId_(linkedRecordId);
   if (
-    (result !== 'added' && result !== 'already exists')
+    (
+      result !== 'added'
+      && result !== 'already exists'
+      && !(result === 'voided' && richmondInstructorVoidAuditContractEnabled_())
+    )
     || linkedId !== exactText_(linkedRecordId)
   ) {
     throw new Error('Admin Audit result is invalid.');
@@ -1671,6 +1713,300 @@ function addMissedInstructorAction_(body) {
       ok: false,
       result: 'failed',
       message: 'The Admin addition failed.'
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function richmondProductionInstructorVoidProfileValid_(body) {
+  if (
+    typeof GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ === 'undefined'
+    || typeof GIB_M1_RICHMOND_PRODUCTION_ENVIRONMENT_ === 'undefined'
+    || typeof GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_TITLE_ === 'undefined'
+    || typeof GIB_M1_RICHMOND_PRODUCTION_DEVICE_ === 'undefined'
+    || typeof GIB_M1_RICHMOND_PRODUCTION_SITE_ === 'undefined'
+    || typeof GIB_M1_RICHMOND_PRODUCTION_AUDIT_HEADERS_ === 'undefined'
+    || typeof GIB_M1_RICHMOND_PRODUCTION_VOID_ELIGIBILITY_VERSION_ === 'undefined'
+    || typeof GIB_M1_REQUIRE_EXACT_SIGNINS_SCHEMA === 'undefined'
+    || typeof GIB_M1_STAFF_CLOCK_ENABLED === 'undefined'
+    || typeof gibM1RichmondProductionWritesEnabled_ !== 'function'
+  ) return false;
+  return configuredDeploymentTarget_() === 'production'
+    && constantTimeTextEqual_(body && body.target, 'production')
+    && constantTimeTextEqual_(body && body.installation, GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_)
+    && constantTimeTextEqual_(body && body.environment, GIB_M1_RICHMOND_PRODUCTION_ENVIRONMENT_)
+    && GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ === 'richmond'
+    && GIB_M1_RICHMOND_PRODUCTION_ENVIRONMENT_ === 'production'
+    && GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_TITLE_ === 'Richmond BJJ M1 — PRODUCTION'
+    && GIB_M1_RICHMOND_PRODUCTION_SITE_ === 'Richmond'
+    && GIB_M1_RICHMOND_PRODUCTION_DEVICE_ === 'Richmond Front Desk Tablet'
+    && GIB_M1_RICHMOND_PRODUCTION_VOID_ELIGIBILITY_VERSION_ === 'richmond-instructor-void-v1'
+    && GIB_M1_REQUIRE_EXACT_SIGNINS_SCHEMA === true
+    && GIB_M1_STAFF_CLOCK_ENABLED === false
+    && GIB_M1_RICHMOND_PRODUCTION_AUDIT_HEADERS_.length === GIB_M1_AUDIT_HEADERS_.length
+    && GIB_M1_RICHMOND_PRODUCTION_AUDIT_HEADERS_.every(function(header, index) {
+      return header === GIB_M1_AUDIT_HEADERS_[index];
+    });
+}
+
+function richmondProductionInstructorVoidEnabled_(body) {
+  return cleanText_(body && body.action) === 'voidInstructorSignin'
+    && richmondProductionInstructorVoidProfileValid_(body)
+    && gibM1RichmondProductionWritesEnabled_();
+}
+
+function richmondProductionDailyReviewVoidEligibilityContext_(body, spreadsheet) {
+  return cleanText_(body && body.action) === 'dailyReview'
+    && richmondProductionInstructorVoidProfileValid_(body)
+    && constantTimeTextEqual_(
+      body && body.voidEligibilityVersion,
+      GIB_M1_RICHMOND_PRODUCTION_VOID_ELIGIBILITY_VERSION_
+    )
+    && spreadsheet
+    && typeof spreadsheet.getName === 'function'
+    && spreadsheet.getName() === GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_TITLE_;
+}
+
+function validateRichmondInstructorVoid_(body, spreadsheet) {
+  if (
+    typeof body.requestId !== 'string'
+    || typeof body.rowId !== 'string'
+    || typeof body.adminName !== 'string'
+    || typeof body.reason !== 'string'
+  ) return null;
+  var value = {
+    requestId: safeExactText_(body.requestId, 320, false),
+    rowId: safeExactText_(body.rowId, GIB_M1_RECORD_ID_MAX_, false),
+    adminName: safeText_(body.adminName, 80, false),
+    reason: safeText_(body.reason, GIB_M1_AUDIT_REASON_MAX_, false)
+  };
+  if (
+    value.requestId !== body.requestId
+    || value.rowId !== body.rowId
+    || value.adminName !== body.adminName
+    || value.reason !== body.reason
+    || !GIB_M1_PRODUCTION_ROW_ID_PATTERN_.test(value.rowId)
+    || value.requestId !== 'gib-m1-admin-void-' + value.rowId
+    || GIB_M1_ADMIN_NAMES_.indexOf(value.adminName) === -1
+    || value.reason.length < 3
+    || spreadsheet.getName() !== GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_TITLE_
+  ) return null;
+  return value;
+}
+
+function validRichmondInstructorSigninForVoidBase_(record, rowId) {
+  var timestamp = canonicalTimestamp_(record && record.timestamp);
+  var date = displayDate_(record && record.date);
+  var notes = safeText_(record && record.notes, 400, true);
+  return exactText_(record && record.rowId) === rowId
+    && GIB_M1_PRODUCTION_ROW_ID_PATTERN_.test(rowId)
+    && Boolean(timestamp)
+    && validCalendarDate_(date)
+    && timestamp.slice(0, 10) === date
+    && date <= todayNewYork_()
+    && !reviewRecordIssue_(record)
+    && safeText_(record && record.classLabel, GIB_M1_CLASS_LABEL_MAX_, false) === record.classLabel
+    && safeText_(record && record.instructor, GIB_M1_INSTRUCTOR_MAX_, false) === record.instructor
+    && !gibM1RichmondProductionObviousTestValue_(record && record.instructor)
+    && exactText_(record && record.site) === GIB_M1_RICHMOND_PRODUCTION_SITE_
+    && cleanText_(record && record.device) === GIB_M1_RICHMOND_PRODUCTION_DEVICE_
+    && safeText_(record && record.build, 120, false) === record.build
+    && notes === exactText_(record && record.notes)
+    && !adminAddedRecord_(record)
+    && !collisionReviewRecord_(record)
+    && !manualRecord_(record);
+}
+
+function validRichmondInstructorSigninForVoid_(record, rowId) {
+  var status = cleanText_(record && record.status);
+  return validRichmondInstructorSigninForVoidBase_(record, rowId)
+    && (status === 'OK' || status === 'VOID');
+}
+
+function uniqueRichmondInstructorSigninForVoid_(records, rowId) {
+  if (!Array.isArray(records) || !rowId) return null;
+  var matches = records.filter(function(candidate) {
+    return exactText_(candidate && candidate.rowId) === rowId;
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function richmondInstructorSigninVoidEligible_(record, rowId, records) {
+  return validRichmondInstructorSigninForVoidBase_(record, rowId)
+    && cleanText_(record && record.status) === 'OK'
+    && uniqueRichmondInstructorSigninForVoid_(records, rowId) === record;
+}
+
+function richmondInstructorVoidAuditValue_(value, record) {
+  return {
+    adminName: value.adminName,
+    instructor: record.instructor,
+    date: record.date,
+    classLabel: record.classLabel,
+    site: record.site,
+    duration: record.duration,
+    reason: value.reason
+  };
+}
+
+function existingRichmondInstructorVoidAudit_(sheet, value, rowId) {
+  var values = adminAuditValues_(sheet);
+  var matches = [];
+  var actionNumbers = {};
+  values.slice(1).forEach(function(row) {
+    var actionNumber = Number(row[0]);
+    if (
+      !isFinite(actionNumber)
+      || actionNumber < 1
+      || Math.floor(actionNumber) !== actionNumber
+      || actionNumber > GIB_M1_MAX_SAFE_INTEGER_
+      || actionNumbers[String(actionNumber)]
+    ) throw new Error('Admin Audit action number is invalid or duplicated.');
+    actionNumbers[String(actionNumber)] = true;
+    var result = cleanText_(row[9]).toLowerCase();
+    if (
+      exactText_(row[10]) === rowId
+      && (result === 'voided' || result === 'already voided')
+    ) matches.push(row);
+  });
+  if (matches.length > 1) throw new Error('Instructor void audit replay state is ambiguous.');
+  if (!matches.length) return { actionNumber: 0, conflict: false };
+  var row = matches[0];
+  var actionNumber = Number(row[0]);
+  if (
+    cleanText_(row[9]).toLowerCase() !== 'voided'
+    || !sameExactAdminAudit_(row, value, 'voided', rowId)
+  ) return { actionNumber: 0, conflict: true };
+  return { actionNumber: actionNumber, conflict: false };
+}
+
+function completedRichmondInstructorVoid_(result, value, record, auditActionNumber) {
+  if (
+    (result !== 'voided' && result !== 'already voided')
+    || !Number.isSafeInteger(auditActionNumber)
+    || auditActionNumber < 1
+  ) throw new Error('Instructor void confirmation is invalid.');
+  return jsonResult_({
+    ok: true,
+    result: result,
+    requestId: value.requestId,
+    linkedRecordId: value.rowId,
+    auditActionNumber: auditActionNumber,
+    confirmation: {
+      adminName: value.adminName,
+      rowId: record.rowId,
+      timestamp: record.timestamp,
+      date: record.date,
+      classLabel: record.classLabel,
+      duration: record.duration,
+      instructor: record.instructor,
+      site: record.site,
+      device: record.device,
+      build: record.build,
+      notes: record.notes,
+      status: 'VOID',
+      reason: value.reason
+    }
+  });
+}
+
+function voidInstructorSigninAction_(body) {
+  if (!richmondProductionInstructorVoidEnabled_(body)) return rejectedAuthResult_();
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return jsonResult_({
+      ok: false,
+      result: 'failed',
+      message: 'The receiver was busy. Nothing changed.'
+    });
+  }
+
+  try {
+    if (!richmondProductionInstructorVoidEnabled_(body)) return rejectedAuthResult_();
+    var spreadsheet = openExpectedSpreadsheet_(body);
+    var value = validateRichmondInstructorVoid_(body, spreadsheet);
+    if (!value) {
+      return jsonResult_({
+        ok: false,
+        result: 'rejected',
+        message: 'The instructor sign-in void was rejected.'
+      });
+    }
+
+    var sheetNames = spreadsheet.getSheets().map(function(candidateSheet) {
+      return candidateSheet.getName();
+    }).sort();
+    if (sheetNames.join('|') !== 'Admin Audit|Signins') {
+      throw new Error('Richmond production Sheet tabs are invalid.');
+    }
+
+    var sheet = signinsSheet_(spreadsheet);
+    var state = readSignins_(sheet);
+    var record = uniqueRichmondInstructorSigninForVoid_(state.records, value.rowId);
+    if (!record || !validRichmondInstructorSigninForVoid_(record, value.rowId)) {
+      return jsonResult_({
+        ok: false,
+        result: 'rejected',
+        message: 'The instructor sign-in row was not eligible for void.'
+      });
+    }
+
+    var auditSheet = spreadsheet.getSheetByName(GIB_M1_AUDIT_SHEET_);
+    if (!auditSheet) throw new Error('Admin Audit tab is missing.');
+    if (auditSheet.getLastColumn() !== GIB_M1_AUDIT_HEADERS_.length) {
+      throw new Error('Admin Audit columns do not match.');
+    }
+    var auditValue = richmondInstructorVoidAuditValue_(value, record);
+    var existingAudit = existingRichmondInstructorVoidAudit_(auditSheet, auditValue, value.rowId);
+    if (existingAudit.conflict) {
+      return jsonResult_({
+        ok: false,
+        result: 'rejected',
+        message: 'The instructor sign-in void conflicts with its audit history.'
+      });
+    }
+
+    var status = cleanText_(record.status);
+    if (status === 'VOID') {
+      if (!existingAudit.actionNumber) {
+        return jsonResult_({
+          ok: false,
+          result: 'rejected',
+          message: 'The instructor sign-in void is missing its audit history.'
+        });
+      }
+      return completedRichmondInstructorVoid_(
+        'already voided',
+        value,
+        record,
+        existingAudit.actionNumber
+      );
+    }
+    if (status !== 'OK') {
+      return jsonResult_({
+        ok: false,
+        result: 'rejected',
+        message: 'The instructor sign-in row was not eligible for void.'
+      });
+    }
+
+    var actionNumber = existingAudit.actionNumber;
+    if (!actionNumber) {
+      if (!gibM1RichmondProductionWritesEnabled_()) return rejectedAuthResult_();
+      actionNumber = appendAdminAudit_(auditSheet, auditValue, 'voided', value.rowId);
+      SpreadsheetApp.flush();
+    }
+    if (!gibM1RichmondProductionWritesEnabled_()) return rejectedAuthResult_();
+    sheet.getRange(record.sheetRow, state.indexes.status + 1, 1, 1).setValue('VOID');
+    SpreadsheetApp.flush();
+    record.status = 'VOID';
+    return completedRichmondInstructorVoid_('voided', value, record, actionNumber);
+  } catch (error) {
+    return jsonResult_({
+      ok: false,
+      result: 'failed',
+      message: 'The instructor sign-in void failed.'
     });
   } finally {
     lock.releaseLock();

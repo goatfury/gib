@@ -1,4 +1,4 @@
-import { jsonResponse } from './_lib/m1-common.mjs';
+import { jsonResponse, postGoogle } from './_lib/m1-common.mjs';
 import {
   exactObjectKeys,
   productionDeviceAuthorization,
@@ -32,6 +32,32 @@ function statusResponse(status, authorized = false, richmond = null) {
       activation: richmond.writesEnabled === true ? 'active' : 'pending'
     }
     : { authorized: authorized === true });
+}
+
+function richmondWriteGateConfirmed(google) {
+  const value = google?.readable === true ? google.value : null;
+  if (!exactObjectKeys(value, [
+    'ok',
+    'target',
+    'installation',
+    'environment',
+    'empty',
+    'signinsRows',
+    'auditRows',
+    'writesEnabled'
+  ])) return false;
+  if (
+    value.ok !== true
+    || value.target !== 'production'
+    || value.installation !== 'richmond'
+    || value.environment !== 'production'
+    || !Number.isSafeInteger(value.signinsRows)
+    || value.signinsRows < 0
+    || !Number.isSafeInteger(value.auditRows)
+    || value.auditRows < 0
+    || value.empty !== (value.signinsRows === 0 && value.auditRows === 0)
+  ) return false;
+  return value.writesEnabled === true;
 }
 
 async function readExactEmptyJson(request) {
@@ -91,6 +117,17 @@ export async function handleTabletStatus(request, dependencies = {}) {
     runtime,
     dependencies.now ?? Date.now()
     );
+  if (richmondProduction && runtime.writesEnabled === true && device.authorized) {
+    const google = await postGoogle(
+      runtime,
+      'ledgerStatus',
+      {},
+      dependencies.fetch || fetch
+    );
+    if (!richmondWriteGateConfirmed(google)) {
+      return statusResponse(503, true, { writesEnabled: false });
+    }
+  }
   return statusResponse(200, device.authorized, richmondProduction ? runtime : null);
 }
 

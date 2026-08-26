@@ -16,6 +16,7 @@ var GIB_M1_RICHMOND_PRODUCTION_WRITES_ENABLED_ = 'GIB_M1_RICHMOND_PRODUCTION_WRI
 var GIB_M1_RICHMOND_PRODUCTION_DEVICE_ = 'Richmond Front Desk Tablet';
 var GIB_M1_RICHMOND_PRODUCTION_SITE_ = 'Richmond';
 var GIB_M1_RICHMOND_PRODUCTION_PROVISION_ACTION_ = 'provisionRichmondProduction';
+var GIB_M1_RICHMOND_PRODUCTION_VOID_ELIGIBILITY_VERSION_ = 'richmond-instructor-void-v1';
 var GIB_M1_RICHMOND_PRODUCTION_AUDIT_HEADERS_ = [
   'Action Number',
   'Admin Name',
@@ -106,7 +107,7 @@ function gibM1RichmondProductionObviousTestValue_(value) {
 
 function gibM1RichmondProductionActionValid_(body) {
   var action = cleanText_(body && body.action);
-  if (['kioskSignIn', 'dailyReview', 'instructorSearch', 'addMissedInstructor', 'ledgerStatus'].indexOf(action) === -1) {
+  if (['kioskSignIn', 'dailyReview', 'instructorSearch', 'addMissedInstructor', 'voidInstructorSignin', 'ledgerStatus'].indexOf(action) === -1) {
     return false;
   }
   if (action === 'ledgerStatus') {
@@ -127,14 +128,28 @@ function gibM1RichmondProductionActionValid_(body) {
     return cleanText_(body.site) === GIB_M1_RICHMOND_PRODUCTION_SITE_
       && !gibM1RichmondProductionObviousTestValue_(body.instructor);
   }
+  if (action === 'voidInstructorSignin') {
+    return gibM1RichmondProductionExactKeys_(body, [
+      'token', 'adminActionToken', 'action', 'target', 'installation', 'environment',
+      'requestId', 'rowId', 'adminName', 'reason'
+    ]);
+  }
   if (action === 'instructorSearch') {
     return !gibM1RichmondProductionObviousTestValue_(body.instructor);
+  }
+  if (action === 'dailyReview' && Object.prototype.hasOwnProperty.call(body, 'voidEligibilityVersion')) {
+    return constantTimeTextEqual_(
+      body.voidEligibilityVersion,
+      GIB_M1_RICHMOND_PRODUCTION_VOID_ELIGIBILITY_VERSION_
+    );
   }
   return true;
 }
 
 function gibM1RichmondProductionMutation_(action) {
-  return action === 'kioskSignIn' || action === 'addMissedInstructor';
+  return action === 'kioskSignIn'
+    || action === 'addMissedInstructor'
+    || action === 'voidInstructorSignin';
 }
 
 function doPost(e) {

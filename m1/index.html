@@ -875,7 +875,7 @@ body.admin-mode .container { max-width: 1120px; }
 }
 
 </style>
-<script src="./installation-profile.generated.js?v=2026-08-21-richmond-m1-run2-r1"></script>
+<script src="./installation-profile.generated.js?v=2026-08-26-richmond-activation-r1"></script>
 </head>
 <body>
 <div class="container">
@@ -1356,10 +1356,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-21-richmond-m1-run2-r1';
+} from './sync-core.mjs?v=2026-08-26-richmond-activation-r1';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-08-21-richmond-m1-run2-r1';
+const OFFLINE_SHELL_REVISION = '2026-08-26-richmond-activation-r1';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -1462,6 +1462,15 @@ if ('serviceWorker' in navigator) {
   // NOTE: bump this whenever you make changes to the kiosk or admin.
   const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
   const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
+  const RICHMOND_PRODUCTION_ORIGIN = 'https://gib-richmond-live.netlify.app';
+  const IS_RICHMOND_PRODUCTION_ORIGIN = IS_RICHMOND_PRODUCTION
+    && location.origin === RICHMOND_PRODUCTION_ORIGIN
+    && INSTALLATION.allowedOrigin === RICHMOND_PRODUCTION_ORIGIN;
+  const IS_REVOLUTION_PRODUCTION_ORIGIN = !IS_RICHMOND
+    && INSTALLATION.installationId === 'rev'
+    && IS_PRODUCTION_ORIGIN;
+  const IS_PRODUCTION_SYNC_ORIGIN = IS_REVOLUTION_PRODUCTION_ORIGIN
+    || IS_RICHMOND_PRODUCTION_ORIGIN;
   const TEST_BUILD = IS_RICHMOND
     ? '2026-08-21 RICHMOND M1 RUN 2 TEST'
     : '2026-08-18 M1B TEST staff-clock-operational-candidate';
@@ -1601,6 +1610,9 @@ function refreshNameDatalist() {
   const LOCAL_STATE_KEY  = installationStorageKey('gib_m1_local_state_v2');
   const SYNC_QUEUE_KEY   = installationStorageKey('gib_m1_sync_queue_v1');
   const SYNC_AUTO_KEY    = installationStorageKey('gib_m1_sync_auto_v1');
+  const RICHMOND_ACTIVATION_MIGRATION_KEY = installationStorageKey(
+    'gib_m1_activation_auto_sync_migration_v1'
+  );
   const DEVICE_LABEL_KEY = installationStorageKey('gib_m1_device_label_v1');
   const SYNC_LAST_KEY    = installationStorageKey('gib_m1_sync_last');
   const SYNC_ERROR_KEY   = installationStorageKey('gib_m1_sync_error');
@@ -3960,6 +3972,135 @@ function refreshNameDatalist() {
     $('#syncStatus').textContent = parts.join(' · ');
     renderAdminSummary();
   }
+  async function applyRichmondActivationMigration(options = {}) {
+    const requiredOrigin = 'https://gib-richmond-live.netlify.app';
+    const markerValue = 'richmond-production-auto-sync-v1';
+    const profile = options.profile;
+    const storage = options.storage;
+    const expectedAutoSyncKey = 'gib_m1_richmond_production_sync_auto_v1';
+    const expectedMarkerKey = 'gib_m1_richmond_production_activation_auto_sync_migration_v1';
+    if (
+      options.origin !== requiredOrigin
+      || profile?.installationId !== 'richmond'
+      || profile.environment !== 'production'
+      || profile.allowedOrigin !== requiredOrigin
+      || profile.storagePrefix !== 'gib_m1_richmond_production_'
+      || profile.activation !== 'active'
+      || profile.writesEnabled !== true
+      || profile.featureFlags?.staffClock !== false
+      || profile.backend?.enabled !== true
+      || profile.backend.transportTarget !== 'richmond-production'
+      || options.autoSyncKey !== expectedAutoSyncKey
+      || options.markerKey !== expectedMarkerKey
+      || !storage
+      || typeof storage.getItem !== 'function'
+      || typeof storage.setItem !== 'function'
+      || typeof storage.removeItem !== 'function'
+      || typeof options.statusRequest !== 'function'
+      || typeof options.readQueue !== 'function'
+      || typeof options.triggerSync !== 'function'
+    ) return false;
+
+    let marker;
+    try {
+      marker = storage.getItem(options.markerKey);
+    } catch (error) {
+      return false;
+    }
+    if (marker !== null) return false;
+
+    let response;
+    let status;
+    try {
+      response = await options.statusRequest();
+      if (response?.ok !== true || response.status !== 200 || typeof response.json !== 'function') {
+        return false;
+      }
+      status = await response.json();
+    } catch (error) {
+      return false;
+    }
+    if (
+      !status
+      || typeof status !== 'object'
+      || Array.isArray(status)
+      || Object.keys(status).sort().join('|') !== 'activation|authorized|writesEnabled'
+      || status.authorized !== true
+      || status.writesEnabled !== true
+      || status.activation !== 'active'
+    ) return false;
+
+    let priorAutoSync;
+    try {
+      if (storage.getItem(options.markerKey) !== null) return false;
+      priorAutoSync = storage.getItem(options.autoSyncKey);
+      storage.setItem(options.autoSyncKey, 'true');
+      if (storage.getItem(options.autoSyncKey) !== 'true') throw new Error('auto-sync write failed');
+      storage.setItem(options.markerKey, markerValue);
+      if (storage.getItem(options.markerKey) !== markerValue) throw new Error('marker write failed');
+    } catch (error) {
+      try {
+        if (priorAutoSync === null) storage.removeItem(options.autoSyncKey);
+        else if (typeof priorAutoSync === 'string') storage.setItem(options.autoSyncKey, priorAutoSync);
+        if (storage.getItem(options.markerKey) === markerValue) {
+          storage.removeItem(options.markerKey);
+        }
+      } catch (rollbackError) {}
+      return false;
+    }
+
+    try {
+      if (typeof options.refreshSettings === 'function') options.refreshSettings();
+      if (typeof options.refreshStatus === 'function') options.refreshStatus();
+      const queue = options.readQueue();
+      if (Array.isArray(queue) && queue.length > 0) await options.triggerSync();
+    } catch (error) {
+      // The versioned marker remains authoritative. Existing auto-sync and
+      // RowID replay protection handle later retries without forcing the setting.
+    }
+    return true;
+  }
+  let richmondActivationMigrationInFlight = null;
+  function runRichmondActivationMigration() {
+    if (richmondActivationMigrationInFlight) return richmondActivationMigrationInFlight;
+    const attempt = applyRichmondActivationMigration({
+      origin: location.origin,
+      profile: INSTALLATION,
+      storage: localStorage,
+      autoSyncKey: SYNC_AUTO_KEY,
+      markerKey: RICHMOND_ACTIVATION_MIGRATION_KEY,
+      statusRequest: () => fetch('/api/m1-tablet-status', {
+        method: 'POST',
+        mode: 'same-origin',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        redirect: 'error',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        body: '{}'
+      }),
+      readQueue: loadSyncQueue,
+      triggerSync: syncNow,
+      refreshSettings: loadSyncSettings,
+      refreshStatus: updateSyncStatus
+    });
+    richmondActivationMigrationInFlight = attempt;
+    attempt.then(
+      () => {
+        if (richmondActivationMigrationInFlight === attempt) {
+          richmondActivationMigrationInFlight = null;
+        }
+      },
+      () => {
+        if (richmondActivationMigrationInFlight === attempt) {
+          richmondActivationMigrationInFlight = null;
+        }
+      }
+    );
+    return attempt;
+  }
   async function syncNow() {
     if (syncInFlight) return;
     if (!BACKEND_ENABLED) {
@@ -3992,7 +4133,7 @@ function refreshNameDatalist() {
       const payload = await requestAcknowledgements(submittedRows, {
         online: navigator.onLine !== false,
         signal: controller.signal,
-        productionOrigin: IS_PRODUCTION_ORIGIN
+        productionOrigin: IS_PRODUCTION_SYNC_ORIGIN
       });
       const acknowledgedAt = new Date().toISOString();
       const applied = applyAcknowledgements(
@@ -4000,7 +4141,7 @@ function refreshNameDatalist() {
         submittedRows,
         payload,
         acknowledgedAt,
-        { productionOrigin: IS_PRODUCTION_ORIGIN }
+        { productionOrigin: IS_PRODUCTION_SYNC_ORIGIN }
       );
       if (!applied.readable) throw new Error('unreadable acknowledgement');
 
@@ -4011,7 +4152,7 @@ function refreshNameDatalist() {
         submittedRows,
         payload,
         acknowledgedAt,
-        { productionOrigin: IS_PRODUCTION_ORIGIN }
+        { productionOrigin: IS_PRODUCTION_SYNC_ORIGIN }
       );
       persistLocalState(latestApplied.state);
       if (latestApplied.confirmedRowIds.length) {
@@ -4486,20 +4627,30 @@ function refreshNameDatalist() {
   dayRolloverController.start();
   dayRolloverController.checkNow();
   // Load sync settings and refresh status on first load
-  if (IS_RICHMOND && localStorage.getItem(SYNC_AUTO_KEY) === null) {
-    if (!IS_RICHMOND_PRODUCTION || RICHMOND_WRITES_ENABLED) {
-      localStorage.setItem(SYNC_AUTO_KEY, 'true');
-    }
+  if (IS_RICHMOND && !IS_RICHMOND_PRODUCTION && localStorage.getItem(SYNC_AUTO_KEY) === null) {
+    localStorage.setItem(SYNC_AUTO_KEY, 'true');
   }
   loadSyncSettings();
   updateSyncStatus();
   if (IS_RICHMOND && (!IS_RICHMOND_PRODUCTION || RICHMOND_WRITES_ENABLED)) {
     window.addEventListener('online', () => {
+      if (
+        IS_RICHMOND_PRODUCTION
+        && localStorage.getItem(RICHMOND_ACTIVATION_MIGRATION_KEY) === null
+      ) {
+        runRichmondActivationMigration();
+        return;
+      }
       if (localStorage.getItem(SYNC_AUTO_KEY) === 'true' && loadSyncQueue().length) {
         syncNow();
       }
     });
     if (
+      IS_RICHMOND_PRODUCTION
+      && localStorage.getItem(RICHMOND_ACTIVATION_MIGRATION_KEY) === null
+    ) {
+      runRichmondActivationMigration();
+    } else if (
       navigator.onLine !== false
       && localStorage.getItem(SYNC_AUTO_KEY) === 'true'
       && loadSyncQueue().length
@@ -4514,6 +4665,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-08-21-richmond-m1-run2-r1"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-08-26-richmond-activation-r1"></script>
 </body>
 </html>

@@ -4,7 +4,10 @@ import {
   postGoogle,
   readJson
 } from './_lib/m1-common.mjs';
-import { sanitizeDailyReviewPayload } from './_lib/m1-admin-contracts.mjs';
+import {
+  RICHMOND_INSTRUCTOR_SIGNIN_VOID_ELIGIBILITY_VERSION,
+  sanitizeDailyReviewPayload
+} from './_lib/m1-admin-contracts.mjs';
 import { deploymentInstallationProfile } from './_lib/m1-installation.mjs';
 import {
   richmondProductionRuntimeConfig,
@@ -55,11 +58,16 @@ export async function handleProductionStatus(request, dependencies = {}) {
   const google = await postGoogle(
     runtime,
     'dailyReview',
-    { date },
+    {
+      date,
+      voidEligibilityVersion: RICHMOND_INSTRUCTOR_SIGNIN_VOID_ELIGIBILITY_VERSION
+    },
     dependencies.fetch || fetch
   );
   const review = google.readable && google.value
-    ? sanitizeDailyReviewPayload(google.value, date)
+    ? sanitizeDailyReviewPayload(google.value, date, {
+      allowInstructorSigninVoid: true
+    })
     : null;
   if (!review) {
     return jsonResponse(502, { ok: false, message: 'Production status is unavailable.' });

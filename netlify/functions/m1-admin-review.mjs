@@ -8,7 +8,10 @@ import {
   runtimeConfig,
   validNonFutureDate
 } from './_lib/m1-common.mjs';
-import { sanitizeDailyReviewPayload } from './_lib/m1-admin-contracts.mjs';
+import {
+  RICHMOND_INSTRUCTOR_SIGNIN_VOID_ELIGIBILITY_VERSION,
+  sanitizeDailyReviewPayload
+} from './_lib/m1-admin-contracts.mjs';
 
 function reviewFailureResponse(google) {
   const failureClass = googleFailureClass(google);
@@ -58,14 +61,23 @@ export async function handleAdminReview(request, dependencies = {}) {
     return jsonResponse(400, { ok: false, message: 'Choose today or an earlier valid date.' });
   }
 
+  const allowInstructorSigninVoid = config.installationId === 'richmond'
+    && config.environment === 'production';
   const google = await postGoogle(
     config,
     'dailyReview',
-    { date },
+    {
+      date,
+      ...(allowInstructorSigninVoid ? {
+        voidEligibilityVersion: RICHMOND_INSTRUCTOR_SIGNIN_VOID_ELIGIBILITY_VERSION
+      } : {})
+    },
     dependencies.fetch || fetch
   );
   const review = google.readable && google.value && google.value.ok === true
-    ? sanitizeDailyReviewPayload(google.value, date)
+    ? sanitizeDailyReviewPayload(google.value, date, {
+      allowInstructorSigninVoid
+    })
     : null;
   if (!review) return reviewFailureResponse(google);
 
