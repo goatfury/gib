@@ -4,6 +4,7 @@ import {
   randomBytes,
   timingSafeEqual
 } from 'node:crypto';
+import { getStore } from '@netlify/blobs';
 
 import { jsonResponse, readJson } from './_lib/m1-common.mjs';
 import {
@@ -345,8 +346,7 @@ function rejectedResponse(status = 403) {
   });
 }
 
-async function defaultStore() {
-  const { getStore } = await import('@netlify/blobs');
+function defaultStore() {
   return getStore({
     name: RICHMOND_PRODUCTION_INSTALL_STORE,
     consistency: 'strong'
