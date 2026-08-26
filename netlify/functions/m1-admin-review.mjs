@@ -65,7 +65,10 @@ export async function handleAdminReview(request, dependencies = {}) {
     dependencies.fetch || fetch
   );
   const review = google.readable && google.value && google.value.ok === true
-    ? sanitizeDailyReviewPayload(google.value, date)
+    ? sanitizeDailyReviewPayload(google.value, date, {
+      allowInstructorSigninVoid: config.installationId === 'richmond'
+        && config.environment === 'production'
+    })
     : null;
   if (!review) return reviewFailureResponse(google);
 

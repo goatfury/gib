@@ -1,10 +1,13 @@
 const DISPLAY_ID_PATTERN = /^sheet-row-[1-9][0-9]*$/u;
 const AUDIT_ID_PATTERN = /^audit-row-[1-9][0-9]*$/u;
+const SIGNIN_ROW_ID_PATTERN = /^gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/u;
 const REVIEW_NOTES_MAX_LENGTH = 800;
 const RECORD_SOURCES = new Set(['Kiosk', 'Admin-added', 'Manual', 'Collision review']);
-const AUDIT_RESULTS = new Set(['added', 'already exists']);
+const ADMIN_ADDITION_RESULTS = new Set(['added', 'already exists']);
+const AUDIT_RESULTS = new Set(['added', 'already exists', 'voided']);
+const INSTRUCTOR_SIGNIN_VOID_RESULTS = new Set(['voided', 'already voided']);
 const ADMIN_NAMES = new Set(['Andrew Smith', 'Stuart Turner']);
 const WARNING_CODES = Object.freeze({
   UNREADABLE_SIGNIN: 'One Sheet row for this date is incomplete and was not included.',
@@ -25,6 +28,22 @@ function text(value, maxLength, allowBlank = false) {
   if (typeof value !== 'string' || value.length > maxLength || value.includes('\u0000')) return null;
   if (!allowBlank && !value) return null;
   return value;
+}
+
+function exactCanonicalText(value, maxLength, allowBlank = false) {
+  if (typeof value !== 'string') return null;
+  const canonical = value
+    .normalize('NFKC')
+    .trim()
+    .replace(/\s+/gu, ' ');
+  if (
+    canonical !== value
+    || canonical.length > maxLength
+    || (!allowBlank && !canonical)
+    || /[\u0000-\u001f\u007f-\u009f]/u.test(canonical)
+    || /^[=+\-@]/u.test(canonical)
+  ) return null;
+  return canonical;
 }
 
 function positiveDuration(value) {
@@ -123,7 +142,7 @@ export function sanitizeReviewWarning(input) {
   return Object.freeze({ displayId, code, message });
 }
 
-export function sanitizeAuditRecord(input, expectedDate = '') {
+export function sanitizeAuditRecord(input, expectedDate = '', options = {}) {
   if (!exactKeys(input, [
     'auditId',
     'actionNumber',
@@ -169,6 +188,13 @@ export function sanitizeAuditRecord(input, expectedDate = '') {
         || !value.linkedRecordId.startsWith('gib-admin-')
       )
     )
+    || (
+      value.result === 'voided'
+      && (
+        options.allowInstructorSigninVoid !== true
+        || !SIGNIN_ROW_ID_PATTERN.test(value.linkedRecordId || '')
+      )
+    )
     || Object.values(value).some(item => item == null)
   ) return null;
   return Object.freeze(value);
@@ -186,7 +212,7 @@ function sanitizeUniqueArray(input, sanitizer, seenIds, idKey) {
   return values;
 }
 
-export function sanitizeDailyReviewPayload(input, expectedDate) {
+export function sanitizeDailyReviewPayload(input, expectedDate, options = {}) {
   if (!exactKeys(input, ['ok', 'date', 'records', 'warnings', 'auditHistory'])) return null;
   if (input.ok !== true || input.date !== expectedDate) return null;
   const displayIds = new Set();
@@ -206,7 +232,7 @@ export function sanitizeDailyReviewPayload(input, expectedDate) {
   if (!warnings) return null;
   const auditHistory = sanitizeUniqueArray(
     input.auditHistory,
-    value => sanitizeAuditRecord(value, expectedDate),
+    value => sanitizeAuditRecord(value, expectedDate, options),
     new Set(),
     'auditId'
   );
@@ -264,7 +290,7 @@ export function sanitizeAdminAdditionPayload(input, expected) {
     'auditActionNumber',
     'confirmation'
   ])) return null;
-  if (input.ok !== true || !AUDIT_RESULTS.has(input.result)) return null;
+  if (input.ok !== true || !ADMIN_ADDITION_RESULTS.has(input.result)) return null;
   const requestId = text(input.requestId, 160);
   const linkedRecordId = text(input.linkedRecordId, 240, true);
   const linkedDisplayId = text(input.linkedDisplayId, 80);
@@ -310,6 +336,102 @@ export function sanitizeAdminAdditionPayload(input, expected) {
     requestId,
     linkedRecordId,
     linkedDisplayId,
+    auditActionNumber: input.auditActionNumber,
+    confirmation: Object.freeze(confirmation)
+  });
+}
+
+export function sanitizeInstructorSigninVoidRequest(input, expectedAdminName) {
+  if (!exactKeys(input, ['requestId', 'rowId', 'adminName', 'reason'])) return null;
+  const rowId = typeof input.rowId === 'string' && SIGNIN_ROW_ID_PATTERN.test(input.rowId)
+    ? input.rowId
+    : '';
+  const requestId = typeof input.requestId === 'string' ? input.requestId : '';
+  const adminName = exactCanonicalText(input.adminName, 80);
+  const reason = exactCanonicalText(input.reason, 240);
+  if (
+    !rowId
+    || requestId !== `gib-m1-admin-void-${rowId}`
+    || !ADMIN_NAMES.has(adminName)
+    || adminName !== expectedAdminName
+    || !reason
+    || reason.length < 3
+  ) return null;
+  return Object.freeze({ requestId, rowId, adminName, reason });
+}
+
+export function sanitizeInstructorSigninVoidResult(input, expected) {
+  if (
+    !exactKeys(input, [
+      'ok',
+      'result',
+      'requestId',
+      'linkedRecordId',
+      'auditActionNumber',
+      'confirmation'
+    ])
+    || input.ok !== true
+    || !INSTRUCTOR_SIGNIN_VOID_RESULTS.has(input.result)
+    || !expected
+    || input.requestId !== expected.requestId
+    || input.linkedRecordId !== expected.rowId
+    || !Number.isSafeInteger(input.auditActionNumber)
+    || input.auditActionNumber < 1
+    || !exactKeys(input.confirmation, [
+      'adminName',
+      'rowId',
+      'timestamp',
+      'date',
+      'classLabel',
+      'duration',
+      'instructor',
+      'site',
+      'device',
+      'build',
+      'notes',
+      'status',
+      'reason'
+    ])
+  ) return null;
+
+  const confirmation = {
+    adminName: exactCanonicalText(input.confirmation.adminName, 80),
+    rowId: typeof input.confirmation.rowId === 'string'
+      && SIGNIN_ROW_ID_PATTERN.test(input.confirmation.rowId)
+      ? input.confirmation.rowId
+      : '',
+    timestamp: text(input.confirmation.timestamp, 19),
+    date: text(input.confirmation.date, 10),
+    classLabel: exactCanonicalText(input.confirmation.classLabel, 200),
+    duration: input.confirmation.duration,
+    instructor: exactCanonicalText(input.confirmation.instructor, 100),
+    site: exactCanonicalText(input.confirmation.site, 80),
+    device: exactCanonicalText(input.confirmation.device, 120),
+    build: exactCanonicalText(input.confirmation.build, 120),
+    notes: exactCanonicalText(input.confirmation.notes, 400, true),
+    status: input.confirmation.status,
+    reason: exactCanonicalText(input.confirmation.reason, 240)
+  };
+  if (
+    confirmation.adminName !== expected.adminName
+    || confirmation.rowId !== expected.rowId
+    || confirmation.reason !== expected.reason
+    || !validTimestamp(confirmation.timestamp)
+    || !validDate(confirmation.date)
+    || confirmation.timestamp.slice(0, 10) !== confirmation.date
+    || !positiveDuration(confirmation.duration)
+    || confirmation.site !== 'Richmond'
+    || confirmation.device !== 'Richmond Front Desk Tablet'
+    || confirmation.status !== 'VOID'
+    || Object.entries(confirmation).some(([key, value]) => (
+      value == null || (key !== 'notes' && value === '')
+    ))
+  ) return null;
+
+  return Object.freeze({
+    result: input.result,
+    requestId: input.requestId,
+    linkedRecordId: input.linkedRecordId,
     auditActionNumber: input.auditActionNumber,
     confirmation: Object.freeze(confirmation)
   });

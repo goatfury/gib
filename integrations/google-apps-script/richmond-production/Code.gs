@@ -106,7 +106,7 @@ function gibM1RichmondProductionObviousTestValue_(value) {
 
 function gibM1RichmondProductionActionValid_(body) {
   var action = cleanText_(body && body.action);
-  if (['kioskSignIn', 'dailyReview', 'instructorSearch', 'addMissedInstructor', 'ledgerStatus'].indexOf(action) === -1) {
+  if (['kioskSignIn', 'dailyReview', 'instructorSearch', 'addMissedInstructor', 'voidInstructorSignin', 'ledgerStatus'].indexOf(action) === -1) {
     return false;
   }
   if (action === 'ledgerStatus') {
@@ -127,6 +127,12 @@ function gibM1RichmondProductionActionValid_(body) {
     return cleanText_(body.site) === GIB_M1_RICHMOND_PRODUCTION_SITE_
       && !gibM1RichmondProductionObviousTestValue_(body.instructor);
   }
+  if (action === 'voidInstructorSignin') {
+    return gibM1RichmondProductionExactKeys_(body, [
+      'token', 'adminActionToken', 'action', 'target', 'installation', 'environment',
+      'requestId', 'rowId', 'adminName', 'reason'
+    ]);
+  }
   if (action === 'instructorSearch') {
     return !gibM1RichmondProductionObviousTestValue_(body.instructor);
   }
@@ -134,7 +140,9 @@ function gibM1RichmondProductionActionValid_(body) {
 }
 
 function gibM1RichmondProductionMutation_(action) {
-  return action === 'kioskSignIn' || action === 'addMissedInstructor';
+  return action === 'kioskSignIn'
+    || action === 'addMissedInstructor'
+    || action === 'voidInstructorSignin';
 }
 
 function doPost(e) {

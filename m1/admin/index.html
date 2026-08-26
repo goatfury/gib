@@ -282,6 +282,20 @@
     }
     .record strong { color: #eaf2fb; }
     .record-detail { color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
+    .class-records { display: grid; gap: 8px; margin-top: 10px; }
+    .signin-void-form {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+      margin-top: 10px;
+      border-top: 1px solid #2a415e;
+      padding-top: 10px;
+    }
+    .signin-void-form .field { gap: 4px; }
+    .signin-void-form input { padding: 8px 10px; }
+    .signin-void-form[aria-busy="true"] { opacity: .82; }
+    .signin-void-status { grid-column: 1 / -1; margin-top: 0; }
     .empty {
       border: 1px dashed #3a526f;
       border-radius: 10px;
@@ -423,7 +437,7 @@
       .class-main { grid-template-columns: 1fr; }
       .class-main .btn { width: 100%; }
       .mini-grid, .fixed { grid-template-columns: 1fr 1fr; }
-      .staff-period-grid, .staff-fix-grid, .staff-void-form { grid-template-columns: 1fr; }
+      .staff-period-grid, .staff-fix-grid, .staff-void-form, .signin-void-form { grid-template-columns: 1fr; }
       .fixed div:nth-child(2) { grid-column: 1 / -1; }
     }
   </style>
@@ -690,6 +704,9 @@
       }
       const IS_RICHMOND = INSTALLATION.installationId === 'richmond';
       const IS_RICHMOND_PRODUCTION = IS_RICHMOND && INSTALLATION.environment === 'production';
+      const IS_RICHMOND_PRODUCTION_ORIGIN = IS_RICHMOND_PRODUCTION
+        && location.origin === 'https://gib-richmond-live.netlify.app'
+        && INSTALLATION.allowedOrigin === location.origin;
       const ADMIN_MUTATIONS_ENABLED = !IS_RICHMOND_PRODUCTION
         || (INSTALLATION.activation === 'active' && INSTALLATION.writesEnabled === true);
       const STAFF_CLOCK_ENABLED = INSTALLATION.featureFlags.staffClock === true;
@@ -721,6 +738,7 @@
         review: '/.netlify/functions/m1-admin-review',
         search: '/.netlify/functions/m1-admin-search',
         add: '/.netlify/functions/m1-admin-add',
+        void: '/.netlify/functions/m1-admin-void',
         productionStatus: '/api/m1-production-status',
         staffTime: '/.netlify/functions/m1-admin-staff-time',
         schedule: '/api/m1-schedule',
@@ -747,6 +765,7 @@
       const TIME_ZONE = 'America/New_York';
       const SITE = INSTALLATION.siteCode;
       const REVIEW_NOTES_MAX_LENGTH = 800;
+      const RICHMOND_PRODUCTION_ROW_ID_PATTERN = /^gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
       const ADMIN_DURATION_OPTIONS = Object.freeze([1, 0.5]);
       const SCHEDULE_DAYS = Object.freeze([
         'Monday',
@@ -791,6 +810,7 @@
             Sunday: 1
           });
       const inFlightAdditions = new Set();
+      const inFlightSigninVoids = new Set();
       let schedule = null;
       let scheduleRefreshPromise = null;
       let scheduleLastAttemptAt = 0;
@@ -1109,7 +1129,11 @@
       }
 
       function reviewFormInProgress() {
-        return Boolean(document.querySelector('.add-form.open'));
+        if (document.querySelector('.add-form.open')) return true;
+        return Array.from(document.querySelectorAll('.signin-void-form')).some(form => (
+          form.getAttribute('aria-busy') === 'true'
+          || clean(form.elements.reason && form.elements.reason.value)
+        ));
       }
 
       function applyScheduleToReviewWhenSafe() {
@@ -1415,9 +1439,22 @@
           && typeof value.reason === 'string'
           && value.reason.length >= 1
           && value.reason.length <= 240
-          && ['added', 'already exists'].includes(value.result)
+          && ['added', 'already exists', 'voided'].includes(value.result)
+          && (
+            value.result !== 'voided'
+            || (
+              typeof IS_RICHMOND_PRODUCTION !== 'undefined'
+              && IS_RICHMOND_PRODUCTION
+            )
+          )
           && typeof value.linkedRecordId === 'string'
-          && (value.result !== 'added' || value.linkedRecordId.startsWith('gib-admin-'))
+          && (
+            value.result === 'added'
+              ? value.linkedRecordId.startsWith('gib-admin-')
+              : value.result === 'voided'
+                ? RICHMOND_PRODUCTION_ROW_ID_PATTERN.test(value.linkedRecordId)
+                : true
+          )
           && value.linkedRecordId.length <= 240;
       }
 
@@ -1491,6 +1528,71 @@
             'adminName', 'date', 'classLabel', 'duration', 'instructor', 'site', 'reason', 'notes'
           ])
           && Object.keys(confirmation).every(key => confirmation[key] === expected[key]);
+      }
+
+      function signinVoidRequestId(rowId) {
+        return RICHMOND_PRODUCTION_ROW_ID_PATTERN.test(rowId)
+          ? `gib-m1-admin-void-${rowId}`
+          : '';
+      }
+
+      function validAdminSigninVoidResponse(value, expected) {
+        if (!exactObjectKeys(value, [
+          'ok',
+          'test',
+          'adminName',
+          'operation',
+          'requestId',
+          'result',
+          'linkedRecordId',
+          'auditActionNumber',
+          'confirmation',
+          'message'
+        ])) return false;
+        const confirmation = value.confirmation;
+        const expectedMessage = value.result === 'voided'
+          ? 'Instructor sign-in voided.'
+          : 'This instructor sign-in was already voided. No second audit action was created.';
+        return value.ok === true
+          && value.test === false
+          && value.adminName === expected.adminName
+          && value.operation === 'void'
+          && ['voided', 'already voided'].includes(value.result)
+          && value.requestId === expected.requestId
+          && value.linkedRecordId === expected.rowId
+          && Number.isSafeInteger(value.auditActionNumber)
+          && value.auditActionNumber > 0
+          && value.message === expectedMessage
+          && exactObjectKeys(confirmation, [
+            'adminName',
+            'rowId',
+            'timestamp',
+            'date',
+            'classLabel',
+            'duration',
+            'instructor',
+            'site',
+            'device',
+            'build',
+            'notes',
+            'status',
+            'reason'
+          ])
+          && confirmation.adminName === expected.adminName
+          && confirmation.rowId === expected.rowId
+          && confirmation.timestamp === expected.timestamp
+          && confirmation.date === expected.date
+          && confirmation.classLabel === expected.classLabel
+          && confirmation.duration === expected.duration
+          && confirmation.instructor === expected.instructor
+          && confirmation.site === expected.site
+          && confirmation.device === INSTALLATION.deviceLabel
+          && typeof confirmation.build === 'string'
+          && confirmation.build.length >= 1
+          && confirmation.build.length <= 120
+          && confirmation.notes === expected.notes
+          && confirmation.status === 'VOID'
+          && confirmation.reason === expected.reason;
       }
 
       function validInstructorSearchResponse(value, expectedInstructor, expectedDate) {
@@ -2871,7 +2973,39 @@
         return form.dataset.staffRequestId;
       }
 
-      function recordElement(record) {
+      function signinVoidEligible(record) {
+        return IS_RICHMOND_PRODUCTION_ORIGIN
+          && ADMIN_MUTATIONS_ENABLED
+          && ['Andrew Smith', 'Stuart Turner'].includes(currentAdminName)
+          && validReviewRecord(record, record.date)
+          && RICHMOND_PRODUCTION_ROW_ID_PATTERN.test(record.recordId);
+      }
+
+      function buildSigninVoidForm(record) {
+        const form = makeElement('form', 'signin-void-form');
+        form.dataset.signinVoidForm = record.displayId;
+        form.dataset.rowId = record.recordId;
+        form.noValidate = true;
+
+        const reason = document.createElement('input');
+        reason.name = 'reason';
+        reason.maxLength = 240;
+        reason.required = true;
+        reason.autocomplete = 'off';
+        reason.placeholder = 'Why this record must be voided';
+
+        const submit = makeElement('button', 'btn warn confirm-signin-void', 'Review and void');
+        submit.type = 'submit';
+        const status = makeElement('div', 'message signin-void-status');
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-live', 'polite');
+        status.setAttribute('aria-atomic', 'true');
+
+        form.append(inputField('Required void reason', reason), submit, status);
+        return form;
+      }
+
+      function recordElement(record, options = {}) {
         const wrapper = makeElement('div', 'record');
         wrapper.append(
           makeElement('strong', '', record.instructor || 'Unknown instructor'),
@@ -2893,6 +3027,9 @@
         if (record.reviewMessage) {
           wrapper.append(makeElement('div', 'record-detail', record.reviewMessage));
         }
+        if (options.allowSigninVoid === true && signinVoidEligible(record)) {
+          wrapper.append(buildSigninVoidForm(record));
+        }
         return wrapper;
       }
 
@@ -2910,7 +3047,11 @@
 
       function auditElement(audit) {
         const wrapper = makeElement('div', 'record');
-        const result = audit.result === 'added' ? 'Instructor added' : 'Exact duplicate blocked';
+        const result = audit.result === 'added'
+          ? 'Instructor added'
+          : audit.result === 'voided'
+            ? 'Instructor record voided'
+            : 'Exact duplicate blocked';
         wrapper.append(
           makeElement('strong', '', `Audit #${audit.actionNumber} · ${result}`),
           makeElement('div', 'record-detail', `${audit.actionTime} · ${audit.adminName}`),
@@ -3056,6 +3197,16 @@
         }
         row.append(main);
         if (
+          matches.length
+          && typeof IS_RICHMOND_PRODUCTION_ORIGIN !== 'undefined'
+          && IS_RICHMOND_PRODUCTION_ORIGIN
+          && ADMIN_MUTATIONS_ENABLED
+        ) {
+          const recordList = makeElement('div', 'class-records');
+          recordList.append(...matches.map(record => recordElement(record, { allowSigninVoid: true })));
+          row.append(recordList);
+        }
+        if (
           persistentReviewOutcome
           && persistentReviewOutcome.date === currentDate
           && normalize(persistentReviewOutcome.classLabel) === normalize(label)
@@ -3064,10 +3215,16 @@
           outcome.setAttribute('role', 'status');
           outcome.setAttribute('aria-live', 'polite');
           outcome.setAttribute('aria-atomic', 'true');
-          const title = persistentReviewOutcome.result === 'added' ? 'Added' : 'Already recorded';
+          const title = persistentReviewOutcome.result === 'added'
+            ? 'Added'
+            : persistentReviewOutcome.result === 'voided'
+              ? 'Voided and audited'
+              : 'Already recorded';
           const detail = persistentReviewOutcome.result === 'added'
             ? `${persistentReviewOutcome.instructor} is now signed in for this class.`
-            : `${persistentReviewOutcome.instructor} is already signed in for this class. Nothing else was added.`;
+            : persistentReviewOutcome.result === 'voided'
+              ? `${persistentReviewOutcome.instructor}'s record was voided through Admin Audit #${persistentReviewOutcome.auditActionNumber}.`
+              : `${persistentReviewOutcome.instructor} is already signed in for this class. Nothing else was added.`;
           outcome.append(makeElement('strong', '', title), makeElement('span', '', detail));
           row.append(outcome);
         }
@@ -3092,7 +3249,10 @@
 
         const unmatched = currentRecords.filter(record => !matchedDisplayIds.has(record.displayId));
         $('#unmatchedSection').hidden = unmatched.length === 0;
-        $('#unmatchedList').replaceChildren(...unmatched.map(recordElement));
+        $('#unmatchedList').replaceChildren(...unmatched.map(record => recordElement(
+          record,
+          { allowSigninVoid: true }
+        )));
         $('#warningSection').hidden = currentWarnings.length === 0;
         $('#warningList').replaceChildren(...currentWarnings.map(warningElement));
         renderRecordList(
@@ -3139,6 +3299,12 @@
           ) return false;
           if (!validDailyReviewResponse(data, dateString)) {
             throw new Error('Daily Review returned an incomplete response. Nothing on the Sheet was changed.');
+          }
+          if (
+            typeof options.verifyResponse === 'function'
+            && options.verifyResponse(data) !== true
+          ) {
+            throw new Error('Daily Review did not confirm the audited record change.');
           }
           setLoggedIn(data);
           currentRecords = data.records;
@@ -3366,6 +3532,154 @@
           }
         } finally {
           setStaffFormWorking(form, false, 'Mark as wrong');
+        }
+      }
+
+      function readSigninVoidRequest(form, record) {
+        const reason = clean(form.elements.reason && form.elements.reason.value);
+        const rowId = String(form.dataset.rowId || '');
+        const requestId = signinVoidRequestId(rowId);
+        if (
+          !signinVoidEligible(record)
+          || record.recordId !== rowId
+          || record.date !== currentDate
+          || reason.length < 3
+          || reason.length > 240
+          || !requestId
+        ) return null;
+        return Object.freeze({
+          requestId,
+          rowId,
+          adminName: currentAdminName,
+          reason
+        });
+      }
+
+      function expectedSigninVoid(record, request) {
+        return Object.freeze({
+          ...request,
+          timestamp: record.timestamp,
+          date: record.date,
+          classLabel: record.classLabel,
+          duration: record.duration,
+          instructor: record.instructor,
+          site: record.site,
+          notes: record.notes
+        });
+      }
+
+      function signinVoidConfirmationText(record, reason) {
+        return [
+          'Void exactly this Richmond instructor record?',
+          '',
+          `Instructor: ${record.instructor}`,
+          `Date: ${record.date}`,
+          `Class: ${record.classLabel}`,
+          `Site: ${record.site}`,
+          `Notes: ${record.notes || '(none)'}`,
+          `RowID: ${record.recordId}`,
+          `Required reason: ${reason}`,
+          '',
+          'The original row will remain and one Admin Audit action will be recorded.'
+        ].join('\n');
+      }
+
+      function setSigninVoidWorking(form, working, message = '') {
+        form.setAttribute('aria-busy', working ? 'true' : 'false');
+        Array.from(form.elements).forEach(control => { control.disabled = working; });
+        const submit = form.querySelector('.confirm-signin-void');
+        if (submit) submit.textContent = working ? 'Recording audit…' : 'Review and void';
+        const status = form.querySelector('.signin-void-status');
+        if (status && message) showMessage(status, message, working ? 'working' : 'error');
+      }
+
+      async function requestSigninVoidWithReconciliation(request) {
+        try {
+          return await requestJson(API.void, request);
+        } catch (error) {
+          if (!error || typeof error.status !== 'number' || error.status < 500) throw error;
+          return requestJson(API.void, request);
+        }
+      }
+
+      function reviewConfirmsSigninVoid(review, expected, result) {
+        if (review.records.some(record => record.recordId === expected.rowId)) return false;
+        const matchingAudits = review.auditHistory.filter(audit => (
+          audit.actionNumber === result.auditActionNumber
+          && audit.adminName === expected.adminName
+          && audit.instructor === expected.instructor
+          && audit.classDate === expected.date
+          && audit.classLabel === expected.classLabel
+          && audit.site === expected.site
+          && audit.duration === expected.duration
+          && audit.reason === expected.reason
+          && audit.result === 'voided'
+          && audit.linkedRecordId === expected.rowId
+        ));
+        return matchingAudits.length === 1;
+      }
+
+      async function refreshConfirmedSigninVoid(expected, result) {
+        return loadReview(expected.date, {
+          preserveOnFailure: true,
+          preserveOutcome: true,
+          quiet: true,
+          verifyResponse: review => reviewConfirmsSigninVoid(review, expected, result)
+        });
+      }
+
+      async function submitSigninVoid(form) {
+        if (!IS_RICHMOND_PRODUCTION_ORIGIN || !ADMIN_MUTATIONS_ENABLED) return;
+        const rowId = String(form.dataset.rowId || '');
+        const matches = currentRecords.filter(record => record.recordId === rowId);
+        const record = matches.length === 1 ? matches[0] : null;
+        const status = form.querySelector('.signin-void-status');
+        const request = record ? readSigninVoidRequest(form, record) : null;
+        if (!request) {
+          showMessage(status, 'Enter a clear required reason for the current Richmond record.');
+          return;
+        }
+        if (!window.confirm(signinVoidConfirmationText(record, request.reason))) return;
+        if (inFlightSigninVoids.has(rowId)) return;
+        inFlightSigninVoids.add(rowId);
+        clearClassOutcome();
+        setSigninVoidWorking(form, true, `Recording the audit for ${record.instructor}…`);
+        try {
+          const expected = expectedSigninVoid(record, request);
+          const result = await requestSigninVoidWithReconciliation(request);
+          if (!validAdminSigninVoidResponse(result, expected)) {
+            throw new Error('The audited record change could not be confirmed.');
+          }
+          if (!await refreshConfirmedSigninVoid(expected, result)) {
+            throw new Error('Daily Review did not confirm the audited record change.');
+          }
+          persistentReviewOutcome = {
+            date: expected.date,
+            classLabel: expected.classLabel,
+            instructor: expected.instructor,
+            result: 'voided',
+            auditActionNumber: result.auditActionNumber
+          };
+          renderReview();
+          toast(`Admin Audit #${result.auditActionNumber} confirmed`);
+        } catch (error) {
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Admin login required.');
+          } else if (form.isConnected) {
+            showMessage(
+              status,
+              `${error.message || 'The audited record change could not be confirmed.'} Retry keeps the same permanent request ID.`
+            );
+          } else {
+            showMessage(
+              $('#reviewMessage'),
+              'The audited record change could not be re-read. Success is not being reported.'
+            );
+          }
+        } finally {
+          inFlightSigninVoids.delete(rowId);
+          if (form.isConnected) setSigninVoidWorking(form, false);
+          applyPendingScheduleToReview();
         }
       }
 
@@ -3791,10 +4105,20 @@
         }
       });
       $('#reviewSection').addEventListener('input', event => {
+        const voidForm = event.target.closest('.signin-void-form');
+        if (voidForm && voidForm.getAttribute('aria-busy') !== 'true') {
+          showMessage(voidForm.querySelector('.signin-void-status'), '');
+          return;
+        }
         const form = event.target.closest('.add-form');
         if (form && form.getAttribute('aria-busy') !== 'true') resetAdditionFormState(form);
       });
       $('#reviewSection').addEventListener('submit', event => {
+        if (event.target.matches('.signin-void-form')) {
+          event.preventDefault();
+          submitSigninVoid(event.target);
+          return;
+        }
         if (!event.target.matches('.add-form')) return;
         event.preventDefault();
         addInstructor(event.target);

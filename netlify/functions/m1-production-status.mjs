@@ -59,7 +59,9 @@ export async function handleProductionStatus(request, dependencies = {}) {
     dependencies.fetch || fetch
   );
   const review = google.readable && google.value
-    ? sanitizeDailyReviewPayload(google.value, date)
+    ? sanitizeDailyReviewPayload(google.value, date, {
+      allowInstructorSigninVoid: true
+    })
     : null;
   if (!review) {
     return jsonResponse(502, { ok: false, message: 'Production status is unavailable.' });
