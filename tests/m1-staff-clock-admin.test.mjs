@@ -1065,6 +1065,9 @@ test('correction, adjustment, and VOID mutations require reasons, confirmation, 
   assert.match(adjustmentMarkupSource, /Proposed corrected clock-out/u);
   assert.match(adjustmentMarkupSource, /reason\.required = true/u);
   assert.match(adjustmentMarkupSource, /reason\.maxLength = 240/u);
+  assert.match(adjustmentMarkupSource, /staff-adjust-review/u);
+  assert.match(adjustmentMarkupSource, /Review punch adjustment before saving/u);
+  assert.match(adjustmentMarkupSource, /Cancel review and edit/u);
 
   const readAdjustmentSource = sourceBetween(
     adminHtml,
@@ -1086,12 +1089,11 @@ test('correction, adjustment, and VOID mutations require reasons, confirmation, 
     'async function submitStaffVoid('
   );
   assert.ok(adjustmentSource.indexOf('staffAdjustmentRequestIdFor(form, adjustment)') < adjustmentSource.indexOf('requestJson(API.staffTime, request)'));
+  assert.ok(adjustmentSource.indexOf('form.dataset.staffReviewedFingerprint !== fingerprint') < adjustmentSource.indexOf('requestJson(API.staffTime, request)'));
   assert.match(adjustmentSource, /operation: 'adjust'/u);
-  assert.match(adjustmentSource, /Adjust \$\{adjustment\.staffName\}’s completed shift/u);
-  assert.match(adjustmentSource, /Current clock-in:/u);
-  assert.match(adjustmentSource, /Proposed clock-out:/u);
-  assert.match(adjustmentSource, /source punches will remain unchanged/u);
-  assert.match(adjustmentSource, /permanently audited/u);
+  assert.match(adjustmentSource, /showStaffAdjustmentReview\(form, adjustment\)/u);
+  assert.match(adjustmentSource, /Confirm and save adjustment/u);
+  assert.doesNotMatch(adjustmentSource, /window\.confirm/u);
   assert.match(adjustmentSource, /Retry keeps the same permanent request ID/u);
   assert.match(adjustmentSource, /error\.status === 409/u);
   assert.match(adjustmentSource, /await loadStaffTime\(\{ quiet: true \}\)/u);
@@ -1101,6 +1103,32 @@ test('correction, adjustment, and VOID mutations require reasons, confirmation, 
     'const expected = Object.freeze({'
   );
   assert.doesNotMatch(adjustmentRequestSource, /staffId|staffName/u);
+
+  const inlineReviewSource = sourceBetween(
+    adminHtml,
+    'function clearStaffAdjustmentReview(',
+    'function setStaffFormWorking('
+  );
+  assert.match(inlineReviewSource, /Review this punch adjustment/u);
+  assert.match(inlineReviewSource, /Staff: \$\{adjustment\.staffName\}/u);
+  assert.match(inlineReviewSource, /Current clock-in:/u);
+  assert.match(inlineReviewSource, /Current clock-out:/u);
+  assert.match(inlineReviewSource, /Proposed clock-in:/u);
+  assert.match(inlineReviewSource, /Proposed clock-out:/u);
+  assert.match(inlineReviewSource, /Reason: \$\{adjustment\.reason\}/u);
+  assert.match(inlineReviewSource, /source punches will remain unchanged/u);
+  assert.match(inlineReviewSource, /permanently audited/u);
+  assert.match(inlineReviewSource, /staffReviewedFingerprint/u);
+  assert.match(inlineReviewSource, /Confirm and save adjustment/u);
+
+  const adjustmentEvents = sourceBetween(
+    adminHtml,
+    "$('#staffTimeRecords').addEventListener('click'",
+    "$('#staffTimeRecords').addEventListener('submit'"
+  );
+  assert.match(adjustmentEvents, /data-staff-adjust-cancel/u);
+  assert.match(adjustmentEvents, /clearStaffAdjustmentReview\(form\)/u);
+  assert.match(adjustmentEvents, /Review canceled\. Edit the times or reason/u);
 
   const voidSource = sourceBetween(adminHtml, 'async function submitStaffVoid(', 'function uniqueRequestId(');
   assert.ok(voidSource.indexOf('staffVoidRequestIdFor(form, punchId, reason)') < voidSource.indexOf('requestJson(API.staffTime, request)'));
@@ -1233,6 +1261,95 @@ test('correction, adjustment, and VOID mutations require reasons, confirmation, 
     ...adjustResponse,
     confirmation: { ...adjustResponse.confirmation, staffName: 'Front Desk Test Two' }
   }, adjustExpected), false);
+});
+
+test('Adjust punch uses inline review first and sends only after the second explicit submit', async () => {
+  const reviewFunctions = sourceBetween(
+    adminHtml,
+    'function clearStaffAdjustmentReview(',
+    'function focusStaffTimeHash('
+  );
+  const submitFunction = sourceBetween(
+    adminHtml,
+    'async function submitStaffAdjustment(',
+    'async function submitStaffVoid('
+  );
+  const context = vm.createContext({ Object, Array, JSON, calls: [], loadCount: 0, focusCount: 0 });
+  new vm.Script(`
+    const API = { staffTime: '/staff-time' };
+    const adjustment = Object.freeze({
+      staffId: 'mandy-test',
+      staffName: 'Mandy Test',
+      clockInPunchId: '${PUNCH_ONE}',
+      clockOutPunchId: '${PUNCH_TWO}',
+      originalClockInAt: '2026-08-18T09:00:00-04:00',
+      originalClockOutAt: '2026-08-18T17:00:00-04:00',
+      correctedClockInAt: '2026-08-18T09:15:00-04:00',
+      correctedClockOutAt: '2026-08-18T17:30:00-04:00',
+      reason: 'Manager verified the written time card'
+    });
+    const review = {
+      hidden: true,
+      replaceChildren(...children) { this.children = children; },
+      focus() { focusCount += 1; }
+    };
+    const cancel = { hidden: true, disabled: false };
+    const submit = { textContent: 'Review adjustment', disabled: false };
+    const status = {};
+    const controls = [submit, cancel];
+    const attributes = { 'aria-busy': 'false' };
+    const form = {
+      dataset: {},
+      elements: controls,
+      getAttribute(name) { return attributes[name] || ''; },
+      setAttribute(name, value) { attributes[name] = String(value); },
+      querySelector(selector) {
+        if (selector === '[data-staff-adjust-review]') return review;
+        if (selector === '[data-staff-adjust-cancel]') return cancel;
+        if (selector === 'button[type="submit"]') return submit;
+        if (selector === '.staff-adjust-status') return status;
+        return null;
+      }
+    };
+    function readStaffAdjustment() { return adjustment; }
+    function staffAdjustmentFingerprint(value) { return JSON.stringify(value); }
+    function staffAdjustmentRequestIdFor(target, value) {
+      target.dataset.staffRequestId = target.dataset.staffRequestId || '${REQUEST_ONE}';
+      target.dataset.staffFingerprint = staffAdjustmentFingerprint(value);
+      return target.dataset.staffRequestId;
+    }
+    function makeElement(tagName, className, textContent) { return { tagName, className, textContent }; }
+    function staffTimestampLabel(value) { return value; }
+    function showMessage(target, message) { target.message = message; }
+    function validStaffMutationResponse() { return true; }
+    async function requestJson(url, body) {
+      calls.push({ url, body: JSON.parse(JSON.stringify(body)) });
+      return { result: 'adjusted' };
+    }
+    function toast() {}
+    async function loadStaffTime() { loadCount += 1; return true; }
+    function setLoggedOut() {}
+    ${reviewFunctions}
+    ${submitFunction}
+    globalThis.hooks = { form, review, cancel, submit, submitStaffAdjustment };
+  `, { filename: 'staff-time-inline-adjustment.js' }).runInContext(context);
+
+  await context.hooks.submitStaffAdjustment(context.hooks.form);
+  assert.equal(context.calls.length, 0);
+  assert.equal(context.hooks.review.hidden, false);
+  assert.equal(context.hooks.cancel.hidden, false);
+  assert.equal(context.hooks.submit.textContent, 'Confirm and save adjustment');
+  assert.equal(context.focusCount, 1);
+
+  await context.hooks.submitStaffAdjustment(context.hooks.form);
+  assert.equal(context.calls.length, 1);
+  assert.deepEqual(Object.keys(context.calls[0].body).sort(), [
+    'clockInPunchId', 'clockOutPunchId', 'correctedClockInAt', 'correctedClockOutAt',
+    'operation', 'originalClockInAt', 'originalClockOutAt', 'reason', 'requestId'
+  ]);
+  assert.equal(context.calls[0].body.operation, 'adjust');
+  assert.equal(context.loadCount, 1);
+  assert.equal(context.hooks.submit.textContent, 'Confirm and save adjustment');
 });
 
 test('#staff-time opens and focuses the existing panel without another login or secret', () => {

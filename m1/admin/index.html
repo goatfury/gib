@@ -436,6 +436,15 @@
     .staff-adjustment-form .field { gap: 4px; }
     .staff-adjustment-form input { padding: 8px 10px; }
     .staff-adjustment-form .form-actions { margin-top: 9px; }
+    .staff-adjust-review {
+      margin-top: 10px;
+      border: 1px solid #4d8a74;
+      border-radius: 10px;
+      background: rgba(21, 96, 75, .2);
+      padding: 10px;
+    }
+    .staff-adjust-review > strong { display: block; margin-bottom: 5px; color: #c8fae8; }
+    .staff-adjust-review .record-detail { margin-top: 4px; }
     .staff-adjustment-evidence { color: #c8fae8; }
     .loading { opacity: .62; pointer-events: none; }
     .toast {
@@ -3039,13 +3048,25 @@
         const actions = makeElement('div', 'form-actions');
         const submit = makeElement('button', 'btn primary small', 'Review adjustment');
         submit.type = 'submit';
-        actions.appendChild(submit);
+        const cancelReview = makeElement('button', 'btn ghost small', 'Cancel review and edit');
+        cancelReview.type = 'button';
+        cancelReview.dataset.staffAdjustCancel = 'true';
+        cancelReview.hidden = true;
+        actions.append(submit, cancelReview);
+        const review = makeElement('div', 'staff-adjust-review');
+        review.dataset.staffAdjustReview = 'true';
+        review.hidden = true;
+        review.tabIndex = -1;
+        review.setAttribute('role', 'region');
+        review.setAttribute('aria-live', 'polite');
+        review.setAttribute('aria-label', 'Review punch adjustment before saving');
         const status = makeElement('div', 'message staff-adjust-status');
         status.setAttribute('role', 'status');
         status.setAttribute('aria-live', 'polite');
         form.append(
           grid,
           inputField('Required reason', reason),
+          review,
           actions,
           status
         );
@@ -3859,6 +3880,46 @@
         });
       }
 
+      function clearStaffAdjustmentReview(form) {
+        delete form.dataset.staffReviewedFingerprint;
+        const review = form.querySelector('[data-staff-adjust-review]');
+        const cancel = form.querySelector('[data-staff-adjust-cancel]');
+        const submit = form.querySelector('button[type="submit"]');
+        if (review) {
+          review.hidden = true;
+          review.replaceChildren();
+        }
+        if (cancel) cancel.hidden = true;
+        if (submit) submit.textContent = 'Review adjustment';
+      }
+
+      function showStaffAdjustmentReview(form, adjustment) {
+        const review = form.querySelector('[data-staff-adjust-review]');
+        const cancel = form.querySelector('[data-staff-adjust-cancel]');
+        const submit = form.querySelector('button[type="submit"]');
+        if (!review || !cancel || !submit) return false;
+        form.dataset.staffReviewedFingerprint = staffAdjustmentFingerprint(adjustment);
+        review.replaceChildren(
+          makeElement('strong', '', 'Review this punch adjustment'),
+          makeElement('div', 'record-detail', `Staff: ${adjustment.staffName}`),
+          makeElement('div', 'record-detail', `Current clock-in: ${staffTimestampLabel(adjustment.originalClockInAt)}`),
+          makeElement('div', 'record-detail', `Current clock-out: ${staffTimestampLabel(adjustment.originalClockOutAt)}`),
+          makeElement('div', 'record-detail', `Proposed clock-in: ${staffTimestampLabel(adjustment.correctedClockInAt)}`),
+          makeElement('div', 'record-detail', `Proposed clock-out: ${staffTimestampLabel(adjustment.correctedClockOutAt)}`),
+          makeElement('div', 'record-detail', `Reason: ${adjustment.reason}`),
+          makeElement(
+            'div',
+            'record-detail staff-adjustment-evidence',
+            'The source punches will remain unchanged and this action will be permanently audited.'
+          )
+        );
+        review.hidden = false;
+        cancel.hidden = false;
+        submit.textContent = 'Confirm and save adjustment';
+        review.focus({ preventScroll: true });
+        return true;
+      }
+
       function setStaffFormWorking(form, working, label) {
         form.setAttribute('aria-busy', working ? 'true' : 'false');
         Array.from(form.elements).forEach(control => { control.disabled = working; });
@@ -3958,6 +4019,7 @@
         const status = form.querySelector('.staff-adjust-status');
         const adjustment = readStaffAdjustment(form);
         if (!adjustment) {
+          clearStaffAdjustmentReview(form);
           showMessage(
             status,
             'Change the clock-in, clock-out, or both; choose the correct EDT or EST time zone; keep clock-out after clock-in within 18 hours; and enter a reason of at least three characters.'
@@ -3969,6 +4031,14 @@
           requestId = staffAdjustmentRequestIdFor(form, adjustment);
         } catch (error) {
           showMessage(status, error.message);
+          return;
+        }
+        const fingerprint = staffAdjustmentFingerprint(adjustment);
+        if (form.dataset.staffReviewedFingerprint !== fingerprint) {
+          showMessage(status, '');
+          if (!showStaffAdjustmentReview(form, adjustment)) {
+            showMessage(status, 'This adjustment could not be prepared for review. Nothing was changed.');
+          }
           return;
         }
         const request = Object.freeze({
@@ -3987,17 +4057,7 @@
           staffId: adjustment.staffId,
           staffName: adjustment.staffName
         });
-        const confirmed = window.confirm([
-          `Adjust ${adjustment.staffName}’s completed shift?`,
-          `Current clock-in: ${staffTimestampLabel(request.originalClockInAt)}`,
-          `Current clock-out: ${staffTimestampLabel(request.originalClockOutAt)}`,
-          `Proposed clock-in: ${staffTimestampLabel(request.correctedClockInAt)}`,
-          `Proposed clock-out: ${staffTimestampLabel(request.correctedClockOutAt)}`,
-          `Reason: ${request.reason}`,
-          'The source punches will remain unchanged and this action will be permanently audited.'
-        ].join('\n\n'));
-        if (!confirmed) return;
-        setStaffFormWorking(form, true, 'Review adjustment');
+        setStaffFormWorking(form, true, 'Confirm and save adjustment');
         showMessage(status, 'Saving adjustment…', 'working');
         try {
           const data = await requestJson(API.staffTime, request);
@@ -4021,7 +4081,7 @@
             showMessage(status, `${error.message} Retry keeps the same permanent request ID.`);
           }
         } finally {
-          setStaffFormWorking(form, false, 'Review adjustment');
+          setStaffFormWorking(form, false, 'Confirm and save adjustment');
         }
       }
 
@@ -4619,9 +4679,19 @@
         staffOlderHistoryExpanded = !staffOlderHistoryExpanded;
         renderStaffTimeRecords(currentStaffTime);
       });
+      $('#staffTimeRecords').addEventListener('click', event => {
+        const cancel = event.target.closest('[data-staff-adjust-cancel]');
+        if (!cancel) return;
+        const form = cancel.closest('[data-staff-adjust-form]');
+        if (!form || form.getAttribute('aria-busy') === 'true') return;
+        clearStaffAdjustmentReview(form);
+        showMessage(form.querySelector('.staff-adjust-status'), 'Review canceled. Edit the times or reason, then review again.');
+        form.elements.correctedClockIn.focus();
+      });
       $('#staffTimeRecords').addEventListener('input', event => {
         const form = event.target.closest('[data-staff-adjust-form]');
         if (form && form.getAttribute('aria-busy') !== 'true') {
+          clearStaffAdjustmentReview(form);
           showMessage(form.querySelector('.staff-adjust-status'), '');
         }
       });
