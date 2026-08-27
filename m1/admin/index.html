@@ -119,6 +119,7 @@
       padding: 13px;
     }
     .test-entry strong { color: var(--amber); }
+    .test-entry .btn.primary { width: 100%; font-size: 1rem; }
     .message {
       display: none;
       margin-top: 14px;
@@ -505,6 +506,11 @@
           <option>Stuart Turner</option>
         </select>
       </div>
+      <div id="testEntry" class="test-entry">
+        <strong id="testEntryHeading">TEST ADMIN — Deploy Preview only</strong>
+        <p id="testEntryCopy" class="muted" style="margin:5px 0 10px">Uses the copied TEST Sheet and fake information. This path is rejected outside a Deploy Preview.</p>
+        <button id="testLoginButton" class="btn warn" type="button">Enter TEST Admin</button>
+      </div>
       <div id="passphraseField" class="field">
         <label for="loginPassphrase">Admin passphrase</label>
         <input id="loginPassphrase" type="password" autocomplete="current-password" placeholder="Four-word passphrase">
@@ -515,11 +521,6 @@
           <a id="localAdminLink" class="btn ghost" href="/m1/?view=admin" style="text-decoration:none">Local M1 Admin</a>
           <a class="btn ghost" href="/m1/" style="text-decoration:none">Instructor Sign-In</a>
         </div>
-      </div>
-      <div id="testEntry" class="test-entry">
-        <strong id="testEntryHeading">TEST ADMIN — Deploy Preview only</strong>
-        <p id="testEntryCopy" class="muted" style="margin:5px 0 10px">Uses the copied TEST Sheet and fake information. This path is rejected outside a Deploy Preview.</p>
-        <button id="testLoginButton" class="btn warn" type="button">Enter TEST Admin</button>
       </div>
       <div id="loginMessage" class="message" role="alert"></div>
     </section>
@@ -4565,6 +4566,25 @@
           && value.writesEnabled === false;
       }
 
+      function configureAdminLoginEntry() {
+        const deployPreviewHost = !IS_RICHMOND_PRODUCTION
+          && TEST_ADMIN_HOST_PATTERN.test(location.hostname);
+        $('#testEntry').style.display = deployPreviewHost ? 'block' : 'none';
+        if (!deployPreviewHost) return false;
+        $('#passphraseField').hidden = true;
+        $('#loginButton').hidden = true;
+        $('#loginCopy').textContent = 'Choose Andrew Smith or Stuart Turner, then enter the isolated TEST Admin. Production credentials are not used on this Deploy Preview.';
+        $('#testEntryHeading').textContent = IS_RICHMOND
+          ? 'RICHMOND TEST ADMIN — Deploy Preview'
+          : 'TEST ADMIN — Deploy Preview';
+        $('#testEntryCopy').textContent = IS_RICHMOND
+          ? 'Uses only the dedicated Richmond TEST Sheet and fake TEST information. Production credentials are not used.'
+          : 'Uses only the copied TEST Sheet and fake TEST information. Production credentials are not used.';
+        $('#testLoginButton').className = 'btn primary';
+        $('#testLoginButton').textContent = 'Enter TEST Admin';
+        return true;
+      }
+
       async function loadProductionLedgerStatus() {
         const status = $('#productionLedgerStatus');
         showMessage(status, 'Checking the protected production ledger…', 'working');
@@ -4622,9 +4642,7 @@
         }
         $('#calendarDate').max = nyDate();
         $('#searchDate').max = nyDate();
-        const deployPreviewHost = !IS_RICHMOND_PRODUCTION
-          && TEST_ADMIN_HOST_PATTERN.test(location.hostname);
-        $('#testEntry').style.display = deployPreviewHost ? 'block' : 'none';
+        configureAdminLoginEntry();
         const diagnosticOriginAllowed = !IS_RICHMOND && validTabletDiagnosticOrigin();
         $('#installSyncSettingsButton').hidden = true;
         $('#tabletDiagnosticButton').hidden = !diagnosticOriginAllowed;
