@@ -1,0 +1,149 @@
+.m1-kiosk-brand {
+  display: flex;
+  align-items: center;
+  min-height: 58px;
+  margin: 0 0 10px;
+}
+
+.m1-kiosk-brand img {
+  display: block;
+  width: auto;
+  max-width: min(230px, 58vw);
+  height: auto;
+  max-height: 76px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.m1-kiosk-brand-richmond img {
+  max-width: min(260px, 66vw);
+  max-height: 70px;
+}
+
+body.admin-mode .m1-kiosk-brand {
+  display: none;
+}
+
+body.kiosk-mode header {
+  padding-block: 12px;
+}
+
+body.kiosk-mode .m1-kiosk-brand {
+  min-height: 46px;
+  margin-bottom: 4px;
+}
+
+body.kiosk-mode .m1-kiosk-brand img {
+  max-height: 58px;
+}
+
+body.kiosk-mode #kiosk {
+  padding: clamp(18px, 3vw, 26px);
+}
+
+body.kiosk-mode .kiosk-heading {
+  margin-bottom: 16px;
+  font-size: clamp(22px, 3vw, 27px);
+  letter-spacing: -0.01em;
+}
+
+.m1-name-field {
+  min-width: 0;
+}
+
+.m1-name-field #nameInput {
+  min-height: 52px;
+  font-size: 17px;
+}
+
+.m1-name-help {
+  margin: 7px 2px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.m1-name-suggestions {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  max-height: 324px;
+  margin-top: 8px;
+  padding: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  background: #0d1728;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.32);
+}
+
+.m1-name-suggestions[hidden] {
+  display: none;
+}
+
+.m1-name-suggestion {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 50px;
+  padding: 11px 13px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.m1-name-suggestion:hover,
+.m1-name-suggestion.active,
+.m1-name-suggestion[aria-selected="true"] {
+  border-color: rgba(96, 165, 250, 0.5);
+  background: rgba(59, 130, 246, 0.16);
+  color: #eff6ff;
+}
+
+.m1-name-suggestion:focus-visible {
+  outline: 3px solid rgba(96, 165, 250, 0.55);
+  outline-offset: -2px;
+}
+
+@media (max-width: 899px) {
+  .container {
+    padding: 14px;
+  }
+
+  body.kiosk-mode header nav {
+    margin-top: 6px;
+  }
+
+  .m1-kiosk-brand,
+  body.kiosk-mode .m1-kiosk-brand {
+    justify-content: center;
+  }
+
+  .m1-kiosk-brand img,
+  body.kiosk-mode .m1-kiosk-brand img {
+    object-position: center;
+  }
+
+  .m1-name-suggestions {
+    max-height: 300px;
+  }
+}
+
+@media (max-width: 560px) {
+  .m1-kiosk-brand img,
+  .m1-kiosk-brand-richmond img {
+    max-height: 52px;
+  }
+
+  .m1-name-suggestion {
+    min-height: 52px;
+  }
+}

@@ -204,7 +204,12 @@ test('install atomically precaches only the revision-matched shell and activatio
       `${ORIGIN}/m1/installation-profile.generated.js?v=${harness.revision}`,
       `${ORIGIN}/m1/sync-core.mjs?v=${harness.revision}`,
       `${ORIGIN}/m1/staff-clock-core.mjs?v=${harness.revision}`,
-      `${ORIGIN}/m1/staff-clock-client.mjs?v=${harness.revision}`
+      `${ORIGIN}/m1/staff-clock-client.mjs?v=${harness.revision}`,
+      `${ORIGIN}/m1/kiosk-enhancements.css?v=${harness.revision}`,
+      `${ORIGIN}/m1/kiosk-enhancements.mjs?v=${harness.revision}`,
+      `${ORIGIN}/m1/kiosk-enhancements-core.mjs`,
+      `${ORIGIN}/m1/assets/revolution-bjj-logo.webp`,
+      `${ORIGIN}/m1/assets/richmond-bjj-logo.webp`
     ]
   );
   for (const value of harness.addAllCalls[0].requests) {
