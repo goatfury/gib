@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { evaluateStaffState, mergeStaffRecords } from '../m1/staff-clock-core.mjs';
+import {
+  evaluateStaffState,
+  mergeStaffRecords,
+  sameStaffRecord,
+  validStaffRecord
+} from '../m1/staff-clock-core.mjs';
 
 const kioskHtml = readFileSync(new URL('../m1/index.html', import.meta.url), 'utf8');
 const clientSource = readFileSync(new URL('../m1/staff-clock-client.mjs', import.meta.url), 'utf8');
@@ -39,10 +44,14 @@ const fullRecord = Object.freeze({
   status: 'ACTIVE',
   source: 'Tablet',
   adminName: '',
-  linkedPunchId: ''
+  linkedPunchId: '',
+  originalTimestamp: '',
+  originalDate: '',
+  adjustmentRequestId: ''
 });
 
 const VIEW_TOKEN = 'a'.repeat(64);
+const ADJUSTMENT_REQUEST_ID = 'gib-m1-staff-request-123e4567-e89b-42d3-a456-426614174000';
 
 function snapshotView(overrides = {}) {
   return {
@@ -126,13 +135,108 @@ function snapshotStart(target = 'test', overrides = {}) {
   };
 }
 
+function newYorkDate(value) {
+  const parts = {};
+  new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(value).forEach(part => {
+    if (part.type !== 'literal') parts[part.type] = part.value;
+  });
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function browserRecordNormalizer() {
+  return Function('validStaffRecord', 'fmtDate', `
+    const STAFF_PUNCH_ID_PATTERN = ${/^gib-m1-staff-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u};
+    ${namedFunctionSource(clientSource, 'cleanStaffClockText')}
+    ${namedFunctionSource(clientSource, 'validStaffClockTimestamp')}
+    return (${namedFunctionSource(clientSource, 'normalizeStaffClockRecord')});
+  `)(validStaffRecord, newYorkDate);
+}
+
 test('Staff Clock is isolated from the inherited inline kiosk client', () => {
   const inlineModule = kioskHtml.match(/<script type="module">([\s\S]*?)<\/script>/u)?.[1] || '';
   assert.match(
     kioskHtml,
-    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-08-26-richmond-activation-r1"><\/script>/u
+    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-08-27-staff-adjustment-r1"><\/script>/u
   );
   assert.doesNotMatch(inlineModule, /staff-clock-core|staffClockSyncPunch|syncStaffClockQueue|renderStaffTimeAdmin/u);
+});
+
+test('browser records accept complete adjustment evidence and reject partial or extra evidence', () => {
+  const normalize = browserRecordNormalizer();
+  const adjusted = {
+    ...fullRecord,
+    timestamp: '2026-08-18T09:45:00-04:00',
+    originalTimestamp: '2026-08-18T09:30:00-04:00',
+    originalDate: '2026-08-18',
+    adjustmentRequestId: ADJUSTMENT_REQUEST_ID
+  };
+
+  assert.deepEqual(normalize(adjusted), adjusted);
+  assert.deepEqual(normalize({
+    ...fullRecord,
+    originalTimestamp: undefined,
+    originalDate: undefined,
+    adjustmentRequestId: undefined
+  }), fullRecord, 'missing optional evidence canonicalizes to explicit blanks');
+
+  for (const invalid of [
+    { ...fullRecord, originalTimestamp: adjusted.originalTimestamp },
+    { ...fullRecord, originalDate: adjusted.originalDate },
+    { ...fullRecord, adjustmentRequestId: adjusted.adjustmentRequestId },
+    {
+      ...adjusted,
+      originalTimestamp: '2026-03-08T02:30:00-05:00',
+      originalDate: '2026-03-08'
+    },
+    { ...adjusted, originalDate: '2026-08-17' },
+    { ...adjusted, adjustmentRequestId: 'gib-m1-staff-request-not-a-uuid' },
+    { ...adjusted, originalClockInAt: adjusted.originalTimestamp }
+  ]) {
+    assert.equal(normalize(invalid), null, JSON.stringify(invalid));
+  }
+});
+
+test('browser record comparison includes original adjustment evidence', () => {
+  const compare = Function('sameStaffRecord', `
+    const STAFF_RECORD_KEYS = ${JSON.stringify([
+      'punchId',
+      'timestamp',
+      'date',
+      'staffId',
+      'staffName',
+      'punchAction',
+      'site',
+      'device',
+      'build',
+      'note',
+      'status',
+      'source',
+      'adminName',
+      'linkedPunchId',
+      'originalTimestamp',
+      'originalDate',
+      'adjustmentRequestId'
+    ])};
+    return (${namedFunctionSource(clientSource, 'sameStaffClockRecord')});
+  `)(sameStaffRecord);
+  const adjusted = {
+    ...fullRecord,
+    originalTimestamp: fullRecord.timestamp,
+    originalDate: fullRecord.date,
+    adjustmentRequestId: ADJUSTMENT_REQUEST_ID
+  };
+
+  assert.equal(compare(adjusted, { ...adjusted }), true);
+  assert.equal(compare(adjusted, fullRecord), false);
+  assert.equal(compare(adjusted, {
+    ...adjusted,
+    adjustmentRequestId: 'gib-m1-staff-request-223e4567-e89b-42d3-a456-426614174000'
+  }), false);
 });
 
 test('Staff Clock sync projects durable records to the exact ten-key wire shape', () => {
@@ -268,6 +372,17 @@ test('browser summary validation is exact and keeps inactive historical names', 
     needsAttention: false
   });
   assert.deepEqual(normalizeSummary(value, [fullRecord]), value);
+  const adjusted = {
+    ...fullRecord,
+    timestamp: '2026-08-18T09:45:00-04:00',
+    originalTimestamp: fullRecord.timestamp,
+    originalDate: fullRecord.date,
+    adjustmentRequestId: ADJUSTMENT_REQUEST_ID
+  };
+  const adjustedValue = snapshotSummary([adjusted], undefined, {
+    view: { adjustmentCount: 1, adjustmentTotal: 1 }
+  });
+  assert.deepEqual(normalizeSummary(adjustedValue, [adjusted]), adjustedValue);
   assert.equal(normalizeSummary({ ...value, extra: true }, [fullRecord]), null);
   assert.equal(normalizeSummary({
     ...value,

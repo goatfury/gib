@@ -875,7 +875,7 @@ body.admin-mode .container { max-width: 1120px; }
 }
 
 </style>
-<script src="./installation-profile.generated.js?v=2026-08-26-richmond-activation-r1"></script>
+<script src="./installation-profile.generated.js?v=2026-08-27-staff-adjustment-r1"></script>
 </head>
 <body>
 <div class="container">
@@ -1356,10 +1356,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-26-richmond-activation-r1';
+} from './sync-core.mjs?v=2026-08-27-staff-adjustment-r1';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-08-26-richmond-activation-r1';
+const OFFLINE_SHELL_REVISION = '2026-08-27-staff-adjustment-r1';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -4665,6 +4665,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-08-26-richmond-activation-r1"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-08-27-staff-adjustment-r1"></script>
 </body>
 </html>

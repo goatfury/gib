@@ -57,6 +57,8 @@ function totalFor(review, period, staffId = 'mandy-test') {
   return review.payPeriods[period].staffTotals.find(item => item.staffId === staffId);
 }
 
+const ADJUSTMENT_REQUEST_ID = 'gib-m1-staff-request-123e4567-e89b-42d3-a456-426614174000';
+
 test('Staff punch IDs are permanent, scoped UUID-v4 values and fail closed without secure randomness', () => {
   const cryptoApi = {
     randomUUID: () => 'ABCDEF12-3456-4ABC-8DEF-1234567890AB'
@@ -111,6 +113,77 @@ test('Staff members and records use one strict browser-safe contract', () => {
     { ...base, linkedPunchId: 'bad' },
     { ...base, unexpected: true }
   ]) assert.equal(validStaffRecord(changed), false, JSON.stringify(changed));
+});
+
+test('adjusted records require one complete, strict evidence set and include it in identity', () => {
+  const base = staffRecord({
+    timestamp: '2026-08-18T09:30:00-04:00'
+  });
+  const adjusted = {
+    ...base,
+    originalTimestamp: '2026-08-18T09:00:00-04:00',
+    originalDate: '2026-08-18',
+    adjustmentRequestId: ADJUSTMENT_REQUEST_ID
+  };
+
+  assert.equal(validStaffRecord(adjusted), true);
+  assert.equal(sameStaffRecord(adjusted, { ...adjusted }), true);
+  assert.equal(sameStaffRecord(base, adjusted), false, 'audit evidence is part of the record identity');
+  assert.equal(sameStaffRecord(adjusted, {
+    ...adjusted,
+    originalTimestamp: '2026-08-18T08:59:00-04:00'
+  }), false);
+  assert.equal(sameStaffRecord(adjusted, {
+    ...adjusted,
+    adjustmentRequestId: 'gib-m1-staff-request-223e4567-e89b-42d3-a456-426614174000'
+  }), false);
+
+  assert.equal(validStaffRecord({
+    ...base,
+    originalTimestamp: '',
+    originalDate: '',
+    adjustmentRequestId: ''
+  }), true, 'canonical blank optional fields are not adjustment evidence');
+
+  for (const invalidEvidence of [
+    { originalTimestamp: adjusted.originalTimestamp },
+    { originalDate: adjusted.originalDate },
+    { adjustmentRequestId: adjusted.adjustmentRequestId },
+    {
+      originalTimestamp: adjusted.originalTimestamp,
+      originalDate: adjusted.originalDate
+    },
+    {
+      originalTimestamp: adjusted.originalTimestamp,
+      adjustmentRequestId: adjusted.adjustmentRequestId
+    },
+    {
+      originalDate: adjusted.originalDate,
+      adjustmentRequestId: adjusted.adjustmentRequestId
+    },
+    {
+      originalTimestamp: '2026-03-08T02:30:00-05:00',
+      originalDate: '2026-03-08',
+      adjustmentRequestId: adjusted.adjustmentRequestId
+    },
+    {
+      originalTimestamp: adjusted.originalTimestamp,
+      originalDate: '2026-08-17',
+      adjustmentRequestId: adjusted.adjustmentRequestId
+    },
+    {
+      originalTimestamp: adjusted.originalTimestamp,
+      originalDate: adjusted.originalDate,
+      adjustmentRequestId: 'gib-m1-staff-request-not-a-uuid'
+    }
+  ]) {
+    assert.equal(validStaffRecord({ ...base, ...invalidEvidence }), false, JSON.stringify(invalidEvidence));
+  }
+
+  assert.equal(validStaffRecord({
+    ...adjusted,
+    originalClockInAt: adjusted.originalTimestamp
+  }), false, 'uncontracted adjustment evidence is rejected');
 });
 
 test('timestamps must be parseable offset-bearing New York local instants', () => {
@@ -379,6 +452,36 @@ test('pay-period totals count completed shifts by Clock In date and sum exact el
   assert.equal(previousTotal.formattedTotal, '3 hr 37 min');
   assert.equal(currentTotal.needsAttention, false);
   assert.equal(previousTotal.needsAttention, false);
+});
+
+test('corrected timestamps drive cross-midnight payroll totals while originals remain intact', () => {
+  const adjustedClockIn = staffRecord({
+    timestamp: '2026-08-09T23:30:00-04:00',
+    punchAction: 'clockIn',
+    originalTimestamp: '2026-08-10T00:30:00-04:00',
+    originalDate: '2026-08-10',
+    adjustmentRequestId: ADJUSTMENT_REQUEST_ID
+  });
+  const adjustedClockOut = staffRecord({
+    timestamp: '2026-08-10T02:00:00-04:00',
+    punchAction: 'clockOut',
+    originalTimestamp: '2026-08-10T03:00:00-04:00',
+    originalDate: '2026-08-10',
+    adjustmentRequestId: ADJUSTMENT_REQUEST_ID
+  });
+  const review = buildStaffReview({
+    confirmedRecords: [adjustedClockIn, adjustedClockOut],
+    staffMembers: [{ staffId: 'mandy-test', staffName: 'Mandy Test' }],
+    now: '2026-08-18T12:00:00-04:00'
+  });
+
+  assert.equal(totalFor(review, 'current').completedShifts, 0);
+  assert.equal(totalFor(review, 'previous').completedShifts, 1);
+  assert.equal(totalFor(review, 'previous').totalMilliseconds, 150 * 60 * 1_000);
+  assert.equal(totalFor(review, 'previous').formattedTotal, '2 hr 30 min');
+  assert.equal(review.records[0].originalTimestamp, '2026-08-10T00:30:00-04:00');
+  assert.equal(review.records[1].originalTimestamp, '2026-08-10T03:00:00-04:00');
+  assert.equal(review.records.every(record => record.adjustmentRequestId === ADJUSTMENT_REQUEST_ID), true);
 });
 
 test('a shift crossing a pay-period boundary stays with its Clock In period without rounding', () => {

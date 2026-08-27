@@ -4,11 +4,14 @@ import {
   postGoogle,
   readJson,
   requireAdmin,
-  runtimeConfig
+  runtimeConfig,
+  safeText
 } from './_lib/m1-common.mjs';
 import {
   exactObjectKeys,
   isStaffViewStale,
+  sanitizeStaffTimeAdjustmentRequest,
+  sanitizeStaffTimeAdjustmentResult,
   sanitizeStaffTimeCorrectionRequest,
   sanitizeStaffTimeCorrectionResult,
   sanitizeStaffTimeReview,
@@ -67,6 +70,8 @@ function adminFailureResponse(google, operation) {
     ? operation === 'reviewPage' ? 'Staff time review page' : 'Staff time review'
     : operation === 'correct'
       ? 'Staff time correction'
+      : operation === 'adjust'
+        ? 'Staff time adjustment'
       : 'Staff time void';
   return jsonResponse(unreachable ? 504 : 502, {
     ok: false,
@@ -74,6 +79,24 @@ function adminFailureResponse(google, operation) {
     message: unreachable
       ? `${label} could not reach Google. Nothing changed.`
       : `${label} did not return a complete readable confirmation. Success is not being reported.`
+  });
+}
+
+function adminMutationFailureResponse(google, operation) {
+  if (
+    google?.readable !== true
+    || !exactObjectKeys(google.value, ['ok', 'result', 'message'])
+    || google.value.ok !== false
+    || (google.value.result !== 'rejected' && google.value.result !== 'conflict')
+  ) return null;
+  const message = safeText(google.value.message, 240);
+  if (!message || message !== google.value.message) return null;
+  const suffix = google.value.result.toLocaleUpperCase('en-US');
+  return jsonResponse(google.value.result === 'conflict' ? 409 : 400, {
+    ok: false,
+    result: google.value.result,
+    code: `STAFF_TIME_${operation.toLocaleUpperCase('en-US')}_${suffix}`,
+    message
   });
 }
 
@@ -108,6 +131,7 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
     operation !== 'review'
     && operation !== 'reviewPage'
     && operation !== 'correct'
+    && operation !== 'adjust'
     && operation !== 'void'
   ) {
     return jsonResponse(400, { ok: false, message: 'Staff time request was rejected.' });
@@ -205,6 +229,8 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
       device: expected.device,
       build: expected.build
     }, fetchImpl);
+    const mutationFailure = adminMutationFailureResponse(google, operation);
+    if (mutationFailure) return mutationFailure;
     const result = google.readable
       ? sanitizeStaffTimeCorrectionResult(google.value, expected, target)
       : null;
@@ -217,6 +243,49 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
       requestId: result.requestId,
       result: result.result,
       linkedPunchId: result.linkedPunchId,
+      auditActionNumber: result.auditActionNumber,
+      confirmation: result.confirmation
+    });
+  }
+
+  if (operation === 'adjust') {
+    const value = sanitizeStaffTimeAdjustmentRequest(parsed.value, { now: dateNow });
+    if (!value) {
+      return jsonResponse(400, {
+        ok: false,
+        result: 'rejected',
+        message: 'Choose one valid completed shift, corrected times, and a required reason.'
+      });
+    }
+    const expected = Object.freeze({
+      ...value,
+      adminName: auth.session.adminName
+    });
+    const google = await postGoogle(runtime, 'staffTimeAdjust', {
+      requestId: expected.requestId,
+      clockInPunchId: expected.clockInPunchId,
+      clockOutPunchId: expected.clockOutPunchId,
+      originalClockInAt: expected.originalClockInAt,
+      originalClockOutAt: expected.originalClockOutAt,
+      correctedClockInAt: expected.correctedClockInAt,
+      correctedClockOutAt: expected.correctedClockOutAt,
+      reason: expected.reason,
+      adminName: expected.adminName
+    }, fetchImpl);
+    const mutationFailure = adminMutationFailureResponse(google, operation);
+    if (mutationFailure) return mutationFailure;
+    const result = google.readable
+      ? sanitizeStaffTimeAdjustmentResult(google.value, expected, target, { now: dateNow })
+      : null;
+    if (!result) return adminFailureResponse(google, operation);
+    return jsonResponse(200, {
+      ok: true,
+      test: runtime.preview,
+      adminName: auth.session.adminName,
+      operation,
+      requestId: result.requestId,
+      result: result.result,
+      linkedPunchIds: result.linkedPunchIds,
       auditActionNumber: result.auditActionNumber,
       confirmation: result.confirmation
     });
@@ -240,6 +309,8 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
     reason: expected.reason,
     adminName: expected.adminName
   }, fetchImpl);
+  const mutationFailure = adminMutationFailureResponse(google, operation);
+  if (mutationFailure) return mutationFailure;
   const result = google.readable
     ? sanitizeStaffTimeVoidResult(google.value, expected, target, { now: dateNow })
     : null;

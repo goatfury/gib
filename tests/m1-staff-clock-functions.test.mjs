@@ -19,6 +19,8 @@ import {
   STAFF_REQUEST_ID_PATTERN,
   sanitizeStaffClockPunch,
   sanitizeStaffClockSnapshot,
+  sanitizeStaffTimeAdjustmentRequest,
+  sanitizeStaffTimeAdjustmentResult,
   sanitizeStaffTimeCorrectionRequest,
   sanitizeStaffTimeReview,
   sanitizeStaffViewPage,
@@ -358,6 +360,49 @@ function audit(target = 'test', overrides = {}) {
     reason: 'Forgotten punch',
     result: 'added',
     linkedPunchId: PUNCH_ID,
+    ...overrides
+  };
+}
+
+function adjustmentRequest(overrides = {}) {
+  return {
+    operation: 'adjust',
+    requestId: REQUEST_ID,
+    clockInPunchId: PUNCH_ID,
+    clockOutPunchId: SECOND_PUNCH_ID,
+    originalClockInAt: '2026-08-17T23:30:00-04:00',
+    originalClockOutAt: '2026-08-18T07:30:00-04:00',
+    correctedClockInAt: '2026-08-17T23:15:00-04:00',
+    correctedClockOutAt: '2026-08-18T07:45:00-04:00',
+    reason: 'Manager confirmed the paper timesheet.',
+    ...overrides
+  };
+}
+
+function adjustmentResult(input = adjustmentRequest(), result = 'adjusted', overrides = {}) {
+  const request = sanitizeStaffTimeAdjustmentRequest(input, { now: NOW });
+  assert.ok(request, 'adjustment result fixture requires a valid request');
+  return {
+    ok: true,
+    target: 'test',
+    requestId: request.requestId,
+    result,
+    linkedPunchIds: [request.clockInPunchId, request.clockOutPunchId],
+    auditActionNumber: 9,
+    confirmation: {
+      actionTime: '2026-08-18T16:50:00-04:00',
+      adminName: 'Andrew Smith',
+      staffId: 'mandy-test',
+      staffName: 'Mandy Test',
+      changed: request.changed,
+      clockInPunchId: request.clockInPunchId,
+      clockOutPunchId: request.clockOutPunchId,
+      originalClockInAt: request.originalClockInAt,
+      originalClockOutAt: request.originalClockOutAt,
+      correctedClockInAt: request.correctedClockInAt,
+      correctedClockOutAt: request.correctedClockOutAt,
+      reason: request.reason
+    },
     ...overrides
   };
 }
@@ -1183,6 +1228,282 @@ test('Admin correction rejects real TEST names, extras, future times, and partia
     })
   });
   assert.equal(failed.status, 502);
+});
+
+test('Admin adjustment request identifies clock-in, clock-out, and both changes with exact New York chronology', () => {
+  const clockInOnly = adjustmentRequest({
+    correctedClockInAt: '2026-08-17T23:20:00-04:00',
+    correctedClockOutAt: '2026-08-18T07:30:00-04:00'
+  });
+  const clockOutOnly = adjustmentRequest({
+    correctedClockInAt: '2026-08-17T23:30:00-04:00',
+    correctedClockOutAt: '2026-08-18T07:45:00-04:00'
+  });
+  const both = adjustmentRequest();
+  assert.equal(sanitizeStaffTimeAdjustmentRequest(clockInOnly, { now: NOW })?.changed, 'clockIn');
+  assert.equal(sanitizeStaffTimeAdjustmentRequest(clockOutOnly, { now: NOW })?.changed, 'clockOut');
+  assert.equal(sanitizeStaffTimeAdjustmentRequest(both, { now: NOW })?.changed, 'both');
+
+  const fallBackNow = new Date('2026-11-02T17:00:00.000Z');
+  const explicitlyDisambiguatedFallBack = adjustmentRequest({
+    originalClockInAt: '2026-11-01T00:30:00-04:00',
+    originalClockOutAt: '2026-11-01T02:30:00-05:00',
+    correctedClockInAt: '2026-11-01T01:15:00-04:00',
+    correctedClockOutAt: '2026-11-01T01:45:00-05:00'
+  });
+  assert.equal(
+    sanitizeStaffTimeAdjustmentRequest(explicitlyDisambiguatedFallBack, { now: fallBackNow })?.changed,
+    'both'
+  );
+
+  const invalid = [
+    { ...both, clockInPunchId: SECOND_PUNCH_ID },
+    { ...both, correctedClockInAt: both.originalClockInAt, correctedClockOutAt: both.originalClockOutAt },
+    { ...both, correctedClockInAt: '2026-08-18T08:00:00-04:00' },
+    {
+      ...both,
+      correctedClockInAt: '2026-08-17T12:00:00-04:00',
+      correctedClockOutAt: '2026-08-18T07:00:01-04:00'
+    },
+    {
+      ...both,
+      originalClockInAt: '2026-08-18T07:30:00-04:00',
+      originalClockOutAt: '2026-08-17T23:30:00-04:00'
+    },
+    {
+      ...both,
+      correctedClockInAt: '2026-08-18T18:00:00-04:00',
+      correctedClockOutAt: '2026-08-18T19:00:00-04:00'
+    },
+    {
+      ...both,
+      correctedClockInAt: '2026-11-01T01:15:00',
+      correctedClockOutAt: '2026-11-01T01:45:00-05:00'
+    },
+    {
+      ...both,
+      correctedClockInAt: '2026-03-08T02:15:00-05:00',
+      correctedClockOutAt: '2026-03-08T03:15:00-04:00'
+    },
+    { ...both, correctedClockInAt: '2026-08-17T23:15:00-05:00' },
+    { ...both, reason: 'x' },
+    { ...both, reason: '=erase history' },
+    { ...both, extra: true }
+  ];
+  invalid.forEach(candidate => {
+    assert.equal(sanitizeStaffTimeAdjustmentRequest(candidate, { now: NOW }), null);
+  });
+});
+
+test('Admin adjustment pins attribution, forwards the exact pair, and accepts an exact idempotent replay', async () => {
+  const variants = [
+    adjustmentRequest({
+      correctedClockInAt: '2026-08-17T23:20:00-04:00',
+      correctedClockOutAt: '2026-08-18T07:30:00-04:00'
+    }),
+    adjustmentRequest({
+      correctedClockInAt: '2026-08-17T23:30:00-04:00',
+      correctedClockOutAt: '2026-08-18T07:45:00-04:00'
+    }),
+    adjustmentRequest()
+  ];
+
+  for (const input of variants) {
+    const sanitized = sanitizeStaffTimeAdjustmentRequest(input, { now: NOW });
+    let upstream;
+    const googleResult = adjustmentResult(input);
+    const response = await handleAdminStaffTime(adminRequest({ body: input }), {
+      env: ENV,
+      now: NOW_MS,
+      dateNow: NOW,
+      fetch: async (url, options) => {
+        upstream = { url, body: JSON.parse(options.body) };
+        return googleResponse(googleResult);
+      }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(upstream.url, TEST_WEBHOOK_URL);
+    assert.deepEqual(upstream.body, {
+      requestId: input.requestId,
+      clockInPunchId: input.clockInPunchId,
+      clockOutPunchId: input.clockOutPunchId,
+      originalClockInAt: input.originalClockInAt,
+      originalClockOutAt: input.originalClockOutAt,
+      correctedClockInAt: input.correctedClockInAt,
+      correctedClockOutAt: input.correctedClockOutAt,
+      reason: input.reason,
+      adminName: 'Andrew Smith',
+      token: TEST_WEBHOOK_TOKEN,
+      action: 'staffTimeAdjust',
+      target: 'test',
+      adminActionToken: TEST_ADMIN_TOKEN
+    });
+    assert.deepEqual(await responseBody(response), {
+      ok: true,
+      test: true,
+      adminName: 'Andrew Smith',
+      operation: 'adjust',
+      requestId: input.requestId,
+      result: 'adjusted',
+      linkedPunchIds: [PUNCH_ID, SECOND_PUNCH_ID],
+      auditActionNumber: 9,
+      confirmation: googleResult.confirmation
+    });
+    assert.ok(sanitized);
+  }
+
+  const exactInput = adjustmentRequest();
+  const upstreamBodies = [];
+  let attempt = 0;
+  const dependencies = {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async (_url, options) => {
+      upstreamBodies.push(JSON.parse(options.body));
+      attempt += 1;
+      return googleResponse(adjustmentResult(
+        exactInput,
+        attempt === 1 ? 'adjusted' : 'already adjusted'
+      ));
+    }
+  };
+  const first = await handleAdminStaffTime(adminRequest({ body: exactInput }), dependencies);
+  const replay = await handleAdminStaffTime(adminRequest({ body: exactInput }), dependencies);
+  assert.equal(first.status, 200);
+  assert.equal(replay.status, 200);
+  assert.deepEqual(upstreamBodies[0], upstreamBodies[1]);
+  assert.equal((await responseBody(first)).result, 'adjusted');
+  assert.equal((await responseBody(replay)).result, 'already adjusted');
+});
+
+test('Admin adjustment result validation fails closed on partial, reordered, or drifted confirmations', async () => {
+  const input = adjustmentRequest();
+  const request = sanitizeStaffTimeAdjustmentRequest(input, { now: NOW });
+  const expected = Object.freeze({ ...request, adminName: 'Andrew Smith' });
+  assert.ok(sanitizeStaffTimeAdjustmentResult(adjustmentResult(input), expected, 'test', { now: NOW }));
+  assert.ok(sanitizeStaffTimeAdjustmentResult(
+    adjustmentResult(input, 'already adjusted'),
+    expected,
+    'test',
+    { now: NOW }
+  ));
+
+  const valid = adjustmentResult(input);
+  const invalid = [
+    { ...valid, result: 'already_adjusted' },
+    { ...valid, linkedPunchIds: [...valid.linkedPunchIds].reverse() },
+    { ...valid, auditActionNumber: 0 },
+    { ...valid, confirmation: { ...valid.confirmation, changed: 'clockIn' } },
+    { ...valid, confirmation: { ...valid.confirmation, correctedClockOutAt: input.originalClockOutAt } },
+    { ...valid, confirmation: { ...valid.confirmation, actionTime: '2026-08-18T18:00:00-04:00' } },
+    { ...valid, confirmation: { ...valid.confirmation, staffName: 'Mandy' } },
+    { ...valid, confirmation: { ...valid.confirmation, extra: true } },
+    { ...valid, confirmation: { adminName: 'Andrew Smith' } }
+  ];
+  invalid.forEach(candidate => {
+    assert.equal(sanitizeStaffTimeAdjustmentResult(candidate, expected, 'test', { now: NOW }), null);
+  });
+
+  const failed = await handleAdminStaffTime(adminRequest({ body: input }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async () => googleResponse(invalid.at(-1))
+  });
+  assert.equal(failed.status, 502);
+});
+
+test('Admin Staff Time maps only exact Apps Script mutation rejections and conflicts to 400 and 409', async () => {
+  const mutations = [
+    {
+      operation: 'correct',
+      body: {
+        operation: 'correct',
+        requestId: REQUEST_ID,
+        punchId: SECOND_PUNCH_ID,
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test',
+        punchAction: 'clockIn',
+        timestamp: '2026-08-18T16:30:00-04:00',
+        date: '2026-08-18',
+        reason: 'Forgotten punch'
+      }
+    },
+    { operation: 'adjust', body: adjustmentRequest() },
+    {
+      operation: 'void',
+      body: {
+        operation: 'void',
+        requestId: REQUEST_ID,
+        punchId: PUNCH_ID,
+        reason: 'Wrong punch selected'
+      }
+    }
+  ];
+
+  for (const mutation of mutations) {
+    for (const [result, status] of [['rejected', 400], ['conflict', 409]]) {
+      const message = `The Staff time ${mutation.operation} was ${result}.`;
+      const response = await handleAdminStaffTime(adminRequest({ body: mutation.body }), {
+        env: ENV,
+        now: NOW_MS,
+        dateNow: NOW,
+        fetch: async () => googleResponse({ ok: false, result, message })
+      });
+      assert.equal(response.status, status);
+      assert.deepEqual(await responseBody(response), {
+        ok: false,
+        result,
+        code: `STAFF_TIME_${mutation.operation.toUpperCase()}_${result.toUpperCase()}`,
+        message
+      });
+    }
+  }
+
+  for (const envelope of [
+    { ok: false, result: 'conflict', message: 'The shift changed.', extra: true },
+    { ok: false, result: 'failed', message: 'The shift changed.' },
+    { ok: false, result: 'rejected', message: ' The shift changed.' }
+  ]) {
+    const response = await handleAdminStaffTime(adminRequest({ body: adjustmentRequest() }), {
+      env: ENV,
+      now: NOW_MS,
+      dateNow: NOW,
+      fetch: async () => googleResponse(envelope)
+    });
+    assert.equal(response.status, 502, 'non-exact failure envelopes remain fail-closed');
+  }
+});
+
+test('Staff Clock and Staff Time adjustment remain unavailable for the Richmond installation', async () => {
+  let called = false;
+  const dependencies = {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    installationId: 'richmond',
+    fetch: async () => {
+      called = true;
+      throw new Error('Richmond must not call the Revolution Staff Clock backend');
+    }
+  };
+  const tablet = await handleStaffClock(staffClockRequest(), dependencies);
+  const admin = await handleAdminStaffTime(
+    adminRequest({ body: adjustmentRequest() }),
+    dependencies
+  );
+  assert.equal(tablet.status, 404);
+  assert.equal(admin.status, 404);
+  assert.equal(called, false);
+  assert.deepEqual(await responseBody(tablet), {
+    ok: false,
+    message: 'Staff Clock is disabled for this installation.'
+  });
+  assert.deepEqual(await responseBody(admin), {
+    ok: false,
+    message: 'Staff Clock is disabled for this installation.'
+  });
 });
 
 test('Admin void uses a separate permanent request, preserves linked punch identity, and confirms VOID', async () => {

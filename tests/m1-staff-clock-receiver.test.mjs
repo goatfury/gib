@@ -7,6 +7,8 @@ import {
   sanitizeStaffClockSnapshot,
   sanitizeStaffClockSyncResults,
   sanitizeStaffViewPage,
+  sanitizeStaffTimeAdjustmentRequest,
+  sanitizeStaffTimeAdjustmentResult,
   sanitizeStaffTimeCorrectionResult,
   sanitizeStaffTimeReview,
   sanitizeStaffTimeVoidResult
@@ -37,6 +39,11 @@ const AUDIT_HEADERS = [
   'Request ID', 'Action Time', 'Admin Name', 'Staff ID', 'Staff Name',
   'Punch Timestamp', 'Action', 'Required Reason', 'Result', 'Linked Punch ID'
 ];
+const ADJUSTMENT_HEADERS = [
+  'Request ID', 'Action Time', 'Admin Name', 'Staff ID', 'Staff Name',
+  'Clock In Punch ID', 'Clock Out Punch ID', 'Original Clock In', 'Original Clock Out',
+  'Corrected Clock In', 'Corrected Clock Out', 'Changed', 'Required Reason', 'Result'
+];
 const ADMIN_AUDIT_HEADERS = [
   'Action Number', 'Admin Name', 'Action Time', 'Instructor', 'Class Date',
   'Class', 'Site', 'Duration', 'Required Reason', 'Final Result',
@@ -50,7 +57,10 @@ const IDS = Object.freeze({
   correction: 'gib-m1-staff-00000000-0000-4000-8000-000000000004',
   request: 'gib-m1-staff-request-10000000-0000-4000-8000-000000000001',
   voidRequest: 'gib-m1-staff-request-10000000-0000-4000-8000-000000000002',
-  voidRequestTwo: 'gib-m1-staff-request-10000000-0000-4000-8000-000000000003'
+  voidRequestTwo: 'gib-m1-staff-request-10000000-0000-4000-8000-000000000003',
+  adjustRequest: 'gib-m1-staff-request-10000000-0000-4000-8000-000000000004',
+  adjustRequestTwo: 'gib-m1-staff-request-10000000-0000-4000-8000-000000000005',
+  adjustRequestThree: 'gib-m1-staff-request-10000000-0000-4000-8000-000000000006'
 });
 
 function makeSheet(initialRows = []) {
@@ -424,7 +434,21 @@ function correction(overrides = {}) {
   });
 }
 
-test('TEST provisioner creates only the exact Staff Clock tabs and fake active seed', () => {
+function adjustment(overrides = {}) {
+  return adminBody('staffTimeAdjust', {
+    requestId: IDS.adjustRequest,
+    clockInPunchId: IDS.in,
+    clockOutPunchId: IDS.out,
+    originalClockInAt: '2026-08-17T23:30:00-04:00',
+    originalClockOutAt: '2026-08-18T02:30:00-04:00',
+    correctedClockInAt: '2026-08-17T23:00:00-04:00',
+    correctedClockOutAt: '2026-08-18T02:30:00-04:00',
+    reason: 'Correct TEST shift start',
+    ...overrides
+  });
+}
+
+test('TEST provisioner creates the exact Staff Clock tabs and fake active seed', () => {
   const harness = createHarness({ includeStaffSheets: false });
   const signinsBefore = structuredClone(harness.signins.values);
   const adminAuditBefore = structuredClone(harness.adminAudit.values);
@@ -433,10 +457,13 @@ test('TEST provisioner creates only the exact Staff Clock tabs and fake active s
   assert.deepEqual(harness.sheets.get('Staff Clock Staff').values, [STAFF_HEADERS, ...STAFF_ROWS]);
   assert.deepEqual(harness.sheets.get('Staff Time').values, [TIME_HEADERS]);
   assert.deepEqual(harness.sheets.get('Staff Time Audit').values, [AUDIT_HEADERS]);
+  assert.deepEqual(harness.sheets.get('Staff Time Adjustments').values, [ADJUSTMENT_HEADERS]);
   assert.equal(harness.sheets.get('Staff Clock Staff').frozenRows, 1);
+  assert.equal(harness.sheets.get('Staff Time Adjustments').frozenRows, 1);
   assert.equal(result.staffCount, 3);
   assert.equal(result.staffTimeCount, 0);
   assert.equal(result.staffAuditCount, 0);
+  assert.equal(result.staffAdjustmentCount, 0);
   assert.deepEqual(harness.signins.values, signinsBefore);
   assert.deepEqual(harness.adminAudit.values, adminAuditBefore);
 });
@@ -728,6 +755,365 @@ test('Admin correction has one permanent request audit and heals a row-only inte
   assert.equal(healed.result, 'already exists');
   assert.equal(rowOnly.sheets.get('Staff Time').values.length, 2);
   assert.equal(rowOnly.sheets.get('Staff Time Audit').values.length, 2);
+});
+
+test('adjusting clock-in, clock-out, or both preserves raw punches and drives cross-midnight totals', () => {
+  const harness = createHarness({
+    timeRows: [
+      timeRow({ timestamp: '2026-08-17T23:30:00-04:00' }),
+      timeRow({
+        punchId: IDS.out,
+        timestamp: '2026-08-18T02:30:00-04:00',
+        action: 'clockOut'
+      })
+    ]
+  });
+  const rawBefore = structuredClone(harness.sheets.get('Staff Time').values);
+
+  const inOnly = harness.post(adjustment());
+  assert.equal(inOnly.result, 'adjusted');
+  assert.equal(inOnly.confirmation.changed, 'clockIn');
+  assert.equal(inOnly.auditActionNumber, 1);
+
+  const outOnly = harness.post(adjustment({
+    requestId: IDS.adjustRequestTwo,
+    originalClockInAt: '2026-08-17T23:00:00-04:00',
+    originalClockOutAt: '2026-08-18T02:30:00-04:00',
+    correctedClockInAt: '2026-08-17T23:00:00-04:00',
+    correctedClockOutAt: '2026-08-18T03:00:00-04:00',
+    reason: 'Correct TEST shift end'
+  }));
+  assert.equal(outOnly.result, 'adjusted');
+  assert.equal(outOnly.confirmation.changed, 'clockOut');
+  assert.equal(outOnly.auditActionNumber, 2);
+
+  const both = harness.post(adjustment({
+    requestId: IDS.adjustRequestThree,
+    originalClockInAt: '2026-08-17T23:00:00-04:00',
+    originalClockOutAt: '2026-08-18T03:00:00-04:00',
+    correctedClockInAt: '2026-08-17T23:15:00-04:00',
+    correctedClockOutAt: '2026-08-18T02:45:00-04:00',
+    reason: 'Correct both TEST shift times'
+  }));
+  assert.equal(both.result, 'adjusted');
+  assert.equal(both.confirmation.changed, 'both');
+  assert.equal(both.auditActionNumber, 3);
+
+  const adjustmentSheet = harness.sheets.get('Staff Time Adjustments');
+  assert.ok(adjustmentSheet, 'the append-only adjustment tab is created on the first authorized write');
+  assert.deepEqual(adjustmentSheet.values[0], ADJUSTMENT_HEADERS);
+  assert.equal(adjustmentSheet.values.length, 4);
+  assert.deepEqual(
+    adjustmentSheet.values.slice(1).map(row => [row[0], row[5], row[6], row[11], row[12], row[13]]),
+    [
+      [IDS.adjustRequest, IDS.in, IDS.out, 'clockIn', 'Correct TEST shift start', 'adjusted'],
+      [IDS.adjustRequestTwo, IDS.in, IDS.out, 'clockOut', 'Correct TEST shift end', 'adjusted'],
+      [IDS.adjustRequestThree, IDS.in, IDS.out, 'both', 'Correct both TEST shift times', 'adjusted']
+    ]
+  );
+  assert.deepEqual(
+    harness.sheets.get('Staff Time').values,
+    rawBefore,
+    'the permanent Staff Time records and timestamps stay byte-for-byte unchanged'
+  );
+  assert.deepEqual(
+    harness.sheets.get('Staff Time').operations,
+    [],
+    'adjustments never update the original Staff Time rows'
+  );
+
+  const adminView = readPagedStaffView(harness, { admin: true });
+  const effectiveById = Object.fromEntries(adminView.streams.records.map(record => [record.punchId, record]));
+  assert.deepEqual({
+    timestamp: effectiveById[IDS.in].timestamp,
+    date: effectiveById[IDS.in].date,
+    originalTimestamp: effectiveById[IDS.in].originalTimestamp,
+    originalDate: effectiveById[IDS.in].originalDate,
+    adjustmentRequestId: effectiveById[IDS.in].adjustmentRequestId
+  }, {
+    timestamp: '2026-08-17T23:15:00-04:00',
+    date: '2026-08-17',
+    originalTimestamp: '2026-08-17T23:30:00-04:00',
+    originalDate: '2026-08-17',
+    adjustmentRequestId: IDS.adjustRequestThree
+  });
+  assert.equal(effectiveById[IDS.out].timestamp, '2026-08-18T02:45:00-04:00');
+  assert.equal(effectiveById[IDS.out].originalTimestamp, '2026-08-18T02:30:00-04:00');
+  assert.equal(effectiveById[IDS.out].adjustmentRequestId, IDS.adjustRequestThree);
+  const adminTotal = adminView.initial.periods.current.totals.find(item => item.staffId === 'mandy-test');
+  assert.equal(adminTotal.completedShifts, 1);
+  assert.equal(adminTotal.totalSeconds, 12_600);
+
+  const auditByRequest = Object.fromEntries(
+    adminView.streams.audit.map(record => [record.requestId, record])
+  );
+  assert.equal(Object.keys(auditByRequest).length, 3);
+  assert.deepEqual(auditByRequest[IDS.adjustRequest], {
+    requestId: IDS.adjustRequest,
+    actionTime: '2026-08-18T18:00:00-04:00',
+    adminName: 'Andrew Smith',
+    operation: 'adjust',
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test',
+    clockInPunchId: IDS.in,
+    clockOutPunchId: IDS.out,
+    originalClockInAt: '2026-08-17T23:30:00-04:00',
+    originalClockOutAt: '2026-08-18T02:30:00-04:00',
+    correctedClockInAt: '2026-08-17T23:00:00-04:00',
+    correctedClockOutAt: '2026-08-18T02:30:00-04:00',
+    changed: 'clockIn',
+    reason: 'Correct TEST shift start',
+    result: 'adjusted'
+  });
+  assert.equal(auditByRequest[IDS.adjustRequestTwo].originalClockInAt, '2026-08-17T23:00:00-04:00');
+  assert.equal(auditByRequest[IDS.adjustRequestTwo].correctedClockOutAt, '2026-08-18T03:00:00-04:00');
+  assert.equal(auditByRequest[IDS.adjustRequestThree].correctedClockInAt, '2026-08-17T23:15:00-04:00');
+  assert.equal(auditByRequest[IDS.adjustRequestThree].correctedClockOutAt, '2026-08-18T02:45:00-04:00');
+
+  const kioskView = readPagedStaffView(harness);
+  const kioskTotal = kioskView.initial.periods.current.totals.find(item => item.staffId === 'mandy-test');
+  assert.equal(kioskTotal.completedShifts, 1);
+  assert.equal(kioskTotal.totalSeconds, 12_600);
+  assert.equal(
+    kioskView.streams.records.find(record => record.punchId === IDS.in).timestamp,
+    '2026-08-17T23:15:00-04:00'
+  );
+});
+
+test('an exact adjustment retry is idempotent while changed payloads and stale preimages conflict', () => {
+  const harness = createHarness({
+    timeRows: [
+      timeRow({ timestamp: '2026-08-17T23:30:00-04:00' }),
+      timeRow({ punchId: IDS.out, timestamp: '2026-08-18T02:30:00-04:00', action: 'clockOut' })
+    ]
+  });
+  const rawBefore = structuredClone(harness.sheets.get('Staff Time').values);
+  const request = adjustment();
+  const first = harness.post(request);
+  assert.equal(first.result, 'adjusted');
+  const adjustmentSheet = harness.sheets.get('Staff Time Adjustments');
+  const afterFirstValues = structuredClone(adjustmentSheet.values);
+  const afterFirstOperations = structuredClone(adjustmentSheet.operations);
+
+  const replay = harness.post(request);
+  assert.equal(replay.result, 'already adjusted');
+  assert.equal(replay.auditActionNumber, first.auditActionNumber);
+  assert.deepEqual(replay.confirmation, first.confirmation);
+  assert.deepEqual(adjustmentSheet.values, afterFirstValues, 'an exact retry appends no second audit row');
+  assert.deepEqual(adjustmentSheet.operations, afterFirstOperations, 'an exact retry performs no write');
+
+  const sameIdChangedPayload = harness.post(adjustment({
+    correctedClockOutAt: '2026-08-18T02:45:00-04:00'
+  }));
+  assert.equal(sameIdChangedPayload.result, 'conflict');
+  assert.deepEqual(adjustmentSheet.values, afterFirstValues);
+
+  const stalePreimage = harness.post(adjustment({
+    requestId: IDS.adjustRequestTwo,
+    correctedClockInAt: '2026-08-17T22:45:00-04:00'
+  }));
+  assert.equal(stalePreimage.result, 'conflict');
+  assert.deepEqual(adjustmentSheet.values, afterFirstValues);
+  assert.deepEqual(harness.sheets.get('Staff Time').values, rawBefore);
+  assert.deepEqual(harness.sheets.get('Staff Time').operations, []);
+
+  const browserRequest = {
+    operation: 'adjust',
+    requestId: IDS.adjustRequest,
+    clockInPunchId: IDS.in,
+    clockOutPunchId: IDS.out,
+    originalClockInAt: '2026-08-17T23:30:00-04:00',
+    originalClockOutAt: '2026-08-18T02:30:00-04:00',
+    correctedClockInAt: '2026-08-17T23:00:00-04:00',
+    correctedClockOutAt: '2026-08-18T02:30:00-04:00',
+    reason: 'Correct TEST shift start'
+  };
+  const sanitizedRequest = sanitizeStaffTimeAdjustmentRequest(browserRequest, {
+    now: new Date(NOW_ISO)
+  });
+  assert.ok(sanitizedRequest);
+  const expected = { ...sanitizedRequest, adminName: 'Andrew Smith' };
+  assert.ok(sanitizeStaffTimeAdjustmentResult(first, expected, 'test', { now: new Date(NOW_ISO) }));
+  assert.ok(sanitizeStaffTimeAdjustmentResult(replay, expected, 'test', { now: new Date(NOW_ISO) }));
+});
+
+test('corrections, voids, and adjustments share one global request ID namespace', () => {
+  const completedShift = [
+    timeRow({ timestamp: '2026-08-17T23:30:00-04:00' }),
+    timeRow({ punchId: IDS.out, timestamp: '2026-08-18T02:30:00-04:00', action: 'clockOut' })
+  ];
+
+  const correctionFirst = createHarness({ timeRows: completedShift });
+  assert.equal(correctionFirst.post(correction()).result, 'added');
+  const correctionAudit = structuredClone(correctionFirst.sheets.get('Staff Time Audit').values);
+  assert.equal(
+    correctionFirst.post(adjustment({ requestId: IDS.request })).result,
+    'conflict',
+    'an audit request ID cannot be reused for an adjustment'
+  );
+  assert.equal(correctionFirst.sheets.has('Staff Time Adjustments'), false);
+  assert.deepEqual(correctionFirst.sheets.get('Staff Time Audit').values, correctionAudit);
+  assert.equal(correctionFirst.post(correction()).result, 'already exists');
+
+  const interruptedCorrection = createHarness({
+    timeRows: [
+      ...completedShift,
+      timeRow({
+        punchId: IDS.correction,
+        timestamp: '2026-08-17T09:00:00-04:00',
+        staffId: 'front-desk-test-two',
+        staffName: 'Front Desk Test Two',
+        source: 'Admin-added',
+        adminName: 'Andrew Smith',
+        device: 'Admin Staff time',
+        note: `Admin correction | Request: ${IDS.request} | Reason: Forgotten TEST punch`
+      })
+    ]
+  });
+  assert.equal(
+    interruptedCorrection.post(adjustment({ requestId: IDS.request })).result,
+    'conflict',
+    'an interrupted correction keeps ownership of its request ID until its audit heals'
+  );
+  assert.equal(
+    interruptedCorrection.post(adminBody('staffTimeVoid', {
+      requestId: IDS.request,
+      punchId: IDS.in,
+      reason: 'Wrong TEST punch'
+    })).result,
+    'conflict',
+    'an interrupted correction request ID cannot be reused for a void'
+  );
+  assert.equal(interruptedCorrection.sheets.has('Staff Time Adjustments'), false);
+  assert.equal(interruptedCorrection.post(correction()).result, 'already exists');
+  assert.equal(interruptedCorrection.sheets.get('Staff Time Audit').values.length, 2);
+
+  const voidTarget = timeRow({
+    punchId: IDS.other,
+    timestamp: '2026-08-18T09:00:00-04:00',
+    staffId: 'front-desk-test-two',
+    staffName: 'Front Desk Test Two'
+  });
+  const voidFirst = createHarness({ timeRows: [...completedShift, voidTarget] });
+  const voidRequest = adminBody('staffTimeVoid', {
+    requestId: IDS.voidRequest,
+    punchId: IDS.other,
+    reason: 'Wrong TEST punch'
+  });
+  assert.equal(voidFirst.post(voidRequest).result, 'voided');
+  assert.equal(
+    voidFirst.post(adjustment({ requestId: IDS.voidRequest })).result,
+    'conflict',
+    'a void audit request ID cannot be reused for an adjustment'
+  );
+  assert.equal(voidFirst.sheets.has('Staff Time Adjustments'), false);
+  assert.equal(voidFirst.post(voidRequest).result, 'already voided');
+
+  const adjustmentFirst = createHarness({ timeRows: completedShift });
+  const exactAdjustment = adjustment();
+  assert.equal(adjustmentFirst.post(exactAdjustment).result, 'adjusted');
+  const adjustmentRows = structuredClone(
+    adjustmentFirst.sheets.get('Staff Time Adjustments').values
+  );
+  assert.equal(
+    adjustmentFirst.post(correction({ requestId: IDS.adjustRequest })).result,
+    'conflict',
+    'an adjustment request ID cannot be reused for a correction'
+  );
+  assert.equal(
+    adjustmentFirst.post(adminBody('staffTimeVoid', {
+      requestId: IDS.adjustRequest,
+      punchId: IDS.in,
+      reason: 'Wrong TEST punch'
+    })).result,
+    'conflict',
+    'an adjustment request ID cannot be reused for a void'
+  );
+  assert.deepEqual(adjustmentFirst.sheets.get('Staff Time Audit').values, [AUDIT_HEADERS]);
+  assert.deepEqual(adjustmentFirst.sheets.get('Staff Time Adjustments').values, adjustmentRows);
+  assert.equal(adjustmentFirst.sheets.get('Staff Time').values[1][10], 'ACTIVE');
+  assert.equal(adjustmentFirst.post(exactAdjustment).result, 'already adjusted');
+});
+
+test('adjustment validation rejects bad New York time, chronology, duration, and neighbor overlap without writes', () => {
+  const previousIn = generatedPunchId(80_001);
+  const previousOut = generatedPunchId(80_002);
+  const nextIn = generatedPunchId(80_003);
+  const nextOut = generatedPunchId(80_004);
+  const harness = createHarness({
+    timeRows: [
+      timeRow({ punchId: previousIn, timestamp: '2026-08-18T07:00:00-04:00' }),
+      timeRow({ punchId: previousOut, timestamp: '2026-08-18T08:00:00-04:00', action: 'clockOut' }),
+      timeRow({ timestamp: '2026-08-18T09:00:00-04:00' }),
+      timeRow({ punchId: IDS.out, timestamp: '2026-08-18T10:00:00-04:00', action: 'clockOut' }),
+      timeRow({ punchId: nextIn, timestamp: '2026-08-18T11:00:00-04:00' }),
+      timeRow({ punchId: nextOut, timestamp: '2026-08-18T12:00:00-04:00', action: 'clockOut' })
+    ]
+  });
+  const rawBefore = structuredClone(harness.sheets.get('Staff Time').values);
+  const base = {
+    originalClockInAt: '2026-08-18T09:00:00-04:00',
+    originalClockOutAt: '2026-08-18T10:00:00-04:00',
+    correctedClockInAt: '2026-08-18T08:45:00-04:00',
+    correctedClockOutAt: '2026-08-18T10:00:00-04:00'
+  };
+  const attempts = [
+    [
+      'rejected',
+      adjustment({
+        ...base,
+        originalClockInAt: '2026-08-18T09:00:00-05:00',
+        requestId: generatedRequestId(80_001)
+      })
+    ],
+    [
+      'rejected',
+      adjustment({
+        ...base,
+        correctedClockInAt: '2026-08-18T10:30:00-04:00',
+        requestId: generatedRequestId(80_002)
+      })
+    ],
+    [
+      'rejected',
+      adjustment({
+        ...base,
+        correctedClockInAt: '2026-08-17T14:00:00-04:00',
+        requestId: generatedRequestId(80_003)
+      })
+    ],
+    [
+      'conflict',
+      adjustment({
+        ...base,
+        correctedClockInAt: '2026-08-18T07:59:00-04:00',
+        requestId: generatedRequestId(80_004)
+      })
+    ],
+    [
+      'conflict',
+      adjustment({
+        ...base,
+        correctedClockOutAt: '2026-08-18T11:01:00-04:00',
+        requestId: generatedRequestId(80_005)
+      })
+    ],
+    [
+      'conflict',
+      adjustment({
+        ...base,
+        originalClockInAt: '2026-08-18T09:01:00-04:00',
+        requestId: generatedRequestId(80_006)
+      })
+    ]
+  ];
+
+  attempts.forEach(([expectedResult, request]) => {
+    assert.equal(harness.post(request).result, expectedResult);
+  });
+  assert.equal(harness.sheets.has('Staff Time Adjustments'), false, 'rejected requests create no audit tab');
+  assert.deepEqual(harness.sheets.get('Staff Time').values, rawBefore);
+  assert.deepEqual(harness.sheets.get('Staff Time').operations, []);
 });
 
 test('void preserves the punch row, updates status, writes one audit, and replays exactly', () => {
