@@ -7,7 +7,7 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-08-27-staff-adjustment-r1';
+} from './staff-clock-core.mjs?v=2026-08-27-tablet-recovery-r1';
 
 const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
 const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
@@ -68,6 +68,7 @@ function fmtDate(value) {
   let staffClockSnapshotRequested = false;
   let staffClockStateRevision = 0;
   let staffClockTotalsSelection = 'current';
+  let staffClockAvailability = 'loading';
 
   function exactStaffClockKeys(value, expectedKeys) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -563,6 +564,52 @@ function fmtDate(value) {
     staffClockPeople = normalized;
   }
 
+  function setStaffClockAvailability(state) {
+    const allowed = new Set(['loading', 'ready', 'authorization-required', 'unavailable']);
+    staffClockAvailability = allowed.has(state) ? state : 'unavailable';
+    if (staffClockAvailability === 'ready' && !staffClockPeople.length) {
+      staffClockAvailability = 'unavailable';
+    }
+
+    const availability = $('#staffClockAvailability');
+    const title = $('#staffClockAvailabilityTitle');
+    const detail = $('#staffClockAvailabilityDetail');
+    const authorize = $('#authorizeStaffClockTablet');
+    const retry = $('#retryStaffClock');
+    const controls = $('#staffClockControls');
+    const select = $('#staffClockName');
+    const action = $('#btnStaffClockAction');
+    if (!availability || !title || !detail || !authorize || !retry || !controls) return;
+
+    const ready = staffClockAvailability === 'ready';
+    availability.hidden = ready;
+    controls.hidden = !ready || staffClockConfirmationActive;
+    if (select) select.disabled = !ready;
+    if (action && !ready) action.disabled = true;
+    authorize.hidden = true;
+    retry.hidden = true;
+
+    if (ready) return;
+    if (staffClockAvailability === 'authorization-required') {
+      title.textContent = 'This tablet needs authorization';
+      detail.textContent = 'An Admin can authorize this tablet here. Production credentials are used only in the secure Admin sign-in.';
+      authorize.hidden = !IS_PRODUCTION_ORIGIN;
+      return;
+    }
+    if (staffClockAvailability === 'loading') {
+      title.textContent = 'Loading Staff Clock…';
+      detail.textContent = 'Checking this tablet and loading the active staff roster.';
+      return;
+    }
+    title.textContent = 'Staff Clock is unavailable';
+    detail.textContent = 'Staff names could not be loaded. Try again when this tablet is online.';
+    retry.hidden = false;
+  }
+
+  function showStaffClockAuthorizationRequired() {
+    setStaffClockAvailability('authorization-required');
+  }
+
   function populateStaffClockPeople() {
     const select = $('#staffClockName');
     if (!select) return;
@@ -737,6 +784,10 @@ function fmtDate(value) {
 
   function renderStaffClock() {
     if (staffClockConfirmationActive) return;
+    if (staffClockAvailability !== 'ready') {
+      $('#btnStaffClockAction').disabled = true;
+      return;
+    }
     const person = selectedStaffClockPerson();
     const statusElement = $('#staffClockStatus');
     const action = $('#btnStaffClockAction');
@@ -771,7 +822,11 @@ function fmtDate(value) {
   }
 
   function performStaffClockAction() {
-    if (staffClockActionLocked || staffClockConfirmationActive) return;
+    if (
+      staffClockActionLocked
+      || staffClockConfirmationActive
+      || staffClockAvailability !== 'ready'
+    ) return;
     const person = selectedStaffClockPerson();
     if (!person) return;
     const action = $('#btnStaffClockAction');
@@ -844,7 +899,7 @@ function fmtDate(value) {
     staffClockActionLocked = false;
     $('#staffClockConfirmation').hidden = true;
     $('#staffClockConfirmation').classList.remove('waiting');
-    $('#staffClockControls').hidden = false;
+    $('#staffClockControls').hidden = staffClockAvailability !== 'ready';
     $('#staffClockName').value = '';
     done.disabled = false;
     renderStaffClock();
@@ -1103,7 +1158,10 @@ function fmtDate(value) {
       staffClockSnapshotRequested = true;
       return staffClockSnapshotPromise;
     }
-    if (navigator.onLine === false) return null;
+    if (navigator.onLine === false) {
+      setStaffClockAvailability(staffClockPeople.length ? 'ready' : 'unavailable');
+      return null;
+    }
     if (loadStaffClockState().queue.length) {
       void syncStaffClockQueue();
       return null;
@@ -1112,7 +1170,10 @@ function fmtDate(value) {
     staffClockSnapshotPromise = (async () => {
       try {
         const payload = await loadStaffClockSnapshotWithRetry();
-        if (!payload) return null;
+        if (!payload) {
+          setStaffClockAvailability(staffClockPeople.length ? 'ready' : 'unavailable');
+          return null;
+        }
         if (staffClockStateRevision !== requestedAtRevision) {
           staffClockSnapshotRequested = true;
           return null;
@@ -1122,13 +1183,22 @@ function fmtDate(value) {
           loadStaffClockState(),
           payload.baseline
         );
-        if (!nextState) return null;
+        if (!nextState) {
+          setStaffClockAvailability(staffClockPeople.length ? 'ready' : 'unavailable');
+          return null;
+        }
         saveStaffClockState(nextState);
         saveStaffClockPeople(payload.staff);
+        setStaffClockAvailability('ready');
         populateStaffClockPeople();
         renderStaffTimeAdmin();
         return payload;
-      } catch {
+      } catch (error) {
+        if (IS_PRODUCTION_ORIGIN && error?.staffClockStatus === 401) {
+          showStaffClockAuthorizationRequired();
+        } else {
+          setStaffClockAvailability(staffClockPeople.length ? 'ready' : 'unavailable');
+        }
         return null;
       } finally {
         staffClockSnapshotPromise = null;
@@ -1242,8 +1312,13 @@ function fmtDate(value) {
         if (acceptedAny && !loadStaffClockState().queue.length) {
           void refreshStaffClockSnapshot();
         }
-      } catch {
+      } catch (error) {
         // The exact queue remains durable. Lifecycle and timer retries are automatic.
+        if (IS_PRODUCTION_ORIGIN && error?.staffClockStatus === 401) {
+          showStaffClockAuthorizationRequired();
+        } else {
+          setStaffClockAvailability(staffClockPeople.length ? 'ready' : 'unavailable');
+        }
       } finally {
         staffClockSyncPromise = null;
         if (staffClockSyncRequested) {
@@ -1673,6 +1748,10 @@ function initializeStaffClockClient() {
   $('#staffClockName')?.addEventListener('change', renderStaffClock);
   $('#btnStaffClockAction')?.addEventListener('click', performStaffClockAction);
   $('#btnStaffClockDone')?.addEventListener('click', resetStaffClockCard);
+  $('#retryStaffClock')?.addEventListener('click', () => {
+    setStaffClockAvailability('loading');
+    void refreshStaffClockSnapshot();
+  });
 
   const admin = $('#admin');
   if (admin && typeof MutationObserver === 'function') {
@@ -1684,6 +1763,11 @@ function initializeStaffClockClient() {
   }
 
   staffClockPeople = loadStaffClockPeople();
+  setStaffClockAvailability(
+    staffClockPeople.length && (!IS_PRODUCTION_ORIGIN || navigator.onLine === false)
+      ? 'ready'
+      : 'loading'
+  );
   populateStaffClockPeople();
   renderStaffTimeAdmin();
   void refreshStaffClockSnapshot();

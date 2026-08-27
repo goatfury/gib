@@ -76,6 +76,21 @@ test('the roster is server-derived and limited to one blank initial option in HT
   assert.match(clientSource, /validatedStaffClockSnapshot/u);
 });
 
+test('missing authorization and empty-roster failures are explicit recovery states', () => {
+  const staffMarkup = between(kioskHtml, '<section id="staffClock"', '<section id="admin"');
+  assert.ok(staffMarkup.indexOf('id="staffClockAvailability"') < staffMarkup.indexOf('id="staffClockControls"'));
+  assert.match(staffMarkup, /id="staffClockControls" class="staff-clock-controls" hidden/u);
+  assert.match(staffMarkup, /Loading Staff Clock…/u);
+  assert.match(
+    staffMarkup,
+    /id="authorizeStaffClockTablet"[^>]*href="\/m1\/admin\/\?authorizeTablet=1" hidden>Authorize this tablet/u
+  );
+  assert.match(clientSource, /This tablet needs authorization/u);
+  assert.match(clientSource, /Staff Clock is unavailable/u);
+  assert.match(clientSource, /error\?\.staffClockStatus === 401/u);
+  assert.match(clientSource, /staffClockAvailability !== 'ready'/u);
+});
+
 test('Staff Clock state and transport remain isolated from Instructor Sign-In', () => {
   assert.match(clientSource, /gib_m1b_staff_clock_state_v1/u);
   assert.match(clientSource, /gib_m1b_staff_clock_staff_v1/u);
@@ -96,7 +111,7 @@ test('a punch is durably saved before sync and duplicate taps are locked', () =>
     'function resetStaffClockCard()'
   );
   assert.ok(actionSource.indexOf('saveStaffClockState') < actionSource.indexOf('syncStaffClockQueue'));
-  assert.match(actionSource, /staffClockActionLocked \|\| staffClockConfirmationActive/u);
+  assert.match(actionSource, /staffClockActionLocked\s*\|\| staffClockConfirmationActive/u);
   assert.match(actionSource, /createStaffClockPunchId\(\)/u);
   assert.match(actionSource, /punchAction: expectedAction/u);
   assert.match(actionSource, /status: 'ACTIVE'/u);

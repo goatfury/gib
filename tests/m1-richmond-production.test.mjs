@@ -30,8 +30,10 @@ import {
 } from '../netlify/functions/_lib/m1-richmond-schedule.mjs';
 import { handleAdminAdd } from '../netlify/functions/m1-admin-add.mjs';
 import { handleAdminLogin } from '../netlify/functions/m1-admin-login.mjs';
+import { handleAdminTabletAuthorize } from '../netlify/functions/m1-admin-tablet-authorize.mjs';
 import { handleKioskSync } from '../netlify/functions/m1-kiosk-sync.mjs';
 import { handleProductionStatus } from '../netlify/functions/m1-production-status.mjs';
+import { handleTabletInstall } from '../netlify/functions/m1-tablet-install.mjs';
 import { handleTabletStatus } from '../netlify/functions/m1-tablet-status.mjs';
 
 const ROOT = new URL('../', import.meta.url);
@@ -512,6 +514,29 @@ test('tablet status exposes pending without authorizing or issuing a cookie', as
     activation: 'pending'
   });
   assert.equal(response.headers.get('set-cookie'), null);
+});
+
+test('Richmond production cannot expose or consume Revolution tablet recovery', async () => {
+  const dependencies = {
+    ...PRODUCTION_DEPENDENCIES,
+    activation: 'active',
+    env: ACTIVE_ENV
+  };
+  const issue = await handleAdminTabletAuthorize(request(
+    '/api/m1-admin-tablet-authorize',
+    { body: { operation: 'issue' } }
+  ), dependencies);
+  const install = await handleTabletInstall(request(
+    '/api/m1-tablet-install',
+    { body: { operation: 'installAdminGrant' } }
+  ), dependencies);
+
+  assert.equal(issue.status, 404);
+  assert.equal(install.status, 404);
+  assert.equal(issue.headers.has('set-cookie'), false);
+  assert.equal(install.headers.has('set-cookie'), false);
+  assert.match(adminHtml, /TABLET_AUTHORIZATION_AVAILABLE = !IS_RICHMOND\s*&& STAFF_CLOCK_ENABLED/u);
+  assert.match(adminHtml, /\$\('#tabletAuthorization'\)\.hidden = !TABLET_AUTHORIZATION_AVAILABLE/u);
 });
 
 test('browser, service-worker, schedule, and build sources keep Richmond production isolated and visibly disabled', () => {

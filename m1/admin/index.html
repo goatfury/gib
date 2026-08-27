@@ -147,6 +147,12 @@
       padding: 16px;
       margin-bottom: 16px;
     }
+    .tablet-authorization {
+      margin-bottom: 16px;
+      border-color: rgba(64, 215, 160, .55);
+    }
+    .tablet-authorization p { margin-top: 7px; line-height: 1.45; }
+    .tablet-authorization .btn { margin-top: 14px; }
     .date-actions { display: flex; flex-wrap: wrap; gap: 8px; }
     .date-summary { text-align: center; }
     .date-summary strong { display: block; font-size: 1.17rem; }
@@ -542,6 +548,13 @@
         </div>
       </header>
 
+      <section id="tabletAuthorization" class="panel section tablet-authorization" aria-labelledby="tabletAuthorizationHeading" hidden>
+        <h2 id="tabletAuthorizationHeading">Authorize this Staff Clock tablet</h2>
+        <p class="muted">Use this after a reset, for a replacement tablet, or for another approved Revolution Staff Clock tablet. Authorization does not change punches, sign-ins, or other tablet data.</p>
+        <button id="authorizeTabletButton" class="btn primary" type="button">Authorize this tablet</button>
+        <div id="tabletAuthorizationMessage" class="message" role="status" aria-live="polite"></div>
+      </section>
+
       <section class="panel toolbar" aria-label="Date controls">
         <div class="date-actions">
           <button id="previousDay" class="btn small" type="button">Previous day</button>
@@ -763,6 +776,12 @@
       const ADMIN_MUTATIONS_ENABLED = !IS_RICHMOND_PRODUCTION
         || (INSTALLATION.activation === 'active' && INSTALLATION.writesEnabled === true);
       const STAFF_CLOCK_ENABLED = INSTALLATION.featureFlags.staffClock === true;
+      const REVOLUTION_PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
+      const TABLET_AUTHORIZATION_AVAILABLE = !IS_RICHMOND
+        && STAFF_CLOCK_ENABLED
+        && location.origin === REVOLUTION_PRODUCTION_ORIGIN;
+      const TABLET_AUTHORIZATION_REQUESTED = TABLET_AUTHORIZATION_AVAILABLE
+        && location.search === '?authorizeTablet=1';
 
       function richmondProductionAdminCopy(mutationsEnabled) {
         return mutationsEnabled
@@ -796,7 +815,9 @@
         staffTime: '/.netlify/functions/m1-admin-staff-time',
         schedule: '/api/m1-schedule',
         scheduleBootstrap: IS_RICHMOND ? '/m1/richmond-schedule.json' : '/m1/shared-schedule.json',
-        tabletDiagnostic: '/api/m1-tablet-diagnostic-verifier'
+        tabletDiagnostic: '/api/m1-tablet-diagnostic-verifier',
+        tabletAuthorize: '/api/m1-admin-tablet-authorize',
+        tabletInstall: '/api/m1-tablet-install'
       });
       const ADMIN_REQUEST_HEADER = 'X-GIB-M1-Admin-Request-Token';
       const TABLET_DIAGNOSTIC_PATH = '/m1/tablet-diagnostic.html';
@@ -2793,6 +2814,59 @@
         toast(installed ? 'Repaired sync settings installed' : 'Installation failed safely');
       }
 
+      function validTabletAuthorizationIssueResponse(value) {
+        return exactObjectKeys(value, ['ok', 'issued', 'expiresInSeconds'])
+          && value.ok === true
+          && value.issued === true
+          && Number.isSafeInteger(value.expiresInSeconds)
+          && value.expiresInSeconds >= 1
+          && value.expiresInSeconds <= 120;
+      }
+
+      function validTabletAuthorizationInstallResponse(value) {
+        return exactObjectKeys(value, ['ok', 'installed'])
+          && value.ok === true
+          && value.installed === true;
+      }
+
+      function focusTabletAuthorization() {
+        if (!TABLET_AUTHORIZATION_REQUESTED || !TABLET_AUTHORIZATION_AVAILABLE) return;
+        const section = $('#tabletAuthorization');
+        const button = $('#authorizeTabletButton');
+        if (!section || !button || section.hidden || $('#appPanel').hidden) return;
+        section.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        button.focus();
+      }
+
+      async function authorizeThisTablet() {
+        if (!TABLET_AUTHORIZATION_AVAILABLE || !adminRequestToken) return;
+        const button = $('#authorizeTabletButton');
+        const status = $('#tabletAuthorizationMessage');
+        button.disabled = true;
+        showMessage(status, 'Authorizing this tablet…', 'working');
+        try {
+          const issue = await requestJson(API.tabletAuthorize, { operation: 'issue' });
+          if (!validTabletAuthorizationIssueResponse(issue)) {
+            throw new Error('Tablet authorization could not be issued safely.');
+          }
+          const installed = await requestJson(API.tabletInstall, {
+            operation: 'installAdminGrant'
+          });
+          if (!validTabletAuthorizationInstallResponse(installed)) {
+            throw new Error('Tablet authorization could not be installed safely.');
+          }
+          showMessage(status, 'Tablet authorized. Returning to Staff Clock…', 'success');
+          location.replace('/m1/#staffClock');
+        } catch (error) {
+          if (error.status === 401) {
+            setLoggedOut('Admin login expired. Sign in again to authorize this tablet.');
+          } else {
+            showMessage(status, error.message || 'Tablet authorization did not complete. Try again.');
+          }
+          button.disabled = false;
+        }
+      }
+
       async function requestJson(url, body) {
         const headers = { 'Content-Type': 'application/json' };
         if (adminRequestToken) headers[ADMIN_REQUEST_HEADER] = adminRequestToken;
@@ -2859,6 +2933,7 @@
         testMode = data.test === true;
         $('#loginPanel').hidden = true;
         $('#appPanel').hidden = false;
+        showMessage($('#tabletAuthorizationMessage'), '');
         $('#sessionLabel').textContent = `${currentAdminName} · ${IS_RICHMOND
           ? IS_RICHMOND_PRODUCTION
             ? `Richmond production Sheet · ${ADMIN_MUTATIONS_ENABLED ? 'active session' : 'read-only pending activation'}`
@@ -2890,11 +2965,13 @@
           adminRequestToken = data.requestToken;
           $('#loginPassphrase').value = '';
           setLoggedIn(data);
+          if (typeof focusTabletAuthorization === 'function') focusTabletAuthorization();
           await loadReview(defaultYesterday());
           if (STAFF_CLOCK_ENABLED) {
             await loadStaffTime();
             focusStaffTimeHash();
           }
+          if (typeof focusTabletAuthorization === 'function') focusTabletAuthorization();
         } catch (error) {
           showMessage($('#loginMessage'), error.message);
         } finally {
@@ -4643,6 +4720,7 @@
         $('#calendarDate').max = nyDate();
         $('#searchDate').max = nyDate();
         configureAdminLoginEntry();
+        $('#tabletAuthorization').hidden = !TABLET_AUTHORIZATION_AVAILABLE;
         const diagnosticOriginAllowed = !IS_RICHMOND && validTabletDiagnosticOrigin();
         $('#installSyncSettingsButton').hidden = true;
         $('#tabletDiagnosticButton').hidden = !diagnosticOriginAllowed;
@@ -4655,6 +4733,12 @@
           // A fresh page has no memory-only Admin request token, even if an old
           // session cookie exists. Wait for the explicit login before Admin API calls.
           setLoggedOut();
+          if (TABLET_AUTHORIZATION_REQUESTED) {
+            showMessage(
+              $('#loginMessage'),
+              'Choose Andrew Smith or Stuart Turner, then sign in to authorize this tablet.'
+            );
+          }
           if (IS_RICHMOND_PRODUCTION && !ADMIN_MUTATIONS_ENABLED) {
             await loadProductionLedgerStatus();
           }
@@ -4673,6 +4757,7 @@
         if (event.key === 'Enter') login(false);
       });
       $('#logoutButton').addEventListener('click', logout);
+      $('#authorizeTabletButton').addEventListener('click', authorizeThisTablet);
       $('#tabletDiagnosticButton').addEventListener('click', () => openTabletDiagnostic('diagnostic'));
       $('#previousDay').addEventListener('click', () => loadReview(shiftDate(currentDate, -1)));
       $('#yesterday').addEventListener('click', () => loadReview(defaultYesterday()));

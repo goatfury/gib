@@ -161,9 +161,147 @@ test('Staff Clock is isolated from the inherited inline kiosk client', () => {
   const inlineModule = kioskHtml.match(/<script type="module">([\s\S]*?)<\/script>/u)?.[1] || '';
   assert.match(
     kioskHtml,
-    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-08-27-staff-adjustment-r1"><\/script>/u
+    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-08-27-tablet-recovery-r1"><\/script>/u
   );
   assert.doesNotMatch(inlineModule, /staff-clock-core|staffClockSyncPunch|syncStaffClockQueue|renderStaffTimeAdmin/u);
+});
+
+test('fresh and reset tablets never expose an empty functional Staff Clock selector', () => {
+  const nodes = {
+    '#staffClockAvailability': { hidden: false },
+    '#staffClockAvailabilityTitle': { textContent: '' },
+    '#staffClockAvailabilityDetail': { textContent: '' },
+    '#authorizeStaffClockTablet': { hidden: true },
+    '#retryStaffClock': { hidden: true },
+    '#staffClockControls': { hidden: false },
+    '#staffClockName': { disabled: false },
+    '#btnStaffClockAction': { disabled: false }
+  };
+  const harness = Function('nodes', `
+    let staffClockAvailability = 'loading';
+    let staffClockPeople = [];
+    let staffClockConfirmationActive = false;
+    const IS_PRODUCTION_ORIGIN = true;
+    const $ = selector => nodes[selector] || null;
+    ${namedFunctionSource(clientSource, 'setStaffClockAvailability')}
+    return {
+      setStaffClockAvailability,
+      setPeople(value) { staffClockPeople = value; }
+    };
+  `)(nodes);
+
+  harness.setStaffClockAvailability('loading');
+  assert.equal(nodes['#staffClockControls'].hidden, true);
+  assert.equal(nodes['#staffClockName'].disabled, true);
+  assert.equal(nodes['#btnStaffClockAction'].disabled, true);
+  assert.equal(nodes['#staffClockAvailabilityTitle'].textContent, 'Loading Staff Clock…');
+
+  harness.setStaffClockAvailability('authorization-required');
+  assert.equal(nodes['#staffClockControls'].hidden, true);
+  assert.equal(nodes['#authorizeStaffClockTablet'].hidden, false);
+  assert.equal(nodes['#retryStaffClock'].hidden, true);
+  assert.equal(nodes['#staffClockAvailabilityTitle'].textContent, 'This tablet needs authorization');
+
+  harness.setStaffClockAvailability('unavailable');
+  assert.equal(nodes['#staffClockControls'].hidden, true);
+  assert.equal(nodes['#retryStaffClock'].hidden, false);
+  assert.equal(nodes['#staffClockAvailabilityTitle'].textContent, 'Staff Clock is unavailable');
+
+  harness.setPeople([{ staffId: 'mandy-test', staffName: 'Mandy Test' }]);
+  harness.setStaffClockAvailability('ready');
+  assert.equal(nodes['#staffClockAvailability'].hidden, true);
+  assert.equal(nodes['#staffClockControls'].hidden, false);
+  assert.equal(nodes['#staffClockName'].disabled, false);
+});
+
+test('production authorization loss during queued sync locks actions and preserves the exact queue', async () => {
+  const queued = { punchId: fullRecord.punchId };
+  const result = Function('queued', `
+    let staffClockSyncPromise = null;
+    let staffClockSyncRequested = false;
+    let staffClockStateRevision = 0;
+    let staffClockPeople = [{ staffId: 'front-desk-test-two', staffName: 'Front Desk Test Two' }];
+    let authRequired = 0;
+    let saveCount = 0;
+    let postCount = 0;
+    const navigator = { onLine: true };
+    const IS_PRODUCTION_ORIGIN = true;
+    const STAFF_SYNC_BATCH_SIZE = 20;
+    const state = { queue: [queued] };
+    const loadStaffClockState = () => state;
+    const postStaffClock = async () => {
+      postCount += 1;
+      const error = new Error('authorization required');
+      error.staffClockStatus = 401;
+      throw error;
+    };
+    const staffClockSyncPunch = value => value;
+    const acceptedStaffClockSyncIds = () => new Set();
+    const sameStaffClockRecord = () => true;
+    const saveStaffClockState = () => { saveCount += 1; };
+    const markStaffClockConfirmationConfirmed = () => {};
+    const renderStaffClock = () => {};
+    const renderStaffTimeAdmin = () => {};
+    const refreshStaffClockSnapshot = () => {};
+    const showStaffClockAuthorizationRequired = () => { authRequired += 1; };
+    const setStaffClockAvailability = () => {};
+    ${namedFunctionSource(clientSource, 'syncStaffClockQueue')}
+    return syncStaffClockQueue().then(() => ({
+      authRequired,
+      saveCount,
+      postCount,
+      queue: state.queue
+    }));
+  `)(queued);
+
+  assert.deepEqual(await result, {
+    authRequired: 1,
+    saveCount: 0,
+    postCount: 1,
+    queue: [queued]
+  });
+  assert.doesNotMatch(clientSource, /localStorage\.clear\(|removeItem\(STAFF_CLOCK/u);
+});
+
+test('production snapshot 401 locks a stale cached roster behind authorization recovery', async () => {
+  const result = Function(`
+    let staffClockSnapshotPromise = null;
+    let staffClockSnapshotRequested = false;
+    let staffClockStateRevision = 0;
+    let staffClockPeople = [{ staffId: 'front-desk-test-two', staffName: 'Front Desk Test Two' }];
+    let authRequired = 0;
+    let availabilityChanges = 0;
+    const navigator = { onLine: true };
+    const IS_PRODUCTION_ORIGIN = true;
+    const loadStaffClockState = () => ({ queue: [] });
+    const loadStaffClockSnapshotWithRetry = async () => {
+      const error = new Error('authorization required');
+      error.staffClockStatus = 401;
+      throw error;
+    };
+    const reconcileStaffClockSnapshotState = () => { throw new Error('must not reconcile'); };
+    const saveStaffClockState = () => { throw new Error('must not save'); };
+    const saveStaffClockPeople = () => { throw new Error('must not replace cache'); };
+    const populateStaffClockPeople = () => { throw new Error('must not expose cache'); };
+    const renderStaffTimeAdmin = () => {};
+    const syncStaffClockQueue = () => {};
+    const showStaffClockAuthorizationRequired = () => { authRequired += 1; };
+    const setStaffClockAvailability = () => { availabilityChanges += 1; };
+    ${namedFunctionSource(clientSource, 'refreshStaffClockSnapshot')}
+    return refreshStaffClockSnapshot().then(value => ({
+      value,
+      authRequired,
+      availabilityChanges,
+      cachedPeople: staffClockPeople
+    }));
+  `)();
+
+  assert.deepEqual(await result, {
+    value: null,
+    authRequired: 1,
+    availabilityChanges: 0,
+    cachedPeople: [{ staffId: 'front-desk-test-two', staffName: 'Front Desk Test Two' }]
+  });
 });
 
 test('browser records accept complete adjustment evidence and reject partial or extra evidence', () => {
@@ -564,11 +702,13 @@ test('snapshot refresh replaces history, caches only active roster names, and re
     let staffClockSnapshotPromise = null;
     let staffClockSnapshotRequested = false;
     let staffClockStateRevision = 0;
+    let staffClockPeople = [];
     let savedState = null;
     let savedPeople = null;
     let populated = 0;
     let adminRendered = 0;
     const STAFF_CLOCK_STATE_VERSION = 2;
+    const IS_PRODUCTION_ORIGIN = false;
     const navigator = { onLine: true };
     const console = { warn() {} };
     const postStaffClock = async body => {
@@ -590,6 +730,8 @@ test('snapshot refresh replaces history, caches only active roster names, and re
     const saveStaffClockPeople = value => { savedPeople = value; };
     const populateStaffClockPeople = () => { populated += 1; };
     const renderStaffTimeAdmin = () => { adminRendered += 1; };
+    const setStaffClockAvailability = () => {};
+    const showStaffClockAuthorizationRequired = () => {};
     ${namedFunctionSource(clientSource, 'reconcileStaffClockSnapshotState')}
     ${namedFunctionSource(clientSource, 'loadStaffClockSnapshot')}
     ${namedFunctionSource(clientSource, 'loadStaffClockSnapshotWithRetry')}

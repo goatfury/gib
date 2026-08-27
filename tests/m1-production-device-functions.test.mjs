@@ -154,6 +154,30 @@ test('capability helper and default-Date.now device credential use canonical sec
   assert.match(credential, /^v1\.[A-Za-z0-9_-]{43}\.[1-9][0-9]{9}\.[A-Za-z0-9_-]{43}$/u);
 });
 
+test('production device credentials expire at the same 400-day boundary as their cookie', () => {
+  const maxAgeSeconds = 400 * 24 * 60 * 60;
+  const credential = createProductionDeviceCredential(
+    DEVICE_TOKEN,
+    size => Buffer.alloc(size, 0x62),
+    NOW_MS
+  );
+  assert.equal(validProductionDeviceCredential(
+    credential,
+    DEVICE_TOKEN,
+    NOW_MS + ((maxAgeSeconds - 1) * 1_000)
+  ), true);
+  assert.equal(validProductionDeviceCredential(
+    credential,
+    DEVICE_TOKEN,
+    NOW_MS + (maxAgeSeconds * 1_000)
+  ), false);
+  assert.equal(validProductionDeviceCredential(
+    credential,
+    DEVICE_TOKEN,
+    NOW_MS + ((maxAgeSeconds + 1) * 1_000)
+  ), false);
+});
+
 test('install capabilities accept exactly ten hours and reject longer durations', () => {
   assert.equal(PRODUCTION_INSTALL_MAX_SECONDS, 36_000);
   const exactBoundary = createProductionInstallCapability({
