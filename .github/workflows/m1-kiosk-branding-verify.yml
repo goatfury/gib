@@ -28,15 +28,19 @@ jobs:
 
           path = Path('tests/m1-offline-shell.test.mjs')
           source = path.read_text(encoding='utf-8')
-          old = """      `${ORIGIN}/m1/staff-clock-client.mjs?v=${harness.revision}`
-    ]"""
-          new = """      `${ORIGIN}/m1/staff-clock-client.mjs?v=${harness.revision}`,
-      `${ORIGIN}/m1/kiosk-enhancements.css?v=${harness.revision}`,
-      `${ORIGIN}/m1/kiosk-enhancements.mjs?v=${harness.revision}`,
-      `${ORIGIN}/m1/kiosk-enhancements-core.mjs`,
-      `${ORIGIN}/m1/assets/revolution-bjj-logo.webp`,
-      `${ORIGIN}/m1/assets/richmond-bjj-logo.webp`
-    ]"""
+          old = (
+              "      `${ORIGIN}/m1/staff-clock-client.mjs?v=${harness.revision}`\n"
+              "    ]"
+          )
+          new = (
+              "      `${ORIGIN}/m1/staff-clock-client.mjs?v=${harness.revision}`,\n"
+              "      `${ORIGIN}/m1/kiosk-enhancements.css?v=${harness.revision}`,\n"
+              "      `${ORIGIN}/m1/kiosk-enhancements.mjs?v=${harness.revision}`,\n"
+              "      `${ORIGIN}/m1/kiosk-enhancements-core.mjs`,\n"
+              "      `${ORIGIN}/m1/assets/revolution-bjj-logo.webp`,\n"
+              "      `${ORIGIN}/m1/assets/richmond-bjj-logo.webp`\n"
+              "    ]"
+          )
           if source.count(old) != 1:
               raise SystemExit('offline shell expectation anchor drifted')
           path.write_text(source.replace(old, new), encoding='utf-8')
