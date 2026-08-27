@@ -21,6 +21,7 @@ function idCount(id) {
 const PUNCH_ONE = 'gib-m1-staff-11111111-1111-4111-8111-111111111111';
 const PUNCH_TWO = 'gib-m1-staff-22222222-2222-4222-8222-222222222222';
 const REQUEST_ONE = 'gib-m1-staff-request-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const REQUEST_TWO = 'gib-m1-staff-request-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const VIEW_TOKEN = 'a'.repeat(64);
 
 function validatorRuntime() {
@@ -170,6 +171,81 @@ function reviewResponse() {
   };
 }
 
+function adjustedReviewResponse() {
+  const clockIn = {
+    ...staffRecord(801),
+    timestamp: '2026-08-18T09:15:00-04:00',
+    date: '2026-08-18',
+    punchAction: 'clockIn',
+    originalTimestamp: '2026-08-18T09:00:00-04:00',
+    originalDate: '2026-08-18',
+    adjustmentRequestId: REQUEST_ONE
+  };
+  const clockOut = {
+    ...staffRecord(802),
+    timestamp: '2026-08-18T17:30:00-04:00',
+    date: '2026-08-18',
+    punchAction: 'clockOut',
+    originalTimestamp: '2026-08-18T17:00:00-04:00',
+    originalDate: '2026-08-18',
+    adjustmentRequestId: REQUEST_ONE
+  };
+  const base = reviewResponse();
+  return {
+    ...base,
+    records: [clockIn, clockOut],
+    clockedInNow: [],
+    todayPunches: [clockIn, clockOut].map(record => ({
+      punchId: record.punchId,
+      staffId: record.staffId,
+      staffName: record.staffName,
+      punchAction: record.punchAction,
+      timestamp: record.timestamp,
+      source: record.source,
+      status: record.status
+    })),
+    periods: {
+      ...base.periods,
+      current: {
+        ...base.periods.current,
+        totals: [{
+          staffId: 'mandy-test',
+          staffName: 'Mandy Test',
+          completedShifts: 1,
+          totalSeconds: 29_700,
+          needsAttention: false
+        }]
+      }
+    },
+    audit: [{
+      requestId: REQUEST_ONE,
+      actionTime: '2026-08-18T17:45:00-04:00',
+      adminName: 'Andrew Smith',
+      operation: 'adjust',
+      staffId: 'mandy-test',
+      staffName: 'Mandy Test',
+      clockInPunchId: clockIn.punchId,
+      clockOutPunchId: clockOut.punchId,
+      originalClockInAt: '2026-08-18T09:00:00-04:00',
+      originalClockOutAt: '2026-08-18T17:00:00-04:00',
+      correctedClockInAt: clockIn.timestamp,
+      correctedClockOutAt: clockOut.timestamp,
+      changed: 'both',
+      reason: 'Manager verified the written time card',
+      result: 'adjusted'
+    }],
+    view: {
+      ...base.view,
+      recordCount: 2,
+      recordTotal: 2,
+      todayPunchCount: 2,
+      todayPunchTotal: 2,
+      adjustmentCount: 2,
+      adjustmentTotal: 2
+    }
+  };
+}
+
 function reviewStartResponse(overrides = {}) {
   const review = reviewResponse();
   return {
@@ -219,7 +295,7 @@ function staffAudit(index, record, operation = 'correct') {
   };
 }
 
-function renderStaffTimeRuntime(data) {
+function renderStaffTimeRuntime(data, { showOlder = false } = {}) {
   const functions = sourceBetween(
     adminHtml,
     'function makeElement(',
@@ -277,6 +353,16 @@ function renderStaffTimeRuntime(data) {
       field.appendChild(input);
       return field;
     }
+    function shiftDate(dateString, days) {
+      const [year, month, day] = dateString.split('-').map(Number);
+      return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+    }
+    function validStaffTimestamp(value) {
+      return typeof value === 'string'
+        && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}-(?:04|05):00$/.test(value)
+        && Number.isFinite(Date.parse(value));
+    }
+    let staffOlderHistoryExpanded = ${showOlder ? 'true' : 'false'};
     ${functions}
     renderStaffTime(data);
   `, { filename: 'staff-time-admin-render.js' }).runInContext(context);
@@ -399,7 +485,9 @@ test('Daily Review remains first and one compact Staff time section follows it',
   assert.match(app, /<details id="staffPayPeriods"[^>]*>\s*<summary>Pay-period totals<\/summary>/u);
   assert.doesNotMatch(app.match(/<details id="staffPayPeriods"[^>]*>/u)?.[0] || '', /\bopen\b/u);
   assert.match(app, /Fix missed punch/u);
-  assert.match(app, /Staff Time records[\s\S]*Staff time audit/u);
+  assert.match(app, /Staff Time records[\s\S]*Show older history[\s\S]*Staff time audit/u);
+  assert.equal(idCount('staffTimeOlderHistory'), 1);
+  assert.match(app, /aria-controls="staffTimeRecords" aria-expanded="false" hidden/u);
 });
 
 test('Staff time reuses the existing secured Admin request path and loads only after login', () => {
@@ -554,6 +642,50 @@ test('review validation requires every canonical Staff time field and rejects dr
   mismatchedAudit.audit[0].punchTimestamp = '2026-08-18T17:26:00-04:00';
   assert.equal(validStaffTimeReviewResponse(mismatchedAudit), false);
 
+  const adjusted = adjustedReviewResponse();
+  assert.equal(validStaffTimeReviewResponse(adjusted), true);
+  const partialAdjustmentEvidence = structuredClone(adjusted);
+  delete partialAdjustmentEvidence.records[0].originalDate;
+  assert.equal(validStaffTimeReviewResponse(partialAdjustmentEvidence), false);
+  const wrongAdjustmentLink = structuredClone(adjusted);
+  wrongAdjustmentLink.audit[0].clockOutPunchId = PUNCH_TWO;
+  assert.equal(validStaffTimeReviewResponse(wrongAdjustmentLink), false);
+  const impossibleAdjustment = structuredClone(adjusted);
+  impossibleAdjustment.audit[0].correctedClockOutAt = '2026-08-18T08:30:00-04:00';
+  assert.equal(validStaffTimeReviewResponse(impossibleAdjustment), false);
+  const driftedLatestAdjustment = structuredClone(adjusted);
+  driftedLatestAdjustment.audit[0].correctedClockOutAt = '2026-08-18T17:31:00-04:00';
+  assert.equal(validStaffTimeReviewResponse(driftedLatestAdjustment), false);
+  const driftedLatestRequest = structuredClone(adjusted);
+  driftedLatestRequest.records[1].adjustmentRequestId = REQUEST_TWO;
+  assert.equal(validStaffTimeReviewResponse(driftedLatestRequest), false);
+  const chainedAdjustment = structuredClone(adjusted);
+  chainedAdjustment.records[0].timestamp = '2026-08-18T09:10:00-04:00';
+  chainedAdjustment.records[0].adjustmentRequestId = REQUEST_TWO;
+  chainedAdjustment.records[1].timestamp = '2026-08-18T17:45:00-04:00';
+  chainedAdjustment.records[1].adjustmentRequestId = REQUEST_TWO;
+  chainedAdjustment.todayPunches[0].timestamp = chainedAdjustment.records[0].timestamp;
+  chainedAdjustment.todayPunches[1].timestamp = chainedAdjustment.records[1].timestamp;
+  chainedAdjustment.periods.current.totals[0].totalSeconds = 30_900;
+  chainedAdjustment.audit.unshift({
+    ...chainedAdjustment.audit[0],
+    requestId: REQUEST_TWO,
+    actionTime: '2026-08-18T18:00:00-04:00',
+    originalClockInAt: '2026-08-18T09:15:00-04:00',
+    originalClockOutAt: '2026-08-18T17:30:00-04:00',
+    correctedClockInAt: chainedAdjustment.records[0].timestamp,
+    correctedClockOutAt: chainedAdjustment.records[1].timestamp
+  });
+  chainedAdjustment.view.auditCount = 2;
+  chainedAdjustment.view.auditTotal = 2;
+  assert.equal(validStaffTimeReviewResponse(chainedAdjustment), true);
+  const brokenAdjustmentChain = structuredClone(chainedAdjustment);
+  brokenAdjustmentChain.audit[1].correctedClockOutAt = '2026-08-18T17:29:00-04:00';
+  assert.equal(validStaffTimeReviewResponse(brokenAdjustmentChain), false);
+  const wrongAdjustmentCount = structuredClone(adjusted);
+  wrongAdjustmentCount.view.adjustmentCount = 1;
+  assert.equal(validStaffTimeReviewResponse(wrongAdjustmentCount), false);
+
   const extraField = structuredClone(valid);
   extraField.secret = 'must-not-render';
   assert.equal(validStaffTimeReviewResponse(extraField), false);
@@ -707,7 +839,7 @@ test('a stale Staff time page restarts the whole view once', async () => {
 });
 
 test('rendering covers all review collections with safe Admin-added, VOID, totals, and audit labels', () => {
-  const renderSource = sourceBetween(adminHtml, 'function renderStaffTime(', 'function newStaffUuid(');
+  const renderSource = sourceBetween(adminHtml, 'function renderStaffTimeRecords(', 'function newStaffUuid(');
   for (const field of [
     'data.staff',
     'data.records',
@@ -725,6 +857,94 @@ test('rendering covers all review collections with safe Admin-added, VOID, total
   assert.doesNotMatch(adminHtml, /\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML/u);
 });
 
+test('Staff Time records default to the latest seven New York calendar days and reveal fetched history newest first', () => {
+  const data = reviewResponse();
+  data.records = [
+    {
+      ...staffRecord(901),
+      timestamp: '2026-08-11T23:50:00-04:00',
+      date: '2026-08-11'
+    },
+    {
+      ...staffRecord(902),
+      timestamp: '2026-08-18T08:00:00-04:00',
+      date: '2026-08-18'
+    },
+    {
+      ...staffRecord(903),
+      timestamp: '2026-08-12T00:01:00-04:00',
+      date: '2026-08-12'
+    },
+    {
+      ...staffRecord(904),
+      timestamp: '2026-08-19T00:01:00-04:00',
+      date: '2026-08-19'
+    }
+  ];
+  data.view = {
+    ...data.view,
+    recordCount: 4,
+    recordTotal: 4,
+    todayPunchCount: 1,
+    todayPunchTotal: 1,
+    adjustmentCount: 0,
+    adjustmentTotal: 0
+  };
+
+  const defaultNodes = renderStaffTimeRuntime(data);
+  assert.equal(defaultNodes['#staffTimeRecords'].children.length, 2);
+  assert.match(elementText(defaultNodes['#staffTimeRecords'].children[0]), /Aug 18/u);
+  assert.match(elementText(defaultNodes['#staffTimeRecords'].children[1]), /Aug 12/u);
+  assert.doesNotMatch(elementText(defaultNodes['#staffTimeRecords']), /Aug 11/u);
+  assert.doesNotMatch(elementText(defaultNodes['#staffTimeRecords']), /Aug 19/u);
+  assert.equal(defaultNodes['#staffTimeOlderHistory'].hidden, false);
+  assert.equal(defaultNodes['#staffTimeOlderHistory'].textContent, 'Show older history');
+  assert.equal(defaultNodes['#staffTimeOlderHistory'].attributes['aria-expanded'], 'false');
+  assert.match(defaultNodes['#staffTimeHistoryScope'].textContent, /2026-08-12 through 2026-08-18, newest first/u);
+  assert.match(defaultNodes['#staffTimeHistoryScope'].textContent, /Items needing attention remain above/u);
+  assert.match(defaultNodes['#staffTimeHistoryScope'].textContent, /1 older punch is preserved/u);
+
+  const expandedNodes = renderStaffTimeRuntime(data, { showOlder: true });
+  assert.equal(expandedNodes['#staffTimeRecords'].children.length, 4);
+  assert.match(elementText(expandedNodes['#staffTimeRecords'].children[3]), /Aug 11/u);
+  assert.equal(expandedNodes['#staffTimeOlderHistory'].textContent, 'Hide older history');
+  assert.equal(expandedNodes['#staffTimeOlderHistory'].attributes['aria-expanded'], 'true');
+  assert.equal(data.records.length, 4);
+
+  const toggleSource = sourceBetween(
+    adminHtml,
+    "$('#staffTimeOlderHistory').addEventListener('click'",
+    "$('#staffTimeRecords').addEventListener('input'"
+  );
+  assert.match(toggleSource, /staffOlderHistoryExpanded = !staffOlderHistoryExpanded/u);
+  assert.match(toggleSource, /renderStaffTimeRecords\(currentStaffTime\)/u);
+});
+
+test('completed shifts render one clear adjustment form plus original and corrected audit evidence', () => {
+  const nodes = renderStaffTimeRuntime(adjustedReviewResponse());
+  assert.equal(countElements(
+    nodes['#staffTimeRecords'],
+    element => element.className === 'staff-adjustment-form'
+  ), 1);
+  const recordText = elementText(nodes['#staffTimeRecords']);
+  assert.match(recordText, /Adjust punch/u);
+  assert.match(recordText, /Current clock-in \(before this change\)/u);
+  assert.match(recordText, /Current clock-out \(before this change\)/u);
+  assert.match(recordText, /Proposed corrected clock-in · America\/New_York/u);
+  assert.match(recordText, /Proposed corrected clock-out · America\/New_York/u);
+  assert.match(recordText, /Clock-in time zone/u);
+  assert.match(recordText, /Clock-out time zone/u);
+  assert.match(recordText, /EDT \(UTC−4\)/u);
+  assert.match(recordText, /EST \(UTC−5\)/u);
+  assert.match(recordText, /Original source time/u);
+  assert.match(recordText, /Adjusted/u);
+  const auditText = elementText(nodes['#staffTimeAudit']);
+  assert.match(auditText, /Adjusted clock-in and clock-out/u);
+  assert.match(auditText, /Original:/u);
+  assert.match(auditText, /Corrected:/u);
+  assert.match(auditText, /Manager verified the written time card/u);
+});
+
 test('correction IDs are permanent for an exact retry and regenerate only after input changes', () => {
   const functions = sourceBetween(adminHtml, 'function newStaffUuid()', 'function recordElement(');
   const uuids = [
@@ -733,7 +953,9 @@ test('correction IDs are permanent for an exact retry and regenerate only after 
     'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
     'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
     'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
-    'ffffffff-ffff-4fff-8fff-ffffffffffff'
+    'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    '12345678-1234-4234-8234-123456789abc',
+    '87654321-4321-4321-8321-cba987654321'
   ];
   const context = vm.createContext({
     Date,
@@ -755,11 +977,21 @@ test('correction IDs are permanent for an exact retry and regenerate only after 
       return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
     }
     ${functions}
-    globalThis.hooks = { staffTimestampForInputs, staffCorrectionIdentityFor, staffVoidRequestIdFor };
+    globalThis.hooks = {
+      staffTimestampForInputs,
+      staffCorrectionIdentityFor,
+      staffVoidRequestIdFor,
+      staffAdjustmentRequestIdFor
+    };
   `, { filename: 'staff-time-admin-identities.js' }).runInContext(context);
 
   assert.equal(context.hooks.staffTimestampForInputs('2026-08-18', '17:27'), '2026-08-18T17:27:00-04:00');
+  assert.equal(context.hooks.staffTimestampForInputs('2026-08-18', '17:27:43'), '2026-08-18T17:27:43-04:00');
   assert.equal(context.hooks.staffTimestampForInputs('2026-01-18', '17:27'), '2026-01-18T17:27:00-05:00');
+  assert.equal(context.hooks.staffTimestampForInputs('2026-03-08', '02:30'), '');
+  assert.equal(context.hooks.staffTimestampForInputs('2026-11-01', '01:30'), '2026-11-01T01:30:00-04:00');
+  assert.equal(context.hooks.staffTimestampForInputs('2026-11-01', '01:30', '-05:00'), '2026-11-01T01:30:00-05:00');
+  assert.equal(context.hooks.staffTimestampForInputs('2026-01-18', '17:27', '-04:00', true), '');
 
   const form = { dataset: {} };
   const correction = {
@@ -785,9 +1017,30 @@ test('correction IDs are permanent for an exact retry and regenerate only after 
   assert.equal(retryVoid, firstVoid);
   const changedVoid = context.hooks.staffVoidRequestIdFor(voidForm, PUNCH_ONE, 'Corrected reason');
   assert.notEqual(changedVoid, firstVoid);
+
+  const adjustForm = { dataset: {} };
+  const adjustment = {
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test',
+    clockInPunchId: PUNCH_ONE,
+    clockOutPunchId: PUNCH_TWO,
+    originalClockInAt: '2026-08-18T09:00:00-04:00',
+    originalClockOutAt: '2026-08-18T17:00:00-04:00',
+    correctedClockInAt: '2026-08-18T09:15:00-04:00',
+    correctedClockOutAt: '2026-08-18T17:30:00-04:00',
+    reason: 'Manager verified the written time card'
+  };
+  const firstAdjustment = context.hooks.staffAdjustmentRequestIdFor(adjustForm, adjustment);
+  const retryAdjustment = context.hooks.staffAdjustmentRequestIdFor(adjustForm, adjustment);
+  assert.equal(retryAdjustment, firstAdjustment);
+  const changedAdjustment = context.hooks.staffAdjustmentRequestIdFor(adjustForm, {
+    ...adjustment,
+    correctedClockOutAt: '2026-08-18T17:45:00-04:00'
+  });
+  assert.notEqual(changedAdjustment, firstAdjustment);
 });
 
-test('correction and VOID mutations require reasons, confirmation, and exact acknowledgments', () => {
+test('correction, adjustment, and VOID mutations require reasons, confirmation, and exact acknowledgments', () => {
   const correctionMarkup = sourceBetween(adminHtml, '<form id="staffCorrectionForm"', '</form>');
   assert.match(correctionMarkup, /name="staffId" required/u);
   assert.match(correctionMarkup, /name="punchAction" required/u);
@@ -800,6 +1053,54 @@ test('correction and VOID mutations require reasons, confirmation, and exact ack
   assert.match(correctionSource, /operation: 'correct'/u);
   assert.match(correctionSource, /window\.confirm/u);
   assert.match(correctionSource, /Retry keeps the same permanent correction IDs/u);
+
+  const adjustmentMarkupSource = sourceBetween(
+    adminHtml,
+    'function staffAdjustmentForm(',
+    'function staffCompletedShiftByClockIn('
+  );
+  assert.match(adjustmentMarkupSource, /Current clock-in/u);
+  assert.match(adjustmentMarkupSource, /Current clock-out/u);
+  assert.match(adjustmentMarkupSource, /Proposed corrected clock-in/u);
+  assert.match(adjustmentMarkupSource, /Proposed corrected clock-out/u);
+  assert.match(adjustmentMarkupSource, /reason\.required = true/u);
+  assert.match(adjustmentMarkupSource, /reason\.maxLength = 240/u);
+
+  const readAdjustmentSource = sourceBetween(
+    adminHtml,
+    'function readStaffAdjustment(',
+    'function setStaffFormWorking('
+  );
+  assert.match(readAdjustmentSource, /staffCompletedShiftByClockIn\(currentStaffTime\.records\)/u);
+  assert.match(readAdjustmentSource, /staffId: completedShift\.clockIn\.staffId/u);
+  assert.match(readAdjustmentSource, /staffName: completedShift\.clockIn\.staffName/u);
+  assert.match(readAdjustmentSource, /staffTimestampForInputs\(date, time, offset, true\)/u);
+  assert.match(readAdjustmentSource, /Date\.parse\(correctedClockOutAt\) - Date\.parse\(correctedClockInAt\)/u);
+  assert.match(readAdjustmentSource, /elapsed > 18 \* 60 \* 60 \* 1_000/u);
+  assert.match(readAdjustmentSource, /Date\.parse\(correctedClockInAt\) > Date\.now\(\)/u);
+  assert.match(readAdjustmentSource, /reason\.length < 3/u);
+
+  const adjustmentSource = sourceBetween(
+    adminHtml,
+    'async function submitStaffAdjustment(',
+    'async function submitStaffVoid('
+  );
+  assert.ok(adjustmentSource.indexOf('staffAdjustmentRequestIdFor(form, adjustment)') < adjustmentSource.indexOf('requestJson(API.staffTime, request)'));
+  assert.match(adjustmentSource, /operation: 'adjust'/u);
+  assert.match(adjustmentSource, /Adjust \$\{adjustment\.staffName\}’s completed shift/u);
+  assert.match(adjustmentSource, /Current clock-in:/u);
+  assert.match(adjustmentSource, /Proposed clock-out:/u);
+  assert.match(adjustmentSource, /source punches will remain unchanged/u);
+  assert.match(adjustmentSource, /permanently audited/u);
+  assert.match(adjustmentSource, /Retry keeps the same permanent request ID/u);
+  assert.match(adjustmentSource, /error\.status === 409/u);
+  assert.match(adjustmentSource, /await loadStaffTime\(\{ quiet: true \}\)/u);
+  const adjustmentRequestSource = sourceBetween(
+    adjustmentSource,
+    'const request = Object.freeze({',
+    'const expected = Object.freeze({'
+  );
+  assert.doesNotMatch(adjustmentRequestSource, /staffId|staffName/u);
 
   const voidSource = sourceBetween(adminHtml, 'async function submitStaffVoid(', 'function uniqueRequestId(');
   assert.ok(voidSource.indexOf('staffVoidRequestIdFor(form, punchId, reason)') < voidSource.indexOf('requestJson(API.staffTime, request)'));
@@ -881,6 +1182,57 @@ test('correction and VOID mutations require reasons, confirmation, and exact ack
   };
   assert.equal(validStaffMutationResponse(voidResponse, voidExpected), true);
   assert.equal(validStaffMutationResponse({ ...voidResponse, result: 'deleted' }, voidExpected), false);
+
+  const adjustExpected = {
+    operation: 'adjust',
+    requestId: REQUEST_ONE,
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test',
+    clockInPunchId: PUNCH_ONE,
+    clockOutPunchId: PUNCH_TWO,
+    originalClockInAt: '2026-08-18T09:00:00-04:00',
+    originalClockOutAt: '2026-08-18T17:00:00-04:00',
+    correctedClockInAt: '2026-08-18T09:15:00-04:00',
+    correctedClockOutAt: '2026-08-18T17:30:00-04:00',
+    reason: 'Manager verified the written time card'
+  };
+  const adjustResponse = {
+    ok: true,
+    test: true,
+    adminName: 'Andrew Smith',
+    operation: 'adjust',
+    requestId: REQUEST_ONE,
+    result: 'adjusted',
+    linkedPunchIds: [PUNCH_ONE, PUNCH_TWO],
+    auditActionNumber: 3,
+    confirmation: {
+      actionTime: '2026-08-18T17:45:00-04:00',
+      adminName: 'Andrew Smith',
+      staffId: 'mandy-test',
+      staffName: 'Mandy Test',
+      changed: 'both',
+      clockInPunchId: PUNCH_ONE,
+      clockOutPunchId: PUNCH_TWO,
+      originalClockInAt: adjustExpected.originalClockInAt,
+      originalClockOutAt: adjustExpected.originalClockOutAt,
+      correctedClockInAt: adjustExpected.correctedClockInAt,
+      correctedClockOutAt: adjustExpected.correctedClockOutAt,
+      reason: adjustExpected.reason
+    }
+  };
+  assert.equal(validStaffMutationResponse(adjustResponse, adjustExpected), true);
+  assert.equal(validStaffMutationResponse({
+    ...adjustResponse,
+    linkedPunchIds: [PUNCH_TWO, PUNCH_ONE]
+  }, adjustExpected), false);
+  assert.equal(validStaffMutationResponse({
+    ...adjustResponse,
+    confirmation: { ...adjustResponse.confirmation, correctedClockOutAt: '2026-08-18T17:45:00-04:00' }
+  }, adjustExpected), false);
+  assert.equal(validStaffMutationResponse({
+    ...adjustResponse,
+    confirmation: { ...adjustResponse.confirmation, staffName: 'Front Desk Test Two' }
+  }, adjustExpected), false);
 });
 
 test('#staff-time opens and focuses the existing panel without another login or secret', () => {

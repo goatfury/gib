@@ -7,7 +7,7 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-08-26-richmond-activation-r1';
+} from './staff-clock-core.mjs?v=2026-08-27-staff-adjustment-r1';
 
 const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
 const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
@@ -51,7 +51,10 @@ function fmtDate(value) {
     'status',
     'source',
     'adminName',
-    'linkedPunchId'
+    'linkedPunchId',
+    'originalTimestamp',
+    'originalDate',
+    'adjustmentRequestId'
   ]);
   const STAFF_SYNC_BATCH_SIZE = 20;
   let staffClockPeople = [];
@@ -114,6 +117,32 @@ function fmtDate(value) {
 
   function normalizeStaffClockRecord(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const requiredKeys = [
+      'punchId',
+      'timestamp',
+      'date',
+      'staffId',
+      'staffName',
+      'punchAction',
+      'site',
+      'device',
+      'build',
+      'note',
+      'status',
+      'source'
+    ];
+    const allowedKeys = new Set([
+      ...requiredKeys,
+      'adminName',
+      'linkedPunchId',
+      'originalTimestamp',
+      'originalDate',
+      'adjustmentRequestId'
+    ]);
+    if (
+      !requiredKeys.every(key => Object.hasOwn(value, key))
+      || Object.keys(value).some(key => !allowedKeys.has(key))
+    ) return null;
     const record = {
       punchId: String(value.punchId || ''),
       timestamp: String(value.timestamp || ''),
@@ -128,7 +157,10 @@ function fmtDate(value) {
       status: String(value.status || ''),
       source: String(value.source || ''),
       adminName: cleanStaffClockText(value.adminName, 80, true),
-      linkedPunchId: String(value.linkedPunchId || '')
+      linkedPunchId: String(value.linkedPunchId || ''),
+      originalTimestamp: String(value.originalTimestamp || ''),
+      originalDate: String(value.originalDate || ''),
+      adjustmentRequestId: String(value.adjustmentRequestId || '')
     };
     if (
       !STAFF_PUNCH_ID_PATTERN.test(record.punchId)
@@ -385,7 +417,11 @@ function fmtDate(value) {
     const adjustmentCount = normalizedRecords.filter(record => (
       record.date >= periods.previous.startDate
       && record.date <= periods.current.endDate
-      && (record.source === 'Admin-added' || record.status === 'VOID')
+      && (
+        record.source === 'Admin-added'
+        || record.status === 'VOID'
+        || Boolean(record.adjustmentRequestId)
+      )
     )).length;
     if (todayCount !== view.todayPunchCount || adjustmentCount !== view.adjustmentCount) return null;
     return {

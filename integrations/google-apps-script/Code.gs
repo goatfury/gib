@@ -61,6 +61,23 @@ var GIB_M1_TEST_STAFF_AUDIT_HEADERS_ = [
   'Result',
   'Linked Punch ID'
 ];
+var GIB_M1_TEST_STAFF_ADJUSTMENT_SHEET_ = 'Staff Time Adjustments';
+var GIB_M1_TEST_STAFF_ADJUSTMENT_HEADERS_ = [
+  'Request ID',
+  'Action Time',
+  'Admin Name',
+  'Staff ID',
+  'Staff Name',
+  'Clock In Punch ID',
+  'Clock Out Punch ID',
+  'Original Clock In',
+  'Original Clock Out',
+  'Corrected Clock In',
+  'Corrected Clock Out',
+  'Changed',
+  'Required Reason',
+  'Result'
+];
 
 var TEST_SPREADSHEET_ID = PropertiesService
   .getScriptProperties()
@@ -183,6 +200,11 @@ function provisionGibM1TestReceiver() {
       GIB_M1_TEST_STAFF_AUDIT_SHEET_,
       GIB_M1_TEST_STAFF_AUDIT_HEADERS_
     );
+    var staffAdjustments = gibM1EnsureTestSheet_(
+      spreadsheet,
+      GIB_M1_TEST_STAFF_ADJUSTMENT_SHEET_,
+      GIB_M1_TEST_STAFF_ADJUSTMENT_HEADERS_
+    );
     gibM1SeedTestStaff_(staff);
     SpreadsheetApp.flush();
 
@@ -203,7 +225,9 @@ function provisionGibM1TestReceiver() {
       staffTimeSheet: GIB_M1_TEST_STAFF_TIME_SHEET_,
       staffTimeCount: Math.max(0, staffTime.getLastRow() - 1),
       staffAuditSheet: GIB_M1_TEST_STAFF_AUDIT_SHEET_,
-      staffAuditCount: Math.max(0, staffAudit.getLastRow() - 1)
+      staffAuditCount: Math.max(0, staffAudit.getLastRow() - 1),
+      staffAdjustmentSheet: GIB_M1_TEST_STAFF_ADJUSTMENT_SHEET_,
+      staffAdjustmentCount: Math.max(0, staffAdjustments.getLastRow() - 1)
     };
   } finally {
     lock.releaseLock();

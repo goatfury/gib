@@ -110,6 +110,23 @@ var GIB_M1_PRODUCTION_STAFF_AUDIT_HEADERS_ = [
   'Result',
   'Linked Punch ID'
 ];
+var GIB_M1_PRODUCTION_STAFF_ADJUSTMENT_SHEET_ = 'Staff Time Adjustments';
+var GIB_M1_PRODUCTION_STAFF_ADJUSTMENT_HEADERS_ = [
+  'Request ID',
+  'Action Time',
+  'Admin Name',
+  'Staff ID',
+  'Staff Name',
+  'Clock In Punch ID',
+  'Clock Out Punch ID',
+  'Original Clock In',
+  'Original Clock Out',
+  'Corrected Clock In',
+  'Corrected Clock Out',
+  'Changed',
+  'Required Reason',
+  'Result'
+];
 
 function adReceiverV2_(e) {
   try {
@@ -135,6 +152,7 @@ function adReceiverV2_(e) {
       || action === 'staffTimeReviewV2'
       || action === 'staffTimeReviewPageV2'
       || action === 'staffTimeCorrect'
+      || action === 'staffTimeAdjust'
       || action === 'staffTimeVoid'
     ) {
       var staffClockTarget = configuredDeploymentTarget_();
@@ -159,6 +177,7 @@ function adReceiverV2_(e) {
       if (action === 'staffTimeReviewV2') return staffTimeReviewV2Action_(body);
       if (action === 'staffTimeReviewPageV2') return staffTimeReviewPageV2Action_(body);
       if (action === 'staffTimeCorrect') return staffTimeCorrectAction_(body);
+      if (action === 'staffTimeAdjust') return staffTimeAdjustAction_(body);
       return staffTimeVoidAction_(body);
     }
 
@@ -2023,6 +2042,8 @@ function staffClockDeploymentConfiguration_() {
     && typeof GIB_M1_TEST_STAFF_TIME_HEADERS_ !== 'undefined'
     && typeof GIB_M1_TEST_STAFF_AUDIT_SHEET_ !== 'undefined'
     && typeof GIB_M1_TEST_STAFF_AUDIT_HEADERS_ !== 'undefined'
+    && typeof GIB_M1_TEST_STAFF_ADJUSTMENT_SHEET_ !== 'undefined'
+    && typeof GIB_M1_TEST_STAFF_ADJUSTMENT_HEADERS_ !== 'undefined'
   ) {
     return {
       target: target,
@@ -2031,7 +2052,9 @@ function staffClockDeploymentConfiguration_() {
       timeSheet: GIB_M1_TEST_STAFF_TIME_SHEET_,
       timeHeaders: GIB_M1_TEST_STAFF_TIME_HEADERS_,
       auditSheet: GIB_M1_TEST_STAFF_AUDIT_SHEET_,
-      auditHeaders: GIB_M1_TEST_STAFF_AUDIT_HEADERS_
+      auditHeaders: GIB_M1_TEST_STAFF_AUDIT_HEADERS_,
+      adjustmentSheet: GIB_M1_TEST_STAFF_ADJUSTMENT_SHEET_,
+      adjustmentHeaders: GIB_M1_TEST_STAFF_ADJUSTMENT_HEADERS_
     };
   }
   if (
@@ -2048,7 +2071,9 @@ function staffClockDeploymentConfiguration_() {
       timeSheet: GIB_M1_PRODUCTION_STAFF_TIME_SHEET_,
       timeHeaders: GIB_M1_PRODUCTION_STAFF_TIME_HEADERS_,
       auditSheet: GIB_M1_PRODUCTION_STAFF_AUDIT_SHEET_,
-      auditHeaders: GIB_M1_PRODUCTION_STAFF_AUDIT_HEADERS_
+      auditHeaders: GIB_M1_PRODUCTION_STAFF_AUDIT_HEADERS_,
+      adjustmentSheet: GIB_M1_PRODUCTION_STAFF_ADJUSTMENT_SHEET_,
+      adjustmentHeaders: GIB_M1_PRODUCTION_STAFF_ADJUSTMENT_HEADERS_
     };
   }
   return null;
@@ -2179,7 +2204,7 @@ function staffClockSheetAction_(value) {
 }
 
 function staffClockPublicRecord_(record) {
-  return {
+  var value = {
     punchId: record.punchId,
     timestamp: record.timestamp,
     date: record.date,
@@ -2195,6 +2220,12 @@ function staffClockPublicRecord_(record) {
     adminName: record.adminName,
     linkedPunchId: record.linkedPunchId
   };
+  if (record.adjustmentRequestId) {
+    value.originalTimestamp = record.originalTimestamp;
+    value.originalDate = record.originalDate;
+    value.adjustmentRequestId = record.adjustmentRequestId;
+  }
+  return value;
 }
 
 function staffClockReadTime_(spreadsheet, staffState) {
@@ -2448,6 +2479,203 @@ function staffClockAppendAudit_(state, value) {
   return value;
 }
 
+function staffClockAdjustmentChange_(value) {
+  var changedIn = value.correctedClockInAt !== value.originalClockInAt;
+  var changedOut = value.correctedClockOutAt !== value.originalClockOutAt;
+  return changedIn && changedOut ? 'both' : changedIn ? 'clockIn' : changedOut ? 'clockOut' : '';
+}
+
+function staffClockAdjustmentSheetState_(spreadsheet, staffState, timeState, createIfMissing) {
+  var configuration = staffClockDeploymentConfiguration_();
+  if (!configuration) throw new Error('Staff Clock is not configured for this deployment.');
+  var sheet = spreadsheet.getSheetByName(configuration.adjustmentSheet);
+  if (!sheet && createIfMissing) {
+    sheet = spreadsheet.insertSheet(configuration.adjustmentSheet);
+    sheet.getRange(1, 1, 1, configuration.adjustmentHeaders.length)
+      .setValues([configuration.adjustmentHeaders]);
+    sheet.setFrozenRows(1);
+    SpreadsheetApp.flush();
+  }
+  if (!sheet) return { sheet: null, records: [], byRequestId: {} };
+  var values = sheet.getDataRange().getValues();
+  if (!values.length) throw new Error('Staff Time Adjustments headings are missing.');
+  var headings = values[0].map(function(value) { return exactText_(value); });
+  if (headings.length !== configuration.adjustmentHeaders.length) {
+    throw new Error('Staff Time Adjustments headings do not match.');
+  }
+  for (var headingIndex = 0; headingIndex < configuration.adjustmentHeaders.length; headingIndex += 1) {
+    if (headings[headingIndex] !== configuration.adjustmentHeaders[headingIndex]) {
+      throw new Error('Staff Time Adjustments headings do not match.');
+    }
+  }
+  var records = [];
+  var byRequestId = {};
+  values.slice(1).forEach(function(row, offset) {
+    if (!staffClockPopulatedRow_(row)) return;
+    var requestId = safeExactText_(row[0], 180, false);
+    var actionTime = staffClockTimestamp_(row[1]);
+    var adminName = safeText_(row[2], 80, false);
+    var staffId = safeExactText_(row[3], 80, false);
+    var staffName = safeExactText_(row[4], 100, false);
+    var clockInPunchId = safeExactText_(row[5], 160, false);
+    var clockOutPunchId = safeExactText_(row[6], 160, false);
+    var originalClockInAt = staffClockTimestamp_(row[7]);
+    var originalClockOutAt = staffClockTimestamp_(row[8]);
+    var correctedClockInAt = staffClockTimestamp_(row[9]);
+    var correctedClockOutAt = staffClockTimestamp_(row[10]);
+    var changed = exactText_(row[11]);
+    var reason = safeExactText_(row[12], GIB_M1_AUDIT_REASON_MAX_, false);
+    var result = exactText_(row[13]);
+    var roster = staffState.byId[staffId];
+    var clockIn = timeState.byId[clockInPunchId];
+    var clockOut = timeState.byId[clockOutPunchId];
+    var value = {
+      requestId: requestId,
+      actionTime: actionTime,
+      adminName: adminName,
+      staffId: staffId,
+      staffName: staffName,
+      clockInPunchId: clockInPunchId,
+      clockOutPunchId: clockOutPunchId,
+      originalClockInAt: originalClockInAt,
+      originalClockOutAt: originalClockOutAt,
+      correctedClockInAt: correctedClockInAt,
+      correctedClockOutAt: correctedClockOutAt,
+      changed: changed,
+      reason: reason,
+      result: result
+    };
+    var elapsed = Date.parse(correctedClockOutAt) - Date.parse(correctedClockInAt);
+    if (
+      !GIB_M1_STAFF_REQUEST_ID_PATTERN_.test(requestId)
+      || byRequestId[requestId]
+      || !actionTime
+      || GIB_M1_ADMIN_NAMES_.indexOf(adminName) === -1
+      || !roster
+      || staffName !== roster.staffName
+      || !GIB_M1_STAFF_PUNCH_ID_PATTERN_.test(clockInPunchId)
+      || !GIB_M1_STAFF_PUNCH_ID_PATTERN_.test(clockOutPunchId)
+      || clockInPunchId === clockOutPunchId
+      || !clockIn
+      || !clockOut
+      || clockIn.staffId !== staffId
+      || clockOut.staffId !== staffId
+      || clockIn.action !== 'clockIn'
+      || clockOut.action !== 'clockOut'
+      || !originalClockInAt
+      || !originalClockOutAt
+      || !correctedClockInAt
+      || !correctedClockOutAt
+      || Date.parse(originalClockOutAt) <= Date.parse(originalClockInAt)
+      || elapsed <= 0
+      || elapsed > GIB_M1_STAFF_MAX_SHIFT_MS_
+      || (changed !== 'clockIn' && changed !== 'clockOut' && changed !== 'both')
+      || staffClockAdjustmentChange_(value) !== changed
+      || reason.length < 3
+      || result !== 'adjusted'
+    ) {
+      throw new Error('Staff Time Adjustments contains an invalid or duplicate row.');
+    }
+    value.sheetRow = offset + 2;
+    records.push(value);
+    byRequestId[requestId] = value;
+  });
+  return { sheet: sheet, records: records, byRequestId: byRequestId };
+}
+
+function staffClockAppendAdjustment_(state, value) {
+  if (!state.sheet || state.byRequestId[value.requestId]) {
+    throw new Error('Staff Time adjustment request ID already exists.');
+  }
+  var row = [
+    value.requestId,
+    value.actionTime,
+    value.adminName,
+    value.staffId,
+    value.staffName,
+    value.clockInPunchId,
+    value.clockOutPunchId,
+    value.originalClockInAt,
+    value.originalClockOutAt,
+    value.correctedClockInAt,
+    value.correctedClockOutAt,
+    value.changed,
+    value.reason,
+    value.result
+  ];
+  var nextRow = state.sheet.getLastRow() + 1;
+  if (nextRow > state.sheet.getMaxRows()) {
+    state.sheet.insertRowsAfter(state.sheet.getMaxRows(), nextRow - state.sheet.getMaxRows());
+  }
+  state.sheet.getRange(nextRow, 2, 1, 1).setNumberFormat('@');
+  state.sheet.getRange(nextRow, 8, 1, 4).setNumberFormat('@');
+  state.sheet.getRange(nextRow, 1, 1, row.length).setValues([row]);
+  value.sheetRow = nextRow;
+  state.records.push(value);
+  state.byRequestId[value.requestId] = value;
+  return value;
+}
+
+function staffClockApplyAdjustments_(timeState, adjustmentState) {
+  var records = timeState.records.map(function(record) {
+    var clone = {};
+    Object.keys(record).forEach(function(key) { clone[key] = record[key]; });
+    return clone;
+  });
+  var byId = {};
+  records.forEach(function(record) { byId[record.punchId] = record; });
+  adjustmentState.records.forEach(function(adjustment) {
+    var clockIn = byId[adjustment.clockInPunchId];
+    var clockOut = byId[adjustment.clockOutPunchId];
+    if (
+      !clockIn
+      || !clockOut
+      || clockIn.staffId !== adjustment.staffId
+      || clockOut.staffId !== adjustment.staffId
+      || clockIn.action !== 'clockIn'
+      || clockOut.action !== 'clockOut'
+      || clockIn.timestamp !== adjustment.originalClockInAt
+      || clockOut.timestamp !== adjustment.originalClockOutAt
+    ) {
+      throw new Error('Staff Time Adjustments does not match the permanent punch history.');
+    }
+    [clockIn, clockOut].forEach(function(record) {
+      if (!record.originalTimestamp) {
+        record.originalTimestamp = record.timestamp;
+        record.originalDate = record.date;
+      }
+      record.adjustmentRequestId = adjustment.requestId;
+    });
+    clockIn.timestamp = adjustment.correctedClockInAt;
+    clockIn.timestampMs = Date.parse(clockIn.timestamp);
+    clockIn.date = clockIn.timestamp.slice(0, 10);
+    clockOut.timestamp = adjustment.correctedClockOutAt;
+    clockOut.timestampMs = Date.parse(clockOut.timestamp);
+    clockOut.date = clockOut.timestamp.slice(0, 10);
+  });
+  return { sheet: timeState.sheet, records: records, byId: byId };
+}
+
+function staffClockPublicAdjustment_(record) {
+  return {
+    requestId: record.requestId,
+    actionTime: record.actionTime,
+    adminName: record.adminName,
+    operation: 'adjust',
+    staffId: record.staffId,
+    staffName: record.staffName,
+    clockInPunchId: record.clockInPunchId,
+    clockOutPunchId: record.clockOutPunchId,
+    originalClockInAt: record.originalClockInAt,
+    originalClockOutAt: record.originalClockOutAt,
+    correctedClockInAt: record.correctedClockInAt,
+    correctedClockOutAt: record.correctedClockOutAt,
+    changed: record.changed,
+    reason: record.reason,
+    result: record.result
+  };
+}
+
 function staffClockIssue_(staff, code, message, records) {
   var first = records && records.length ? records[0] : null;
   return {
@@ -2659,7 +2887,11 @@ function staffClockRelevantRecords_(timeState, analysis, today, previousPeriod, 
     allRecordsByStaff[record.staffId].push(record);
     var periodAdjustment = record.date >= firstDate
       && record.date <= lastDate
-      && (record.source === 'Admin-added' || record.status === 'VOID');
+      && (
+        record.source === 'Admin-added'
+        || record.status === 'VOID'
+        || Boolean(record.adjustmentRequestId)
+      );
     if (record.date === today || periodAdjustment) requireRecord(record);
   });
   Object.keys(allRecordsByStaff).forEach(function(staffId) {
@@ -2724,7 +2956,9 @@ function staffClockRelevantAudit_(auditState, records) {
     recordIds[record.punchId] = true;
   });
   var audit = auditState.records.filter(function(record) {
-    return recordIds[record.linkedPunchId];
+    return record.clockInPunchId
+      ? recordIds[record.clockInPunchId] || recordIds[record.clockOutPunchId]
+      : recordIds[record.linkedPunchId];
   });
   return audit;
 }
@@ -2798,7 +3032,11 @@ function staffClockPublicIssueGroup_(group) {
 function staffClockPeriodAdjustment_(record, previousPeriod, currentPeriod) {
   return record.date >= previousPeriod.startDate
     && record.date <= currentPeriod.endDate
-    && (record.source === 'Admin-added' || record.status === 'VOID');
+    && (
+      record.source === 'Admin-added'
+      || record.status === 'VOID'
+      || Boolean(record.adjustmentRequestId)
+    );
 }
 
 function staffClockSelectRecords_(
@@ -2908,6 +3146,12 @@ function staffClockSheetLastRow_(spreadsheet, name, expectedHeaders) {
   return sheet.getLastRow();
 }
 
+function staffClockOptionalSheetLastRow_(spreadsheet, name, expectedHeaders) {
+  var sheet = spreadsheet.getSheetByName(name);
+  if (!sheet) return 0;
+  return staffClockSheetLastRow_(spreadsheet, name, expectedHeaders);
+}
+
 function staffClockViewState_(body, includeAdmin) {
   var spreadsheet = openExpectedSpreadsheet_(body);
   var configuration = staffClockDeploymentConfiguration_();
@@ -2933,6 +3177,11 @@ function staffClockViewState_(body, includeAdmin) {
     configuration.auditSheet,
     configuration.auditHeaders
   );
+  var adjustmentLastRow = staffClockOptionalSheetLastRow_(
+    spreadsheet,
+    configuration.adjustmentSheet,
+    configuration.adjustmentHeaders
+  );
   var signature = staffClockSha256Hex_(JSON.stringify([
     'gib-m1-staff-state-v2',
     target,
@@ -2940,7 +3189,8 @@ function staffClockViewState_(body, includeAdmin) {
     today,
     rosterHash,
     timeLastRow,
-    auditLastRow
+    auditLastRow,
+    adjustmentLastRow
   ]));
   return {
     spreadsheet: spreadsheet,
@@ -3010,7 +3260,14 @@ function staffClockInvalidateCachedView_(cache, manifest) {
 function staffClockReadLegacySnapshot_(body, includeAdmin) {
   var spreadsheet = openExpectedSpreadsheet_(body);
   var staffState = staffClockStaffState_(spreadsheet);
-  var timeState = staffClockReadTime_(spreadsheet, staffState);
+  var rawTimeState = staffClockReadTime_(spreadsheet, staffState);
+  var adjustmentState = staffClockAdjustmentSheetState_(
+    spreadsheet,
+    staffState,
+    rawTimeState,
+    false
+  );
+  var timeState = staffClockApplyAdjustments_(rawTimeState, adjustmentState);
   var analysis = staffClockAnalyze_(staffState, timeState);
   var records = staffClockSortRecords_(timeState.records);
   var value = {
@@ -3020,9 +3277,10 @@ function staffClockReadLegacySnapshot_(body, includeAdmin) {
     records: records.map(staffClockPublicRecord_)
   };
   if (includeAdmin) {
-    var auditState = staffClockReadAudit_(spreadsheet, staffState, timeState);
+    var auditState = staffClockReadAudit_(spreadsheet, staffState, rawTimeState);
     var today = todayNewYork_();
-    value.audit = auditState.records.map(staffClockPublicAudit_);
+    value.audit = auditState.records.map(staffClockPublicAudit_)
+      .concat(adjustmentState.records.map(staffClockPublicAdjustment_));
     value.clockedInNow = analysis.clockedInNow;
     value.todayPunches = records.filter(function(record) {
       return record.date === today;
@@ -3049,7 +3307,14 @@ function staffClockReadLegacySnapshot_(body, includeAdmin) {
 function staffClockBuildView_(state, includeAdmin) {
   var spreadsheet = state.spreadsheet;
   var staffState = state.staffState;
-  var timeState = staffClockReadTime_(spreadsheet, staffState);
+  var rawTimeState = staffClockReadTime_(spreadsheet, staffState);
+  var adjustmentState = staffClockAdjustmentSheetState_(
+    spreadsheet,
+    staffState,
+    rawTimeState,
+    false
+  );
+  var timeState = staffClockApplyAdjustments_(rawTimeState, adjustmentState);
   var analysis = staffClockAnalyze_(staffState, timeState);
   var today = state.today;
   var currentPeriod = staffClockPayPeriod_(today, 0);
@@ -3080,11 +3345,17 @@ function staffClockBuildView_(state, includeAdmin) {
   var relevantAudit = [];
   var publicAudit = [];
   if (includeAdmin) {
-    var auditState = staffClockReadAudit_(spreadsheet, staffState, timeState);
-    relevantAudit = staffClockRelevantAudit_(auditState, relevantRecords);
+    var auditState = staffClockReadAudit_(spreadsheet, staffState, rawTimeState);
+    relevantAudit = staffClockRelevantAudit_(auditState, relevantRecords)
+      .concat(staffClockRelevantAudit_(adjustmentState, relevantRecords));
     publicAudit = staffClockSelectAudit_(
       staffClockRelevantAudit_(auditState, records)
-    ).map(staffClockPublicAudit_);
+        .concat(staffClockRelevantAudit_(adjustmentState, records))
+    ).map(function(record) {
+      return record.clockInPunchId
+        ? staffClockPublicAdjustment_(record)
+        : staffClockPublicAudit_(record);
+    });
   }
   var todayPunchTotal = relevantRecords.filter(function(record) {
     return record.date === today;
@@ -3419,6 +3690,12 @@ function staffClockPunchAction_(body) {
     var spreadsheet = openExpectedSpreadsheet_(body);
     var staffState = staffClockStaffState_(spreadsheet);
     var timeState = staffClockReadTime_(spreadsheet, staffState);
+    var adjustmentState = staffClockAdjustmentSheetState_(
+      spreadsheet,
+      staffState,
+      timeState,
+      false
+    );
     var seen = {};
     var results = body.punches.map(function(punch) {
       var requestedId = safeExactText_(punch && punch.punchId, 160, true);
@@ -3433,7 +3710,8 @@ function staffClockPunchAction_(body) {
           ? { punchId: candidate.punchId, result: 'already exists', linkedPunchId: existing.punchId }
           : { punchId: candidate.punchId, result: 'rejected', linkedPunchId: '' };
       }
-      var analysis = staffClockAnalyze_(staffState, timeState);
+      var effectiveTimeState = staffClockApplyAdjustments_(timeState, adjustmentState);
+      var analysis = staffClockAnalyze_(staffState, effectiveTimeState);
       var current = analysis.byStaff[candidate.staffId];
       if (current.issues.length) {
         return { punchId: candidate.punchId, result: 'needs attention', linkedPunchId: '' };
@@ -3580,6 +3858,13 @@ function staffClockCorrectionResult_(target, result, requestId, record, audit) {
   });
 }
 
+function staffClockCorrectionRecordForRequest_(timeState, requestId) {
+  var requestPrefix = 'Admin correction | Request: ' + requestId + ' |';
+  return timeState.records.find(function(record) {
+    return record.source === 'Admin-added' && record.note.indexOf(requestPrefix) === 0;
+  });
+}
+
 function staffTimeCorrectAction_(body) {
   return staffClockWithLock_('Staff time was busy. Nothing changed.', function() {
     var spreadsheet = openExpectedSpreadsheet_(body);
@@ -3590,6 +3875,15 @@ function staffTimeCorrectAction_(body) {
     }
     var timeState = staffClockReadTime_(spreadsheet, staffState);
     var auditState = staffClockReadAudit_(spreadsheet, staffState, timeState);
+    var adjustmentState = staffClockAdjustmentSheetState_(
+      spreadsheet,
+      staffState,
+      timeState,
+      false
+    );
+    if (adjustmentState.byRequestId[value.requestId]) {
+      return jsonResult_({ ok: false, result: 'conflict', message: 'The correction request ID conflicts with an existing action.' });
+    }
     var replayAudit = auditState.byRequestId[value.requestId];
     if (replayAudit) {
       var replayLinked = timeState.byId[replayAudit.linkedPunchId];
@@ -3608,10 +3902,7 @@ function staffTimeCorrectAction_(body) {
     if (existingId && !staffClockSamePunch_(existingId, value.record)) {
       return jsonResult_({ ok: false, result: 'conflict', message: 'The correction punch ID conflicts with an existing punch.' });
     }
-    var requestPrefix = 'Admin correction | Request: ' + value.requestId + ' |';
-    var permanentRequestRecord = timeState.records.find(function(record) {
-      return record.source === 'Admin-added' && record.note.indexOf(requestPrefix) === 0;
-    });
+    var permanentRequestRecord = staffClockCorrectionRecordForRequest_(timeState, value.requestId);
     if (permanentRequestRecord && permanentRequestRecord.punchId !== value.record.punchId) {
       return jsonResult_({ ok: false, result: 'conflict', message: 'The correction request ID conflicts with an existing punch.' });
     }
@@ -3646,6 +3937,188 @@ function staffTimeCorrectAction_(body) {
       linked,
       audit
     );
+  });
+}
+
+function validateStaffTimeAdjustment_(body) {
+  var requestId = safeExactText_(body && body.requestId, 180, false);
+  var clockInPunchId = safeExactText_(body && body.clockInPunchId, 160, false);
+  var clockOutPunchId = safeExactText_(body && body.clockOutPunchId, 160, false);
+  var originalClockInAt = staffClockTimestamp_(body && body.originalClockInAt);
+  var originalClockOutAt = staffClockTimestamp_(body && body.originalClockOutAt);
+  var correctedClockInAt = staffClockTimestamp_(body && body.correctedClockInAt);
+  var correctedClockOutAt = staffClockTimestamp_(body && body.correctedClockOutAt);
+  var reason = safeExactText_(body && body.reason, GIB_M1_AUDIT_REASON_MAX_, false);
+  var adminName = safeText_(body && body.adminName, 80, false);
+  var value = {
+    requestId: requestId,
+    clockInPunchId: clockInPunchId,
+    clockOutPunchId: clockOutPunchId,
+    originalClockInAt: originalClockInAt,
+    originalClockOutAt: originalClockOutAt,
+    correctedClockInAt: correctedClockInAt,
+    correctedClockOutAt: correctedClockOutAt,
+    reason: reason,
+    adminName: adminName
+  };
+  value.changed = staffClockAdjustmentChange_(value);
+  var correctedElapsed = Date.parse(correctedClockOutAt) - Date.parse(correctedClockInAt);
+  if (
+    !GIB_M1_STAFF_REQUEST_ID_PATTERN_.test(requestId)
+    || !GIB_M1_STAFF_PUNCH_ID_PATTERN_.test(clockInPunchId)
+    || !GIB_M1_STAFF_PUNCH_ID_PATTERN_.test(clockOutPunchId)
+    || clockInPunchId === clockOutPunchId
+    || !originalClockInAt
+    || !originalClockOutAt
+    || !correctedClockInAt
+    || !correctedClockOutAt
+    || Date.parse(originalClockOutAt) <= Date.parse(originalClockInAt)
+    || correctedElapsed <= 0
+    || correctedElapsed > GIB_M1_STAFF_MAX_SHIFT_MS_
+    || Date.parse(correctedClockInAt) > Date.now() + 5 * 60 * 1000
+    || Date.parse(correctedClockOutAt) > Date.now() + 5 * 60 * 1000
+    || !value.changed
+    || reason.length < 3
+    || GIB_M1_ADMIN_NAMES_.indexOf(adminName) === -1
+  ) return null;
+  return value;
+}
+
+function staffClockAdjustmentMatches_(record, value) {
+  return record.adminName === value.adminName
+    && record.clockInPunchId === value.clockInPunchId
+    && record.clockOutPunchId === value.clockOutPunchId
+    && record.originalClockInAt === value.originalClockInAt
+    && record.originalClockOutAt === value.originalClockOutAt
+    && record.correctedClockInAt === value.correctedClockInAt
+    && record.correctedClockOutAt === value.correctedClockOutAt
+    && record.changed === value.changed
+    && record.reason === value.reason;
+}
+
+function staffClockAdjustmentPair_(timeState, value) {
+  var clockIn = timeState.byId[value.clockInPunchId];
+  var clockOut = timeState.byId[value.clockOutPunchId];
+  if (
+    !clockIn
+    || !clockOut
+    || clockIn.status !== 'ACTIVE'
+    || clockOut.status !== 'ACTIVE'
+    || clockIn.staffId !== clockOut.staffId
+    || clockIn.staffName !== clockOut.staffName
+    || clockIn.action !== 'clockIn'
+    || clockOut.action !== 'clockOut'
+    || clockIn.timestamp !== value.originalClockInAt
+    || clockOut.timestamp !== value.originalClockOutAt
+  ) return null;
+  var active = timeState.records.filter(function(record) {
+    return record.staffId === clockIn.staffId && record.status === 'ACTIVE';
+  }).sort(function(left, right) {
+    return left.timestampMs - right.timestampMs || left.sheetRow - right.sheetRow;
+  });
+  var clockInIndex = active.findIndex(function(record) {
+    return record.punchId === clockIn.punchId;
+  });
+  var clockOutIndex = active.findIndex(function(record) {
+    return record.punchId === clockOut.punchId;
+  });
+  if (clockInIndex < 0 || clockOutIndex !== clockInIndex + 1) return null;
+  var previous = active[clockInIndex - 1] || null;
+  var next = active[clockOutIndex + 1] || null;
+  var correctedInMs = Date.parse(value.correctedClockInAt);
+  var correctedOutMs = Date.parse(value.correctedClockOutAt);
+  if (
+    (previous && (previous.action !== 'clockOut' || previous.timestampMs >= correctedInMs))
+    || (next && (next.action !== 'clockIn' || next.timestampMs <= correctedOutMs))
+  ) return null;
+  return { clockIn: clockIn, clockOut: clockOut };
+}
+
+function staffClockAdjustmentResult_(target, result, record) {
+  return jsonResult_({
+    ok: true,
+    target: target,
+    requestId: record.requestId,
+    result: result,
+    linkedPunchIds: [record.clockInPunchId, record.clockOutPunchId],
+    auditActionNumber: record.sheetRow - 1,
+    confirmation: {
+      actionTime: record.actionTime,
+      adminName: record.adminName,
+      staffId: record.staffId,
+      staffName: record.staffName,
+      changed: record.changed,
+      clockInPunchId: record.clockInPunchId,
+      clockOutPunchId: record.clockOutPunchId,
+      originalClockInAt: record.originalClockInAt,
+      originalClockOutAt: record.originalClockOutAt,
+      correctedClockInAt: record.correctedClockInAt,
+      correctedClockOutAt: record.correctedClockOutAt,
+      reason: record.reason
+    }
+  });
+}
+
+function staffTimeAdjustAction_(body) {
+  return staffClockWithLock_('Staff time was busy. Nothing changed.', function() {
+    var value = validateStaffTimeAdjustment_(body);
+    if (!value) {
+      return jsonResult_({ ok: false, result: 'rejected', message: 'The Staff time adjustment was rejected.' });
+    }
+    var spreadsheet = openExpectedSpreadsheet_(body);
+    var staffState = staffClockStaffState_(spreadsheet);
+    var rawTimeState = staffClockReadTime_(spreadsheet, staffState);
+    var adjustmentState = staffClockAdjustmentSheetState_(
+      spreadsheet,
+      staffState,
+      rawTimeState,
+      false
+    );
+    var auditState = staffClockReadAudit_(spreadsheet, staffState, rawTimeState);
+    if (
+      auditState.byRequestId[value.requestId]
+      || staffClockCorrectionRecordForRequest_(rawTimeState, value.requestId)
+    ) {
+      return jsonResult_({ ok: false, result: 'conflict', message: 'The adjustment request ID conflicts with an existing action.' });
+    }
+    var replay = adjustmentState.byRequestId[value.requestId];
+    if (replay) {
+      if (!staffClockAdjustmentMatches_(replay, value)) {
+        return jsonResult_({ ok: false, result: 'conflict', message: 'The adjustment request ID conflicts with an existing action.' });
+      }
+      return staffClockAdjustmentResult_(requestTarget_(body), 'already adjusted', replay);
+    }
+    var effectiveTimeState = staffClockApplyAdjustments_(rawTimeState, adjustmentState);
+    var pair = staffClockAdjustmentPair_(effectiveTimeState, value);
+    if (!pair) {
+      return jsonResult_({ ok: false, result: 'conflict', message: 'The shift changed or the corrected times conflict with nearby punches.' });
+    }
+    if (!adjustmentState.sheet) {
+      adjustmentState = staffClockAdjustmentSheetState_(
+        spreadsheet,
+        staffState,
+        rawTimeState,
+        true
+      );
+    }
+    var record = staffClockAppendAdjustment_(adjustmentState, {
+      requestId: value.requestId,
+      actionTime: staffClockNowTimestamp_(),
+      adminName: value.adminName,
+      staffId: pair.clockIn.staffId,
+      staffName: pair.clockIn.staffName,
+      clockInPunchId: value.clockInPunchId,
+      clockOutPunchId: value.clockOutPunchId,
+      originalClockInAt: value.originalClockInAt,
+      originalClockOutAt: value.originalClockOutAt,
+      correctedClockInAt: value.correctedClockInAt,
+      correctedClockOutAt: value.correctedClockOutAt,
+      changed: value.changed,
+      reason: value.reason,
+      result: 'adjusted'
+    });
+    SpreadsheetApp.flush();
+    return staffClockAdjustmentResult_(requestTarget_(body), 'adjusted', record);
   });
 }
 
@@ -3710,6 +4183,18 @@ function staffTimeVoidAction_(body) {
       return jsonResult_({ ok: false, result: 'rejected', message: 'The punch to void was not found.' });
     }
     var auditState = staffClockReadAudit_(spreadsheet, staffState, timeState);
+    var adjustmentState = staffClockAdjustmentSheetState_(
+      spreadsheet,
+      staffState,
+      timeState,
+      false
+    );
+    if (
+      adjustmentState.byRequestId[value.requestId]
+      || staffClockCorrectionRecordForRequest_(timeState, value.requestId)
+    ) {
+      return jsonResult_({ ok: false, result: 'conflict', message: 'The void request ID conflicts with an existing action.' });
+    }
     var replayAudit = auditState.byRequestId[value.requestId];
     if (replayAudit) {
       if (!staffClockAuditMatchesVoid_(replayAudit, value, target)) {
