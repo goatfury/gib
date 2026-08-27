@@ -1,0 +1,75 @@
+name: M1 kiosk visual QA
+
+on:
+  push:
+    branches:
+      - agent/m1-kiosk-branding
+    paths:
+      - .github/workflows/m1-kiosk-visual-qa.yml
+
+permissions:
+  contents: write
+
+jobs:
+  browser-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      REV_BEFORE_URL: https://gib-live.netlify.app/m1/
+      REV_AFTER_URL: https://deploy-preview-72--gib-live.netlify.app/m1/
+      RICHMOND_BEFORE_URL: https://gib-richmond-live.netlify.app/m1/
+      RICHMOND_AFTER_URL: https://agent-m1-richmond-installation-preview--gib-live.netlify.app/m1/
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Locate Chrome and install the browser driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          chrome_path="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || true)"
+          test -n "$chrome_path"
+          echo "CHROME_PATH=$chrome_path" >> "$GITHUB_ENV"
+          npm install --no-save --package-lock=false puppeteer-core@24.17.0
+      - name: Wait for all exact public review URLs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for url in "$REV_BEFORE_URL" "$REV_AFTER_URL" "$RICHMOND_BEFORE_URL" "$RICHMOND_AFTER_URL"; do
+            ready=''
+            for attempt in $(seq 1 60); do
+              status="$(curl --location --silent --output /dev/null --write-out '%{http_code}' --max-time 20 "$url" || true)"
+              if [ "$status" = '200' ]; then
+                ready='yes'
+                break
+              fi
+              sleep 5
+            done
+            if [ "$ready" != 'yes' ]; then
+              echo "Public review URL unavailable: $url" >&2
+              exit 1
+            fi
+          done
+      - name: Exercise instructor and Admin flows at Fire portrait and desktop sizes
+        run: node tools/m1-kiosk-visual-qa.mjs
+      - name: Upload browser report and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m1-kiosk-browser-qa
+          path: artifacts/m1-kiosk-qa
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Remove one-shot QA files
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/m1-kiosk-visual-qa.yml tools/m1-kiosk-visual-qa.mjs
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/m1-kiosk-visual-qa.yml tools/m1-kiosk-visual-qa.mjs
+          git commit -m 'chore(m1): complete kiosk browser QA'
+          git push origin HEAD:agent/m1-kiosk-branding
