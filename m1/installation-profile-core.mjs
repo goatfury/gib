@@ -137,6 +137,12 @@ export function browserInstallationProfileSource(profile) {
   document.documentElement.dataset.m1Environment = profile.environment || '';
   document.documentElement.dataset.m1StaffClock = String(profile.featureFlags.staffClock);
 
+  if (
+    typeof URL === 'undefined'
+    || !document.head
+    || typeof document.createElement !== 'function'
+  ) return;
+
   const profileScript = document.currentScript;
   const baseUrl = profileScript && profileScript.src
     ? new URL('.', profileScript.src)
