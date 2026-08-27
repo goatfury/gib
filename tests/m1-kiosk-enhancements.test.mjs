@@ -60,7 +60,7 @@ test('name matching supports exact, partial, similar, punctuation, and spacing i
   assert.deepEqual(usefulNameSuggestions(roster, 'O’H'), ['Cara O’Hara', 'Caroline O’Hara']);
   assert.deepEqual(usefulNameSuggestions(roster, 'OHara'), ['Cara O’Hara', 'Caroline O’Hara']);
   assert.deepEqual(usefulNameSuggestions(roster, 'Mary - Jane'), ['Mary-Jane Smith']);
-  assert.deepEqual(usefulNameSuggestions(roster, 'Mary Jane'), ['Mary-Jane Smith', 'Mary Jones']);
+  assert.deepEqual(usefulNameSuggestions(roster, 'Mary Jane'), ['Mary-Jane Smith']);
   assert.deepEqual(usefulNameSuggestions(roster, 'Completely New'), []);
   assert.equal(normalizedNameSearchText('  Caroline   O’Hara  '), "caroline o'hara");
   assert.equal(normalizedNameSearchText(' Mary  -  Jane '), 'mary-jane');
@@ -68,7 +68,8 @@ test('name matching supports exact, partial, similar, punctuation, and spacing i
 
 test('free-form names remain allowed and kiosk save/sync code is not replaced', () => {
   assert.doesNotMatch(moduleSource, /localStorage|sessionStorage|fetch\s*\(/u);
-  assert.doesNotMatch(moduleSource, /preventDefault\(\).*btnSignIn/su);
+  assert.doesNotMatch(moduleSource, /setCustomValidity|required\s*=|input\.disabled/u);
+  assert.doesNotMatch(moduleSource, /addEventListener\(['"]submit/u);
   assert.match(moduleSource, /document\.getElementById\(buttonId\)\?\.addEventListener\('click', closeSuggestions, \{ capture: true \}\)/u);
   assert.match(moduleSource, /event\.key === 'Escape'/u);
   assert.match(moduleSource, /pointerdown/u);
