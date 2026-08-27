@@ -58,9 +58,12 @@ test('name matching supports exact, partial, similar, punctuation, and spacing i
   assert.deepEqual(usefulNameSuggestions(roster, "Caroline O'Hara"), ['Caroline O’Hara']);
   assert.deepEqual(usefulNameSuggestions(roster, 'Cara'), ['Cara O’Hara']);
   assert.deepEqual(usefulNameSuggestions(roster, 'O’H'), ['Cara O’Hara', 'Caroline O’Hara']);
-  assert.deepEqual(usefulNameSuggestions(roster, 'Mary - Jane'), []);
+  assert.deepEqual(usefulNameSuggestions(roster, 'OHara'), ['Cara O’Hara', 'Caroline O’Hara']);
+  assert.deepEqual(usefulNameSuggestions(roster, 'Mary - Jane'), ['Mary-Jane Smith']);
+  assert.deepEqual(usefulNameSuggestions(roster, 'Mary Jane'), ['Mary-Jane Smith', 'Mary Jones']);
   assert.deepEqual(usefulNameSuggestions(roster, 'Completely New'), []);
   assert.equal(normalizedNameSearchText('  Caroline   O’Hara  '), "caroline o'hara");
+  assert.equal(normalizedNameSearchText(' Mary  -  Jane '), 'mary-jane');
 });
 
 test('free-form names remain allowed and kiosk save/sync code is not replaced', () => {
