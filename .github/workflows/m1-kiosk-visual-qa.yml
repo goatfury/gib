@@ -16,9 +16,9 @@ jobs:
     timeout-minutes: 12
     env:
       REV_BEFORE_URL: https://gib-live.netlify.app/m1/
-      REV_AFTER_URL: https://deploy-preview-72--gib-live.netlify.app/m1/
+      REV_AFTER_URL: https://deploy-preview-72--gib-live.netlify.app/m1/?ntl-drawer-state=hidden
       RICHMOND_BEFORE_URL: https://gib-richmond-live.netlify.app/m1/
-      RICHMOND_AFTER_URL: https://deploy-preview-73--gib-live.netlify.app/m1/
+      RICHMOND_AFTER_URL: https://deploy-preview-73--gib-live.netlify.app/m1/?ntl-drawer-state=hidden
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -100,7 +100,34 @@ jobs:
           )
           if source.count(old) != 1:
               raise SystemExit('sign-in QA anchor drifted')
-          path.write_text(source.replace(old, new), encoding='utf-8')
+          source = source.replace(old, new)
+
+          validation_old = (
+              "  assert.match(value || '', /^https:\\/\\/[a-z0-9.-]+\\.netlify\\.app\\/m1\\/$/u, "
+              "`${name} URL must be an exact Netlify M1 URL.`);"
+          )
+          validation_new = (
+              "  assert.match(value || '', /^https:\\/\\/[a-z0-9.-]+\\.netlify\\.app\\/m1\\/"
+              "(?:\\?ntl-drawer-state=hidden)?$/u, `${name} URL must be an exact Netlify M1 URL.`);"
+          )
+          if source.count(validation_old) != 1:
+              raise SystemExit('URL validation anchor drifted')
+          source = source.replace(validation_old, validation_new)
+
+          admin_old = (
+              "  const response = await page.goto(new URL('admin/', url).href, "
+              "{ waitUntil: 'networkidle2', timeout: 60_000 });"
+          )
+          admin_new = (
+              "  const adminUrl = new URL('admin/', url);\n"
+              "  adminUrl.searchParams.set('ntl-drawer-state', 'hidden');\n"
+              "  const response = await page.goto(adminUrl.href, "
+              "{ waitUntil: 'networkidle2', timeout: 60_000 });"
+          )
+          if source.count(admin_old) != 1:
+              raise SystemExit('Admin URL anchor drifted')
+          source = source.replace(admin_old, admin_new)
+          path.write_text(source, encoding='utf-8')
           PY
       - name: Wait for all exact public review URLs
         shell: bash
