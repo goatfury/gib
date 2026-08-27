@@ -1,0 +1,40 @@
+name: M1 kiosk and branding verification
+
+on:
+  push:
+    branches:
+      - agent/m1-kiosk-branding
+    paths:
+      - .github/workflows/m1-kiosk-branding-verify.yml
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Generate installation profile
+        run: npm run build
+      - name: Complete M1 test suite
+        run: npm test
+      - name: Commit generated profile and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/m1-kiosk-branding-verify.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add m1/installation-profile.generated.js netlify/functions/_lib/m1-installation.generated.mjs .github/workflows/m1-kiosk-branding-verify.yml
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'chore(m1): verify kiosk branding candidate'
+          git push origin HEAD:agent/m1-kiosk-branding
