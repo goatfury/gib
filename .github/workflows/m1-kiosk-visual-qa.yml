@@ -33,6 +33,75 @@ jobs:
           test -n "$chrome_path"
           echo "CHROME_PATH=$chrome_path" >> "$GITHUB_ENV"
           npm install --no-save --package-lock=false puppeteer-core@24.17.0
+      - name: Instrument the real-user sign-in check
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tools/m1-kiosk-visual-qa.mjs')
+          source = path.read_text(encoding='utf-8')
+          old = """  await page.click('#btnSignIn');
+          await page.waitForSelector('#signInModal.show', { visible: true, timeout: 10_000 });
+          await assertSuggestionsClosed(page);
+
+          const after = await page.evaluate(browserKeys => ({
+          """
+          new = """  const signInDialogs = [];
+          const onSignInDialog = async dialog => {
+            signInDialogs.push(dialog.message());
+            await dialog.dismiss();
+          };
+          page.on('dialog', onSignInDialog);
+          const signInPreflight = await page.evaluate(browserKeys => ({
+            name: document.getElementById('nameInput').value,
+            selectedClasses: Array.from(document.querySelectorAll('#classListWrap input[type=\"checkbox\"]:checked')).map(input => input.value),
+            signins: JSON.parse(localStorage.getItem(browserKeys.signins) || '[]').length,
+            queue: JSON.parse(localStorage.getItem(browserKeys.queue) || '[]').length
+          }), keys);
+          assert.match(signInPreflight.name, /^TEST Marvin/u);
+          assert.equal(signInPreflight.selectedClasses.length, 1);
+          await page.click('#btnSignIn');
+          try {
+            await page.waitForFunction(() => {
+              const modal = document.getElementById('signInModal');
+              return Boolean(
+                modal
+                && modal.classList.contains('show')
+                && modal.getAttribute('aria-hidden') === 'false'
+              );
+            }, { timeout: 10_000 });
+          } catch (error) {
+            const failureState = await page.evaluate(browserKeys => {
+              const modal = document.getElementById('signInModal');
+              return {
+                inputName: document.getElementById('nameInput').value,
+                checkedClasses: Array.from(document.querySelectorAll('#classListWrap input[type=\"checkbox\"]:checked')).map(input => input.value),
+                modalClass: modal ? modal.className : 'missing',
+                modalAriaHidden: modal ? modal.getAttribute('aria-hidden') : 'missing',
+                signInDisabled: document.getElementById('btnSignIn').disabled,
+                signins: JSON.parse(localStorage.getItem(browserKeys.signins) || '[]').length,
+                queue: JSON.parse(localStorage.getItem(browserKeys.queue) || '[]').length
+              };
+            }, keys);
+            await page.screenshot({
+              path: path.join(OUTPUT_DIR, `sign-in-failure-${installation}.png`),
+              fullPage: true
+            });
+            throw new Error(`Sign-in confirmation did not open. Preflight=${JSON.stringify(signInPreflight)} State=${JSON.stringify(failureState)} Dialogs=${JSON.stringify(signInDialogs)} Cause=${error.message}`);
+          } finally {
+            page.off('dialog', onSignInDialog);
+          }
+          assert.deepEqual(signInDialogs, []);
+          await assertSuggestionsClosed(page);
+
+          const after = await page.evaluate(browserKeys => ({
+          """
+          if source.count(old) != 1:
+              raise SystemExit('sign-in QA anchor drifted')
+          path.write_text(source.replace(old, new), encoding='utf-8')
+          PY
       - name: Wait for all exact public review URLs
         shell: bash
         run: |
