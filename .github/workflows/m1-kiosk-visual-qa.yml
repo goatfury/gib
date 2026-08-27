@@ -18,7 +18,7 @@ jobs:
       REV_BEFORE_URL: https://gib-live.netlify.app/m1/
       REV_AFTER_URL: https://deploy-preview-72--gib-live.netlify.app/m1/
       RICHMOND_BEFORE_URL: https://gib-richmond-live.netlify.app/m1/
-      RICHMOND_AFTER_URL: https://agent-m1-richmond-installation-preview--gib-live.netlify.app/m1/
+      RICHMOND_AFTER_URL: https://deploy-preview-73--gib-live.netlify.app/m1/
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
