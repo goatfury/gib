@@ -1,0 +1,70 @@
+name: M1 official asset discovery
+
+on:
+  push:
+    branches:
+      - agent/m1-kiosk-branding
+    paths:
+      - .github/workflows/m1-asset-discovery.yml
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect official sites
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, re, urllib.parse, urllib.request
+          from html.parser import HTMLParser
+
+          class Assets(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.items=[]
+              def handle_starttag(self, tag, attrs):
+                  attrs=dict(attrs)
+                  if tag == 'img' and attrs.get('src'):
+                      self.items.append(('img', attrs.get('src'), attrs.get('alt','')))
+                  if tag == 'link' and attrs.get('href') and any(x in attrs.get('rel','').lower() for x in ('icon','logo')):
+                      self.items.append(('link', attrs.get('href'), attrs.get('rel','')))
+                  if tag == 'meta' and attrs.get('content') and attrs.get('property','').lower() in ('og:image','twitter:image'):
+                      self.items.append(('meta', attrs.get('content'), attrs.get('property','')))
+
+          def get(url):
+              req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0 GitHubActions M1 asset verification'})
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return response.read(), response.headers.get_content_type(), response.geturl()
+
+          for site in ('https://revolutionbjj.com/','https://www.richmondbjj.com/'):
+              raw, content_type, final_url = get(site)
+              text=raw.decode('utf-8','replace')
+              parser=Assets(); parser.feed(text)
+              print('\nSITE', site, 'FINAL', final_url, 'TYPE', content_type)
+              for kind, value, label in parser.items:
+                  print(kind, urllib.parse.urljoin(final_url,value), repr(label))
+
+          endpoints = [
+              'https://revolutionbjj.com/wp-json/wp/v2/media?per_page=100&search=logo',
+              'https://revolutionbjj.com/wp-json/wp/v2/media?per_page=100&search=revolution',
+              'https://revolutionbjj.com/wp-json/wp/v2/media?per_page=100&orderby=date&order=desc&page=1',
+          ]
+          for url in endpoints:
+              try:
+                  raw, content_type, final_url = get(url)
+                  print('\nENDPOINT', url, 'TYPE', content_type, 'BYTES', len(raw))
+                  data=json.loads(raw)
+                  if isinstance(data,list):
+                      for item in data:
+                          title=(item.get('title') or {}).get('rendered','')
+                          source=item.get('source_url','')
+                          if source:
+                              print(item.get('id'), repr(title), source)
+              except Exception as exc:
+                  print('\nENDPOINT ERROR', url, type(exc).__name__, str(exc))
+          PY
