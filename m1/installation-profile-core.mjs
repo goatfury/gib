@@ -136,6 +136,29 @@ export function browserInstallationProfileSource(profile) {
   document.documentElement.dataset.m1Installation = profile.installationId;
   document.documentElement.dataset.m1Environment = profile.environment || '';
   document.documentElement.dataset.m1StaffClock = String(profile.featureFlags.staffClock);
+
+  const profileScript = document.currentScript;
+  const baseUrl = profileScript && profileScript.src
+    ? new URL('.', profileScript.src)
+    : new URL('./', document.baseURI);
+  const revision = profileScript && profileScript.src
+    ? new URL(profileScript.src).searchParams.get('v') || ''
+    : '';
+  const assetUrl = path => {
+    const url = new URL(path, baseUrl);
+    if (revision) url.searchParams.set('v', revision);
+    return url.href;
+  };
+
+  const stylesheet = document.createElement('link');
+  stylesheet.rel = 'stylesheet';
+  stylesheet.href = assetUrl('kiosk-enhancements.css');
+  document.head.appendChild(stylesheet);
+
+  const enhancements = document.createElement('script');
+  enhancements.type = 'module';
+  enhancements.src = assetUrl('kiosk-enhancements.mjs');
+  document.head.appendChild(enhancements);
 })();
 `;
 }
