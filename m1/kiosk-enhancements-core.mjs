@@ -1,5 +1,6 @@
 const APOSTROPHE_PATTERN = /[’‘`´]/gu;
 const DASH_PATTERN = /[‐‑‒–—]/gu;
+const NAME_PUNCTUATION_PATTERN = /['-]/gu;
 
 export const MAX_NAME_SUGGESTIONS = 6;
 
@@ -10,25 +11,42 @@ export function normalizedNameSearchText(value) {
     .replace(DASH_PATTERN, '-')
     .trim()
     .replace(/\s+/gu, ' ')
+    .replace(/\s*(['-])\s*/gu, '$1')
     .toLocaleLowerCase('en-US');
 }
 
+function nameSearchParts(value) {
+  const normalized = normalizedNameSearchText(value);
+  return Object.freeze({
+    normalized,
+    words: normalized.replace(NAME_PUNCTUATION_PATTERN, ' ').split(' ').filter(Boolean),
+    compactWords: normalized.split(' ').map(word => word.replace(NAME_PUNCTUATION_PATTERN, '')),
+    compact: normalized.replace(/[\s'-]/gu, '')
+  });
+}
+
 function suggestionRank(name, query) {
-  const normalizedName = normalizedNameSearchText(name);
-  if (!normalizedName || !query) return Number.POSITIVE_INFINITY;
-  if (normalizedName === query) return 0;
-  if (normalizedName.startsWith(query)) return 1;
+  const nameParts = nameSearchParts(name);
+  const queryParts = nameSearchParts(query);
+  if (!nameParts.normalized || !queryParts.normalized) return Number.POSITIVE_INFINITY;
+  if (nameParts.normalized === queryParts.normalized) return 0;
+  if (nameParts.normalized.startsWith(queryParts.normalized)) return 1;
 
-  const nameWords = normalizedName.split(' ');
-  if (nameWords.some(word => word.startsWith(query))) return 2;
-
-  const queryWords = query.split(' ').filter(Boolean);
   if (
-    queryWords.length > 1
-    && queryWords.every(word => nameWords.some(nameWord => nameWord.startsWith(word)))
+    queryParts.compact
+    && nameParts.compactWords.some(word => word.startsWith(queryParts.compact))
+  ) return 2;
+
+  if (
+    queryParts.words.length > 1
+    && queryParts.words.every(queryWord => (
+      nameParts.words.some(nameWord => nameWord.startsWith(queryWord))
+    ))
   ) return 3;
 
-  if (normalizedName.includes(query)) return 4;
+  if (nameParts.words.some(word => word.startsWith(queryParts.normalized))) return 4;
+  if (nameParts.normalized.includes(queryParts.normalized)) return 5;
+  if (queryParts.compact && nameParts.compact.includes(queryParts.compact)) return 6;
   return Number.POSITIVE_INFINITY;
 }
 
