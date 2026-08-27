@@ -23,7 +23,13 @@ const REQUIRED_RECORD_KEYS = Object.freeze([
   'status',
   'source'
 ]);
-const OPTIONAL_RECORD_KEYS = Object.freeze(['adminName', 'linkedPunchId']);
+const OPTIONAL_RECORD_KEYS = Object.freeze([
+  'adminName',
+  'linkedPunchId',
+  'originalTimestamp',
+  'originalDate',
+  'adjustmentRequestId'
+]);
 const ALLOWED_RECORD_KEYS = new Set([...REQUIRED_RECORD_KEYS, ...OPTIONAL_RECORD_KEYS]);
 const RECORD_ACTIONS = new Set(['clockIn', 'clockOut']);
 const RECORD_STATUSES = new Set(['ACTIVE', 'VOID']);
@@ -95,7 +101,10 @@ function recordFingerprint(record) {
   return JSON.stringify([
     ...REQUIRED_RECORD_KEYS.map(key => record[key]),
     record.adminName || '',
-    record.linkedPunchId || ''
+    record.linkedPunchId || '',
+    record.originalTimestamp || '',
+    record.originalDate || '',
+    record.adjustmentRequestId || ''
   ]);
 }
 
@@ -234,6 +243,21 @@ export function validStaffRecord(value) {
     Object.hasOwn(value, 'linkedPunchId')
     && value.linkedPunchId !== ''
     && !validStaffPunchId(value.linkedPunchId)
+  ) return false;
+  const hasAdjustment = Boolean(
+    value.originalTimestamp
+    || value.originalDate
+    || value.adjustmentRequestId
+  );
+  if (
+    hasAdjustment
+    && (
+      !validStaffTimestamp(value.originalTimestamp)
+      || !validStaffDate(value.originalDate)
+      || value.originalTimestamp.slice(0, 10) !== value.originalDate
+      || typeof value.adjustmentRequestId !== 'string'
+      || !/^gib-m1-staff-request-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.adjustmentRequestId)
+    )
   ) return false;
   return true;
 }

@@ -1,0 +1,39 @@
+{
+  "verifiedAt": "2026-08-27",
+  "assets": [
+    {
+      "installationId": "rev",
+      "file": "m1/assets/revolution-bjj-logo.webp",
+      "alt": "Revolution BJJ logo",
+      "officialSource": "https://revolutionbjj.com/wp-content/uploads/2025/05/cropped-RBJJlogo-hi-res-2015.png",
+      "originalDimensions": [
+        712,
+        404
+      ],
+      "optimizedDimensions": [
+        634,
+        360
+      ],
+      "sourceSha256": "d1509bf3bc0f8886607645122531c2fa51b0750ec92bad446be2c6c26a03357e",
+      "assetSha256": "409b8cdff433da486e1c005c1e8bbc903a4f09229038ec39c16020ce502f4b40",
+      "assetBytes": 46120
+    },
+    {
+      "installationId": "richmond",
+      "file": "m1/assets/richmond-bjj-logo.webp",
+      "alt": "Richmond Brazilian Jiu-Jitsu and Self-Defense Academy logo",
+      "officialSource": "https://images.squarespace-cdn.com/content/v1/60df68b141b02f78f053e8e6/1625254262073-ON61IBBD9WH8O03Q4HX5/LOGO-RIchmond+BJJ.png?format=1500w",
+      "originalDimensions": [
+        1500,
+        578
+      ],
+      "optimizedDimensions": [
+        720,
+        277
+      ],
+      "sourceSha256": "b41879a0573572cbe84ad27ccdad426926ab946499cca3c15d1797fa6eca6519",
+      "assetSha256": "f2f4f6832fc796ad6ad2bf336a929cf3e85b50262fb125f696071b01369412c0",
+      "assetBytes": 32440
+    }
+  ]
+}

@@ -34,16 +34,34 @@ const STAFF_CLOCK_CLIENT_URL = new URL(
   `staff-clock-client.mjs?v=${encodeURIComponent(SHELL_REVISION)}`,
   SCOPE_URL
 ).href;
-const SHELL_REQUESTS = Object.freeze([
+const KIOSK_ENHANCEMENTS_CSS_URL = new URL(
+  `kiosk-enhancements.css?v=${encodeURIComponent(SHELL_REVISION)}`,
+  SCOPE_URL
+).href;
+const KIOSK_ENHANCEMENTS_URL = new URL(
+  `kiosk-enhancements.mjs?v=${encodeURIComponent(SHELL_REVISION)}`,
+  SCOPE_URL
+).href;
+const KIOSK_ENHANCEMENTS_CORE_URL = new URL('kiosk-enhancements-core.mjs', SCOPE_URL).href;
+const REVOLUTION_LOGO_URL = new URL('assets/revolution-bjj-logo.webp', SCOPE_URL).href;
+const RICHMOND_LOGO_URL = new URL('assets/richmond-bjj-logo.webp', SCOPE_URL).href;
+const SHELL_URLS = Object.freeze([
   INDEX_URL,
   INSTALLATION_PROFILE_URL,
   SYNC_CORE_URL,
   STAFF_CLOCK_CORE_URL,
-  STAFF_CLOCK_CLIENT_URL
-].map(url => new Request(url, {
+  STAFF_CLOCK_CLIENT_URL,
+  KIOSK_ENHANCEMENTS_CSS_URL,
+  KIOSK_ENHANCEMENTS_URL,
+  KIOSK_ENHANCEMENTS_CORE_URL,
+  REVOLUTION_LOGO_URL,
+  RICHMOND_LOGO_URL
+]);
+const SHELL_REQUESTS = Object.freeze(SHELL_URLS.map(url => new Request(url, {
   cache: 'reload',
   credentials: 'same-origin'
 })));
+const SHELL_URL_SET = new Set(SHELL_URLS);
 
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
@@ -76,12 +94,7 @@ function shellCacheKey(request) {
     return INDEX_URL;
   }
 
-  return url.href === INSTALLATION_PROFILE_URL
-    || url.href === SYNC_CORE_URL
-    || url.href === STAFF_CLOCK_CORE_URL
-    || url.href === STAFF_CLOCK_CLIENT_URL
-    ? url.href
-    : '';
+  return SHELL_URL_SET.has(url.href) ? url.href : '';
 }
 
 async function networkFirst(request, cacheKey) {

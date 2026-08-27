@@ -23,12 +23,15 @@ const SYNC_RESULTS = new Set([
 ]);
 const CORRECTION_RESULTS = new Set(['added', 'already exists']);
 const VOID_RESULTS = new Set(['voided', 'already voided']);
+const ADJUSTMENT_RESULTS = new Set(['adjusted', 'already adjusted']);
+const ADJUSTMENT_CHANGES = new Set(['clockIn', 'clockOut', 'both']);
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 const FORMULA_PREFIX_PATTERN = /^[=+\-@]/u;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const NEW_YORK_TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2})T((?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d)(?:\.\d{1,3})?(-04:00|-05:00)$/u;
 const MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 const MAX_SAFE_TOTAL_SECONDS = 15 * 24 * 60 * 60;
+const MAX_STAFF_SHIFT_MS = 18 * 60 * 60 * 1_000;
 const STAFF_VIEW_TOKEN_PATTERN = /^[0-9a-f]{64}$/u;
 const KIOSK_PAGE_STREAMS = new Set(['records', 'attention']);
 const ADMIN_PAGE_STREAMS = new Set(['records', 'attention', 'audit']);
@@ -222,7 +225,13 @@ function sanitizeRecord(input, options = {}) {
     'status',
     'source'
   ];
-  const optionalKeys = ['adminName', 'linkedPunchId'];
+  const optionalKeys = [
+    'adminName',
+    'linkedPunchId',
+    'originalTimestamp',
+    'originalDate',
+    'adjustmentRequestId'
+  ];
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const actualKeys = Object.keys(input);
   const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);
@@ -236,6 +245,18 @@ function sanitizeRecord(input, options = {}) {
     : '';
   const adminName = exactText(input.adminName ?? '', 80, true);
   const linkedPunchId = exactText(input.linkedPunchId ?? '', 80, true);
+  const hasAdjustment = Object.hasOwn(input, 'originalTimestamp')
+    || Object.hasOwn(input, 'originalDate')
+    || Object.hasOwn(input, 'adjustmentRequestId');
+  const originalTimestamp = hasAdjustment && typeof input.originalTimestamp === 'string'
+    ? input.originalTimestamp
+    : '';
+  const originalDate = hasAdjustment && typeof input.originalDate === 'string'
+    ? input.originalDate
+    : '';
+  const adjustmentRequestId = hasAdjustment && typeof input.adjustmentRequestId === 'string'
+    ? input.adjustmentRequestId
+    : '';
   const value = {
     punchId: typeof input.punchId === 'string' && STAFF_PUNCH_ID_PATTERN.test(input.punchId)
       ? input.punchId
@@ -279,6 +300,16 @@ function sanitizeRecord(input, options = {}) {
     || (value.linkedPunchId && !STAFF_PUNCH_ID_PATTERN.test(value.linkedPunchId))
     || (source === 'Tablet' && value.adminName)
     || (source === 'Admin-added' && !ADMIN_NAMES.has(value.adminName))
+    || (hasAdjustment && (
+      !validDate(originalDate)
+      || !validNewYorkTimestamp(
+        originalTimestamp,
+        originalDate,
+        options.now || new Date(),
+        Number.POSITIVE_INFINITY
+      )
+      || !STAFF_REQUEST_ID_PATTERN.test(adjustmentRequestId)
+    ))
   ) return null;
   const output = {
     punchId: value.punchId,
@@ -296,6 +327,11 @@ function sanitizeRecord(input, options = {}) {
   };
   if (value.adminName) output.adminName = value.adminName;
   if (value.linkedPunchId) output.linkedPunchId = value.linkedPunchId;
+  if (hasAdjustment) {
+    output.originalTimestamp = originalTimestamp;
+    output.originalDate = originalDate;
+    output.adjustmentRequestId = adjustmentRequestId;
+  }
   return Object.freeze(output);
 }
 
@@ -407,7 +443,129 @@ export function sanitizeStaffTimeVoidRequest(input) {
   return Object.freeze(value);
 }
 
+function adjustmentChange(value) {
+  const changedIn = value.correctedClockInAt !== value.originalClockInAt;
+  const changedOut = value.correctedClockOutAt !== value.originalClockOutAt;
+  return changedIn && changedOut ? 'both' : changedIn ? 'clockIn' : changedOut ? 'clockOut' : '';
+}
+
+export function sanitizeStaffTimeAdjustmentRequest(input, options = {}) {
+  if (!exactObjectKeys(input, [
+    'operation',
+    'requestId',
+    'clockInPunchId',
+    'clockOutPunchId',
+    'originalClockInAt',
+    'originalClockOutAt',
+    'correctedClockInAt',
+    'correctedClockOutAt',
+    'reason'
+  ]) || input.operation !== 'adjust') return null;
+  const now = options.now instanceof Date ? options.now : new Date();
+  const value = {
+    operation: 'adjust',
+    requestId: typeof input.requestId === 'string' && STAFF_REQUEST_ID_PATTERN.test(input.requestId)
+      ? input.requestId
+      : '',
+    clockInPunchId: typeof input.clockInPunchId === 'string' && STAFF_PUNCH_ID_PATTERN.test(input.clockInPunchId)
+      ? input.clockInPunchId
+      : '',
+    clockOutPunchId: typeof input.clockOutPunchId === 'string' && STAFF_PUNCH_ID_PATTERN.test(input.clockOutPunchId)
+      ? input.clockOutPunchId
+      : '',
+    originalClockInAt: typeof input.originalClockInAt === 'string' ? input.originalClockInAt : '',
+    originalClockOutAt: typeof input.originalClockOutAt === 'string' ? input.originalClockOutAt : '',
+    correctedClockInAt: typeof input.correctedClockInAt === 'string' ? input.correctedClockInAt : '',
+    correctedClockOutAt: typeof input.correctedClockOutAt === 'string' ? input.correctedClockOutAt : '',
+    reason: exactText(input.reason, 240)
+  };
+  const originalElapsed = Date.parse(value.originalClockOutAt) - Date.parse(value.originalClockInAt);
+  const correctedElapsed = Date.parse(value.correctedClockOutAt) - Date.parse(value.correctedClockInAt);
+  const changed = adjustmentChange(value);
+  if (
+    !value.requestId
+    || !value.clockInPunchId
+    || !value.clockOutPunchId
+    || value.clockInPunchId === value.clockOutPunchId
+    || !validNewYorkTimestamp(value.originalClockInAt, '', now, Number.POSITIVE_INFINITY)
+    || !validNewYorkTimestamp(value.originalClockOutAt, '', now, Number.POSITIVE_INFINITY)
+    || !validNewYorkTimestamp(value.correctedClockInAt, '', now, 0)
+    || !validNewYorkTimestamp(value.correctedClockOutAt, '', now, 0)
+    || originalElapsed <= 0
+    || correctedElapsed <= 0
+    || correctedElapsed > MAX_STAFF_SHIFT_MS
+    || !changed
+    || !value.reason
+    || value.reason.length < 3
+  ) return null;
+  return Object.freeze({ ...value, changed });
+}
+
 function sanitizeAuditRecord(input, options = {}) {
+  if (input?.operation === 'adjust') {
+    if (!exactObjectKeys(input, [
+      'requestId',
+      'actionTime',
+      'adminName',
+      'operation',
+      'staffId',
+      'staffName',
+      'clockInPunchId',
+      'clockOutPunchId',
+      'originalClockInAt',
+      'originalClockOutAt',
+      'correctedClockInAt',
+      'correctedClockOutAt',
+      'changed',
+      'reason',
+      'result'
+    ])) return null;
+    const value = {
+      requestId: typeof input.requestId === 'string' && STAFF_REQUEST_ID_PATTERN.test(input.requestId)
+        ? input.requestId
+        : '',
+      actionTime: typeof input.actionTime === 'string' ? input.actionTime : '',
+      adminName: exactText(input.adminName, 80),
+      operation: 'adjust',
+      staffId: sanitizeStaffId(input.staffId),
+      staffName: sanitizeStaffName(input.staffName, options.requireTestName === true),
+      clockInPunchId: typeof input.clockInPunchId === 'string' && STAFF_PUNCH_ID_PATTERN.test(input.clockInPunchId)
+        ? input.clockInPunchId
+        : '',
+      clockOutPunchId: typeof input.clockOutPunchId === 'string' && STAFF_PUNCH_ID_PATTERN.test(input.clockOutPunchId)
+        ? input.clockOutPunchId
+        : '',
+      originalClockInAt: typeof input.originalClockInAt === 'string' ? input.originalClockInAt : '',
+      originalClockOutAt: typeof input.originalClockOutAt === 'string' ? input.originalClockOutAt : '',
+      correctedClockInAt: typeof input.correctedClockInAt === 'string' ? input.correctedClockInAt : '',
+      correctedClockOutAt: typeof input.correctedClockOutAt === 'string' ? input.correctedClockOutAt : '',
+      changed: typeof input.changed === 'string' && ADJUSTMENT_CHANGES.has(input.changed) ? input.changed : '',
+      reason: exactText(input.reason, 240),
+      result: typeof input.result === 'string' && input.result === 'adjusted' ? input.result : ''
+    };
+    const correctedElapsed = Date.parse(value.correctedClockOutAt) - Date.parse(value.correctedClockInAt);
+    if (
+      !value.requestId
+      || !validNewYorkTimestamp(value.actionTime, '', options.now || new Date())
+      || !ADMIN_NAMES.has(value.adminName)
+      || !value.staffId
+      || !value.staffName
+      || !value.clockInPunchId
+      || !value.clockOutPunchId
+      || value.clockInPunchId === value.clockOutPunchId
+      || !validNewYorkTimestamp(value.originalClockInAt, '', options.now || new Date(), Number.POSITIVE_INFINITY)
+      || !validNewYorkTimestamp(value.originalClockOutAt, '', options.now || new Date(), Number.POSITIVE_INFINITY)
+      || !validNewYorkTimestamp(value.correctedClockInAt, '', options.now || new Date(), Number.POSITIVE_INFINITY)
+      || !validNewYorkTimestamp(value.correctedClockOutAt, '', options.now || new Date(), Number.POSITIVE_INFINITY)
+      || Date.parse(value.originalClockOutAt) <= Date.parse(value.originalClockInAt)
+      || correctedElapsed <= 0
+      || correctedElapsed > MAX_STAFF_SHIFT_MS
+      || adjustmentChange(value) !== value.changed
+      || !value.reason
+      || !value.result
+    ) return null;
+    return Object.freeze(value);
+  }
   if (!exactObjectKeys(input, [
     'requestId',
     'actionTime',
@@ -888,6 +1046,67 @@ export function sanitizeStaffTimeVoidResult(input, expected, expectedTarget, opt
     requestId: input.requestId,
     result: input.result,
     linkedPunchId: input.linkedPunchId,
+    auditActionNumber: input.auditActionNumber,
+    confirmation: Object.freeze({ ...confirmation })
+  });
+}
+
+export function sanitizeStaffTimeAdjustmentResult(input, expected, expectedTarget, options = {}) {
+  if (
+    !exactObjectKeys(input, [
+      'ok',
+      'target',
+      'requestId',
+      'result',
+      'linkedPunchIds',
+      'auditActionNumber',
+      'confirmation'
+    ])
+    || input.ok !== true
+    || input.target !== expectedTarget
+    || !expected
+    || input.requestId !== expected.requestId
+    || !ADJUSTMENT_RESULTS.has(input.result)
+    || !Array.isArray(input.linkedPunchIds)
+    || input.linkedPunchIds.length !== 2
+    || input.linkedPunchIds[0] !== expected.clockInPunchId
+    || input.linkedPunchIds[1] !== expected.clockOutPunchId
+    || !validAuditActionNumber(input.auditActionNumber)
+    || !exactObjectKeys(input.confirmation, [
+      'actionTime',
+      'adminName',
+      'staffId',
+      'staffName',
+      'changed',
+      'clockInPunchId',
+      'clockOutPunchId',
+      'originalClockInAt',
+      'originalClockOutAt',
+      'correctedClockInAt',
+      'correctedClockOutAt',
+      'reason'
+    ])
+  ) return null;
+  const confirmation = input.confirmation;
+  if (
+    confirmation.adminName !== expected.adminName
+    || !ADMIN_NAMES.has(confirmation.adminName)
+    || !sanitizeStaffId(confirmation.staffId)
+    || !sanitizeStaffName(confirmation.staffName, expectedTarget === 'test')
+    || confirmation.changed !== expected.changed
+    || confirmation.clockInPunchId !== expected.clockInPunchId
+    || confirmation.clockOutPunchId !== expected.clockOutPunchId
+    || confirmation.originalClockInAt !== expected.originalClockInAt
+    || confirmation.originalClockOutAt !== expected.originalClockOutAt
+    || confirmation.correctedClockInAt !== expected.correctedClockInAt
+    || confirmation.correctedClockOutAt !== expected.correctedClockOutAt
+    || confirmation.reason !== expected.reason
+    || !validNewYorkTimestamp(confirmation.actionTime, '', options.now || new Date())
+  ) return null;
+  return Object.freeze({
+    requestId: input.requestId,
+    result: input.result,
+    linkedPunchIds: Object.freeze([...input.linkedPunchIds]),
     auditActionNumber: input.auditActionNumber,
     confirmation: Object.freeze({ ...confirmation })
   });
