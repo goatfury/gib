@@ -1,0 +1,27 @@
+name: Export M1 staff adjustment source
+
+on:
+  push:
+    branches:
+      - agent/m1-staff-punch-adjustment
+    paths:
+      - .github/workflows/export-m1-staff-source.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude=.git --exclude=node_modules -czf /tmp/gib-m1-staff-source.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gib-m1-staff-source
+          path: /tmp/gib-m1-staff-source.tar.gz
+          retention-days: 7
