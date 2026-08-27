@@ -471,6 +471,34 @@ async function runPagination(initial, streams, { staleOnce = false, pageSize = 5
   return { data, calls: context.calls };
 }
 
+function configureLoginEntryRuntime(hostname) {
+  const source = sourceBetween(
+    adminHtml,
+    'function configureAdminLoginEntry(',
+    'async function loadProductionLedgerStatus('
+  );
+  const nodes = {
+    '#testEntry': { style: { display: 'unchanged' } },
+    '#passphraseField': { hidden: false },
+    '#loginButton': { hidden: false },
+    '#loginCopy': { textContent: 'production login copy' },
+    '#testEntryHeading': { textContent: 'original test heading' },
+    '#testEntryCopy': { textContent: 'original test copy' },
+    '#testLoginButton': { className: 'btn warn', textContent: 'Enter TEST Admin' },
+    '#loginAdminName': { value: 'Stuart Turner' }
+  };
+  const context = vm.createContext({ nodes, location: { hostname } });
+  new vm.Script(`
+    const IS_RICHMOND = false;
+    const IS_RICHMOND_PRODUCTION = false;
+    const TEST_ADMIN_HOST_PATTERN = /^(?:deploy-preview-[0-9]+|[a-f0-9]{24})--gib-live[.]netlify[.]app$/i;
+    function $(selector) { return nodes[selector]; }
+    ${source}
+    globalThis.result = configureAdminLoginEntry();
+  `, { filename: 'admin-login-entry.js' }).runInContext(context);
+  return { nodes, result: context.result };
+}
+
 test('Daily Review remains first and one compact Staff time section follows it', () => {
   const app = sourceBetween(adminHtml, '<section id="appPanel"', '<div id="toast"');
   const reviewPosition = app.indexOf('id="reviewSection"');
@@ -521,6 +549,97 @@ test('Staff time reuses the existing secured Admin request path and loads only a
   assert.match(initializeSource, /setLoggedOut\(\)/u);
   assert.doesNotMatch(adminHtml, /localStorage|sessionStorage/u);
   assert.equal((adminHtml.match(/id="loginAdminName"/gu) || []).length, 1);
+});
+
+test('Deploy Preview presents one production-credential-free TEST Admin entry while production stays unchanged', () => {
+  const loginMarkup = sourceBetween(adminHtml, '<section id="loginPanel"', '<section id="appPanel"');
+  assert.ok(loginMarkup.indexOf('id="loginAdminName"') < loginMarkup.indexOf('id="testEntry"'));
+  assert.ok(loginMarkup.indexOf('id="testEntry"') < loginMarkup.indexOf('id="passphraseField"'));
+  assert.ok(loginMarkup.indexOf('id="testEntry"') < loginMarkup.indexOf('class="login-actions"'));
+  for (const hostname of [
+    'deploy-preview-74--gib-live.netlify.app',
+    '1234567890abcdef12345678--gib-live.netlify.app'
+  ]) {
+    const { nodes, result } = configureLoginEntryRuntime(hostname);
+    assert.equal(result, true);
+    assert.equal(nodes['#testEntry'].style.display, 'block');
+    assert.equal(nodes['#passphraseField'].hidden, true);
+    assert.equal(nodes['#loginButton'].hidden, true);
+    assert.equal(nodes['#testLoginButton'].className, 'btn primary');
+    assert.equal(nodes['#testLoginButton'].textContent, 'Enter TEST Admin');
+    assert.match(nodes['#loginCopy'].textContent, /Choose Andrew Smith or Stuart Turner/u);
+    assert.match(nodes['#loginCopy'].textContent, /Production credentials are not used/u);
+    assert.match(nodes['#testEntryCopy'].textContent, /copied TEST Sheet/u);
+    assert.match(nodes['#testEntryCopy'].textContent, /Production credentials are not used/u);
+    assert.equal(nodes['#loginAdminName'].value, 'Stuart Turner');
+  }
+
+  const production = configureLoginEntryRuntime('gib-live.netlify.app');
+  assert.equal(production.result, false);
+  assert.equal(production.nodes['#testEntry'].style.display, 'none');
+  assert.equal(production.nodes['#passphraseField'].hidden, false);
+  assert.equal(production.nodes['#loginButton'].hidden, false);
+  assert.equal(production.nodes['#loginCopy'].textContent, 'production login copy');
+  assert.equal(production.nodes['#testLoginButton'].className, 'btn warn');
+  assert.match(adminHtml, /\.test-entry \.btn\.primary \{ width: 100%; font-size: 1rem; \}/u);
+});
+
+test('TEST Admin entry preserves the direct Staff Time hash and focuses it after loading', async () => {
+  const loginSource = sourceBetween(adminHtml, 'async function login(', 'async function logout(');
+  const focusSource = sourceBetween(adminHtml, 'function focusStaffTimeHash(', 'async function loadStaffTime(');
+  const nodes = {
+    '#loginMessage': {},
+    '#loginAdminName': { value: 'Stuart Turner' },
+    '#testLoginButton': { disabled: false },
+    '#loginButton': { disabled: false },
+    '#loginPassphrase': { value: 'production credential must not be used' },
+    '#appPanel': { hidden: true },
+    '#staff-time': {
+      open: false,
+      focus() { this.focused = true; },
+      scrollIntoView() { this.scrolled = true; }
+    }
+  };
+  const context = vm.createContext({
+    nodes,
+    location: { hash: '#staff-time' },
+    calls: [],
+    events: [],
+    window: { requestAnimationFrame(callback) { callback(); } }
+  });
+  new vm.Script(`
+    const API = { login: '/login' };
+    const IS_RICHMOND_PRODUCTION = false;
+    const ADMIN_MUTATIONS_ENABLED = true;
+    const STAFF_CLOCK_ENABLED = true;
+    let adminRequestToken = '';
+    function $(selector) { return nodes[selector]; }
+    function showMessage(target, message) { target.message = message; }
+    async function requestJson(url, body) {
+      calls.push({ url, body: JSON.parse(JSON.stringify(body)) });
+      return { requestToken: 'a'.repeat(32), adminName: body.adminName, test: true };
+    }
+    function setLoggedIn() { nodes['#appPanel'].hidden = false; events.push('logged-in'); }
+    function defaultYesterday() { return '2026-08-26'; }
+    async function loadReview() { events.push('review-loaded'); }
+    async function loadStaffTime() { events.push('staff-loaded'); }
+    ${focusSource}
+    ${loginSource}
+    globalThis.hooks = { login };
+  `, { filename: 'test-admin-direct-staff-time.js' }).runInContext(context);
+
+  await context.hooks.login(true);
+  assert.equal(context.calls.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.calls[0].body)), {
+    adminName: 'Stuart Turner',
+    passphrase: '',
+    testShortcut: true
+  });
+  assert.deepEqual(Array.from(context.events), ['logged-in', 'review-loaded', 'staff-loaded']);
+  assert.equal(nodes['#staff-time'].open, true);
+  assert.equal(nodes['#staff-time'].focused, true);
+  assert.equal(nodes['#staff-time'].scrolled, true);
+  assert.equal(context.location.hash, '#staff-time');
 });
 
 test('review validation requires every canonical Staff time field and rejects drift', () => {
