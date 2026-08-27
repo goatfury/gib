@@ -501,6 +501,30 @@ input, textarea, select {
   border-color: rgba(245,158,11,.38);
   color: #fde68a;
 }
+.staff-clock-availability {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid rgba(245,158,11,.42);
+  border-radius: 12px;
+  background: rgba(245,158,11,.08);
+}
+.staff-clock-availability-title {
+  color: #fde68a;
+  font-size: 18px;
+  font-weight: 750;
+}
+.staff-clock-availability-detail {
+  margin-top: 5px;
+  color: #e2e8f0;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.staff-clock-availability-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
 #btnStaffClockAction,
 #btnStaffClockDone {
   min-height: 48px;
@@ -540,6 +564,7 @@ input, textarea, select {
   color: #fde68a;
 }
 .staff-clock-controls[hidden],
+.staff-clock-availability[hidden],
 .staff-clock-confirmation[hidden] { display: none; }
 
 html:not([data-m1-staff-clock="true"]) #staffClock,
@@ -875,7 +900,7 @@ body.admin-mode .container { max-width: 1120px; }
 }
 
 </style>
-<script src="./installation-profile.generated.js?v=2026-08-27-staff-adjustment-r1"></script>
+<script src="./installation-profile.generated.js?v=2026-08-27-tablet-recovery-r1"></script>
 </head>
 <body>
 <div class="container">
@@ -943,7 +968,15 @@ body.admin-mode .container { max-width: 1120px; }
       <h2 id="staffClockHeading" class="staff-clock-heading">Front desk staff clock</h2>
       <div class="staff-clock-subtitle">For hourly front desk staff</div>
     </div>
-    <div id="staffClockControls" class="staff-clock-controls">
+    <div id="staffClockAvailability" class="staff-clock-availability" role="status" aria-live="polite" aria-atomic="true">
+      <div id="staffClockAvailabilityTitle" class="staff-clock-availability-title">Loading Staff Clock…</div>
+      <div id="staffClockAvailabilityDetail" class="staff-clock-availability-detail">Checking this tablet and loading the active staff roster.</div>
+      <div class="staff-clock-availability-actions">
+        <a id="authorizeStaffClockTablet" class="btn brand" href="/m1/admin/?authorizeTablet=1" hidden>Authorize this tablet</a>
+        <button id="retryStaffClock" class="btn" type="button" hidden>Try again</button>
+      </div>
+    </div>
+    <div id="staffClockControls" class="staff-clock-controls" hidden>
       <div class="staff-clock-field">
         <label for="staffClockName">Staff name</label>
         <select id="staffClockName" aria-describedby="staffClockStatus">
@@ -1356,10 +1389,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-27-staff-adjustment-r1';
+} from './sync-core.mjs?v=2026-08-27-tablet-recovery-r1';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-08-27-staff-adjustment-r1';
+const OFFLINE_SHELL_REVISION = '2026-08-27-tablet-recovery-r1';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -4665,6 +4698,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-08-27-staff-adjustment-r1"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-08-27-tablet-recovery-r1"></script>
 </body>
 </html>

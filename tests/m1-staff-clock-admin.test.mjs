@@ -584,6 +584,109 @@ test('Deploy Preview presents one production-credential-free TEST Admin entry wh
   assert.match(adminHtml, /\.test-entry \.btn\.primary \{ width: 100%; font-size: 1rem; \}/u);
 });
 
+test('Revolution Admin exposes one same-tablet recovery control without a browser-readable grant', () => {
+  const app = sourceBetween(adminHtml, '<section id="appPanel"', '<div id="toast"');
+  assert.equal(idCount('tabletAuthorization'), 1);
+  assert.equal(idCount('authorizeTabletButton'), 1);
+  assert.match(app, /id="tabletAuthorization"[^>]*hidden/u);
+  assert.match(app, /Authorize this Staff Clock tablet/u);
+  assert.match(app, /Authorization does not change punches, sign-ins, or other tablet data/u);
+  assert.match(adminHtml, /tabletAuthorize:\s*'\/api\/m1-admin-tablet-authorize'/u);
+  assert.match(adminHtml, /tabletInstall:\s*'\/api\/m1-tablet-install'/u);
+  assert.match(adminHtml, /TABLET_AUTHORIZATION_AVAILABLE = !IS_RICHMOND/u);
+  assert.match(adminHtml, /location\.search === '\?authorizeTablet=1'/u);
+  assert.match(adminHtml, /\$\('#tabletAuthorization'\)\.hidden = !TABLET_AUTHORIZATION_AVAILABLE/u);
+
+  const authorizationSource = sourceBetween(
+    adminHtml,
+    'function validTabletAuthorizationIssueResponse(',
+    'async function requestJson('
+  );
+  assert.match(authorizationSource, /requestJson\(API\.tabletAuthorize, \{ operation: 'issue' \}\)/u);
+  assert.match(authorizationSource, /operation: 'installAdminGrant'/u);
+  assert.match(authorizationSource, /location\.replace\('\/m1\/#staffClock'\)/u);
+  assert.doesNotMatch(authorizationSource, /authorizationGrant|localStorage|sessionStorage|URLSearchParams/u);
+
+  const requestSource = sourceBetween(adminHtml, 'async function requestJson(', 'function setLoggedOut(');
+  assert.match(requestSource, /headers\[ADMIN_REQUEST_HEADER\] = adminRequestToken/u);
+  assert.match(requestSource, /credentials:\s*'same-origin'/u);
+});
+
+test('same-device Admin authorization installs the HttpOnly grant and failures remain visible', async () => {
+  const issueValidator = sourceBetween(
+    adminHtml,
+    'function validTabletAuthorizationIssueResponse(',
+    'function validTabletAuthorizationInstallResponse('
+  );
+  const installValidator = sourceBetween(
+    adminHtml,
+    'function validTabletAuthorizationInstallResponse(',
+    'function focusTabletAuthorization('
+  );
+  const authorizeSource = sourceBetween(
+    adminHtml,
+    'async function authorizeThisTablet(',
+    'async function requestJson('
+  );
+
+  async function run(installFailure = null) {
+    const nodes = {
+      '#authorizeTabletButton': { disabled: false },
+      '#tabletAuthorizationMessage': { message: '', tone: '' }
+    };
+    return Function('nodes', 'installFailure', `
+      const TABLET_AUTHORIZATION_AVAILABLE = true;
+      let adminRequestToken = 'a'.repeat(32);
+      const API = { tabletAuthorize: '/issue', tabletInstall: '/install' };
+      const calls = [];
+      let redirected = '';
+      let loggedOut = '';
+      const location = { replace(value) { redirected = value; } };
+      const $ = selector => nodes[selector];
+      function exactObjectKeys(value, expectedKeys) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+        const actual = Object.keys(value).sort();
+        const expected = [...expectedKeys].sort();
+        return actual.length === expected.length
+          && actual.every((key, index) => key === expected[index]);
+      }
+      function showMessage(target, message, tone = 'error') {
+        target.message = message;
+        target.tone = tone;
+      }
+      function setLoggedOut(message) { loggedOut = message; }
+      async function requestJson(url, body) {
+        calls.push({ url, body });
+        if (url === '/issue') return { ok: true, issued: true, expiresInSeconds: 90 };
+        if (installFailure) throw Object.assign(new Error(installFailure), { status: 403 });
+        return { ok: true, installed: true };
+      }
+      ${issueValidator}
+      ${installValidator}
+      ${authorizeSource}
+      return authorizeThisTablet().then(() => ({ calls, redirected, loggedOut, nodes }));
+    `)(nodes, installFailure);
+  }
+
+  const success = await run();
+  assert.deepEqual(JSON.parse(JSON.stringify(success.calls)), [
+    { url: '/issue', body: { operation: 'issue' } },
+    { url: '/install', body: { operation: 'installAdminGrant' } }
+  ]);
+  assert.equal(success.redirected, '/m1/#staffClock');
+  assert.equal(success.loggedOut, '');
+  assert.equal(success.nodes['#tabletAuthorizationMessage'].tone, 'success');
+
+  const failure = await run('Authorization expired or was already used.');
+  assert.equal(failure.redirected, '');
+  assert.equal(failure.loggedOut, '');
+  assert.equal(failure.nodes['#authorizeTabletButton'].disabled, false);
+  assert.equal(
+    failure.nodes['#tabletAuthorizationMessage'].message,
+    'Authorization expired or was already used.'
+  );
+});
+
 test('TEST Admin entry preserves the direct Staff Time hash and focuses it after loading', async () => {
   const loginSource = sourceBetween(adminHtml, 'async function login(', 'async function logout(');
   const focusSource = sourceBetween(adminHtml, 'function focusStaffTimeHash(', 'async function loadStaffTime(');
