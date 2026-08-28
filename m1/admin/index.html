@@ -910,6 +910,7 @@
       let currentStaffTime = null;
       let staffTimeLoadGeneration = 0;
       let currentStaffHistoryPage = null;
+      let staffHistoryReceiverUnavailable = false;
       let staffHistoryPageLoading = false;
       let diagnosticWindow = null;
       let diagnosticRunId = '';
@@ -2442,8 +2443,14 @@
           generation
         );
         if (!audit) return null;
-        const historyPage = await fetchStaffTimeHistoryPage(initial, 0, generation);
-        if (!historyPage) return null;
+        let historyPage = null;
+        try {
+          historyPage = await fetchStaffTimeHistoryPage(initial, 0, generation);
+        } catch (error) {
+          if (!validStaffTimeHistoryUnavailableError(error)) throw error;
+          staffHistoryReceiverUnavailable = true;
+        }
+        if (!historyPage && !staffHistoryReceiverUnavailable) return null;
         const review = assembleStaffTimeReview(initial, records, needsAttention, audit);
         currentStaffHistoryPage = historyPage;
         return review;
@@ -2456,6 +2463,15 @@
           && error.data.ok === false
           && error.data.result === 'stale'
           && error.data.code === 'STAFF_TIME_VIEW_STALE';
+      }
+
+      function validStaffTimeHistoryUnavailableError(error) {
+        return Boolean(error)
+          && error.status === 502
+          && exactObjectKeys(error.data, ['ok', 'code', 'message'])
+          && error.data.ok === false
+          && error.data.code === 'STAFF_TIME_HISTORYPAGE_REJECTED'
+          && error.data.message === 'Staff time history page did not return a complete readable confirmation. Success is not being reported.';
       }
 
       async function loadStaffTimeReviewView(generation) {
@@ -3220,6 +3236,7 @@
         persistentReviewOutcome = null;
         currentStaffTime = null;
         currentStaffHistoryPage = null;
+        staffHistoryReceiverUnavailable = false;
         staffHistoryPageLoading = false;
         currentAdminName = '';
         adminRequestToken = '';
@@ -3626,9 +3643,13 @@
         const history = $('#staffCompletedShiftHistory');
         const toggle = $('#staffTimeOlderHistory');
         if (!page) {
-          history.replaceChildren(staffEmpty('Completed shift history is unavailable.'));
+          history.replaceChildren(staffEmpty(staffHistoryReceiverUnavailable
+            ? 'Completed shift history is temporarily unavailable until the matching Staff Clock receiver is active. Current Staff time remains visible; nothing changed.'
+            : 'Completed shift history is unavailable.'));
           toggle.hidden = true;
-          $('#staffTimeHistoryScope').textContent = '';
+          $('#staffTimeHistoryScope').textContent = staffHistoryReceiverUnavailable
+            ? 'History requires the matching receiver release.'
+            : '';
           return;
         }
         history.replaceChildren(...page.items.map(staffCompletedShiftElement));
@@ -4384,6 +4405,7 @@
       async function loadStaffTime(options = {}) {
         const generation = ++staffTimeLoadGeneration;
         currentStaffHistoryPage = null;
+        staffHistoryReceiverUnavailable = false;
         staffHistoryPageLoading = false;
         if (options.quiet !== true) {
           $('#staff-time').classList.add('loading');

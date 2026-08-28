@@ -333,7 +333,10 @@ function staffAudit(index, record, operation = 'correct') {
   };
 }
 
-function renderStaffTimeRuntime(data, { historyPage = completedHistoryPage() } = {}) {
+function renderStaffTimeRuntime(data, {
+  historyPage = completedHistoryPage(),
+  historyReceiverUnavailable = false
+} = {}) {
   const functions = sourceBetween(
     adminHtml,
     'function makeElement(',
@@ -376,12 +379,14 @@ function renderStaffTimeRuntime(data, { historyPage = completedHistoryPage() } =
     nodes,
     data: structuredClone(data),
     historyPage: structuredClone(historyPage),
+    historyReceiverUnavailable,
     createElement: tagName => new FakeElement(tagName)
   });
   new vm.Script(`
     const TIME_ZONE = 'America/New_York';
     let currentStaffTime = null;
     let currentStaffHistoryPage = historyPage;
+    let staffHistoryReceiverUnavailable = historyReceiverUnavailable;
     let staffHistoryPageLoading = false;
     const document = { createElement };
     function $(selector) {
@@ -426,7 +431,8 @@ function countElements(element, predicate) {
 async function runPagination(initial, streams, {
   staleOnce = false,
   pageSize = 500,
-  historyPage = completedHistoryPage()
+  historyPage = completedHistoryPage(),
+  historyReceiverUnavailable = false
 } = {}) {
   const functions = sourceBetween(
     adminHtml,
@@ -445,6 +451,7 @@ async function runPagination(initial, streams, {
     staleOnce,
     pageSize,
     historyPage,
+    historyReceiverUnavailable,
     calls: []
   });
   new vm.Script(`
@@ -465,6 +472,7 @@ async function runPagination(initial, streams, {
     let currentAdminName = 'Andrew Smith';
     let staffTimeLoadGeneration = 7;
     let currentStaffHistoryPage = null;
+    let staffHistoryReceiverUnavailable = false;
     let staleRemaining = staleOnce ? 1 : 0;
     function clean(value) {
       return String(value == null ? '' : value).normalize('NFKC').trim().replace(/\\s+/g, ' ');
@@ -492,6 +500,16 @@ async function runPagination(initial, streams, {
       calls.push(JSON.parse(JSON.stringify(body)));
       if (body.operation === 'review') return JSON.parse(JSON.stringify(initial));
       if (body.operation === 'historyPage') {
+        if (historyReceiverUnavailable) {
+          const error = new Error('matching receiver unavailable');
+          error.status = 502;
+          error.data = {
+            ok: false,
+            code: 'STAFF_TIME_HISTORYPAGE_REJECTED',
+            message: 'Staff time history page did not return a complete readable confirmation. Success is not being reported.'
+          };
+          throw error;
+        }
         return JSON.parse(JSON.stringify({
           ...historyPage,
           viewToken: body.viewToken,
@@ -520,10 +538,39 @@ async function runPagination(initial, streams, {
       };
     }
     ${functions}
-    globalThis.hooks = { loadStaffTimeReviewView };
+    globalThis.hooks = {
+      loadStaffTimeReviewView,
+      historyState: () => ({
+        page: currentStaffHistoryPage,
+        receiverUnavailable: staffHistoryReceiverUnavailable
+      })
+    };
   `, { filename: 'staff-time-admin-pagination.js' }).runInContext(context);
   const data = await context.hooks.loadStaffTimeReviewView(7);
-  return { data, calls: context.calls };
+  return { data, calls: context.calls, historyState: context.hooks.historyState() };
+}
+
+function historyUnavailableErrorAccepted(error) {
+  const source = sourceBetween(
+    adminHtml,
+    'function validStaffTimeHistoryUnavailableError(',
+    'async function loadStaffTimeReviewView('
+  );
+  const context = vm.createContext({ error: structuredClone(error) });
+  new vm.Script(`
+    function isObject(value) {
+      return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+    }
+    function exactObjectKeys(value, expectedKeys) {
+      if (!isObject(value)) return false;
+      const actual = Object.keys(value).sort();
+      const expected = [...expectedKeys].sort();
+      return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+    }
+    ${source}
+    globalThis.result = validStaffTimeHistoryUnavailableError(error);
+  `, { filename: 'staff-time-history-unavailable.js' }).runInContext(context);
+  return context.result;
 }
 
 function configureLoginEntryRuntime(hostname) {
@@ -1447,6 +1494,56 @@ test('a stale Staff time page restarts the whole view once', async () => {
   );
 });
 
+test('a legacy receiver rejection preserves the validated Admin summary while history stays unavailable', async () => {
+  const review = reviewResponse();
+  const initial = reviewStartResponse();
+  const streams = {
+    records: review.records,
+    attention: review.needsAttention,
+    audit: review.audit
+  };
+  const { data, calls, historyState } = await runPagination(initial, streams, {
+    historyReceiverUnavailable: true
+  });
+  assert.equal(data.records.length, review.records.length);
+  assert.equal(data.audit.length, review.audit.length);
+  assert.equal(historyState.page, null);
+  assert.equal(historyState.receiverUnavailable, true);
+  assert.deepEqual(
+    calls.filter(call => call.operation === 'historyPage'),
+    [{ operation: 'historyPage', viewToken: VIEW_TOKEN, offset: 0 }]
+  );
+
+  const nodes = renderStaffTimeRuntime(data, {
+    historyPage: null,
+    historyReceiverUnavailable: true
+  });
+  assert.match(
+    elementText(nodes['#staffCompletedShiftHistory']),
+    /temporarily unavailable until the matching Staff Clock receiver is active/u
+  );
+  assert.equal(nodes['#staffTimeOlderHistory'].hidden, true);
+  assert.equal(nodes['#staffTimeHistoryScope'].textContent, 'History requires the matching receiver release.');
+
+  const canonical = {
+    status: 502,
+    data: {
+      ok: false,
+      code: 'STAFF_TIME_HISTORYPAGE_REJECTED',
+      message: 'Staff time history page did not return a complete readable confirmation. Success is not being reported.'
+    }
+  };
+  assert.equal(historyUnavailableErrorAccepted(canonical), true);
+  for (const nearMiss of [
+    { ...canonical, status: 504 },
+    { ...canonical, data: { ...canonical.data, ok: true } },
+    { ...canonical, data: { ...canonical.data, code: 'STAFF_TIME_HISTORYPAGE_FAILED' } },
+    { ...canonical, data: { ...canonical.data, message: 'Different failure.' } },
+    { ...canonical, data: { ...canonical.data, extra: true } },
+    { ...canonical, data: { ok: false, code: canonical.data.code } }
+  ]) assert.equal(historyUnavailableErrorAccepted(nearMiss), false);
+});
+
 test('rendering covers all review collections with safe Admin-added, VOID, totals, and audit labels', () => {
   const renderSource = sourceBetween(adminHtml, 'function renderStaffTimeRecords(', 'function newStaffUuid(');
   for (const field of [
@@ -1551,6 +1648,7 @@ test('Staff Time records keep a seven-day priority view while bounded completed-
   );
   assert.match(loadOlderSource, /currentStaffHistoryPage\.nextOffset/u);
   assert.match(loadOlderSource, /currentStaffHistoryPage = page/u);
+  assert.doesNotMatch(loadOlderSource, /validStaffTimeHistoryUnavailableError/u);
   assert.match(adminHtml, /\$\('#staffTimeOlderHistory'\)\.addEventListener\('click', loadOlderStaffTimeHistory\)/u);
 });
 
