@@ -131,6 +131,7 @@ function makeSheet(initialRows = []) {
   let maxRows = Math.max(1000, values.length);
   let frozenRows = 0;
   let dataRangeReads = 0;
+  let rangeValueReads = 0;
   return {
     values,
     operations,
@@ -147,6 +148,7 @@ function makeSheet(initialRows = []) {
       return { getValues: () => values.map(row => [...row]) };
     },
     get dataRangeReads() { return dataRangeReads; },
+    get rangeValueReads() { return rangeValueReads; },
     getLastRow() { return values.length; },
     getLastColumn() {
       let last = 0;
@@ -158,6 +160,7 @@ function makeSheet(initialRows = []) {
     getRange(startRow, startColumn, rowCount, columnCount) {
       return {
         getValues() {
+          rangeValueReads += 1;
           return Array.from({ length: rowCount }, (_, rowOffset) => (
             Array.from({ length: columnCount }, (_, columnOffset) => (
               values[startRow - 1 + rowOffset]?.[startColumn - 1 + columnOffset] ?? ''
@@ -413,6 +416,7 @@ function createHarness({
   }));
   const cacheValues = new Map();
   let cachePeakSize = 0;
+  let spreadsheetRevision = Date.parse('2026-08-18T12:00:00-04:00');
   function cachePut(key, value) {
     cacheValues.delete(key);
     cacheValues.set(key, String(value));
@@ -432,10 +436,15 @@ function createHarness({
       getScriptCache: () => ({
         get: key => cacheValues.has(key) ? cacheValues.get(key) : null,
         put: cachePut,
-        remove(key) { cacheValues.delete(key); }
+        remove(key) { cacheValues.delete(key); },
+        removeAll(keys) { keys.forEach(key => cacheValues.delete(key)); }
       })
     },
     DriveApp: {
+      getFileById: id => {
+        assert.equal(id, 'unit-test-spreadsheet-id');
+        return { getLastUpdated: () => new Date(spreadsheetRevision) };
+      },
       getFilesByName: () => {
         let read = false;
         return {
@@ -472,7 +481,11 @@ function createHarness({
     Utilities: {
       Charset: { UTF_8: 'UTF_8' },
       DigestAlgorithm: { SHA_256: 'SHA_256' },
-      base64EncodeWebSafe: bytes => Buffer.from(bytes.map(value => value < 0 ? value + 256 : value)).toString('base64url'),
+      base64EncodeWebSafe: bytes => {
+        assert.ok(bytes.every(value => Number.isInteger(value) && value >= -128 && value <= 127));
+        return Buffer.from(bytes.map(value => value < 0 ? value + 256 : value)).toString('base64url');
+      },
+      base64DecodeWebSafe: value => [...Buffer.from(String(value), 'base64url')],
       computeDigest: (_algorithm, value) => [...createHash('sha256').update(String(value)).digest()],
       computeHmacSha256Signature: () => [],
       formatDate,
@@ -511,6 +524,7 @@ function createHarness({
       return vmContext.GIB_M1_TEST_HISTORY_SERIALIZATION_COUNT_ || 0;
     },
     get spreadsheetOpens() { return spreadsheetOpens; },
+    touchSpreadsheet() { spreadsheetRevision += 1; },
     post(body) {
       const result = vmContext.doPost({ postData: { contents: JSON.stringify(body) } });
       return JSON.parse(result.text);
@@ -1827,7 +1841,8 @@ test('Admin completed-shift history is bounded, paired, read-only, pageable, and
       'clockIn',
       'Correct retained TEST shift start',
       'adjusted'
-    ]]
+    ]],
+    historyWindowPageLimit: 2
   });
   const originalSheets = new Map(
     [...harness.sheets].map(([name, sheet]) => [name, structuredClone(sheet.values)])
@@ -1840,11 +1855,12 @@ test('Admin completed-shift history is bounded, paired, read-only, pageable, and
   ));
   assert.deepEqual(
     Object.keys(historyManifest.history).sort(),
-    ['digest', 'total'],
+    ['digest', 'indexDigest', 'total'],
     'the manifest binds only bounded history metadata'
   );
   assert.equal(historyManifest.history.total, 601);
   assert.match(historyManifest.history.digest, /^[a-f0-9]{64}$/);
+  assert.match(historyManifest.history.indexDigest, /^[a-f0-9]{64}$/);
   const timeReadsAfterReview = harness.sheets.get('Staff Time').dataRangeReads;
   const adjustmentReadsAfterReview = harness.sheets.get('Staff Time Adjustments').dataRangeReads;
   const first = readStaffHistoryPage(harness, review.initial.view.token, 0);
@@ -1899,74 +1915,85 @@ test('Admin completed-shift history is bounded, paired, read-only, pageable, and
     { ok: false, target: 'test', result: 'rejected' }
   );
 
-  harness.cacheValues.delete('gib-m1-staff-v2-history-window-page-1');
-  const recovered = readStaffHistoryPage(
+  const restarted = readStaffHistoryPage(harness, review.initial.view.token, 0);
+  readStaffHistoryPage(
     harness,
     review.initial.view.token,
-    first.page.nextOffset
+    restarted.page.nextOffset
   );
-  assert.equal(recovered.page.offset, first.page.nextOffset);
-  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, timeReadsAfterReview + 1);
+  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, timeReadsAfterReview);
   assert.equal(
     harness.sheets.get('Staff Time Adjustments').dataRangeReads,
-    adjustmentReadsAfterReview + 1
+    adjustmentReadsAfterReview
   );
-  const readsAfterRecovery = harness.sheets.get('Staff Time').dataRangeReads;
-  const adjustmentReadsAfterRecovery = harness.sheets.get('Staff Time Adjustments').dataRangeReads;
-  readStaffHistoryPage(harness, review.initial.view.token, recovered.page.nextOffset);
-  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, readsAfterRecovery);
-  assert.equal(
-    harness.sheets.get('Staff Time Adjustments').dataRangeReads,
-    adjustmentReadsAfterRecovery
-  );
-  const activeWindow = JSON.parse(
-    harness.cacheValues.get('gib-m1-staff-v2-history-window')
-  );
-  const recoveredEntry = activeWindow.pages.find(entry => (
-    entry.offset === recovered.page.offset
-  ));
-  const recoveredKey = `gib-m1-staff-v2-history-window-page-${recoveredEntry.slot}`;
-  const alteredPage = JSON.parse(harness.cacheValues.get(recoveredKey));
-  alteredPage.items[0].clockIn.note = 'parseable cache alteration';
-  harness.cacheValues.set(recoveredKey, JSON.stringify(alteredPage));
+  harness.cacheValues.delete('gib-m1-staff-v2-history-window-page-1');
   assert.deepEqual(
     harness.post(adminBody('staffTimeHistoryPageV2', {
       viewToken: review.initial.view.token,
-      offset: recovered.page.offset
+      offset: first.page.nextOffset
+    })),
+    { ok: false, target: 'test', result: 'stale' },
+    'a missing cached page fails closed instead of replaying all retained history'
+  );
+  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, timeReadsAfterReview);
+  assert.equal(
+    harness.sheets.get('Staff Time Adjustments').dataRangeReads,
+    adjustmentReadsAfterReview
+  );
+
+  const rebuilt = readPagedStaffView(harness, { admin: true });
+  assert.equal(rebuilt.initial.view.token, review.initial.view.token);
+  const activeWindow = JSON.parse(
+    harness.cacheValues.get('gib-m1-staff-v2-history-window')
+  );
+  const firstEntry = activeWindow.pages.find(entry => (
+    entry.offset === first.page.offset
+  ));
+  const firstKey = `gib-m1-staff-v2-history-window-page-${firstEntry.slot}`;
+  const alteredPage = JSON.parse(harness.cacheValues.get(firstKey));
+  alteredPage.items[0].clockIn.note = 'parseable cache alteration';
+  harness.cacheValues.set(firstKey, JSON.stringify(alteredPage));
+  const readsBeforeTamper = harness.sheets.get('Staff Time').dataRangeReads;
+  const adjustmentReadsBeforeTamper = harness.sheets.get('Staff Time Adjustments').dataRangeReads;
+  assert.deepEqual(
+    harness.post(adminBody('staffTimeHistoryPageV2', {
+      viewToken: review.initial.view.token,
+      offset: first.page.offset
     })),
     { ok: false, target: 'test', result: 'stale' },
     'a valid-shape page with a digest mismatch fails closed'
   );
-  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, readsAfterRecovery);
+  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, readsBeforeTamper);
   assert.equal(
     harness.sheets.get('Staff Time Adjustments').dataRangeReads,
-    adjustmentReadsAfterRecovery
+    adjustmentReadsBeforeTamper
   );
 
-  const rebuilt = readPagedStaffView(harness, { admin: true });
-
-  harness.sheets.get('Staff Time').values.push(
-    timeRow({
-      punchId: generatedPunchId(120_002),
-      timestamp: '2026-08-18T20:00:00-04:00',
-      action: 'clockIn'
-    }),
-    timeRow({
-      punchId: generatedPunchId(120_003),
-      timestamp: '2026-08-18T21:00:00-04:00',
-      action: 'clockOut'
-    })
-  );
+  const changedView = readPagedStaffView(harness, { admin: true });
+  const timeReadsBeforeSourceEdit = harness.sheets.get('Staff Time').dataRangeReads;
+  const adjustmentReadsBeforeSourceEdit = harness.sheets.get('Staff Time Adjustments').dataRangeReads;
+  harness.sheets.get('Staff Time Adjustments').values[1][12]
+    = 'Revised retained TEST shift reason';
+  harness.touchSpreadsheet();
   assert.deepEqual(
     harness.post(adminBody('staffTimeHistoryPageV2', {
-      viewToken: rebuilt.initial.view.token,
+      viewToken: changedView.initial.view.token,
       offset: 0
     })),
     {
       ok: false,
       target: 'test',
       result: 'stale'
-    }
+    },
+    'an in-place adjustment edit changes the source revision and invalidates the old token'
+  );
+  assert.equal(
+    harness.sheets.get('Staff Time').dataRangeReads,
+    timeReadsBeforeSourceEdit
+  );
+  assert.equal(
+    harness.sheets.get('Staff Time Adjustments').dataRangeReads,
+    adjustmentReadsBeforeSourceEdit
   );
 });
 
@@ -2036,10 +2063,16 @@ test('completed-shift history rotates fixed cache windows and reaches retained h
     timestamp: '2026-06-01T10:00:00-04:00',
     action: 'clockOut'
   });
+  const ordinaryRows = [oldestClockIn, oldestClockOut, ...yesterdayRows];
+  const sparseRows = ordinaryRows.flatMap((row, index) => (
+    index === ordinaryRows.length - 1
+      ? [row]
+      : [row, Array(TIME_HEADERS.length).fill('')]
+  ));
   const harness = createHarness({
-    timeRows: [oldestClockIn, oldestClockOut, ...yesterdayRows],
+    timeRows: sparseRows,
     adjustmentRows: [],
-    cacheCapacity: 8,
+    cacheCapacity: 20,
     historyWindowPageLimit: 2,
     instrumentHistorySerialization: true
   });
@@ -2049,29 +2082,30 @@ test('completed-shift history rotates fixed cache windows and reaches retained h
   assert.ok(initialWindowSerializations > 0);
   const token = review.initial.view.token;
   const clockInIds = [];
-  const serializationDeltas = [];
+  const timeReadsAfterReview = harness.sheets.get('Staff Time').dataRangeReads;
+  const adjustmentReadsAfterReview = harness.sheets.get('Staff Time Adjustments').dataRangeReads;
   let offset = 0;
   let pageIndex = 0;
-  let rebuildCount = 0;
   while (offset !== null) {
-    const timeReadsBefore = harness.sheets.get('Staff Time').dataRangeReads;
-    const adjustmentReadsBefore = harness.sheets.get('Staff Time Adjustments').dataRangeReads;
-    const serializationsBefore = harness.historySerializationCount;
+    const directReadsBefore = harness.sheets.get('Staff Time').rangeValueReads
+      + harness.sheets.get('Staff Time Adjustments').rangeValueReads;
     const { page } = readStaffHistoryPage(harness, token, offset);
-    serializationDeltas.push(
-      harness.historySerializationCount - serializationsBefore
+    const directReadDelta = harness.sheets.get('Staff Time').rangeValueReads
+      + harness.sheets.get('Staff Time Adjustments').rangeValueReads
+      - directReadsBefore;
+    assert.ok(
+      directReadDelta <= 26,
+      `page ${pageIndex + 1} stays within 24 targeted row spans plus two header reads`
     );
-    const expectedRebuild = pageIndex > 0 && pageIndex % 2 === 0 ? 1 : 0;
-    rebuildCount += expectedRebuild;
     assert.equal(
       harness.sheets.get('Staff Time').dataRangeReads,
-      timeReadsBefore + expectedRebuild,
-      `page ${pageIndex + 1} scans Staff Time only when entering a new window`
+      timeReadsAfterReview,
+      `page ${pageIndex + 1} never rescans all of Staff Time`
     );
     assert.equal(
       harness.sheets.get('Staff Time Adjustments').dataRangeReads,
-      adjustmentReadsBefore + expectedRebuild,
-      `page ${pageIndex + 1} scans adjustments only when entering a new window`
+      adjustmentReadsAfterReview,
+      `page ${pageIndex + 1} never rescans all adjustments`
     );
     assert.ok(page.items.length > 0 && page.items.length <= 50);
     assert.ok(page.items.every(shift => (
@@ -2093,34 +2127,41 @@ test('completed-shift history rotates fixed cache windows and reaches retained h
       'only the active index and its fixed page slots remain cached'
     );
     assert.ok(activeWindow.pages.length > 0 && activeWindow.pages.length <= 2);
-    assert.ok(harness.cacheValues.size <= 8, 'the synthetic shared cache stays within capacity');
+    assert.ok(harness.cacheValues.size <= 20, 'the synthetic shared cache stays within capacity');
     offset = page.nextOffset;
     pageIndex += 1;
   }
-  assert.equal(pageIndex, 7);
-  assert.equal(rebuildCount, 3);
-  assert.deepEqual(
-    serializationDeltas.slice(0, 6),
-    [0, 0, initialWindowSerializations, 0, initialWindowSerializations, 0],
-    'each full sequential replacement serializes only its two new pages'
-  );
-  assert.ok(
-    serializationDeltas[6] > 0
-    && serializationDeltas[6] < initialWindowSerializations,
-    'the final one-page replacement performs less work than a full window'
-  );
+  assert.ok(pageIndex > 7, 'sparse retained rows paginate without exceeding the read-call cap');
   assert.equal(clockInIds.length, 301);
   assert.equal(new Set(clockInIds).size, 301, 'window rotation introduces no gap or duplicate');
   assert.equal(clockInIds.at(-1), oldestClockIn[0], 'the oldest retained shift remains reachable');
 
-  readStaffHistoryPage(harness, token, 0);
+  const readsBeforeRestart = harness.sheets.get('Staff Time').dataRangeReads;
+  const restarted = readStaffHistoryPage(harness, token, 0);
+  assert.equal(restarted.page.offset, 0);
+  assert.equal(
+    harness.sheets.get('Staff Time').dataRangeReads,
+    readsBeforeRestart,
+    'restarting at page zero uses the bounded index without a full history scan'
+  );
+  const restartedNext = readStaffHistoryPage(
+    harness,
+    token,
+    restarted.page.nextOffset
+  );
+  assert.equal(restartedNext.page.offset, restarted.page.nextOffset);
+  assert.equal(
+    harness.sheets.get('Staff Time').dataRangeReads,
+    readsBeforeRestart,
+    'paging continues from the restarted bounded window without a full history scan'
+  );
   let safetyWindow = JSON.parse(
     harness.cacheValues.get('gib-m1-staff-v2-history-window')
   );
   let finalEntry = safetyWindow.pages.at(-1);
   let finalKey = `gib-m1-staff-v2-history-window-page-${finalEntry.slot}`;
   let finalPage = JSON.parse(harness.cacheValues.get(finalKey));
-  assert.equal(finalPage.nextOffset, 100);
+  assert.equal(finalPage.nextOffset, restartedNext.page.nextOffset);
   let readsBeforeUnsafeContinuation = harness.sheets.get('Staff Time').dataRangeReads;
   harness.cacheValues.set(finalKey, '{malformed-json');
   assert.deepEqual(
@@ -2166,24 +2207,21 @@ test('completed-shift history rotates fixed cache windows and reaches retained h
   finalPage = JSON.parse(harness.cacheValues.get(finalKey));
   harness.cacheValues.delete(finalKey);
   const readsBeforeMissingContinuation = harness.sheets.get('Staff Time').dataRangeReads;
-  const serializationsBeforeMissingContinuation = harness.historySerializationCount;
-  const recoveredContinuation = readStaffHistoryPage(
-    harness,
-    token,
-    finalPage.nextOffset
+  assert.deepEqual(
+    harness.post(adminBody('staffTimeHistoryPageV2', {
+      viewToken: token,
+      offset: finalPage.nextOffset
+    })),
+    { ok: false, target: 'test', result: 'stale' },
+    'a missing final page cannot authorize a direct continuation'
   );
-  assert.equal(recoveredContinuation.page.offset, finalPage.nextOffset);
   assert.equal(
     harness.sheets.get('Staff Time').dataRangeReads,
-    readsBeforeMissingContinuation + 1,
-    'a missing final page safely falls back to one authoritative rebuild'
-  );
-  assert.ok(
-    harness.historySerializationCount - serializationsBeforeMissingContinuation
-      > initialWindowSerializations,
-    'an unverified missing continuation retains full canonical replay'
+    readsBeforeMissingContinuation
   );
 
+  restored = readPagedStaffView(harness, { admin: true });
+  assert.equal(restored.initial.view.token, token);
   const windowBeforeInvalidOffset = harness.cacheValues.get('gib-m1-staff-v2-history-window');
   assert.deepEqual(
     harness.post(adminBody('staffTimeHistoryPageV2', { viewToken: token, offset: 1 })),
@@ -2220,7 +2258,7 @@ test('completed-shift history rotates fixed cache windows and reaches retained h
     3,
     'a new token retires rather than accumulates history-window keys'
   );
-  assert.ok(harness.cachePeakSize <= 8);
+  assert.ok(harness.cachePeakSize <= 20);
 });
 
 test('500-record projection keeps interleaved adjusted pairs atomic for kiosk and Admin views', () => {

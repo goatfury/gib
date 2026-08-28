@@ -306,6 +306,7 @@ function createHarness({
   const sheetWriteEvents = [];
   const propertyWriteEvents = [];
   const cacheValues = new Map();
+  const spreadsheetRevision = Date.parse('2026-08-19T12:00:00-04:00');
   const recordSheetWrite = operation => sheetWriteEvents.push(operation);
   let signins = initialRows === null ? null : makeSheet(initialRows, recordSheetWrite);
   const sheets = new Map();
@@ -359,10 +360,15 @@ function createHarness({
       getScriptCache: () => ({
         get: key => cacheValues.get(key) || null,
         put(key, value) { cacheValues.set(key, String(value)); },
-        remove(key) { cacheValues.delete(key); }
+        remove(key) { cacheValues.delete(key); },
+        removeAll(keys) { keys.forEach(key => cacheValues.delete(key)); }
       })
     },
     DriveApp: {
+      getFileById(id) {
+        assert.equal(id, spreadsheetId);
+        return { getLastUpdated: () => new Date(spreadsheetRevision) };
+      },
       getFilesByName(title) {
         driveQueries += 1;
         assert.equal(title, EXPECTED_TITLE);
@@ -417,15 +423,21 @@ function createHarness({
       Charset: { UTF_8: 'UTF_8' },
       DigestAlgorithm: { SHA_256: 'SHA_256' },
       base64EncodeWebSafe(bytes) {
+        assert.ok(bytes.every(value => Number.isInteger(value) && value >= -128 && value <= 127));
         return Buffer.from(bytes.map(value => value < 0 ? value + 256 : value)).toString('base64url');
+      },
+      base64DecodeWebSafe(value) {
+        return [...Buffer.from(String(value), 'base64url')];
       },
       computeDigest(_algorithm, value, charset) {
         assert.equal(charset, 'UTF_8');
-        return [...createHash('sha256').update(String(value), 'utf8').digest()];
+        return [...createHash('sha256').update(String(value), 'utf8').digest()]
+          .map(byte => byte > 127 ? byte - 256 : byte);
       },
       computeHmacSha256Signature(value, secret, charset) {
         assert.equal(charset, 'UTF_8');
-        return [...createHmac('sha256', String(secret)).update(String(value), 'utf8').digest()];
+        return [...createHmac('sha256', String(secret)).update(String(value), 'utf8').digest()]
+          .map(byte => byte > 127 ? byte - 256 : byte);
       },
       newBlob(value) {
         return {

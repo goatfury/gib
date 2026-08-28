@@ -76,6 +76,10 @@ var GIB_M1_STAFF_ATTENTION_LIMIT_ = 600;
 var GIB_M1_STAFF_PAGE_SIZE_ = 500;
 var GIB_M1_STAFF_HISTORY_PAGE_SIZE_ = 50;
 var GIB_M1_STAFF_HISTORY_WINDOW_PAGE_LIMIT_ = 64;
+var GIB_M1_STAFF_HISTORY_INDEX_CHUNK_LIMIT_ = 64;
+var GIB_M1_STAFF_HISTORY_INDEX_CHUNK_SHIFT_LIMIT_ = 5600;
+var GIB_M1_STAFF_HISTORY_INDEX_ROW_MAX_ = 0xfffff;
+var GIB_M1_STAFF_HISTORY_RANGE_READ_LIMIT_ = 24;
 var GIB_M1_STAFF_PAGE_MAX_BYTES_ = 80000;
 var GIB_M1_STAFF_HISTORY_PAGE_MAX_BYTES_ = 79000;
 var GIB_M1_STAFF_CACHE_MAX_BYTES_ = 90000;
@@ -2233,6 +2237,64 @@ function staffClockPublicRecord_(record) {
   return value;
 }
 
+function staffClockTimeRecordFromRow_(row, sheetRow, staffState, byId) {
+  if (!staffClockPopulatedRow_(row)) return null;
+  var punchId = safeExactText_(row[0], 160, false);
+  var timestamp = staffClockTimestamp_(row[1]);
+  var date = exactText_(row[2]);
+  var staffId = safeExactText_(row[3], 80, false);
+  var staffName = safeExactText_(row[4], 100, false);
+  var action = staffClockStoredAction_(row[5]);
+  var site = safeExactText_(row[6], 80, false);
+  var device = safeText_(row[7], 120, false);
+  var build = safeText_(row[8], 120, false);
+  var note = safeExactText_(row[9], 400, true);
+  var status = exactText_(row[10]);
+  var recordSource = exactText_(row[11]);
+  var adminName = safeText_(row[12], 80, true);
+  var linkedPunchId = safeExactText_(row[13], 160, true);
+  var roster = staffState.byId[staffId];
+  if (
+    !punchId
+    || !GIB_M1_STAFF_PUNCH_ID_PATTERN_.test(punchId)
+    || byId[punchId]
+    || !timestamp
+    || !validCalendarDate_(date)
+    || date !== timestamp.slice(0, 10)
+    || !roster
+    || staffName !== roster.staffName
+    || !action
+    || !site
+    || !device
+    || !build
+    || (status !== 'ACTIVE' && status !== 'VOID')
+    || (recordSource !== 'Tablet' && recordSource !== 'Admin-added')
+    || (recordSource === 'Tablet' && adminName)
+    || (recordSource === 'Admin-added' && GIB_M1_ADMIN_NAMES_.indexOf(adminName) === -1)
+    || (linkedPunchId && !GIB_M1_STAFF_PUNCH_ID_PATTERN_.test(linkedPunchId))
+  ) {
+    throw new Error('Staff Time contains an invalid or duplicate row.');
+  }
+  return {
+    sheetRow: sheetRow,
+    punchId: punchId,
+    timestamp: timestamp,
+    timestampMs: Date.parse(timestamp),
+    date: date,
+    staffId: staffId,
+    staffName: staffName,
+    action: action,
+    site: site,
+    device: device,
+    build: build,
+    note: note,
+    status: status,
+    source: recordSource,
+    adminName: adminName,
+    linkedPunchId: linkedPunchId
+  };
+}
+
 function staffClockReadTime_(spreadsheet, staffState) {
   var configuration = staffClockDeploymentConfiguration_();
   if (!configuration) {
@@ -2246,63 +2308,10 @@ function staffClockReadTime_(spreadsheet, staffState) {
   var records = [];
   var byId = {};
   source.values.slice(1).forEach(function(row, offset) {
-    if (!staffClockPopulatedRow_(row)) return;
-    var punchId = safeExactText_(row[0], 160, false);
-    var timestamp = staffClockTimestamp_(row[1]);
-    var date = exactText_(row[2]);
-    var staffId = safeExactText_(row[3], 80, false);
-    var staffName = safeExactText_(row[4], 100, false);
-    var action = staffClockStoredAction_(row[5]);
-    var site = safeExactText_(row[6], 80, false);
-    var device = safeText_(row[7], 120, false);
-    var build = safeText_(row[8], 120, false);
-    var note = safeExactText_(row[9], 400, true);
-    var status = exactText_(row[10]);
-    var recordSource = exactText_(row[11]);
-    var adminName = safeText_(row[12], 80, true);
-    var linkedPunchId = safeExactText_(row[13], 160, true);
-    var roster = staffState.byId[staffId];
-    if (
-      !punchId
-      || !GIB_M1_STAFF_PUNCH_ID_PATTERN_.test(punchId)
-      || byId[punchId]
-      || !timestamp
-      || !validCalendarDate_(date)
-      || date !== timestamp.slice(0, 10)
-      || !roster
-      || staffName !== roster.staffName
-      || !action
-      || !site
-      || !device
-      || !build
-      || (status !== 'ACTIVE' && status !== 'VOID')
-      || (recordSource !== 'Tablet' && recordSource !== 'Admin-added')
-      || (recordSource === 'Tablet' && adminName)
-      || (recordSource === 'Admin-added' && GIB_M1_ADMIN_NAMES_.indexOf(adminName) === -1)
-      || (linkedPunchId && !GIB_M1_STAFF_PUNCH_ID_PATTERN_.test(linkedPunchId))
-    ) {
-      throw new Error('Staff Time contains an invalid or duplicate row.');
-    }
-    var record = {
-      sheetRow: offset + 2,
-      punchId: punchId,
-      timestamp: timestamp,
-      timestampMs: Date.parse(timestamp),
-      date: date,
-      staffId: staffId,
-      staffName: staffName,
-      action: action,
-      site: site,
-      device: device,
-      build: build,
-      note: note,
-      status: status,
-      source: recordSource,
-      adminName: adminName,
-      linkedPunchId: linkedPunchId
-    };
+    var record = staffClockTimeRecordFromRow_(row, offset + 2, staffState, byId);
+    if (!record) return;
     records.push(record);
-    byId[punchId] = record;
+    byId[record.punchId] = record;
   });
   return { sheet: source.sheet, records: records, byId: byId };
 }
@@ -2490,6 +2499,92 @@ function staffClockAdjustmentChange_(value) {
   return changedIn && changedOut ? 'both' : changedIn ? 'clockIn' : changedOut ? 'clockOut' : '';
 }
 
+function staffClockAdjustmentRecordFromRow_(
+  row,
+  sheetRow,
+  staffState,
+  timeState,
+  byRequestId,
+  requireLinkedRecords
+) {
+  if (!staffClockPopulatedRow_(row)) return null;
+  var requestId = safeExactText_(row[0], 180, false);
+  var actionTime = staffClockTimestamp_(row[1]);
+  var adminName = safeText_(row[2], 80, false);
+  var staffId = safeExactText_(row[3], 80, false);
+  var staffName = safeExactText_(row[4], 100, false);
+  var clockInPunchId = safeExactText_(row[5], 160, false);
+  var clockOutPunchId = safeExactText_(row[6], 160, false);
+  var originalClockInAt = staffClockTimestamp_(row[7]);
+  var originalClockOutAt = staffClockTimestamp_(row[8]);
+  var correctedClockInAt = staffClockTimestamp_(row[9]);
+  var correctedClockOutAt = staffClockTimestamp_(row[10]);
+  var changed = exactText_(row[11]);
+  var reason = safeExactText_(row[12], GIB_M1_AUDIT_REASON_MAX_, false);
+  var result = exactText_(row[13]);
+  var roster = staffState.byId[staffId];
+  var clockIn = timeState && timeState.byId
+    ? timeState.byId[clockInPunchId]
+    : null;
+  var clockOut = timeState && timeState.byId
+    ? timeState.byId[clockOutPunchId]
+    : null;
+  var value = {
+    requestId: requestId,
+    actionTime: actionTime,
+    adminName: adminName,
+    staffId: staffId,
+    staffName: staffName,
+    clockInPunchId: clockInPunchId,
+    clockOutPunchId: clockOutPunchId,
+    originalClockInAt: originalClockInAt,
+    originalClockOutAt: originalClockOutAt,
+    correctedClockInAt: correctedClockInAt,
+    correctedClockOutAt: correctedClockOutAt,
+    changed: changed,
+    reason: reason,
+    result: result
+  };
+  var elapsed = Date.parse(correctedClockOutAt) - Date.parse(correctedClockInAt);
+  if (
+    !GIB_M1_STAFF_REQUEST_ID_PATTERN_.test(requestId)
+    || byRequestId[requestId]
+    || !actionTime
+    || GIB_M1_ADMIN_NAMES_.indexOf(adminName) === -1
+    || !roster
+    || staffName !== roster.staffName
+    || !GIB_M1_STAFF_PUNCH_ID_PATTERN_.test(clockInPunchId)
+    || !GIB_M1_STAFF_PUNCH_ID_PATTERN_.test(clockOutPunchId)
+    || clockInPunchId === clockOutPunchId
+    || !originalClockInAt
+    || !originalClockOutAt
+    || !correctedClockInAt
+    || !correctedClockOutAt
+    || Date.parse(originalClockOutAt) <= Date.parse(originalClockInAt)
+    || elapsed <= 0
+    || elapsed > GIB_M1_STAFF_MAX_SHIFT_MS_
+    || (changed !== 'clockIn' && changed !== 'clockOut' && changed !== 'both')
+    || staffClockAdjustmentChange_(value) !== changed
+    || reason.length < 3
+    || result !== 'adjusted'
+    || (
+      requireLinkedRecords
+      && (
+        !clockIn
+        || !clockOut
+        || clockIn.staffId !== staffId
+        || clockOut.staffId !== staffId
+        || clockIn.action !== 'clockIn'
+        || clockOut.action !== 'clockOut'
+      )
+    )
+  ) {
+    throw new Error('Staff Time Adjustments contains an invalid or duplicate row.');
+  }
+  value.sheetRow = sheetRow;
+  return value;
+}
+
 function staffClockAdjustmentSheetState_(spreadsheet, staffState, timeState, createIfMissing) {
   var configuration = staffClockDeploymentConfiguration_();
   if (!configuration) throw new Error('Staff Clock is not configured for this deployment.');
@@ -2516,74 +2611,17 @@ function staffClockAdjustmentSheetState_(spreadsheet, staffState, timeState, cre
   var records = [];
   var byRequestId = {};
   values.slice(1).forEach(function(row, offset) {
-    if (!staffClockPopulatedRow_(row)) return;
-    var requestId = safeExactText_(row[0], 180, false);
-    var actionTime = staffClockTimestamp_(row[1]);
-    var adminName = safeText_(row[2], 80, false);
-    var staffId = safeExactText_(row[3], 80, false);
-    var staffName = safeExactText_(row[4], 100, false);
-    var clockInPunchId = safeExactText_(row[5], 160, false);
-    var clockOutPunchId = safeExactText_(row[6], 160, false);
-    var originalClockInAt = staffClockTimestamp_(row[7]);
-    var originalClockOutAt = staffClockTimestamp_(row[8]);
-    var correctedClockInAt = staffClockTimestamp_(row[9]);
-    var correctedClockOutAt = staffClockTimestamp_(row[10]);
-    var changed = exactText_(row[11]);
-    var reason = safeExactText_(row[12], GIB_M1_AUDIT_REASON_MAX_, false);
-    var result = exactText_(row[13]);
-    var roster = staffState.byId[staffId];
-    var clockIn = timeState.byId[clockInPunchId];
-    var clockOut = timeState.byId[clockOutPunchId];
-    var value = {
-      requestId: requestId,
-      actionTime: actionTime,
-      adminName: adminName,
-      staffId: staffId,
-      staffName: staffName,
-      clockInPunchId: clockInPunchId,
-      clockOutPunchId: clockOutPunchId,
-      originalClockInAt: originalClockInAt,
-      originalClockOutAt: originalClockOutAt,
-      correctedClockInAt: correctedClockInAt,
-      correctedClockOutAt: correctedClockOutAt,
-      changed: changed,
-      reason: reason,
-      result: result
-    };
-    var elapsed = Date.parse(correctedClockOutAt) - Date.parse(correctedClockInAt);
-    if (
-      !GIB_M1_STAFF_REQUEST_ID_PATTERN_.test(requestId)
-      || byRequestId[requestId]
-      || !actionTime
-      || GIB_M1_ADMIN_NAMES_.indexOf(adminName) === -1
-      || !roster
-      || staffName !== roster.staffName
-      || !GIB_M1_STAFF_PUNCH_ID_PATTERN_.test(clockInPunchId)
-      || !GIB_M1_STAFF_PUNCH_ID_PATTERN_.test(clockOutPunchId)
-      || clockInPunchId === clockOutPunchId
-      || !clockIn
-      || !clockOut
-      || clockIn.staffId !== staffId
-      || clockOut.staffId !== staffId
-      || clockIn.action !== 'clockIn'
-      || clockOut.action !== 'clockOut'
-      || !originalClockInAt
-      || !originalClockOutAt
-      || !correctedClockInAt
-      || !correctedClockOutAt
-      || Date.parse(originalClockOutAt) <= Date.parse(originalClockInAt)
-      || elapsed <= 0
-      || elapsed > GIB_M1_STAFF_MAX_SHIFT_MS_
-      || (changed !== 'clockIn' && changed !== 'clockOut' && changed !== 'both')
-      || staffClockAdjustmentChange_(value) !== changed
-      || reason.length < 3
-      || result !== 'adjusted'
-    ) {
-      throw new Error('Staff Time Adjustments contains an invalid or duplicate row.');
-    }
-    value.sheetRow = offset + 2;
+    var value = staffClockAdjustmentRecordFromRow_(
+      row,
+      offset + 2,
+      staffState,
+      timeState,
+      byRequestId,
+      true
+    );
+    if (!value) return;
     records.push(value);
-    byRequestId[requestId] = value;
+    byRequestId[value.requestId] = value;
   });
   return { sheet: sheet, records: records, byRequestId: byRequestId };
 }
@@ -3227,10 +3265,29 @@ function staffClockOptionalSheetLastRow_(spreadsheet, name, expectedHeaders) {
   return staffClockSheetLastRow_(spreadsheet, name, expectedHeaders);
 }
 
+function staffClockSpreadsheetRevision_(spreadsheet) {
+  var updated = DriveApp.getFileById(spreadsheet.getId()).getLastUpdated();
+  var revision = updated && typeof updated.getTime === 'function'
+    ? updated.getTime()
+    : NaN;
+  if (!isFinite(revision) || revision < 0) {
+    throw new Error('Staff Clock spreadsheet revision is unavailable.');
+  }
+  return revision;
+}
+
+function staffClockViewStateStillCurrent_(state) {
+  return state.sourceRevision === 0
+    || staffClockSpreadsheetRevision_(state.spreadsheet) === state.sourceRevision;
+}
+
 function staffClockViewState_(body, includeAdmin) {
   var spreadsheet = openExpectedSpreadsheet_(body);
   var configuration = staffClockDeploymentConfiguration_();
   if (!configuration) throw new Error('Staff Clock is not configured for this deployment.');
+  var sourceRevision = includeAdmin
+    ? staffClockSpreadsheetRevision_(spreadsheet)
+    : 0;
   var staffState = staffClockStaffState_(spreadsheet);
   var today = todayNewYork_();
   var target = requestTarget_(body);
@@ -3263,6 +3320,7 @@ function staffClockViewState_(body, includeAdmin) {
     mode,
     today,
     rosterHash,
+    sourceRevision,
     timeLastRow,
     auditLastRow,
     adjustmentLastRow
@@ -3273,6 +3331,7 @@ function staffClockViewState_(body, includeAdmin) {
     target: target,
     mode: mode,
     today: today,
+    sourceRevision: sourceRevision,
     signature: signature
   };
 }
@@ -3299,6 +3358,14 @@ function staffClockCacheHistoryWindowKey_() {
 
 function staffClockCacheHistoryPageKey_(slot) {
   return 'gib-m1-staff-v2-history-window-page-' + slot;
+}
+
+function staffClockCacheHistoryIndexKey_() {
+  return 'gib-m1-staff-v2-history-index';
+}
+
+function staffClockCacheHistoryIndexChunkKey_(slot) {
+  return 'gib-m1-staff-v2-history-index-chunk-' + slot;
 }
 
 function staffClockCacheReadJson_(cache, key) {
@@ -3329,12 +3396,13 @@ function staffClockManifestMatches_(manifest, state, token) {
     && manifest.token === token
     && manifest.summaryKey === staffClockCacheSummaryKey_(state.signature)
     && staffClockExactKeys_(manifest.streams, ['records', 'attention', 'audit'])
-    && staffClockExactKeys_(manifest.history, ['total', 'digest'])
+    && staffClockExactKeys_(manifest.history, ['total', 'digest', 'indexDigest'])
     && typeof manifest.history.total === 'number'
     && isFinite(manifest.history.total)
     && Math.floor(manifest.history.total) === manifest.history.total
     && manifest.history.total >= 0
-    && GIB_M1_STAFF_VIEW_TOKEN_PATTERN_.test(manifest.history.digest);
+    && GIB_M1_STAFF_VIEW_TOKEN_PATTERN_.test(manifest.history.digest)
+    && GIB_M1_STAFF_VIEW_TOKEN_PATTERN_.test(manifest.history.indexDigest);
 }
 
 function staffClockInvalidateCachedView_(cache, manifest) {
@@ -3436,6 +3504,7 @@ function staffClockBuildView_(state, includeAdmin) {
   var relevantAudit = [];
   var publicAudit = [];
   var publicHistory = [];
+  var historyIndex = staffClockBuildHistoryIndexPlan_([], adjustmentState);
   if (includeAdmin) {
     var auditState = staffClockReadAudit_(spreadsheet, staffState, rawTimeState);
     relevantAudit = staffClockRelevantAudit_(auditState, relevantRecords)
@@ -3448,9 +3517,11 @@ function staffClockBuildView_(state, includeAdmin) {
         ? staffClockPublicAdjustment_(record)
         : staffClockPublicAudit_(record);
     });
-    publicHistory = staffClockSortedCompletedShifts_(analysis).map(function(shift) {
+    var completedHistory = staffClockSortedCompletedShifts_(analysis);
+    publicHistory = completedHistory.map(function(shift) {
       return staffClockPublicCompletedShift_(shift, adjustmentState);
     });
+    historyIndex = staffClockBuildHistoryIndexPlan_(completedHistory, adjustmentState);
   }
   var historyDigest = staffClockSha256Hex_(JSON.stringify(publicHistory));
   var todayPunchTotal = relevantRecords.filter(function(record) {
@@ -3500,7 +3571,8 @@ function staffClockBuildView_(state, includeAdmin) {
   ];
   if (includeAdmin) canonical.push(publicAudit, {
     total: publicHistory.length,
-    digest: historyDigest
+    digest: historyDigest,
+    indexDigest: historyIndex.digest
   });
   var token = staffClockSha256Hex_(JSON.stringify(canonical));
   if (!GIB_M1_STAFF_VIEW_TOKEN_PATTERN_.test(token)) {
@@ -3525,7 +3597,8 @@ function staffClockBuildView_(state, includeAdmin) {
     },
     history: {
       items: publicHistory,
-      digest: historyDigest
+      digest: historyDigest,
+      index: historyIndex
     }
   };
 }
@@ -3548,14 +3621,20 @@ function staffClockReadPagedSummary_(body, includeAdmin) {
       staffClockCacheManifestKey_(cached.summary.view.token)
     );
     if (staffClockManifestMatches_(cachedManifest, state, cached.summary.view.token)) {
-      return cached.summary;
+      if (staffClockViewStateStillCurrent_(state)) return cached.summary;
+      staffClockInvalidateCachedView_(cache, cachedManifest);
     }
-    staffClockInvalidateCachedView_(cache, cachedManifest || {
-      summaryKey: summaryKey,
-      token: cached.summary.view.token
-    });
+    if (staffClockCacheReadJson_(cache, summaryKey)) {
+      staffClockInvalidateCachedView_(cache, cachedManifest || {
+        summaryKey: summaryKey,
+        token: cached.summary.view.token
+      });
+    }
   }
   var built = staffClockBuildView_(state, includeAdmin);
+  if (!staffClockViewStateStillCurrent_(state)) {
+    throw new Error('Staff Clock changed during review. Please retry.');
+  }
   staffClockCacheBuiltView_(cache, state, built);
   return built.summary;
 }
@@ -3671,6 +3750,136 @@ function staffClockSortedCompletedShifts_(analysis) {
   });
 }
 
+function staffClockHistoryAdjustmentRow_(record, adjustmentState) {
+  if (!record.adjustmentRequestId) return 0;
+  var adjustment = adjustmentState.byRequestId[record.adjustmentRequestId];
+  if (
+    !adjustment
+    || typeof adjustment.sheetRow !== 'number'
+    || Math.floor(adjustment.sheetRow) !== adjustment.sheetRow
+    || adjustment.sheetRow < 2
+    || adjustment.sheetRow > GIB_M1_STAFF_HISTORY_INDEX_ROW_MAX_
+  ) {
+    throw new Error('Staff Clock history adjustment index is invalid.');
+  }
+  return adjustment.sheetRow;
+}
+
+function staffClockHistoryDescriptor_(shift, adjustmentState) {
+  var descriptor = [
+    shift.clockIn.sheetRow,
+    shift.clockOut.sheetRow,
+    staffClockHistoryAdjustmentRow_(shift.clockIn, adjustmentState),
+    staffClockHistoryAdjustmentRow_(shift.clockOut, adjustmentState)
+  ];
+  if (descriptor.some(function(value, index) {
+    return typeof value !== 'number'
+      || !isFinite(value)
+      || Math.floor(value) !== value
+      || value < (index < 2 ? 2 : 0)
+      || value > GIB_M1_STAFF_HISTORY_INDEX_ROW_MAX_;
+  })) {
+    throw new Error('Staff Clock history row index exceeds the safe bound.');
+  }
+  return descriptor;
+}
+
+function staffClockPackHistoryDescriptors_(descriptors) {
+  var bytes = [];
+  descriptors.forEach(function(descriptor) {
+    var first = descriptor[0];
+    var second = descriptor[1];
+    var third = descriptor[2];
+    var fourth = descriptor[3];
+    bytes.push(
+      (first >>> 12) & 255,
+      (first >>> 4) & 255,
+      ((first & 15) << 4) | ((second >>> 16) & 15),
+      (second >>> 8) & 255,
+      second & 255,
+      (third >>> 12) & 255,
+      (third >>> 4) & 255,
+      ((third & 15) << 4) | ((fourth >>> 16) & 15),
+      (fourth >>> 8) & 255,
+      fourth & 255
+    );
+  });
+  return Utilities.base64EncodeWebSafe(bytes.map(function(value) {
+    return value > 127 ? value - 256 : value;
+  }));
+}
+
+function staffClockUnpackHistoryDescriptors_(data, expectedCount) {
+  if (typeof data !== 'string' || !data) return null;
+  var bytes;
+  try {
+    bytes = Utilities.base64DecodeWebSafe(data).map(function(value) {
+      return value < 0 ? value + 256 : value;
+    });
+  } catch (error) {
+    return null;
+  }
+  if (bytes.length !== expectedCount * 10) return null;
+  var descriptors = [];
+  for (var offset = 0; offset < bytes.length; offset += 10) {
+    descriptors.push([
+      (bytes[offset] << 12)
+        | (bytes[offset + 1] << 4)
+        | (bytes[offset + 2] >>> 4),
+      ((bytes[offset + 2] & 15) << 16)
+        | (bytes[offset + 3] << 8)
+        | bytes[offset + 4],
+      (bytes[offset + 5] << 12)
+        | (bytes[offset + 6] << 4)
+        | (bytes[offset + 7] >>> 4),
+      ((bytes[offset + 7] & 15) << 16)
+        | (bytes[offset + 8] << 8)
+        | bytes[offset + 9]
+    ]);
+  }
+  return descriptors;
+}
+
+function staffClockBuildHistoryIndexPlan_(shifts, adjustmentState) {
+  var descriptors = shifts.map(function(shift) {
+    return staffClockHistoryDescriptor_(shift, adjustmentState);
+  });
+  var chunks = [];
+  for (
+    var startOffset = 0;
+    startOffset < descriptors.length;
+    startOffset += GIB_M1_STAFF_HISTORY_INDEX_CHUNK_SHIFT_LIMIT_
+  ) {
+    if (chunks.length >= GIB_M1_STAFF_HISTORY_INDEX_CHUNK_LIMIT_) {
+      throw new Error('Staff Clock history index exceeds the safe chunk bound.');
+    }
+    var slice = descriptors.slice(
+      startOffset,
+      startOffset + GIB_M1_STAFF_HISTORY_INDEX_CHUNK_SHIFT_LIMIT_
+    );
+    var data = staffClockPackHistoryDescriptors_(slice);
+    chunks.push({
+      slot: chunks.length,
+      startOffset: startOffset,
+      count: slice.length,
+      digest: staffClockSha256Hex_(data),
+      data: data
+    });
+  }
+  var metadata = chunks.map(function(chunk) {
+    return {
+      slot: chunk.slot,
+      startOffset: chunk.startOffset,
+      count: chunk.count,
+      digest: chunk.digest
+    };
+  });
+  return {
+    digest: staffClockSha256Hex_(JSON.stringify(metadata)),
+    chunks: chunks
+  };
+}
+
 function staffClockHistoryPageEnvelope_(target, request, shifts, itemCount) {
   var items = shifts.slice(request.offset, request.offset + itemCount);
   var nextOffset = request.offset + items.length;
@@ -3740,7 +3949,8 @@ function staffClockHistoryWindowShapeValid_(window) {
   if (
     !window
     || !staffClockExactKeys_(window, [
-      'signature', 'target', 'mode', 'token', 'total', 'digest', 'startOffset', 'pages'
+      'signature', 'target', 'mode', 'token', 'total', 'digest', 'indexDigest',
+      'startOffset', 'pages'
     ])
     || !GIB_M1_STAFF_VIEW_TOKEN_PATTERN_.test(window.signature)
     || typeof window.target !== 'string'
@@ -3751,6 +3961,7 @@ function staffClockHistoryWindowShapeValid_(window) {
     || Math.floor(window.total) !== window.total
     || window.total < 0
     || !GIB_M1_STAFF_VIEW_TOKEN_PATTERN_.test(window.digest)
+    || !GIB_M1_STAFF_VIEW_TOKEN_PATTERN_.test(window.indexDigest)
     || typeof window.startOffset !== 'number'
     || !isFinite(window.startOffset)
     || Math.floor(window.startOffset) !== window.startOffset
@@ -3824,14 +4035,438 @@ function staffClockBuildHistoryWindow_(
 }
 
 function staffClockRetireHistoryWindow_(cache) {
-  cache.remove(staffClockCacheHistoryWindowKey_());
+  var keys = [staffClockCacheHistoryWindowKey_()];
   for (
     var slot = 0;
     slot < GIB_M1_STAFF_HISTORY_WINDOW_PAGE_LIMIT_;
     slot += 1
   ) {
-    cache.remove(staffClockCacheHistoryPageKey_(slot));
+    keys.push(staffClockCacheHistoryPageKey_(slot));
   }
+  cache.removeAll(keys);
+}
+
+function staffClockRetireHistoryIndex_(cache) {
+  var keys = [staffClockCacheHistoryIndexKey_()];
+  for (
+    var slot = 0;
+    slot < GIB_M1_STAFF_HISTORY_INDEX_CHUNK_LIMIT_;
+    slot += 1
+  ) {
+    keys.push(staffClockCacheHistoryIndexChunkKey_(slot));
+  }
+  cache.removeAll(keys);
+}
+
+function staffClockCacheHistoryIndex_(cache, state, token, history) {
+  var chunks = history.index.chunks;
+  if (chunks.length > GIB_M1_STAFF_HISTORY_INDEX_CHUNK_LIMIT_) {
+    throw new Error('Staff Clock history index exceeds the safe chunk bound.');
+  }
+  staffClockRetireHistoryIndex_(cache);
+  var metadata = [];
+  chunks.forEach(function(chunk) {
+    var entry = {
+      slot: chunk.slot,
+      startOffset: chunk.startOffset,
+      count: chunk.count,
+      digest: chunk.digest
+    };
+    staffClockCachePutJson_(
+      cache,
+      staffClockCacheHistoryIndexChunkKey_(chunk.slot),
+      {
+        signature: state.signature,
+        target: state.target,
+        mode: 'admin',
+        token: token,
+        total: history.items.length,
+        indexDigest: history.index.digest,
+        slot: chunk.slot,
+        startOffset: chunk.startOffset,
+        count: chunk.count,
+        data: chunk.data
+      }
+    );
+    metadata.push(entry);
+  });
+  if (staffClockSha256Hex_(JSON.stringify(metadata)) !== history.index.digest) {
+    throw new Error('Staff Clock history index digest does not match.');
+  }
+  staffClockCachePutJson_(cache, staffClockCacheHistoryIndexKey_(), {
+    signature: state.signature,
+    target: state.target,
+    mode: 'admin',
+    token: token,
+    total: history.items.length,
+    digest: history.digest,
+    indexDigest: history.index.digest,
+    chunks: metadata
+  });
+}
+
+function staffClockHistoryIndexMatches_(index, state, request, manifest) {
+  if (
+    !index
+    || !staffClockExactKeys_(index, [
+      'signature', 'target', 'mode', 'token', 'total', 'digest', 'indexDigest',
+      'chunks'
+    ])
+    || index.signature !== state.signature
+    || index.target !== state.target
+    || index.mode !== 'admin'
+    || index.token !== request.viewToken
+    || index.total !== manifest.history.total
+    || index.digest !== manifest.history.digest
+    || index.indexDigest !== manifest.history.indexDigest
+    || !Array.isArray(index.chunks)
+    || index.chunks.length > GIB_M1_STAFF_HISTORY_INDEX_CHUNK_LIMIT_
+    || index.chunks.length !== Math.ceil(
+      index.total / GIB_M1_STAFF_HISTORY_INDEX_CHUNK_SHIFT_LIMIT_
+    )
+  ) return false;
+  var metadata = [];
+  for (var slot = 0; slot < index.chunks.length; slot += 1) {
+    var entry = index.chunks[slot];
+    var expectedStart = slot * GIB_M1_STAFF_HISTORY_INDEX_CHUNK_SHIFT_LIMIT_;
+    var expectedCount = Math.min(
+      GIB_M1_STAFF_HISTORY_INDEX_CHUNK_SHIFT_LIMIT_,
+      index.total - expectedStart
+    );
+    if (
+      !staffClockExactKeys_(entry, ['slot', 'startOffset', 'count', 'digest'])
+      || entry.slot !== slot
+      || entry.startOffset !== expectedStart
+      || entry.count !== expectedCount
+      || !GIB_M1_STAFF_VIEW_TOKEN_PATTERN_.test(entry.digest)
+    ) return false;
+    metadata.push(entry);
+  }
+  return staffClockSha256Hex_(JSON.stringify(metadata)) === index.indexDigest;
+}
+
+function staffClockReadHistoryDescriptors_(cache, index, request, count) {
+  if (count < 0 || count > GIB_M1_STAFF_HISTORY_PAGE_SIZE_) return null;
+  if (request.offset + count > index.total) return null;
+  if (count === 0) return [];
+  var firstSlot = Math.floor(
+    request.offset / GIB_M1_STAFF_HISTORY_INDEX_CHUNK_SHIFT_LIMIT_
+  );
+  var lastSlot = Math.floor(
+    (request.offset + count - 1) / GIB_M1_STAFF_HISTORY_INDEX_CHUNK_SHIFT_LIMIT_
+  );
+  var descriptors = [];
+  for (var slot = firstSlot; slot <= lastSlot; slot += 1) {
+    var entry = index.chunks[slot];
+    if (!entry) return null;
+    var chunk = staffClockCacheReadJson_(
+      cache,
+      staffClockCacheHistoryIndexChunkKey_(slot)
+    );
+    if (
+      !chunk
+      || !staffClockExactKeys_(chunk, [
+        'signature', 'target', 'mode', 'token', 'total', 'indexDigest', 'slot',
+        'startOffset', 'count', 'data'
+      ])
+      || chunk.signature !== index.signature
+      || chunk.target !== index.target
+      || chunk.mode !== 'admin'
+      || chunk.token !== index.token
+      || chunk.total !== index.total
+      || chunk.indexDigest !== index.indexDigest
+      || chunk.slot !== entry.slot
+      || chunk.startOffset !== entry.startOffset
+      || chunk.count !== entry.count
+      || staffClockSha256Hex_(chunk.data) !== entry.digest
+    ) return null;
+    var unpacked = staffClockUnpackHistoryDescriptors_(chunk.data, chunk.count);
+    if (!unpacked) return null;
+    var localStart = Math.max(request.offset, chunk.startOffset) - chunk.startOffset;
+    var localEnd = Math.min(
+      request.offset + count,
+      chunk.startOffset + chunk.count
+    ) - chunk.startOffset;
+    descriptors = descriptors.concat(unpacked.slice(localStart, localEnd));
+  }
+  return descriptors.length === count ? descriptors : null;
+}
+
+function staffClockHistoryRowSpanCount_(rowNumbers) {
+  var unique = {};
+  rowNumbers.forEach(function(rowNumber) { unique[rowNumber] = true; });
+  var ordered = Object.keys(unique).map(Number).sort(function(left, right) {
+    return left - right;
+  });
+  var spans = 0;
+  var previous = -1;
+  ordered.forEach(function(rowNumber) {
+    if (rowNumber !== previous + 1) spans += 1;
+    previous = rowNumber;
+  });
+  return spans;
+}
+
+function staffClockBoundHistoryDescriptorReads_(descriptors) {
+  var accepted = [];
+  var timeRows = [];
+  var adjustmentRows = [];
+  for (var index = 0; index < descriptors.length; index += 1) {
+    var descriptor = descriptors[index];
+    var candidateTimeRows = timeRows.concat(descriptor[0], descriptor[1]);
+    var candidateAdjustmentRows = adjustmentRows.slice();
+    if (descriptor[2]) candidateAdjustmentRows.push(descriptor[2]);
+    if (descriptor[3]) candidateAdjustmentRows.push(descriptor[3]);
+    if (
+      staffClockHistoryRowSpanCount_(candidateTimeRows)
+        + staffClockHistoryRowSpanCount_(candidateAdjustmentRows)
+        > GIB_M1_STAFF_HISTORY_RANGE_READ_LIMIT_
+    ) break;
+    accepted.push(descriptor);
+    timeRows = candidateTimeRows;
+    adjustmentRows = candidateAdjustmentRows;
+  }
+  return accepted;
+}
+
+function staffClockReadExactSheetRows_(sheet, rowNumbers, columnCount) {
+  var unique = {};
+  var lastRow = sheet.getLastRow();
+  rowNumbers.forEach(function(rowNumber) {
+    if (
+      typeof rowNumber !== 'number'
+      || !isFinite(rowNumber)
+      || Math.floor(rowNumber) !== rowNumber
+      || rowNumber < 2
+      || rowNumber > GIB_M1_STAFF_HISTORY_INDEX_ROW_MAX_
+      || rowNumber > lastRow
+    ) {
+      throw new Error('Staff Clock history row reference is invalid.');
+    }
+    unique[rowNumber] = true;
+  });
+  var ordered = Object.keys(unique).map(Number).sort(function(left, right) {
+    return left - right;
+  });
+  var byRow = {};
+  var index = 0;
+  while (index < ordered.length) {
+    var start = ordered[index];
+    var end = start;
+    while (index + 1 < ordered.length && ordered[index + 1] === end + 1) {
+      index += 1;
+      end = ordered[index];
+    }
+    var values = sheet.getRange(start, 1, end - start + 1, columnCount).getValues();
+    values.forEach(function(row, offset) {
+      byRow[start + offset] = row;
+    });
+    index += 1;
+  }
+  return byRow;
+}
+
+function staffClockHistoryEffectiveRecord_(record, adjustment, expectedAction) {
+  var value = {};
+  Object.keys(record).forEach(function(key) { value[key] = record[key]; });
+  if (!adjustment) return value;
+  var isClockIn = expectedAction === 'clockIn';
+  var linkedPunchId = isClockIn
+    ? adjustment.clockInPunchId
+    : adjustment.clockOutPunchId;
+  var correctedTimestamp = isClockIn
+    ? adjustment.correctedClockInAt
+    : adjustment.correctedClockOutAt;
+  if (
+    record.action !== expectedAction
+    || linkedPunchId !== record.punchId
+    || adjustment.staffId !== record.staffId
+    || adjustment.staffName !== record.staffName
+    || !correctedTimestamp
+  ) {
+    throw new Error('Staff Clock history adjustment reference does not match.');
+  }
+  value.originalTimestamp = record.timestamp;
+  value.originalDate = record.date;
+  value.adjustmentRequestId = adjustment.requestId;
+  value.timestamp = correctedTimestamp;
+  value.timestampMs = Date.parse(correctedTimestamp);
+  value.date = correctedTimestamp.slice(0, 10);
+  return value;
+}
+
+function staffClockMaterializeHistoryItems_(state, descriptors) {
+  var configuration = staffClockDeploymentConfiguration_();
+  if (!configuration) {
+    throw new Error('Staff Clock is not configured for this deployment.');
+  }
+  var timeSheet = state.spreadsheet.getSheetByName(configuration.timeSheet);
+  if (!timeSheet) throw new Error(configuration.timeSheet + ' tab is missing.');
+  var timeRowNumbers = [];
+  var adjustmentRowNumbers = [];
+  descriptors.forEach(function(descriptor) {
+    if (
+      !Array.isArray(descriptor)
+      || descriptor.length !== 4
+      || descriptor.some(function(value, index) {
+        return typeof value !== 'number'
+          || !isFinite(value)
+          || Math.floor(value) !== value
+          || value < (index < 2 ? 2 : 0)
+          || value > GIB_M1_STAFF_HISTORY_INDEX_ROW_MAX_;
+      })
+    ) {
+      throw new Error('Staff Clock history descriptor is invalid.');
+    }
+    timeRowNumbers.push(descriptor[0], descriptor[1]);
+    if (descriptor[2]) adjustmentRowNumbers.push(descriptor[2]);
+    if (descriptor[3]) adjustmentRowNumbers.push(descriptor[3]);
+  });
+  var rawTimeRows = staffClockReadExactSheetRows_(
+    timeSheet,
+    timeRowNumbers,
+    configuration.timeHeaders.length
+  );
+  var timeById = {};
+  var timeByRow = {};
+  Object.keys(rawTimeRows).map(Number).sort(function(left, right) {
+    return left - right;
+  }).forEach(function(sheetRow) {
+    var record = staffClockTimeRecordFromRow_(
+      rawTimeRows[sheetRow],
+      sheetRow,
+      state.staffState,
+      timeById
+    );
+    if (!record) throw new Error('Staff Clock history references an empty punch row.');
+    timeById[record.punchId] = record;
+    timeByRow[sheetRow] = record;
+  });
+
+  var adjustmentByRow = {};
+  var adjustmentByRequestId = {};
+  if (adjustmentRowNumbers.length) {
+    var adjustmentSheet = state.spreadsheet.getSheetByName(configuration.adjustmentSheet);
+    if (!adjustmentSheet) {
+      throw new Error(configuration.adjustmentSheet + ' tab is missing.');
+    }
+    var rawAdjustmentRows = staffClockReadExactSheetRows_(
+      adjustmentSheet,
+      adjustmentRowNumbers,
+      configuration.adjustmentHeaders.length
+    );
+    Object.keys(rawAdjustmentRows).map(Number).sort(function(left, right) {
+      return left - right;
+    }).forEach(function(sheetRow) {
+      var adjustment = staffClockAdjustmentRecordFromRow_(
+        rawAdjustmentRows[sheetRow],
+        sheetRow,
+        state.staffState,
+        null,
+        adjustmentByRequestId,
+        false
+      );
+      if (!adjustment) {
+        throw new Error('Staff Clock history references an empty adjustment row.');
+      }
+      adjustmentByRequestId[adjustment.requestId] = adjustment;
+      adjustmentByRow[sheetRow] = adjustment;
+    });
+  }
+
+  var usedPunchIds = {};
+  return descriptors.map(function(descriptor) {
+    var rawClockIn = timeByRow[descriptor[0]];
+    var rawClockOut = timeByRow[descriptor[1]];
+    var clockInAdjustment = descriptor[2]
+      ? adjustmentByRow[descriptor[2]]
+      : null;
+    var clockOutAdjustment = descriptor[3]
+      ? adjustmentByRow[descriptor[3]]
+      : null;
+    if (
+      !rawClockIn
+      || !rawClockOut
+      || usedPunchIds[rawClockIn.punchId]
+      || usedPunchIds[rawClockOut.punchId]
+      || rawClockIn.status !== 'ACTIVE'
+      || rawClockOut.status !== 'ACTIVE'
+      || rawClockIn.action !== 'clockIn'
+      || rawClockOut.action !== 'clockOut'
+      || rawClockIn.staffId !== rawClockOut.staffId
+      || rawClockIn.staffName !== rawClockOut.staffName
+    ) {
+      throw new Error('Staff Clock history pair reference does not match.');
+    }
+    var clockIn = staffClockHistoryEffectiveRecord_(
+      rawClockIn,
+      clockInAdjustment,
+      'clockIn'
+    );
+    var clockOut = staffClockHistoryEffectiveRecord_(
+      rawClockOut,
+      clockOutAdjustment,
+      'clockOut'
+    );
+    if (clockOut.timestampMs <= clockIn.timestampMs) {
+      throw new Error('Staff Clock history pair chronology is invalid.');
+    }
+    usedPunchIds[clockIn.punchId] = true;
+    usedPunchIds[clockOut.punchId] = true;
+    return staffClockPublicCompletedShift_(
+      { clockIn: clockIn, clockOut: clockOut },
+      { byRequestId: adjustmentByRequestId }
+    );
+  });
+}
+
+function staffClockMaterializedHistoryPageEnvelope_(
+  target,
+  request,
+  total,
+  items,
+  itemCount
+) {
+  var selected = items.slice(0, itemCount);
+  var nextOffset = request.offset + selected.length;
+  return {
+    ok: true,
+    target: target,
+    viewToken: request.viewToken,
+    offset: request.offset,
+    total: total,
+    items: selected,
+    nextOffset: nextOffset < total ? nextOffset : null
+  };
+}
+
+function staffClockBoundedMaterializedHistoryPage_(target, request, total, items) {
+  if (request.offset > total || items.length > GIB_M1_STAFF_HISTORY_PAGE_SIZE_) {
+    return null;
+  }
+  if (!items.length) {
+    return staffClockMaterializedHistoryPageEnvelope_(target, request, total, items, 0);
+  }
+  var low = 1;
+  var high = items.length;
+  var accepted = null;
+  while (low <= high) {
+    var count = Math.floor((low + high) / 2);
+    var candidate = staffClockMaterializedHistoryPageEnvelope_(
+      target,
+      request,
+      total,
+      items,
+      count
+    );
+    if (staffClockPageByteLength_(candidate) <= GIB_M1_STAFF_HISTORY_PAGE_MAX_BYTES_) {
+      accepted = candidate;
+      low = count + 1;
+    } else {
+      high = count - 1;
+    }
+  }
+  return accepted;
 }
 
 function staffClockCacheReadJsonStatus_(cache, key) {
@@ -3857,7 +4492,7 @@ function staffClockSequentialHistoryContinuation_(
     staffClockCacheHistoryPageKey_(finalEntry.slot)
   );
   if (finalPageRead.status === 'malformed') return 'malformed';
-  if (finalPageRead.status === 'miss') return 'unverified';
+  if (finalPageRead.status === 'miss') return 'missing';
   var finalRequest = {
     viewToken: request.viewToken,
     offset: finalEntry.offset
@@ -3877,6 +4512,7 @@ function staffClockCacheHistoryWindow_(
   token,
   shifts,
   digest,
+  indexDigest,
   startOffset,
   startOffsetVerified
 ) {
@@ -3905,10 +4541,45 @@ function staffClockCacheHistoryWindow_(
     token: token,
     total: shifts.length,
     digest: digest,
+    indexDigest: indexDigest,
     startOffset: startOffset,
     pages: entries
   });
   return pages[0];
+}
+
+function staffClockCacheSequentialHistoryPage_(cache, state, index, window, page) {
+  var pageDigest = staffClockSha256Hex_(JSON.stringify(page));
+  var entries;
+  var slot;
+  var startOffset;
+  var finalEntry = window.pages[window.pages.length - 1];
+  if (
+    window.pages.length >= GIB_M1_STAFF_HISTORY_WINDOW_PAGE_LIMIT_
+    || page.offset <= finalEntry.offset
+  ) {
+    staffClockRetireHistoryWindow_(cache);
+    entries = [];
+    slot = 0;
+    startOffset = page.offset;
+  } else {
+    entries = window.pages.slice();
+    slot = entries.length;
+    startOffset = window.startOffset;
+  }
+  staffClockCachePutJson_(cache, staffClockCacheHistoryPageKey_(slot), page);
+  entries.push({ offset: page.offset, slot: slot, digest: pageDigest });
+  staffClockCachePutJson_(cache, staffClockCacheHistoryWindowKey_(), {
+    signature: state.signature,
+    target: state.target,
+    mode: 'admin',
+    token: index.token,
+    total: index.total,
+    digest: index.digest,
+    indexDigest: index.indexDigest,
+    startOffset: startOffset,
+    pages: entries
+  });
 }
 
 function staffClockCacheBuiltView_(cache, state, built) {
@@ -3923,7 +4594,8 @@ function staffClockCacheBuiltView_(cache, state, built) {
     streams: { records: [], attention: [], audit: [] },
     history: {
       total: built.history.items.length,
-      digest: built.history.digest
+      digest: built.history.digest,
+      indexDigest: built.history.index.digest
     }
   };
   ['records', 'attention', 'audit'].forEach(function(stream) {
@@ -3941,6 +4613,7 @@ function staffClockCacheBuiltView_(cache, state, built) {
     }
   });
   if (state.mode === 'admin') {
+    staffClockCacheHistoryIndex_(cache, state, token, built.history);
     var firstHistoryPage = staffClockCacheHistoryWindow_(
       cache,
       state.signature,
@@ -3948,6 +4621,7 @@ function staffClockCacheBuiltView_(cache, state, built) {
       token,
       built.history.items,
       built.history.digest,
+      built.history.index.digest,
       0,
       true
     );
@@ -4012,6 +4686,10 @@ function staffClockReadPage_(body, includeAdmin) {
     staffClockInvalidateCachedView_(cache, manifest);
     return { ok: false, target: target, result: 'stale' };
   }
+  if (!staffClockViewStateStillCurrent_(state)) {
+    staffClockInvalidateCachedView_(cache, manifest);
+    return { ok: false, target: target, result: 'stale' };
+  }
   return page;
 }
 
@@ -4031,107 +4709,137 @@ function staffClockReadHistoryPage_(body) {
   if (manifest.mode !== 'admin' || request.offset > manifest.history.total) {
     return { ok: false, target: target, result: 'rejected' };
   }
+  var indexRead = staffClockCacheReadJsonStatus_(
+    cache,
+    staffClockCacheHistoryIndexKey_()
+  );
+  if (
+    indexRead.status !== 'hit'
+    || !staffClockHistoryIndexMatches_(indexRead.value, state, request, manifest)
+  ) {
+    staffClockInvalidateCachedView_(cache, manifest);
+    return { ok: false, target: target, result: 'stale' };
+  }
+  var historyIndex = indexRead.value;
   var windowRead = staffClockCacheReadJsonStatus_(
     cache,
     staffClockCacheHistoryWindowKey_()
   );
   if (
-    windowRead.status === 'malformed'
-    || (
-      windowRead.status === 'hit'
-      && !staffClockHistoryWindowShapeValid_(windowRead.value)
-    )
+    windowRead.status !== 'hit'
+    || !staffClockHistoryWindowShapeValid_(windowRead.value)
   ) {
     staffClockInvalidateCachedView_(cache, manifest);
     return { ok: false, target: target, result: 'stale' };
   }
   var window = windowRead.value;
   if (
-    window
-    && window.token === request.viewToken
-    && (
-      window.signature !== state.signature
-      || window.target !== target
-      || window.mode !== 'admin'
-      || window.total !== manifest.history.total
-      || window.digest !== manifest.history.digest
-    )
+    window.token !== request.viewToken
+    || window.signature !== state.signature
+    || window.target !== target
+    || window.mode !== 'admin'
+    || window.total !== manifest.history.total
+    || window.digest !== manifest.history.digest
+    || window.indexDigest !== manifest.history.indexDigest
   ) {
     staffClockInvalidateCachedView_(cache, manifest);
     return { ok: false, target: target, result: 'stale' };
   }
-  var sequentialContinuationVerified = false;
-  if (window && window.token === request.viewToken) {
-    for (var index = 0; index < window.pages.length; index += 1) {
-      var entry = window.pages[index];
-      if (entry.offset !== request.offset) continue;
-      var pageRead = staffClockCacheReadJsonStatus_(
-        cache,
-        staffClockCacheHistoryPageKey_(entry.slot)
-      );
-      if (pageRead.status === 'malformed') {
-        staffClockInvalidateCachedView_(cache, manifest);
-        return { ok: false, target: target, result: 'stale' };
-      }
-      var cachedPage = pageRead.value;
-      if (pageRead.status === 'hit') {
-        if (
-          staffClockSha256Hex_(JSON.stringify(cachedPage)) !== entry.digest
-          || !staffClockHistoryPageMatches_(cachedPage, target, request, manifest)
-        ) {
-          staffClockInvalidateCachedView_(cache, manifest);
-          return { ok: false, target: target, result: 'stale' };
-        }
-        return cachedPage;
-      }
-      break;
+  for (var pageIndex = 0; pageIndex < window.pages.length; pageIndex += 1) {
+    var entry = window.pages[pageIndex];
+    if (entry.offset !== request.offset) continue;
+    var pageRead = staffClockCacheReadJsonStatus_(
+      cache,
+      staffClockCacheHistoryPageKey_(entry.slot)
+    );
+    if (pageRead.status !== 'hit') {
+      staffClockInvalidateCachedView_(cache, manifest);
+      return { ok: false, target: target, result: 'stale' };
     }
-    var continuationStatus = staffClockSequentialHistoryContinuation_(
+    var cachedPage = pageRead.value;
+    if (
+      staffClockSha256Hex_(JSON.stringify(cachedPage)) !== entry.digest
+      || !staffClockHistoryPageMatches_(cachedPage, target, request, manifest)
+    ) {
+      staffClockInvalidateCachedView_(cache, manifest);
+      return { ok: false, target: target, result: 'stale' };
+    }
+    if (!staffClockViewStateStillCurrent_(state)) {
+      staffClockInvalidateCachedView_(cache, manifest);
+      return { ok: false, target: target, result: 'stale' };
+    }
+    return cachedPage;
+  }
+  var continuationStatus = request.offset === 0
+    ? 'verified'
+    : staffClockSequentialHistoryContinuation_(
       cache,
       window,
       target,
       request,
       manifest
     );
-    if (continuationStatus === 'malformed') {
-      staffClockInvalidateCachedView_(cache, manifest);
-      return { ok: false, target: target, result: 'stale' };
-    }
-    sequentialContinuationVerified = continuationStatus === 'verified';
+  if (continuationStatus === 'malformed' || continuationStatus === 'missing') {
+    staffClockInvalidateCachedView_(cache, manifest);
+    return { ok: false, target: target, result: 'stale' };
+  }
+  if (continuationStatus !== 'verified') {
+    return { ok: false, target: target, result: 'rejected' };
   }
 
-  var rebuilt = staffClockBuildView_(state, true);
+  var descriptorCount = Math.min(
+    GIB_M1_STAFF_HISTORY_PAGE_SIZE_,
+    manifest.history.total - request.offset
+  );
+  var descriptors = staffClockReadHistoryDescriptors_(
+    cache,
+    historyIndex,
+    request,
+    descriptorCount
+  );
+  if (!descriptors) {
+    staffClockInvalidateCachedView_(cache, manifest);
+    return { ok: false, target: target, result: 'stale' };
+  }
+  descriptors = staffClockBoundHistoryDescriptorReads_(descriptors);
+  if (!descriptors.length && descriptorCount > 0) {
+    staffClockInvalidateCachedView_(cache, manifest);
+    return { ok: false, target: target, result: 'stale' };
+  }
+  var items;
+  try {
+    items = staffClockMaterializeHistoryItems_(state, descriptors);
+  } catch (error) {
+    staffClockInvalidateCachedView_(cache, manifest);
+    return { ok: false, target: target, result: 'stale' };
+  }
+  var materializedPage = staffClockBoundedMaterializedHistoryPage_(
+    target,
+    request,
+    manifest.history.total,
+    items
+  );
   if (
-    rebuilt.summary.view.token !== request.viewToken
-    || rebuilt.history.items.length !== manifest.history.total
-    || rebuilt.history.digest !== manifest.history.digest
+    !materializedPage
+    || !staffClockHistoryPageMatches_(materializedPage, target, request, manifest)
+    || !staffClockViewStateStillCurrent_(state)
   ) {
     staffClockInvalidateCachedView_(cache, manifest);
     return { ok: false, target: target, result: 'stale' };
   }
-  var rebuiltPage = staffClockCacheHistoryWindow_(
+  staffClockCacheSequentialHistoryPage_(
     cache,
-    state.signature,
-    target,
-    request.viewToken,
-    rebuilt.history.items,
-    rebuilt.history.digest,
-    request.offset,
-    sequentialContinuationVerified
+    state,
+    historyIndex,
+    window,
+    materializedPage
   );
-  if (!rebuiltPage) {
-    return { ok: false, target: target, result: 'rejected' };
-  }
-  if (!staffClockHistoryPageMatches_(rebuiltPage, target, request, manifest)) {
-    staffClockInvalidateCachedView_(cache, manifest);
-    return { ok: false, target: target, result: 'stale' };
-  }
   staffClockCachePutJson_(
     cache,
     staffClockCacheManifestKey_(request.viewToken),
     manifest
   );
-  return rebuiltPage;
+  return materializedPage;
 }
 
 function staffClockWithLock_(busyMessage, callback) {
