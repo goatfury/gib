@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xhtml="http://www.w3.org/1999/xhtml" width="100%" height="100%" style="width:100vw;height:100vh;background:#07101c">
+  <foreignObject x="0" y="0" width="100%" height="100%">
+    <xhtml:body style="margin:0;width:100%;height:100%;overflow:hidden;background:#07101c">
+      <xhtml:div id="loading" style="display:grid;place-items:center;width:100%;height:100%;color:#f4f7ff;font:16px system-ui;opacity:.72">Loading Atlas Recall…</xhtml:div>
+      <xhtml:iframe id="app" title="Atlas Recall" style="display:none;border:0;width:100%;height:100%"></xhtml:iframe>
+    </xhtml:body>
+  </foreignObject>
+  <script type="application/ecmascript"><![CDATA[
+    const parts=["part-00.b64","part-01.b64","part-02.b64","part-03.b64","part-04.b64","part-05a.b64","part-05b.b64","part-05c.b64","part-06.b64"];
+    Promise.all(parts.map(p=>fetch(p,{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(p);return r.text()}))).then(async xs=>{
+      const raw=atob(xs.join(''));
+      const bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));
+      const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+      const html=await new Response(stream).text();
+      const frame=document.getElementById('app');
+      frame.srcdoc=html;
+      frame.onload=()=>{document.getElementById('loading').style.display='none';frame.style.display='block'};
+    }).catch(e=>document.getElementById('loading').textContent='Preview failed to load: '+e);
+  ]]></script>
+</svg>
