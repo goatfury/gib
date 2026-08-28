@@ -367,7 +367,8 @@ function createHarness({
   lockAvailable = true,
   nowIso = NOW_ISO,
   cacheCapacity = Number.POSITIVE_INFINITY,
-  historyWindowPageLimit = 64
+  historyWindowPageLimit = 64,
+  instrumentHistorySerialization = false
 } = {}) {
   class FixedDate extends Date {
     constructor(...args) { super(...(args.length ? args : [nowIso])); }
@@ -482,6 +483,22 @@ function createHarness({
   vm.runInContext(codeSource, vmContext, { filename: 'Code.gs' });
   vm.runInContext(receiverSource, vmContext, { filename: 'GibM1Receiver.gs' });
   vmContext.GIB_M1_STAFF_HISTORY_WINDOW_PAGE_LIMIT_ = historyWindowPageLimit;
+  if (instrumentHistorySerialization) {
+    vm.runInContext(`
+      var GIB_M1_TEST_HISTORY_SERIALIZATION_COUNT_ = 0;
+      var gibM1OriginalStaffClockHistoryPageEnvelopeForTest_
+        = staffClockHistoryPageEnvelope_;
+      staffClockHistoryPageEnvelope_ = function(target, request, shifts, itemCount) {
+        GIB_M1_TEST_HISTORY_SERIALIZATION_COUNT_ += 1;
+        return gibM1OriginalStaffClockHistoryPageEnvelopeForTest_(
+          target,
+          request,
+          shifts,
+          itemCount
+        );
+      };
+    `, vmContext);
+  }
   return {
     apps: vmContext,
     sheets,
@@ -490,6 +507,9 @@ function createHarness({
     properties,
     cacheValues,
     get cachePeakSize() { return cachePeakSize; },
+    get historySerializationCount() {
+      return vmContext.GIB_M1_TEST_HISTORY_SERIALIZATION_COUNT_ || 0;
+    },
     get spreadsheetOpens() { return spreadsheetOpens; },
     post(body) {
       const result = vmContext.doPost({ postData: { contents: JSON.stringify(body) } });
@@ -2020,19 +2040,27 @@ test('completed-shift history rotates fixed cache windows and reaches retained h
     timeRows: [oldestClockIn, oldestClockOut, ...yesterdayRows],
     adjustmentRows: [],
     cacheCapacity: 8,
-    historyWindowPageLimit: 2
+    historyWindowPageLimit: 2,
+    instrumentHistorySerialization: true
   });
 
   const review = readPagedStaffView(harness, { admin: true });
+  const initialWindowSerializations = harness.historySerializationCount;
+  assert.ok(initialWindowSerializations > 0);
   const token = review.initial.view.token;
   const clockInIds = [];
+  const serializationDeltas = [];
   let offset = 0;
   let pageIndex = 0;
   let rebuildCount = 0;
   while (offset !== null) {
     const timeReadsBefore = harness.sheets.get('Staff Time').dataRangeReads;
     const adjustmentReadsBefore = harness.sheets.get('Staff Time Adjustments').dataRangeReads;
+    const serializationsBefore = harness.historySerializationCount;
     const { page } = readStaffHistoryPage(harness, token, offset);
+    serializationDeltas.push(
+      harness.historySerializationCount - serializationsBefore
+    );
     const expectedRebuild = pageIndex > 0 && pageIndex % 2 === 0 ? 1 : 0;
     rebuildCount += expectedRebuild;
     assert.equal(
@@ -2071,9 +2099,90 @@ test('completed-shift history rotates fixed cache windows and reaches retained h
   }
   assert.equal(pageIndex, 7);
   assert.equal(rebuildCount, 3);
+  assert.deepEqual(
+    serializationDeltas.slice(0, 6),
+    [0, 0, initialWindowSerializations, 0, initialWindowSerializations, 0],
+    'each full sequential replacement serializes only its two new pages'
+  );
+  assert.ok(
+    serializationDeltas[6] > 0
+    && serializationDeltas[6] < initialWindowSerializations,
+    'the final one-page replacement performs less work than a full window'
+  );
   assert.equal(clockInIds.length, 301);
   assert.equal(new Set(clockInIds).size, 301, 'window rotation introduces no gap or duplicate');
   assert.equal(clockInIds.at(-1), oldestClockIn[0], 'the oldest retained shift remains reachable');
+
+  readStaffHistoryPage(harness, token, 0);
+  let safetyWindow = JSON.parse(
+    harness.cacheValues.get('gib-m1-staff-v2-history-window')
+  );
+  let finalEntry = safetyWindow.pages.at(-1);
+  let finalKey = `gib-m1-staff-v2-history-window-page-${finalEntry.slot}`;
+  let finalPage = JSON.parse(harness.cacheValues.get(finalKey));
+  assert.equal(finalPage.nextOffset, 100);
+  let readsBeforeUnsafeContinuation = harness.sheets.get('Staff Time').dataRangeReads;
+  harness.cacheValues.set(finalKey, '{malformed-json');
+  assert.deepEqual(
+    harness.post(adminBody('staffTimeHistoryPageV2', {
+      viewToken: token,
+      offset: finalPage.nextOffset
+    })),
+    { ok: false, target: 'test', result: 'stale' },
+    'a malformed present final page cannot authorize a direct continuation'
+  );
+  assert.equal(
+    harness.sheets.get('Staff Time').dataRangeReads,
+    readsBeforeUnsafeContinuation
+  );
+
+  let restored = readPagedStaffView(harness, { admin: true });
+  assert.equal(restored.initial.view.token, token);
+  safetyWindow = JSON.parse(harness.cacheValues.get('gib-m1-staff-v2-history-window'));
+  finalEntry = safetyWindow.pages.at(-1);
+  finalKey = `gib-m1-staff-v2-history-window-page-${finalEntry.slot}`;
+  finalPage = JSON.parse(harness.cacheValues.get(finalKey));
+  finalPage.items[0].clockOut.note = 'tampered final continuation';
+  harness.cacheValues.set(finalKey, JSON.stringify(finalPage));
+  readsBeforeUnsafeContinuation = harness.sheets.get('Staff Time').dataRangeReads;
+  assert.deepEqual(
+    harness.post(adminBody('staffTimeHistoryPageV2', {
+      viewToken: token,
+      offset: finalPage.nextOffset
+    })),
+    { ok: false, target: 'test', result: 'stale' },
+    'a digest-mismatched final page cannot authorize a direct continuation'
+  );
+  assert.equal(
+    harness.sheets.get('Staff Time').dataRangeReads,
+    readsBeforeUnsafeContinuation
+  );
+
+  restored = readPagedStaffView(harness, { admin: true });
+  assert.equal(restored.initial.view.token, token);
+  safetyWindow = JSON.parse(harness.cacheValues.get('gib-m1-staff-v2-history-window'));
+  finalEntry = safetyWindow.pages.at(-1);
+  finalKey = `gib-m1-staff-v2-history-window-page-${finalEntry.slot}`;
+  finalPage = JSON.parse(harness.cacheValues.get(finalKey));
+  harness.cacheValues.delete(finalKey);
+  const readsBeforeMissingContinuation = harness.sheets.get('Staff Time').dataRangeReads;
+  const serializationsBeforeMissingContinuation = harness.historySerializationCount;
+  const recoveredContinuation = readStaffHistoryPage(
+    harness,
+    token,
+    finalPage.nextOffset
+  );
+  assert.equal(recoveredContinuation.page.offset, finalPage.nextOffset);
+  assert.equal(
+    harness.sheets.get('Staff Time').dataRangeReads,
+    readsBeforeMissingContinuation + 1,
+    'a missing final page safely falls back to one authoritative rebuild'
+  );
+  assert.ok(
+    harness.historySerializationCount - serializationsBeforeMissingContinuation
+      > initialWindowSerializations,
+    'an unverified missing continuation retains full canonical replay'
+  );
 
   const windowBeforeInvalidOffset = harness.cacheValues.get('gib-m1-staff-v2-history-window');
   assert.deepEqual(

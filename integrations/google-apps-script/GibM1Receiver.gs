@@ -3779,22 +3779,30 @@ function staffClockHistoryWindowShapeValid_(window) {
   return window.pages[0].offset === window.startOffset;
 }
 
-function staffClockBuildHistoryWindow_(target, token, shifts, startOffset) {
-  var offset = 0;
-  while (offset < startOffset) {
-    var precedingPage = staffClockBoundedHistoryPage_(
-      target,
-      { viewToken: token, offset: offset },
-      shifts
-    );
-    if (
-      !precedingPage
-      || precedingPage.nextOffset === null
-      || precedingPage.nextOffset > startOffset
-    ) return null;
-    offset = precedingPage.nextOffset;
+function staffClockBuildHistoryWindow_(
+  target,
+  token,
+  shifts,
+  startOffset,
+  startOffsetVerified
+) {
+  var offset = startOffsetVerified ? startOffset : 0;
+  if (!startOffsetVerified) {
+    while (offset < startOffset) {
+      var precedingPage = staffClockBoundedHistoryPage_(
+        target,
+        { viewToken: token, offset: offset },
+        shifts
+      );
+      if (
+        !precedingPage
+        || precedingPage.nextOffset === null
+        || precedingPage.nextOffset > startOffset
+      ) return null;
+      offset = precedingPage.nextOffset;
+    }
+    if (offset !== startOffset) return null;
   }
-  if (offset !== startOffset) return null;
 
   var pages = [];
   for (
@@ -3836,6 +3844,32 @@ function staffClockCacheReadJsonStatus_(cache, key) {
   }
 }
 
+function staffClockSequentialHistoryContinuation_(
+  cache,
+  window,
+  target,
+  request,
+  manifest
+) {
+  var finalEntry = window.pages[window.pages.length - 1];
+  var finalPageRead = staffClockCacheReadJsonStatus_(
+    cache,
+    staffClockCacheHistoryPageKey_(finalEntry.slot)
+  );
+  if (finalPageRead.status === 'malformed') return 'malformed';
+  if (finalPageRead.status === 'miss') return 'unverified';
+  var finalRequest = {
+    viewToken: request.viewToken,
+    offset: finalEntry.offset
+  };
+  var finalPage = finalPageRead.value;
+  if (
+    staffClockSha256Hex_(JSON.stringify(finalPage)) !== finalEntry.digest
+    || !staffClockHistoryPageMatches_(finalPage, target, finalRequest, manifest)
+  ) return 'malformed';
+  return finalPage.nextOffset === request.offset ? 'verified' : 'unverified';
+}
+
 function staffClockCacheHistoryWindow_(
   cache,
   signature,
@@ -3843,9 +3877,16 @@ function staffClockCacheHistoryWindow_(
   token,
   shifts,
   digest,
-  startOffset
+  startOffset,
+  startOffsetVerified
 ) {
-  var pages = staffClockBuildHistoryWindow_(target, token, shifts, startOffset);
+  var pages = staffClockBuildHistoryWindow_(
+    target,
+    token,
+    shifts,
+    startOffset,
+    startOffsetVerified
+  );
   if (!pages) return null;
   staffClockRetireHistoryWindow_(cache);
   var entries = [];
@@ -3907,7 +3948,8 @@ function staffClockCacheBuiltView_(cache, state, built) {
       token,
       built.history.items,
       built.history.digest,
-      0
+      0,
+      true
     );
     if (!firstHistoryPage) {
       throw new Error('Staff Clock history page exceeds the safe byte bound.');
@@ -4018,6 +4060,7 @@ function staffClockReadHistoryPage_(body) {
     staffClockInvalidateCachedView_(cache, manifest);
     return { ok: false, target: target, result: 'stale' };
   }
+  var sequentialContinuationVerified = false;
   if (window && window.token === request.viewToken) {
     for (var index = 0; index < window.pages.length; index += 1) {
       var entry = window.pages[index];
@@ -4043,6 +4086,18 @@ function staffClockReadHistoryPage_(body) {
       }
       break;
     }
+    var continuationStatus = staffClockSequentialHistoryContinuation_(
+      cache,
+      window,
+      target,
+      request,
+      manifest
+    );
+    if (continuationStatus === 'malformed') {
+      staffClockInvalidateCachedView_(cache, manifest);
+      return { ok: false, target: target, result: 'stale' };
+    }
+    sequentialContinuationVerified = continuationStatus === 'verified';
   }
 
   var rebuilt = staffClockBuildView_(state, true);
@@ -4061,7 +4116,8 @@ function staffClockReadHistoryPage_(body) {
     request.viewToken,
     rebuilt.history.items,
     rebuilt.history.digest,
-    request.offset
+    request.offset,
+    sequentialContinuationVerified
   );
   if (!rebuiltPage) {
     return { ok: false, target: target, result: 'rejected' };
