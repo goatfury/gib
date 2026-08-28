@@ -15,6 +15,7 @@ import {
   deploymentInstallationProfile,
   remoteBackendEnabled,
   remoteScheduleEnabled,
+  staffClockPairingProfile,
   staffClockEnabled
 } from '../netlify/functions/_lib/m1-installation.mjs';
 import { runtimeConfig } from '../netlify/functions/_lib/m1-common.mjs';
@@ -31,6 +32,10 @@ const netlifyConfig = readFileSync(new URL('netlify.toml', ROOT), 'utf8');
 const buildTool = readFileSync(new URL('tools/build-m1-installation-profile.mjs', ROOT), 'utf8');
 const serverProfile = readFileSync(
   new URL('netlify/functions/_lib/m1-installation.generated.mjs', ROOT),
+  'utf8'
+);
+const serverInstallationSource = readFileSync(
+  new URL('netlify/functions/_lib/m1-installation.mjs', ROOT),
   'utf8'
 );
 const PREVIEW_ORIGIN = 'https://deploy-preview-77--gib-live.netlify.app';
@@ -84,8 +89,13 @@ test('Rev stays the exact default while Richmond is a fixed isolated TEST instal
     siteCode: 'Rev',
     deviceLabel: 'Revolution BJJ front desk',
     storagePrefix: 'gib_m1_',
+    allowedOrigin: PRODUCTION_ORIGIN,
     scheduleSource: { mode: 'rev-website', endpoint: '/api/m1-schedule' },
-    featureFlags: { staffClock: true },
+    featureFlags: { staffClock: true, staffClockPairing: true },
+    staffClockPairing: {
+      origin: PRODUCTION_ORIGIN,
+      expiresInSeconds: 300
+    },
     backend: { enabled: true, transportTarget: 'rev' }
   });
   assert.deepEqual(richmond, {
@@ -98,7 +108,7 @@ test('Rev stays the exact default while Richmond is a fixed isolated TEST instal
     environment: 'test',
     allowedOrigin: RICHMOND_ORIGIN,
     scheduleSource: { mode: 'richmond-website', endpoint: '/api/m1-schedule' },
-    featureFlags: { staffClock: false },
+    featureFlags: { staffClock: false, staffClockPairing: false },
     backend: { enabled: true, transportTarget: 'richmond-test' }
   });
   assert.equal(deploymentInstallationProfile(), rev);
@@ -107,6 +117,84 @@ test('Rev stays the exact default while Richmond is a fixed isolated TEST instal
   assert.equal(remoteBackendEnabled('richmond'), true);
   assert.equal(remoteScheduleEnabled('richmond'), true);
   assert.equal(staffClockEnabled('richmond'), false);
+  assert.deepEqual(staffClockPairingProfile(), {
+    installationId: 'rev',
+    gymName: 'Revolution BJJ',
+    deviceLabel: 'Revolution BJJ front desk',
+    origin: PRODUCTION_ORIGIN,
+    expiresInSeconds: 300
+  });
+  assert.equal(staffClockPairingProfile('richmond'), null);
+});
+
+test('server pairing profiles require Staff Clock, pairing, backend, same origin, and a 60-to-300-second lifetime', () => {
+  const functionStart = serverInstallationSource.indexOf('export function staffClockPairingProfile(');
+  const functionEnd = serverInstallationSource.indexOf(
+    '\nexport function remoteScheduleEnabled(',
+    functionStart
+  );
+  assert.notEqual(functionStart, -1);
+  assert.notEqual(functionEnd, -1);
+  const functionSource = serverInstallationSource
+    .slice(functionStart, functionEnd)
+    .replace(/^export\s+/u, '');
+  const base = structuredClone(installationProfile('rev'));
+  const evaluate = profile => Function('deploymentInstallationProfile', `
+    ${functionSource}
+    return staffClockPairingProfile();
+  `)(() => profile);
+
+  for (const expiresInSeconds of [60, 61, 119, 120, 299, 300]) {
+    assert.deepEqual(evaluate({
+      ...structuredClone(base),
+      staffClockPairing: {
+        ...base.staffClockPairing,
+        expiresInSeconds
+      }
+    }), {
+      installationId: base.installationId,
+      gymName: base.gymName,
+      deviceLabel: base.deviceLabel,
+      origin: base.allowedOrigin,
+      expiresInSeconds
+    });
+  }
+
+  for (const invalid of [
+    {
+      ...structuredClone(base),
+      featureFlags: { ...base.featureFlags, staffClock: false }
+    },
+    {
+      ...structuredClone(base),
+      featureFlags: { ...base.featureFlags, staffClockPairing: false }
+    },
+    {
+      ...structuredClone(base),
+      backend: { ...base.backend, enabled: false }
+    },
+    {
+      ...structuredClone(base),
+      staffClockPairing: {
+        ...base.staffClockPairing,
+        origin: 'https://wrong-origin.example'
+      }
+    },
+    {
+      ...structuredClone(base),
+      staffClockPairing: { ...base.staffClockPairing, expiresInSeconds: 59 }
+    },
+    {
+      ...structuredClone(base),
+      staffClockPairing: { ...base.staffClockPairing, expiresInSeconds: 301 }
+    },
+    {
+      ...structuredClone(base),
+      staffClockPairing: { ...base.staffClockPairing, expiresInSeconds: 120.5 }
+    }
+  ]) {
+    assert.equal(evaluate(invalid), null);
+  }
 });
 
 test('Richmond maps every browser key into its own namespace and ignores Rev state on reload', () => {
@@ -180,8 +268,10 @@ test('the generated browser profile is frozen and cannot be selected by URL or s
   );
   assert.equal(Object.isFrozen(context.M1_INSTALLATION_PROFILE), true);
   assert.equal(Object.isFrozen(context.M1_INSTALLATION_PROFILE.backend), true);
+  assert.equal(context.M1_INSTALLATION_PROFILE_VALID, true);
   assert.equal(context.document.documentElement.dataset.m1Installation, 'richmond');
   assert.equal(context.document.documentElement.dataset.m1StaffClock, 'false');
+  assert.equal(context.document.documentElement.dataset.m1StaffClockPairing, 'false');
   assert.equal(Object.getOwnPropertyDescriptor(context, 'M1_INSTALLATION_PROFILE').writable, false);
 
   const profileGate = kioskHtml.slice(
@@ -189,7 +279,9 @@ test('the generated browser profile is frozen and cannot be selected by URL or s
     kioskHtml.indexOf('// Update the build stamp')
   );
   assert.doesNotMatch(profileGate, /URLSearchParams|location\.(?:search|hash)|localStorage/u);
-  assert.match(profileGate, /JSON\.stringify\(INSTALLATION\) !== JSON\.stringify\(expectedInstallation\)/u);
+  assert.match(profileGate, /M1_INSTALLATION_PROFILE_VALID !== true/u);
+  assert.match(profileGate, /INSTALLATION\?\.schema !== 'gib-m1-installation-profile\/v1'/u);
+  assert.doesNotMatch(profileGate, /expectedInstallation|JSON\.stringify\(INSTALLATION\)/u);
   assert.match(buildTool, /process\.env\.GIB_M1_INSTALLATION \|\| 'rev'/u);
   assert.match(buildTool, /m1-installation\.generated\.mjs/u);
   assert.match(serverProfile, /DEPLOYMENT_INSTALLATION_ID = ["']rev["']/u);
@@ -211,7 +303,8 @@ test('Richmond client is fixed to its site, official schedule, remote Daily Revi
   assert.match(kioskHtml, /navigator\.onLine !== false[\s\S]*window\.setTimeout\(syncNow, 0\)/u);
   assert.match(kioskHtml, /\$\('#dailyReviewLink'\)\.href = '\/m1\/admin\/'/u);
   assert.match(kioskHtml, /Rows sync only to the dedicated Richmond TEST Sheet/u);
-  assert.match(staffClient, /installationProfile\.installationId === 'rev'[\s\S]*featureFlags\?\.staffClock === true[\s\S]*initializeStaffClockClient\(\)/u);
+  assert.match(staffClient, /typeof installationProfile\.installationId === 'string'[\s\S]*featureFlags\?\.staffClock === true[\s\S]*initializeStaffClockClient\(\)/u);
+  assert.doesNotMatch(staffClient, /installationProfile\.installationId === 'rev'/u);
   assert.match(kioskHtml, /html:not\(\[data-m1-staff-clock="true"\]\) #staffClock/u);
 });
 

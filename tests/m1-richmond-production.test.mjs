@@ -30,10 +30,11 @@ import {
 } from '../netlify/functions/_lib/m1-richmond-schedule.mjs';
 import { handleAdminAdd } from '../netlify/functions/m1-admin-add.mjs';
 import { handleAdminLogin } from '../netlify/functions/m1-admin-login.mjs';
-import { handleAdminTabletAuthorize } from '../netlify/functions/m1-admin-tablet-authorize.mjs';
+import { handleAdminTabletPairing } from '../netlify/functions/m1-admin-tablet-pairing.mjs';
 import { handleKioskSync } from '../netlify/functions/m1-kiosk-sync.mjs';
 import { handleProductionStatus } from '../netlify/functions/m1-production-status.mjs';
-import { handleTabletInstall } from '../netlify/functions/m1-tablet-install.mjs';
+import { handleTabletPairingPoll } from '../netlify/functions/m1-tablet-pairing-poll.mjs';
+import { handleTabletPairingStart } from '../netlify/functions/m1-tablet-pairing-start.mjs';
 import { handleTabletStatus } from '../netlify/functions/m1-tablet-status.mjs';
 
 const ROOT = new URL('../', import.meta.url);
@@ -151,7 +152,7 @@ test('Richmond production profile is fixed, pending, and storage-isolated from T
     activation: 'pending',
     writesEnabled: false,
     scheduleSource: { mode: 'richmond-website', endpoint: '/api/m1-schedule' },
-    featureFlags: { staffClock: false },
+    featureFlags: { staffClock: false, staffClockPairing: false },
     backend: { enabled: true, transportTarget: 'richmond-production' }
   });
   const key = 'gib_m1_sync_queue_v1';
@@ -522,21 +523,30 @@ test('Richmond production cannot expose or consume Revolution tablet recovery', 
     activation: 'active',
     env: ACTIVE_ENV
   };
-  const issue = await handleAdminTabletAuthorize(request(
-    '/api/m1-admin-tablet-authorize',
-    { body: { operation: 'issue' } }
-  ), dependencies);
-  const install = await handleTabletInstall(request(
-    '/api/m1-tablet-install',
-    { body: { operation: 'installAdminGrant' } }
-  ), dependencies);
+  const responses = await Promise.all([
+    handleTabletPairingStart(request(
+      '/api/m1-tablet-pairing-start',
+      { body: { operation: 'start' } }
+    ), dependencies),
+    handleTabletPairingPoll(request(
+      '/api/m1-tablet-pairing-poll',
+      { body: { operation: 'poll' } }
+    ), dependencies),
+    handleAdminTabletPairing(request(
+      '/api/m1-admin-tablet-pairing',
+      { body: { operation: 'review', pairingCode: '01234-56789' } }
+    ), dependencies),
+    handleAdminTabletPairing(request(
+      '/api/m1-admin-tablet-pairing',
+      { body: { operation: 'approve', pairingCode: '01234-56789' } }
+    ), dependencies)
+  ]);
 
-  assert.equal(issue.status, 404);
-  assert.equal(install.status, 404);
-  assert.equal(issue.headers.has('set-cookie'), false);
-  assert.equal(install.headers.has('set-cookie'), false);
-  assert.match(adminHtml, /TABLET_AUTHORIZATION_AVAILABLE = !IS_RICHMOND\s*&& STAFF_CLOCK_ENABLED/u);
-  assert.match(adminHtml, /\$\('#tabletAuthorization'\)\.hidden = !TABLET_AUTHORIZATION_AVAILABLE/u);
+  assert.deepEqual(responses.map(response => response.status), [404, 404, 404, 404]);
+  responses.forEach(response => assert.equal(response.headers.has('set-cookie'), false));
+  assert.match(adminHtml, /STAFF_CLOCK_PAIRING_ENABLED = INSTALLATION\.featureFlags\.staffClockPairing === true/u);
+  assert.match(adminHtml, /TABLET_PAIRING_AVAILABLE = STAFF_CLOCK_ENABLED\s*&& STAFF_CLOCK_PAIRING_ENABLED/u);
+  assert.match(adminHtml, /\$\('#tabletPairing'\)\.hidden = !TABLET_PAIRING_AVAILABLE/u);
 });
 
 test('browser, service-worker, schedule, and build sources keep Richmond production isolated and visibly disabled', () => {

@@ -17,18 +17,12 @@ export const PRODUCTION_INSTALL_SIGNATURE_DOMAIN = 'gib-m1-production-install:v1
 export const PRODUCTION_INSTALL_MAX_SECONDS = 36_000;
 export const PRODUCTION_INSTALL_TOKEN_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/u;
 export const PRODUCTION_INSTALL_STORE = 'gib-m1-production-installer';
-export const PRODUCTION_ADMIN_INSTALL_GRANT_COOKIE = '__Host-gib_m1_tablet_authorization';
-export const PRODUCTION_ADMIN_INSTALL_GRANT_PURPOSE = 'production-admin-tablet-authorization';
-export const PRODUCTION_ADMIN_INSTALL_GRANT_SIGNATURE_DOMAIN = 'gib-m1-production-admin-install:v1\0';
-export const PRODUCTION_ADMIN_INSTALL_GRANT_MAX_SECONDS = 120;
-export const PRODUCTION_ADMIN_INSTALL_GRANT_TOKEN_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/u;
 
 const DEVICE_COOKIE_SIGNATURE_DOMAIN = 'gib-m1-production-device:v1\0';
 const DEVICE_COOKIE_PATTERN = /^v1\.[A-Za-z0-9_-]{43}\.[1-9][0-9]{8,11}\.[A-Za-z0-9_-]{43}$/u;
 const GOOGLE_WEBHOOK_PATH_PATTERN = /^\/macros\/s\/[A-Za-z0-9_-]{12,512}\/exec$/u;
 const INSTALL_RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/u;
 const BASE64URL_32_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
-const ADMIN_REQUEST_TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,256}$/u;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 const COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
 
@@ -120,7 +114,33 @@ export function exactObjectKeys(value, expected) {
     && actual.every((key, index) => key === wanted[index]);
 }
 
-export function validExactProductionRequest(request, path) {
+function profileProductionOrigin(options = {}) {
+  if (options.staffClock !== true) return PRODUCTION_ORIGIN;
+  const profile = deploymentInstallationProfile(
+    options.installationId,
+    options.environment,
+    options.activation
+  );
+  const origin = exactString(profile?.allowedOrigin);
+  if (profile?.featureFlags?.staffClock !== true || !origin) return '';
+  try {
+    const parsed = new URL(origin);
+    return parsed.protocol === 'https:'
+      && parsed.origin === origin
+      && !parsed.port
+      && !parsed.username
+      && !parsed.password
+      ? origin
+      : '';
+  } catch {
+    return '';
+  }
+}
+
+export function validExactProductionRequest(request, path, options = {}) {
+  const requiredOrigin = profileProductionOrigin(options);
+  if (!requiredOrigin) return false;
+  const expected = new URL(requiredOrigin);
   let url;
   try {
     url = new URL(request.url);
@@ -129,10 +149,10 @@ export function validExactProductionRequest(request, path) {
   }
 
   if (
-    url.origin !== PRODUCTION_ORIGIN
+    url.origin !== requiredOrigin
     || url.protocol !== 'https:'
-    || url.hostname !== PRODUCTION_HOST
-    || url.host !== PRODUCTION_HOST
+    || url.hostname !== expected.hostname
+    || url.host !== expected.host
     || url.port
     || url.username
     || url.password
@@ -143,14 +163,40 @@ export function validExactProductionRequest(request, path) {
 
   const host = request.headers.get('host');
   return typeof host === 'string'
-    && host.toLocaleLowerCase('en-US') === PRODUCTION_HOST
-    && request.headers.get('origin') === PRODUCTION_ORIGIN
+    && host.toLocaleLowerCase('en-US') === expected.host.toLocaleLowerCase('en-US')
+    && request.headers.get('origin') === requiredOrigin
     && request.headers.get('sec-fetch-site') === 'same-origin';
 }
 
 export function productionRuntimeConfig(env = process.env, options = {}) {
-  if (!remoteBackendEnabled(options.installationId)) return null;
-  if (deploymentInstallationProfile(options.installationId)?.installationId !== 'rev') return null;
+  const profile = deploymentInstallationProfile(
+    options.installationId,
+    options.environment,
+    options.activation
+  );
+  if (!remoteBackendEnabled(
+    options.installationId,
+    options.environment,
+    options.activation
+  )) return null;
+  const pairingMode = options.staffClockPairing === true;
+  const staffClockMode = options.staffClock === true;
+  const pairing = profile?.staffClockPairing;
+  const requiredOrigin = pairingMode
+    && profile?.featureFlags?.staffClockPairing === true
+    && pairing?.origin === profile.allowedOrigin
+    ? pairing.origin
+    : pairingMode
+      ? ''
+      : staffClockMode && profile?.featureFlags?.staffClock === true
+        ? profile.allowedOrigin
+        : staffClockMode
+          ? ''
+          : PRODUCTION_ORIGIN;
+  if (
+    !requiredOrigin
+    || (!pairingMode && !staffClockMode && profile?.installationId !== 'rev')
+  ) return null;
   const origin = exactString(env.GIB_M1_PRODUCTION_ORIGIN);
   const webhookUrl = validGoogleWebhook(env.GIB_M1_PRODUCTION_WEBHOOK_URL);
   const webhookToken = validSecret(env.GIB_M1_PRODUCTION_WEBHOOK_TOKEN);
@@ -161,7 +207,7 @@ export function productionRuntimeConfig(env = process.env, options = {}) {
 
   if (
     env.GIB_M1_PRODUCTION_SYNC_ENABLED !== 'true'
-    || origin !== PRODUCTION_ORIGIN
+    || origin !== requiredOrigin
     || !webhookUrl
     || !webhookToken
     || !deviceToken
@@ -199,8 +245,8 @@ export function productionInstallerConfig(env = process.env) {
   return Object.freeze({ ...runtime, installSecret, runId });
 }
 
-export function productionAdminInstallerConfig(env = process.env) {
-  const runtime = productionRuntimeConfig(env);
+export function productionAdminInstallerConfig(env = process.env, options = {}) {
+  const runtime = productionRuntimeConfig(env, options);
   const installSecret = validSecret(env.GIB_M1_PRODUCTION_INSTALL_CAPABILITY_SECRET);
   if (
     !runtime
@@ -327,169 +373,6 @@ export function readProductionInstallCapability(token, config, now = Date.now())
 
 export function productionInstallConsumptionKey(token) {
   return `production/install/v1/${createHash('sha256').update(token, 'utf8').digest('hex')}`;
-}
-
-function productionAdminSessionBinding(secret, adminName, requestToken) {
-  return signBase64Url(
-    secret,
-    'gib-m1-production-admin-install:session:v1\0',
-    `${adminName}\0${requestToken}`
-  );
-}
-
-function validAdminGrantSession(adminName, requestToken) {
-  const normalizedAdminName = exactString(adminName);
-  return normalizedAdminName.length >= 1
-    && normalizedAdminName.length <= 128
-    && ADMIN_REQUEST_TOKEN_PATTERN.test(String(requestToken ?? ''));
-}
-
-export function createProductionAdminInstallGrant({
-  secret,
-  adminName,
-  requestToken,
-  issuedAt,
-  expiresAt,
-  nonce
-}) {
-  const installSecret = validSecret(secret);
-  const normalizedAdminName = exactString(adminName);
-  const normalizedRequestToken = String(requestToken ?? '');
-  const issuedAtSeconds = integerSeconds(issuedAt);
-  const expiresAtSeconds = integerSeconds(expiresAt);
-  const normalizedNonce = exactString(nonce);
-  if (
-    !installSecret
-    || !validAdminGrantSession(normalizedAdminName, normalizedRequestToken)
-    || !Number.isInteger(issuedAtSeconds)
-    || !Number.isInteger(expiresAtSeconds)
-    || issuedAtSeconds < 1
-    || expiresAtSeconds <= issuedAtSeconds
-    || expiresAtSeconds - issuedAtSeconds > PRODUCTION_ADMIN_INSTALL_GRANT_MAX_SECONDS
-    || !validBase64Url32(normalizedNonce)
-  ) throw new Error('Invalid production Admin install grant input.');
-
-  const encodedPayload = Buffer.from(JSON.stringify({
-    v: 1,
-    purpose: PRODUCTION_ADMIN_INSTALL_GRANT_PURPOSE,
-    origin: PRODUCTION_ORIGIN,
-    installationId: 'rev',
-    issuedAt: issuedAtSeconds,
-    expiresAt: expiresAtSeconds,
-    nonce: normalizedNonce,
-    sessionBinding: productionAdminSessionBinding(
-      installSecret,
-      normalizedAdminName,
-      normalizedRequestToken
-    )
-  }), 'utf8').toString('base64url');
-  const signature = signBase64Url(
-    installSecret,
-    PRODUCTION_ADMIN_INSTALL_GRANT_SIGNATURE_DOMAIN,
-    encodedPayload
-  );
-  return `${encodedPayload}.${signature}`;
-}
-
-export function readProductionAdminInstallGrant(token, config, session, now = Date.now()) {
-  if (
-    typeof token !== 'string'
-    || token.length > 2_048
-    || !PRODUCTION_ADMIN_INSTALL_GRANT_TOKEN_PATTERN.test(token)
-    || !config
-    || !validSecret(config.installSecret)
-    || !session
-    || !validAdminGrantSession(session.adminName, session.requestToken)
-  ) return null;
-
-  const separator = token.indexOf('.');
-  const encodedPayload = token.slice(0, separator);
-  const suppliedSignature = token.slice(separator + 1);
-  const expectedSignature = signBase64Url(
-    config.installSecret,
-    PRODUCTION_ADMIN_INSTALL_GRANT_SIGNATURE_DOMAIN,
-    encodedPayload
-  );
-  if (!equalSecret(suppliedSignature, expectedSignature)) return null;
-
-  let payload;
-  try {
-    const decoded = Buffer.from(encodedPayload, 'base64url');
-    if (decoded.toString('base64url') !== encodedPayload) return null;
-    payload = JSON.parse(decoded.toString('utf8'));
-  } catch {
-    return null;
-  }
-
-  const nowSeconds = integerSeconds(now);
-  if (
-    !exactObjectKeys(payload, [
-      'v',
-      'purpose',
-      'origin',
-      'installationId',
-      'issuedAt',
-      'expiresAt',
-      'nonce',
-      'sessionBinding'
-    ])
-    || payload.v !== 1
-    || payload.purpose !== PRODUCTION_ADMIN_INSTALL_GRANT_PURPOSE
-    || payload.origin !== PRODUCTION_ORIGIN
-    || payload.installationId !== 'rev'
-    || !Number.isInteger(payload.issuedAt)
-    || !Number.isInteger(payload.expiresAt)
-    || payload.issuedAt < 1
-    || payload.issuedAt > nowSeconds
-    || payload.expiresAt <= nowSeconds
-    || payload.expiresAt <= payload.issuedAt
-    || payload.expiresAt - payload.issuedAt > PRODUCTION_ADMIN_INSTALL_GRANT_MAX_SECONDS
-    || !validBase64Url32(payload.nonce)
-    || !equalSecret(
-      payload.sessionBinding,
-      productionAdminSessionBinding(
-        config.installSecret,
-        session.adminName,
-        session.requestToken
-      )
-    )
-  ) return null;
-  return Object.freeze({ ...payload });
-}
-
-export function productionAdminInstallGrantConsumptionKey(token) {
-  return `production/admin-install/v1/${createHash('sha256').update(token, 'utf8').digest('hex')}`;
-}
-
-export function productionAdminInstallGrantCookieHeader(grant, maxAgeSeconds) {
-  const maxAge = Number(maxAgeSeconds);
-  if (
-    typeof grant !== 'string'
-    || !PRODUCTION_ADMIN_INSTALL_GRANT_TOKEN_PATTERN.test(grant)
-    || !Number.isInteger(maxAge)
-    || maxAge < 1
-    || maxAge > PRODUCTION_ADMIN_INSTALL_GRANT_MAX_SECONDS
-  ) throw new Error('Invalid production Admin install grant cookie.');
-  return [
-    `${PRODUCTION_ADMIN_INSTALL_GRANT_COOKIE}=${encodeURIComponent(grant)}`,
-    'Path=/',
-    `Max-Age=${maxAge}`,
-    'Secure',
-    'HttpOnly',
-    'SameSite=Strict'
-  ].join('; ');
-}
-
-export function clearProductionAdminInstallGrantCookieHeader() {
-  return [
-    `${PRODUCTION_ADMIN_INSTALL_GRANT_COOKIE}=`,
-    'Path=/',
-    'Max-Age=0',
-    'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
-    'Secure',
-    'HttpOnly',
-    'SameSite=Strict'
-  ].join('; ');
 }
 
 export function createProductionDeviceCredential(

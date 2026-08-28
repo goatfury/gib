@@ -5,6 +5,7 @@ import {
   evaluateStaffState,
   mergeStaffRecords,
   sameStaffRecord,
+  validStaffMember,
   validStaffRecord
 } from '../m1/staff-clock-core.mjs';
 
@@ -18,7 +19,21 @@ function namedFunctionSource(source, name) {
   const start = source.slice(Math.max(0, functionStart - 6), functionStart) === 'async '
     ? functionStart - 6
     : functionStart;
-  const brace = source.indexOf('{', start);
+  const parametersStart = source.indexOf('(', functionStart);
+  let parameterDepth = 0;
+  let parametersEnd = -1;
+  for (let index = parametersStart; index < source.length; index += 1) {
+    if (source[index] === '(') parameterDepth += 1;
+    if (source[index] === ')') {
+      parameterDepth -= 1;
+      if (parameterDepth === 0) {
+        parametersEnd = index;
+        break;
+      }
+    }
+  }
+  assert.notEqual(parametersEnd, -1, `${name} parameters must be complete`);
+  const brace = source.indexOf('{', parametersEnd + 1);
   let depth = 0;
   for (let index = brace; index < source.length; index += 1) {
     if (source[index] === '{') depth += 1;
@@ -157,11 +172,166 @@ function browserRecordNormalizer() {
   `)(validStaffRecord, newYorkDate);
 }
 
+function createPairingHarness(responses, options = {}) {
+  const calls = [];
+  const timers = [];
+  const nowRef = { value: options.now ?? Date.now() };
+  const nodes = {
+    '#staffClockAvailability': { hidden: false },
+    '#staffClockAvailabilityTitle': { textContent: '' },
+    '#staffClockAvailabilityDetail': { textContent: '' },
+    '#staffClockPairingCodeWrap': { hidden: true },
+    '#staffClockPairingCode': { textContent: '' },
+    '#staffClockPairingExpiry': { textContent: '' },
+    '#staffClockPairingInstructions': { hidden: true },
+    '#staffClockPairingAdminUrl': { textContent: '' },
+    '#retryStaffClock': { hidden: true, textContent: '' },
+    '#staffClockControls': { hidden: false },
+    '#staffClockName': { disabled: false },
+    '#btnStaffClockAction': { disabled: false }
+  };
+  return Function(
+    'responses',
+    'calls',
+    'timers',
+    'nowRef',
+    'nodes',
+    'NativeDate',
+    'online',
+    'onRefresh',
+    `
+      const Date = class extends NativeDate {
+        constructor(...args) { super(...(args.length ? args : [nowRef.value])); }
+        static now() { return nowRef.value; }
+        static parse(value) { return NativeDate.parse(value); }
+      };
+      let nextTimerId = 1;
+      const window = {
+        setTimeout(callback, delay = 0) {
+          const timer = { id: nextTimerId++, callback, delay, cancelled: false };
+          timers.push(timer);
+          return timer.id;
+        },
+        clearTimeout(id) {
+          const timer = timers.find(item => item.id === id);
+          if (timer) timer.cancelled = true;
+        }
+      };
+      const navigator = { onLine: online };
+      const installationProfile = {
+        gymName: 'Revolution BJJ',
+        deviceLabel: 'Revolution BJJ front desk'
+      };
+      const TZ = 'America/New_York';
+      const STAFF_CLOCK_PAIRING_AVAILABLE = true;
+      const STAFF_CLOCK_PAIRING_CONFIG = { origin: 'https://gib-live.netlify.app' };
+      const STAFF_CLOCK_PAIRING_POLL_INTERVAL_MS = 2_500;
+      const STAFF_CLOCK_PAIRING_APPROVED_POLL_MS = 250;
+      const STAFF_CLOCK_PAIRING_MAX_LIFETIME_MS = 5 * 60_000;
+      const STAFF_CLOCK_PAIRING_MAX_DELIVERY_WINDOW_MS = 2 * 60_000;
+      let staffClockPairingPromise = null;
+      let staffClockPairingPollTimer = null;
+      let staffClockPairingCode = '';
+      let staffClockPairingExpiresAt = '';
+      let staffClockPairingDeliveryExpiresAt = '';
+      let staffClockAvailability = 'loading';
+      let staffClockPeople = [];
+      let staffClockConfirmationActive = false;
+      let staffClockAuthorizationRecoveryInProgress = false;
+      let refreshCount = 0;
+      const refreshPromises = [];
+      const $ = selector => nodes[selector] || null;
+      const postStaffClockPairing = async operation => {
+        calls.push(operation);
+        const next = responses.shift();
+        if (next?.throws) {
+          const error = new Error(next.message || 'network interrupted');
+          if (Number.isSafeInteger(next.status)) error.staffClockPairingStatus = next.status;
+          if (next.data) error.staffClockPairingData = next.data;
+          throw error;
+        }
+        return next;
+      };
+      const refreshStaffClockSnapshot = () => {
+        refreshCount += 1;
+        const pending = Promise.resolve().then(onRefresh);
+        refreshPromises.push(pending);
+        return pending;
+      };
+      const refreshStaffClockRosterAfterAuthorization = refreshStaffClockSnapshot;
+      ${namedFunctionSource(clientSource, 'exactStaffClockKeys')}
+      ${namedFunctionSource(clientSource, 'setStaffClockAvailability')}
+      ${namedFunctionSource(clientSource, 'validStaffClockPairingCode')}
+      ${namedFunctionSource(clientSource, 'validStaffClockPairingTimestamp')}
+      ${namedFunctionSource(clientSource, 'validStaffClockPairingPending')}
+      ${namedFunctionSource(clientSource, 'validStaffClockPairingResult')}
+      ${namedFunctionSource(clientSource, 'validStaffClockPairingApproved')}
+      ${namedFunctionSource(clientSource, 'validStaffClockPairingExpired')}
+      ${namedFunctionSource(clientSource, 'validStaffClockPairingAuthorizationRequired')}
+      ${namedFunctionSource(clientSource, 'validStaffClockPairingRejected')}
+      ${namedFunctionSource(clientSource, 'clearStaffClockPairingTimer')}
+      ${namedFunctionSource(clientSource, 'clearStaffClockPairingMemory')}
+      ${namedFunctionSource(clientSource, 'staffClockPairingExpiresLabel')}
+      ${namedFunctionSource(clientSource, 'renderStaffClockPairingPending')}
+      ${namedFunctionSource(clientSource, 'renderStaffClockPairingExpired')}
+      ${namedFunctionSource(clientSource, 'scheduleStaffClockPairingPoll')}
+      ${namedFunctionSource(clientSource, 'staffClockPairingStillCurrent')}
+      ${namedFunctionSource(clientSource, 'runStaffClockPairing')}
+      ${namedFunctionSource(clientSource, 'ensureStaffClockPairing')}
+      ${namedFunctionSource(clientSource, 'restartStaffClockPairing')}
+      return {
+        run: runStaffClockPairing,
+        ensure: ensureStaffClockPairing,
+        restart: restartStaffClockPairing,
+        advanceTo(value) { nowRef.value = value; },
+        flushZeroTimers() {
+          timers.filter(timer => !timer.cancelled && timer.delay === 0).forEach(timer => {
+            timer.cancelled = true;
+            timer.callback();
+          });
+        },
+        async settleRefreshes() {
+          await Promise.all(refreshPromises);
+        },
+        state() {
+          return {
+            availability: staffClockAvailability,
+            code: staffClockPairingCode,
+            expiresAt: staffClockPairingExpiresAt,
+            deliveryExpiresAt: staffClockPairingDeliveryExpiresAt,
+            refreshCount,
+            recoveryInProgress: staffClockAuthorizationRecoveryInProgress,
+            calls: [...calls],
+            activeTimerDelays: timers.filter(timer => !timer.cancelled).map(timer => timer.delay),
+            title: nodes['#staffClockAvailabilityTitle'].textContent,
+            detail: nodes['#staffClockAvailabilityDetail'].textContent,
+            displayedCode: nodes['#staffClockPairingCode'].textContent,
+            codeHidden: nodes['#staffClockPairingCodeWrap'].hidden,
+            instructionsHidden: nodes['#staffClockPairingInstructions'].hidden,
+            retryHidden: nodes['#retryStaffClock'].hidden,
+            retryLabel: nodes['#retryStaffClock'].textContent,
+            controlsHidden: nodes['#staffClockControls'].hidden
+          };
+        }
+      };
+    `
+  )(
+    responses,
+    calls,
+    timers,
+    nowRef,
+    nodes,
+    Date,
+    options.online !== false,
+    options.onRefresh || (() => null)
+  );
+}
+
 test('Staff Clock is isolated from the inherited inline kiosk client', () => {
   const inlineModule = kioskHtml.match(/<script type="module">([\s\S]*?)<\/script>/u)?.[1] || '';
   assert.match(
     kioskHtml,
-    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-08-27-tablet-recovery-r1"><\/script>/u
+    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-08-27-tablet-pairing-r1"><\/script>/u
   );
   assert.doesNotMatch(inlineModule, /staff-clock-core|staffClockSyncPunch|syncStaffClockQueue|renderStaffTimeAdmin/u);
 });
@@ -171,7 +341,10 @@ test('fresh and reset tablets never expose an empty functional Staff Clock selec
     '#staffClockAvailability': { hidden: false },
     '#staffClockAvailabilityTitle': { textContent: '' },
     '#staffClockAvailabilityDetail': { textContent: '' },
-    '#authorizeStaffClockTablet': { hidden: true },
+    '#staffClockPairingCodeWrap': { hidden: false },
+    '#staffClockPairingCode': { textContent: 'STALE-CODE' },
+    '#staffClockPairingExpiry': { textContent: 'stale expiry' },
+    '#staffClockPairingInstructions': { hidden: false },
     '#retryStaffClock': { hidden: true },
     '#staffClockControls': { hidden: false },
     '#staffClockName': { disabled: false },
@@ -198,7 +371,10 @@ test('fresh and reset tablets never expose an empty functional Staff Clock selec
 
   harness.setStaffClockAvailability('authorization-required');
   assert.equal(nodes['#staffClockControls'].hidden, true);
-  assert.equal(nodes['#authorizeStaffClockTablet'].hidden, false);
+  assert.equal(nodes['#staffClockPairingCodeWrap'].hidden, true);
+  assert.equal(nodes['#staffClockPairingInstructions'].hidden, true);
+  assert.equal(nodes['#staffClockPairingCode'].textContent, '');
+  assert.equal(nodes['#staffClockPairingExpiry'].textContent, '');
   assert.equal(nodes['#retryStaffClock'].hidden, true);
   assert.equal(nodes['#staffClockAvailabilityTitle'].textContent, 'This tablet needs authorization');
 
@@ -214,12 +390,921 @@ test('fresh and reset tablets never expose an empty functional Staff Clock selec
   assert.equal(nodes['#staffClockName'].disabled, false);
 });
 
+test('tablet pairing accepts only the exact unbiased Crockford XXXXX-XXXXX code shape', () => {
+  const validate = Function(`return (${namedFunctionSource(clientSource, 'validStaffClockPairingCode')});`)();
+  for (const value of [
+    'ABCDE-FGHJK',
+    '01234-56789',
+    'MNPQR-STVWX',
+    'ZZZZZ-ZZZZZ'
+  ]) assert.equal(validate(value), true, value);
+
+  for (const value of [
+    'ABCD-EFGHJ',
+    'ABCDEF-GHJK',
+    'abcde-fghjk',
+    'ABCDI-FGHJK',
+    'ABCDL-FGHJK',
+    'ABCDO-FGHJK',
+    'ABCDU-FGHJK',
+    'ABCDE-FGHJ1-extra',
+    'ABCDE FGHJK'
+  ]) assert.equal(validate(value), false, value);
+});
+
+test('tablet pairing start and poll use separate same-origin endpoints with exact operation bodies', async () => {
+  const calls = [];
+  const fetch = async (endpoint, options) => {
+    calls.push({ endpoint, options });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: 'authorized' })
+    };
+  };
+  const fakeWindow = {
+    setTimeout() { return 1; },
+    clearTimeout() {}
+  };
+  const post = Function('fetch', 'window', `
+    const STAFF_CLOCK_PAIRING_START_ENDPOINT = '/api/m1-tablet-pairing-start';
+    const STAFF_CLOCK_PAIRING_POLL_ENDPOINT = '/api/m1-tablet-pairing-poll';
+    return (${namedFunctionSource(clientSource, 'postStaffClockPairing')});
+  `)(fetch, fakeWindow);
+
+  await post('start');
+  await post('poll');
+  await assert.rejects(post('review'), /operation was invalid/u);
+  assert.deepEqual(calls.map(({ endpoint, options }) => ({
+    endpoint,
+    method: options.method,
+    credentials: options.credentials,
+    mode: options.mode,
+    redirect: options.redirect,
+    cache: options.cache,
+    headers: options.headers,
+    body: JSON.parse(options.body)
+  })), [
+    {
+      endpoint: '/api/m1-tablet-pairing-start',
+      method: 'POST',
+      credentials: 'same-origin',
+      mode: 'same-origin',
+      redirect: 'error',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: { operation: 'start' }
+    },
+    {
+      endpoint: '/api/m1-tablet-pairing-poll',
+      method: 'POST',
+      credentials: 'same-origin',
+      mode: 'same-origin',
+      redirect: 'error',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: { operation: 'poll' }
+    }
+  ]);
+});
+
+test('pending to approved to authorized pairing clears the code and refreshes the roster automatically', async () => {
+  const now = Date.parse('2026-08-27T14:00:00-04:00');
+  const expiresAt = new Date(now + 5 * 60_000).toISOString();
+  const deliveryExpiresAt = new Date(now + 90_000).toISOString();
+  const harness = createPairingHarness([
+    {
+      ok: true,
+      result: 'pending',
+      pairingCode: 'ABCDE-FGHJK',
+      expiresAt,
+      gymName: 'Revolution BJJ',
+      deviceLabel: 'Revolution BJJ front desk'
+    },
+    { ok: true, result: 'approved', deliveryExpiresAt },
+    { ok: true, result: 'authorized' }
+  ], { now });
+
+  await harness.run('start');
+  let state = harness.state();
+  assert.equal(state.availability, 'authorization-required');
+  assert.equal(state.title, 'This tablet needs authorization');
+  assert.equal(state.code, 'ABCDE-FGHJK');
+  assert.equal(state.displayedCode, 'ABCDE-FGHJK');
+  assert.equal(state.codeHidden, false);
+  assert.equal(state.instructionsHidden, false);
+  assert.equal(state.controlsHidden, true);
+  assert.deepEqual(state.activeTimerDelays, [2_500]);
+
+  await harness.run('poll');
+  state = harness.state();
+  assert.equal(state.code, '');
+  assert.equal(state.displayedCode, '');
+  assert.equal(state.codeHidden, true);
+  assert.equal(state.deliveryExpiresAt, deliveryExpiresAt);
+  assert.match(state.detail, /Admin approved this tablet/u);
+  assert.deepEqual(state.activeTimerDelays, [250]);
+
+  await harness.run('poll');
+  state = harness.state();
+  assert.equal(state.availability, 'loading');
+  assert.equal(state.code, '');
+  assert.equal(state.expiresAt, '');
+  assert.equal(state.deliveryExpiresAt, '');
+  assert.deepEqual(state.calls, ['start', 'poll', 'poll']);
+  assert.equal(state.refreshCount, 0);
+  assert.deepEqual(state.activeTimerDelays, [0]);
+  harness.flushZeroTimers();
+  assert.equal(harness.state().refreshCount, 1);
+});
+
+test('an authorized pairing response locks queue sync before its deferred roster callback', async () => {
+  const pairing = createPairingHarness([
+    { ok: true, result: 'authorized' }
+  ], { now: Date.parse('2026-08-27T14:00:00-04:00') });
+  await pairing.run('start');
+  assert.equal(pairing.state().recoveryInProgress, true);
+  assert.deepEqual(pairing.state().activeTimerDelays, [0]);
+
+  const lifecycle = Function(`
+    let staffClockSyncPromise = null;
+    let staffClockSyncRequested = false;
+    let staffClockAvailability = 'loading';
+    let staffClockAuthorizationRecoveryInProgress = true;
+    let posts = 0;
+    const navigator = { onLine: true };
+    const postStaffClock = async () => { posts += 1; };
+    ${namedFunctionSource(clientSource, 'syncStaffClockQueue')}
+    return {
+      run: syncStaffClockQueue,
+      posts: () => posts
+    };
+  `)();
+  assert.equal(await lifecycle.run(), null);
+  assert.equal(lifecycle.posts(), 0);
+
+  const authorizedBranch = namedFunctionSource(clientSource, 'runStaffClockPairing');
+  assert.ok(
+    authorizedBranch.indexOf('staffClockAuthorizationRecoveryInProgress = true;')
+      < authorizedBranch.indexOf('window.setTimeout(() => {'),
+    'the recovery guard must be set synchronously before the deferred callback'
+  );
+});
+
+test('authorization callback is snapshot-only, preserves a nonempty queue byte-for-byte, rebuilds roster cache, and keeps controls locked', async () => {
+  const staff = [
+    { staffId: 'mandy', staffName: 'Mandy' },
+    { staffId: 'marvin', staffName: 'Marvin' }
+  ];
+  const totals = staff.map(person => ({
+    ...person,
+    completedShifts: 0,
+    totalSeconds: 0,
+    needsAttention: false
+  }));
+  const productionSnapshot = {
+    ok: true,
+    target: 'production',
+    staff,
+    clockedInNow: [],
+    periods: {
+      current: {
+        startDate: '2026-08-10',
+        endDate: '2026-08-23',
+        totals
+      },
+      previous: {
+        startDate: '2026-07-27',
+        endDate: '2026-08-09',
+        totals
+      }
+    },
+    view: snapshotView({
+      recordCount: 0,
+      recordTotal: 0,
+      todayPunchCount: 0,
+      todayPunchTotal: 0,
+      adjustmentCount: 0,
+      adjustmentTotal: 0,
+      attentionCount: 0,
+      attentionOccurrenceCount: 0
+    })
+  };
+  const businessValues = Object.freeze({
+    gib_m1_signins_v1: '[{"RowID":"existing-sign-in"}]',
+    gib_m1_sync_queue_v1: '[{"RowID":"waiting-sign-in"}]',
+    gib_m1_schedule_v1: '{"Monday":["existing-class"]}',
+    gib_m1_duration_rules_v1: '{"defaultMinutes":60}'
+  });
+  const storage = new Map(Object.entries(businessValues));
+  const preservedStaffClockState = {
+    version: 2,
+    baseline: null,
+    overlay: [fullRecord],
+    queue: [fullRecord]
+  };
+  const preservedStaffClockStateBytes = JSON.stringify(preservedStaffClockState);
+  storage.set('gib_m1b_staff_clock_state_v1', preservedStaffClockStateBytes);
+  const writes = [];
+  const snapshotCalls = [];
+  const snapshotHarness = Function(
+    'snapshot',
+    'storage',
+    'writes',
+    'snapshotCalls',
+    'validStaffMember',
+    'initialState',
+    `
+      const STAFF_CLOCK_STATE_KEY = 'gib_m1b_staff_clock_state_v1';
+      const STAFF_CLOCK_STAFF_CACHE_KEY = 'gib_m1b_staff_clock_staff_v1';
+      const STAFF_CLOCK_STATE_VERSION = 2;
+      const STAFF_CLOCK_MAX_INCLUDED_RECORDS = 500;
+      const STAFF_CLOCK_MAX_ATTENTION_GROUPS = 600;
+      const STAFF_PUNCH_ID_PATTERN = ${/^gib-m1-staff-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u};
+      const IS_PRODUCTION_ORIGIN = true;
+      const navigator = { onLine: true };
+      const localStorage = {
+        getItem: key => storage.get(key) ?? null,
+        setItem(key, value) {
+          writes.push(key);
+          storage.set(key, value);
+        },
+        removeItem() { throw new Error('Pairing recovery must not remove tablet data.'); },
+        clear() { throw new Error('Pairing recovery must not clear tablet data.'); }
+      };
+      const select = {
+        value: '',
+        disabled: true,
+        children: [],
+        replaceChildren(...children) { this.children = [...children]; },
+        appendChild(child) { this.children.push(child); }
+      };
+      const nodes = {
+        '#staffClockAvailability': { hidden: false },
+        '#staffClockAvailabilityTitle': { textContent: '' },
+        '#staffClockAvailabilityDetail': { textContent: '' },
+        '#staffClockPairingCodeWrap': { hidden: true },
+        '#staffClockPairingCode': { textContent: '' },
+        '#staffClockPairingExpiry': { textContent: '' },
+        '#staffClockPairingInstructions': { hidden: true },
+        '#retryStaffClock': { hidden: true, textContent: '' },
+        '#staffClockControls': { hidden: true },
+        '#staffClockName': select,
+        '#btnStaffClockAction': { disabled: true }
+      };
+      const document = {
+        createElement(tag) {
+          if (tag !== 'option') throw new Error('Unexpected element.');
+          return { value: '', textContent: '' };
+        }
+      };
+      const $ = selector => nodes[selector] || null;
+      let staffClockPeople = [];
+      let staffClockAvailability = 'loading';
+      let staffClockConfirmationActive = false;
+      let staffClockAuthorizationRecoveryInProgress = false;
+      const state = initialState;
+      let adminRendered = 0;
+      const postStaffClock = async body => {
+        snapshotCalls.push(body);
+        if (body.operation !== 'snapshot') throw new Error('No page is needed for an empty history.');
+        return snapshot;
+      };
+      const normalizeStaffClockRecordList = value => (
+        Array.isArray(value) && value.length === 0 ? [] : null
+      );
+      const validatedStaffClockSnapshotPage = () => {
+        throw new Error('No snapshot page should be requested.');
+      };
+      const loadStaffClockState = () => state;
+      const renderStaffClock = () => {};
+      const renderStaffTimeAdmin = () => { adminRendered += 1; };
+      const clearStaffClockPairingMemory = () => {};
+      const showStaffClockAuthorizationRequired = () => {
+        throw new Error('The authorized snapshot must not return to recovery.');
+      };
+      ${namedFunctionSource(clientSource, 'exactStaffClockKeys')}
+      ${namedFunctionSource(clientSource, 'cleanStaffClockText')}
+      ${namedFunctionSource(clientSource, 'normalizeStaffClockPerson')}
+      ${namedFunctionSource(clientSource, 'validStaffClockTimestamp')}
+      ${namedFunctionSource(clientSource, 'dateKeyAsUtc')}
+      ${namedFunctionSource(clientSource, 'utcAsDateKey')}
+      ${namedFunctionSource(clientSource, 'normalizeStaffClockPeriod')}
+      ${namedFunctionSource(clientSource, 'normalizeStaffClockPeriods')}
+      ${namedFunctionSource(clientSource, 'normalizeStaffClockView')}
+      ${namedFunctionSource(clientSource, 'normalizeStaffClockSummary')}
+      ${namedFunctionSource(clientSource, 'validatedStaffClockSnapshotStart')}
+      ${namedFunctionSource(clientSource, 'saveStaffClockPeople')}
+      ${namedFunctionSource(clientSource, 'setStaffClockAvailability')}
+      ${namedFunctionSource(clientSource, 'populateStaffClockPeople')}
+      ${namedFunctionSource(clientSource, 'loadStaffClockSnapshot')}
+      ${namedFunctionSource(clientSource, 'loadStaffClockSnapshotWithRetry')}
+      ${namedFunctionSource(clientSource, 'refreshStaffClockRosterAfterAuthorization')}
+      return {
+        refreshStaffClockRosterAfterAuthorization,
+        result() {
+          return {
+            state,
+            staffClockPeople,
+            availability: staffClockAvailability,
+            options: select.children.map(option => ({
+              value: option.value,
+              textContent: option.textContent
+            })),
+            controlsHidden: nodes['#staffClockControls'].hidden,
+            cache: JSON.parse(storage.get(STAFF_CLOCK_STAFF_CACHE_KEY)),
+            adminRendered
+          };
+        }
+      };
+    `
+  )(
+    productionSnapshot,
+    storage,
+    writes,
+    snapshotCalls,
+    validStaffMember,
+    preservedStaffClockState
+  );
+
+  const now = Date.parse('2026-08-27T14:00:00-04:00');
+  const pairingHarness = createPairingHarness([
+    {
+      ok: true,
+      result: 'pending',
+      pairingCode: 'ABCDE-FGHJK',
+      expiresAt: new Date(now + 5 * 60_000).toISOString(),
+      gymName: 'Revolution BJJ',
+      deviceLabel: 'Revolution BJJ front desk'
+    },
+    {
+      ok: true,
+      result: 'approved',
+      deliveryExpiresAt: new Date(now + 120_000).toISOString()
+    },
+    { ok: true, result: 'authorized' }
+  ], {
+    now,
+    onRefresh: snapshotHarness.refreshStaffClockRosterAfterAuthorization
+  });
+  await pairingHarness.run('start');
+  await pairingHarness.run('poll');
+  await pairingHarness.run('poll');
+  pairingHarness.flushZeroTimers();
+  await pairingHarness.settleRefreshes();
+
+  assert.deepEqual(snapshotCalls, [{ operation: 'snapshot' }]);
+  assert.deepEqual(snapshotHarness.result(), {
+    state: preservedStaffClockState,
+    staffClockPeople: staff,
+    availability: 'loading',
+    options: [
+      { value: '', textContent: 'Select staff member' },
+      { value: 'mandy', textContent: 'Mandy' },
+      { value: 'marvin', textContent: 'Marvin' }
+    ],
+    controlsHidden: true,
+    cache: { version: 1, staff },
+    adminRendered: 1
+  });
+  assert.deepEqual(writes, ['gib_m1b_staff_clock_staff_v1']);
+  assert.equal(storage.get('gib_m1b_staff_clock_state_v1'), preservedStaffClockStateBytes);
+  for (const [key, value] of Object.entries(businessValues)) {
+    assert.equal(storage.get(key), value, key);
+  }
+});
+
+test('authorization recovery keeps a cached roster and durable queue locked and byte-identical when its snapshot fails', async t => {
+  const cachedStaff = [
+    { staffId: 'mandy', staffName: 'Mandy' },
+    { staffId: 'marvin', staffName: 'Marvin' }
+  ];
+  const cachedRosterBytes = JSON.stringify({ version: 1, staff: cachedStaff });
+  const queuedRecord = {
+    ...fullRecord,
+    staffId: 'mandy',
+    staffName: 'Mandy'
+  };
+  const stateBytes = JSON.stringify({
+    version: 2,
+    baseline: null,
+    overlay: [queuedRecord],
+    queue: [queuedRecord]
+  });
+
+  for (const failureMode of ['http-500', 'invalid-response']) {
+    await t.test(failureMode, async () => {
+      const harness = Function(
+        'failureMode',
+        'cachedRosterBytes',
+        'stateBytes',
+        `
+          const cachedRoster = JSON.parse(cachedRosterBytes);
+          const state = JSON.parse(stateBytes);
+          const storage = new Map([
+            ['gib_m1b_staff_clock_staff_v1', cachedRosterBytes],
+            ['gib_m1b_staff_clock_state_v1', stateBytes]
+          ]);
+          const localStorage = {
+            getItem: key => storage.get(key) ?? null,
+            setItem() { throw new Error('Failed authorization recovery must not write tablet data.'); },
+            removeItem() { throw new Error('Failed authorization recovery must not remove tablet data.'); },
+            clear() { throw new Error('Failed authorization recovery must not clear tablet data.'); }
+          };
+          const nodes = {
+            '#staffClockAvailability': { hidden: true },
+            '#staffClockAvailabilityTitle': { textContent: '' },
+            '#staffClockAvailabilityDetail': { textContent: '' },
+            '#staffClockPairingCodeWrap': { hidden: false },
+            '#staffClockPairingCode': { textContent: 'ABCDE-FGHJK' },
+            '#staffClockPairingExpiry': { textContent: '5:00' },
+            '#staffClockPairingInstructions': { hidden: false },
+            '#retryStaffClock': { hidden: true, textContent: '' },
+            '#staffClockControls': { hidden: false },
+            '#staffClockName': { disabled: false },
+            '#btnStaffClockAction': { disabled: false }
+          };
+          const $ = selector => nodes[selector] || null;
+          let staffClockPeople = cachedRoster.staff;
+          let staffClockAvailability = 'loading';
+          let staffClockConfirmationActive = false;
+          let staffClockAuthorizationRecoveryInProgress = true;
+          const IS_PRODUCTION_ORIGIN = true;
+          let snapshotPosts = 0;
+          let syncPosts = 0;
+          let businessPosts = 0;
+          const loadStaffClockState = () => state;
+          const loadStaffClockSnapshotWithRetry = async () => {
+            snapshotPosts += 1;
+            if (failureMode === 'http-500') {
+              const error = new Error('Synthetic snapshot failure.');
+              error.staffClockStatus = 500;
+              throw error;
+            }
+            return null;
+          };
+          const reconcileStaffClockSnapshotState = () => {
+            throw new Error('An invalid snapshot must not reconcile local state.');
+          };
+          const saveStaffClockState = () => {
+            throw new Error('A failed snapshot must not save local state.');
+          };
+          const saveStaffClockPeople = () => {
+            throw new Error('A failed snapshot must not replace the roster cache.');
+          };
+          const clearStaffClockPairingMemory = () => {
+            throw new Error('A failed snapshot must not complete recovery.');
+          };
+          const populateStaffClockPeople = () => {
+            throw new Error('A failed snapshot must not expose cached names.');
+          };
+          const renderStaffTimeAdmin = () => {
+            throw new Error('A failed snapshot must not render server state.');
+          };
+          const showStaffClockAuthorizationRequired = () => {
+            throw new Error('A non-401 snapshot failure is unavailable, not authorization-required.');
+          };
+          const syncStaffClockQueue = async () => { syncPosts += 1; };
+          const postStaffClock = async body => {
+            if (body?.operation === 'snapshot' || body?.operation === 'snapshotPage') snapshotPosts += 1;
+            else businessPosts += 1;
+            throw new Error('Authorization recovery must use only its snapshot loader.');
+          };
+          ${namedFunctionSource(clientSource, 'setStaffClockAvailability')}
+          ${namedFunctionSource(clientSource, 'refreshStaffClockRosterAfterAuthorization')}
+          return {
+            run: refreshStaffClockRosterAfterAuthorization,
+            result() {
+              return {
+                stateBytes: JSON.stringify(state),
+                storedStateBytes: storage.get('gib_m1b_staff_clock_state_v1'),
+                cachedRosterBytes: storage.get('gib_m1b_staff_clock_staff_v1'),
+                peopleBytes: JSON.stringify(staffClockPeople),
+                availability: staffClockAvailability,
+                availabilityHidden: nodes['#staffClockAvailability'].hidden,
+                title: nodes['#staffClockAvailabilityTitle'].textContent,
+                controlsHidden: nodes['#staffClockControls'].hidden,
+                selectDisabled: nodes['#staffClockName'].disabled,
+                actionDisabled: nodes['#btnStaffClockAction'].disabled,
+                pairingCode: nodes['#staffClockPairingCode'].textContent,
+                pairingInstructionsHidden: nodes['#staffClockPairingInstructions'].hidden,
+                retryHidden: nodes['#retryStaffClock'].hidden,
+                retryLabel: nodes['#retryStaffClock'].textContent,
+                recoveryInProgress: staffClockAuthorizationRecoveryInProgress,
+                snapshotPosts,
+                syncPosts,
+                businessPosts
+              };
+            }
+          };
+        `
+      )(failureMode, cachedRosterBytes, stateBytes);
+
+      assert.equal(await harness.run(), null);
+      assert.deepEqual(harness.result(), {
+        stateBytes,
+        storedStateBytes: stateBytes,
+        cachedRosterBytes,
+        peopleBytes: JSON.stringify(cachedStaff),
+        availability: 'unavailable',
+        availabilityHidden: false,
+        title: 'Staff Clock is unavailable',
+        controlsHidden: true,
+        selectDisabled: true,
+        actionDisabled: true,
+        pairingCode: '',
+        pairingInstructionsHidden: true,
+        retryHidden: false,
+        retryLabel: 'Try again',
+        recoveryInProgress: false,
+        snapshotPosts: 1,
+        syncPosts: 0,
+        businessPosts: 0
+      });
+    });
+  }
+});
+
+test('blank reset state saves an authoritative open Mandy shift and immediately renders Clock out with both roster names cached', async () => {
+  const staff = [
+    { staffId: 'mandy', staffName: 'Mandy' },
+    { staffId: 'marvin', staffName: 'Marvin' }
+  ];
+  const totals = staff.map(person => ({
+    ...person,
+    completedShifts: 0,
+    totalSeconds: 0,
+    needsAttention: false
+  }));
+  const baseline = {
+    records: [],
+    clockedInNow: [{
+      punchId: fullRecord.punchId,
+      staffId: 'mandy',
+      staffName: 'Mandy',
+      clockInAt: '2026-08-27T09:00:00-04:00'
+    }],
+    needsAttention: [],
+    periods: {
+      current: {
+        startDate: '2026-08-24',
+        endDate: '2026-09-06',
+        totals
+      },
+      previous: {
+        startDate: '2026-08-10',
+        endDate: '2026-08-23',
+        totals
+      }
+    },
+    view: snapshotView({
+      today: '2026-08-27',
+      recordCount: 0,
+      recordTotal: 1,
+      todayPunchCount: 0,
+      todayPunchTotal: 1,
+      recordsTruncated: true
+    })
+  };
+  const payload = { staff, baseline };
+  const harness = Function(
+    'payload',
+    'validStaffMember',
+    'mergeStaffRecords',
+    'evaluateStaffState',
+    `
+      const STAFF_CLOCK_STATE_KEY = 'gib_m1b_staff_clock_state_v1';
+      const STAFF_CLOCK_STAFF_CACHE_KEY = 'gib_m1b_staff_clock_staff_v1';
+      const STAFF_CLOCK_STATE_VERSION = 2;
+      const TZ = 'America/New_York';
+      const storage = new Map();
+      const writes = [];
+      const snapshotCalls = [];
+      const localStorage = {
+        getItem: key => storage.get(key) ?? null,
+        setItem(key, value) {
+          writes.push(key);
+          storage.set(key, value);
+        }
+      };
+      const select = {
+        value: 'mandy',
+        disabled: true,
+        children: [],
+        replaceChildren(...children) { this.children = [...children]; },
+        appendChild(child) { this.children.push(child); }
+      };
+      const status = {
+        textContent: '',
+        classList: { add() {}, remove() {} }
+      };
+      const action = {
+        textContent: '',
+        disabled: true,
+        dataset: {}
+      };
+      const nodes = {
+        '#staffClockAvailability': { hidden: false },
+        '#staffClockAvailabilityTitle': { textContent: '' },
+        '#staffClockAvailabilityDetail': { textContent: '' },
+        '#staffClockPairingCodeWrap': { hidden: true },
+        '#staffClockPairingCode': { textContent: '' },
+        '#staffClockPairingExpiry': { textContent: '' },
+        '#staffClockPairingInstructions': { hidden: true },
+        '#retryStaffClock': { hidden: true, textContent: '' },
+        '#staffClockControls': { hidden: true },
+        '#staffClockName': select,
+        '#staffClockStatus': status,
+        '#btnStaffClockAction': action
+      };
+      const document = {
+        createElement(tag) {
+          if (tag !== 'option') throw new Error('Unexpected element.');
+          return { value: '', textContent: '' };
+        }
+      };
+      const $ = selector => nodes[selector] || null;
+      let state = { version: 2, baseline: null, overlay: [], queue: [] };
+      let staffClockPeople = [];
+      let staffClockAvailability = 'loading';
+      let staffClockConfirmationActive = false;
+      let staffClockAuthorizationRecoveryInProgress = true;
+      const normalizeStaffClockSummary = value => value;
+      const loadStaffClockState = () => state;
+      const saveStaffClockState = value => {
+        state = value;
+        localStorage.setItem(STAFF_CLOCK_STATE_KEY, JSON.stringify(value));
+      };
+      const loadStaffClockSnapshotWithRetry = async () => {
+        snapshotCalls.push({ operation: 'snapshot' });
+        return payload;
+      };
+      const clearStaffClockPairingMemory = () => {};
+      const renderStaffTimeAdmin = () => {};
+      const showStaffClockAuthorizationRequired = () => {
+        throw new Error('Authorized refresh must not return to pairing.');
+      };
+      ${namedFunctionSource(clientSource, 'fmtDate')}
+      ${namedFunctionSource(clientSource, 'exactStaffClockKeys')}
+      ${namedFunctionSource(clientSource, 'cleanStaffClockText')}
+      ${namedFunctionSource(clientSource, 'normalizeStaffClockPerson')}
+      ${namedFunctionSource(clientSource, 'reconcileStaffClockSnapshotState')}
+      ${namedFunctionSource(clientSource, 'saveStaffClockPeople')}
+      ${namedFunctionSource(clientSource, 'setStaffClockAvailability')}
+      ${namedFunctionSource(clientSource, 'combinedStaffClockRecords')}
+      ${namedFunctionSource(clientSource, 'staffClockBaselineOpenRecord')}
+      ${namedFunctionSource(clientSource, 'staffClockStatusFor')}
+      ${namedFunctionSource(clientSource, 'selectedStaffClockPerson')}
+      ${namedFunctionSource(clientSource, 'formatStaffClockTime')}
+      ${namedFunctionSource(clientSource, 'renderStaffClock')}
+      ${namedFunctionSource(clientSource, 'populateStaffClockPeople')}
+      ${namedFunctionSource(clientSource, 'refreshStaffClockRosterAfterAuthorization')}
+      return {
+        run: refreshStaffClockRosterAfterAuthorization,
+        result() {
+          return {
+            state,
+            people: staffClockPeople,
+            availability: staffClockAvailability,
+            controlsHidden: nodes['#staffClockControls'].hidden,
+            options: select.children.map(option => option.textContent),
+            selected: select.value,
+            status: status.textContent,
+            action: {
+              textContent: action.textContent,
+              disabled: action.disabled,
+              dataset: { ...action.dataset }
+            },
+            cache: JSON.parse(storage.get(STAFF_CLOCK_STAFF_CACHE_KEY)),
+            writes,
+            snapshotCalls,
+            recoveryInProgress: staffClockAuthorizationRecoveryInProgress
+          };
+        }
+      };
+    `
+  )(payload, validStaffMember, mergeStaffRecords, evaluateStaffState);
+
+  assert.deepEqual(await harness.run(), payload);
+  assert.deepEqual(harness.result(), {
+    state: {
+      version: 2,
+      baseline,
+      overlay: [],
+      queue: []
+    },
+    people: staff,
+    availability: 'ready',
+    controlsHidden: false,
+    options: ['Select staff member', 'Mandy', 'Marvin'],
+    selected: 'mandy',
+    status: 'Clocked in at 9:00 AM',
+    action: {
+      textContent: 'Clock out',
+      disabled: false,
+      dataset: { action: 'clockOut' }
+    },
+    cache: { version: 1, staff },
+    writes: [
+      'gib_m1b_staff_clock_state_v1',
+      'gib_m1b_staff_clock_staff_v1'
+    ],
+    snapshotCalls: [{ operation: 'snapshot' }],
+    recoveryInProgress: false
+  });
+});
+
+test('reload recovery accepts approved or authorized directly from the start endpoint', async () => {
+  const now = Date.parse('2026-08-27T14:00:00-04:00');
+  const approved = createPairingHarness([
+    {
+      ok: true,
+      result: 'approved',
+      deliveryExpiresAt: new Date(now + 120_000).toISOString()
+    }
+  ], { now });
+  await approved.run('start');
+  assert.deepEqual(approved.state().calls, ['start']);
+  assert.equal(approved.state().codeHidden, true);
+  assert.deepEqual(approved.state().activeTimerDelays, [250]);
+
+  const authorized = createPairingHarness([
+    { ok: true, result: 'authorized' }
+  ], { now });
+  await authorized.run('start');
+  assert.deepEqual(authorized.state().calls, ['start']);
+  assert.equal(authorized.state().availability, 'loading');
+  authorized.flushZeroTimers();
+  assert.equal(authorized.state().refreshCount, 1);
+});
+
+test('pairing expiry and network interruption remain visible, retryable, and bounded', async () => {
+  const now = Date.parse('2026-08-27T14:00:00-04:00');
+  const expiresAt = new Date(now + 5 * 60_000).toISOString();
+  const pending = {
+    ok: true,
+    result: 'pending',
+    pairingCode: 'ABCDE-FGHJK',
+    expiresAt,
+    gymName: 'Revolution BJJ',
+    deviceLabel: 'Revolution BJJ front desk'
+  };
+  const expiredData = {
+    ok: false,
+    result: 'expired',
+    message: 'Pairing code expired. Request a new code.'
+  };
+  const expired = createPairingHarness([
+    pending,
+    { throws: true, status: 410, data: expiredData }
+  ], { now });
+  await expired.run('start');
+  await expired.run('poll');
+  let state = expired.state();
+  assert.equal(state.code, '');
+  assert.equal(state.displayedCode, '');
+  assert.equal(state.codeHidden, true);
+  assert.equal(state.retryHidden, false);
+  assert.equal(state.retryLabel, 'Get a new code');
+  assert.equal(state.detail, expiredData.message);
+
+  const interrupted = createPairingHarness([
+    pending,
+    { throws: true, message: 'network interrupted' },
+    { throws: true, message: 'network interrupted' }
+  ], { now });
+  await interrupted.run('start');
+  await interrupted.run('poll');
+  state = interrupted.state();
+  assert.equal(state.code, 'ABCDE-FGHJK');
+  assert.match(state.detail, /retry automatically without changing this code/u);
+  assert.equal(state.retryLabel, 'Retry now');
+  assert.deepEqual(state.activeTimerDelays, [2_500]);
+
+  interrupted.advanceTo(Date.parse(expiresAt) + 1);
+  await interrupted.run('poll');
+  state = interrupted.state();
+  assert.equal(state.code, '', 'the display code is cleared at its five-minute expiry');
+  assert.equal(state.displayedCode, '');
+  assert.match(state.detail, /after approval may have started/u);
+  assert.deepEqual(state.activeTimerDelays, [2_500]);
+});
+
+test('terminal pairing 401 and 403 clear stale codes and leave only a fresh-code recovery action', async () => {
+  const now = Date.parse('2026-08-27T14:00:00-04:00');
+  const pending = {
+    ok: true,
+    result: 'pending',
+    pairingCode: 'ABCDE-FGHJK',
+    expiresAt: new Date(now + 5 * 60_000).toISOString(),
+    gymName: 'Revolution BJJ',
+    deviceLabel: 'Revolution BJJ front desk'
+  };
+  const terminalResponses = [{
+    status: 401,
+    data: {
+      ok: false,
+      result: 'authorization_required',
+      message: 'This tablet needs authorization.'
+    }
+  }, {
+    status: 403,
+    data: {
+      ok: false,
+      message: 'Tablet pairing request was not accepted.'
+    }
+  }];
+
+  for (const terminal of terminalResponses) {
+    const harness = createPairingHarness([
+      pending,
+      { throws: true, ...terminal }
+    ], { now });
+    await harness.run('start');
+    assert.equal(harness.state().displayedCode, pending.pairingCode);
+    assert.deepEqual(harness.state().activeTimerDelays, [2_500]);
+
+    await harness.run('poll');
+    const state = harness.state();
+    assert.equal(state.availability, 'authorization-required');
+    assert.equal(state.title, 'This tablet needs authorization');
+    assert.equal(state.code, '');
+    assert.equal(state.expiresAt, '');
+    assert.equal(state.deliveryExpiresAt, '');
+    assert.equal(state.displayedCode, '');
+    assert.equal(state.codeHidden, true);
+    assert.equal(state.instructionsHidden, true);
+    assert.equal(state.controlsHidden, true);
+    assert.equal(state.retryHidden, false);
+    assert.equal(state.retryLabel, 'Get a new code');
+    assert.equal(state.detail, terminal.data.message);
+    assert.deepEqual(state.activeTimerDelays, []);
+  }
+});
+
+test('pairing secrets stay in memory and never enter a URL, browser storage, or Admin navigation', () => {
+  const pairingStart = clientSource.indexOf('function validStaffClockPairingCode(');
+  const pairingEnd = clientSource.indexOf('function validatedStaffClockSnapshotStart(', pairingStart);
+  assert.ok(pairingStart >= 0 && pairingEnd > pairingStart);
+  const pairingSource = clientSource.slice(pairingStart, pairingEnd);
+  assert.doesNotMatch(pairingSource, /localStorage|sessionStorage|location\.(?:href|search|assign|replace)|URLSearchParams|history\.|authorizeTablet/iu);
+  assert.match(pairingSource, /adminUrl\.textContent = new URL\('\/m1\/admin\/', STAFF_CLOCK_PAIRING_CONFIG\.origin\)\.href/u);
+  assert.doesNotMatch(pairingSource, /adminUrl\.href\s*=|window\.open\(|location\s*=/u);
+  assert.doesNotMatch(kioskHtml, /\?authorizeTablet=1|id="authorizeStaffClockTablet"/u);
+  assert.match(kioskHtml, /On a <strong>separate phone or computer<\/strong>/u);
+});
+
+test('pairing is profile-gated and remains absent from both Richmond profiles', () => {
+  assert.match(clientSource, /installationProfile\?\.featureFlags\?\.staffClockPairing === true/u);
+  assert.match(clientSource, /installationProfile\?\.allowedOrigin === STAFF_CLOCK_PAIRING_CONFIG\.origin/u);
+  assert.match(clientSource, /location\.origin === STAFF_CLOCK_PAIRING_CONFIG\.origin/u);
+  assert.doesNotMatch(clientSource, /STAFF_CLOCK_PAIRING_AVAILABLE\s*=\s*[^;]*IS_RICHMOND/su);
+  assert.match(kioskHtml, /const STAFF_CLOCK_PAIRING_ENABLED = INSTALLATION\.featureFlags\.staffClockPairing === true/u);
+  assert.match(kioskHtml, /profile\.featureFlags\?\.staffClockPairing !== false/u);
+  assert.match(kioskHtml, /\$\('#staffClock'\)\.hidden = !STAFF_CLOCK_ENABLED/u);
+});
+
+test('missing or false installation-profile validity causes zero Staff Clock initialization, API, or business activity', () => {
+  const gateStart = clientSource.lastIndexOf('if (\n  globalThis.M1_INSTALLATION_PROFILE_VALID === true');
+  assert.ok(gateStart > 0);
+  const gateSource = clientSource.slice(gateStart);
+  for (const profileValid of [undefined, false]) {
+    const result = Function('profileValid', 'gateSource', `
+      const globalThis = profileValid === undefined
+        ? {}
+        : { M1_INSTALLATION_PROFILE_VALID: profileValid };
+      const installationProfile = {
+        schema: 'gib-m1-installation-profile/v1',
+        installationId: 'rev',
+        siteCode: 'Rev',
+        featureFlags: { staffClock: true },
+        backend: { enabled: true, transportTarget: 'production' }
+      };
+      const activity = { initialization: 0, api: 0, business: 0 };
+      const initializeStaffClockClient = () => {
+        activity.initialization += 1;
+        activity.api += 1;
+        activity.business += 1;
+      };
+      eval(gateSource);
+      return activity;
+    `)(profileValid, gateSource);
+    assert.deepEqual(result, {
+      initialization: 0,
+      api: 0,
+      business: 0
+    }, String(profileValid));
+  }
+});
+
 test('production authorization loss during queued sync locks actions and preserves the exact queue', async () => {
   const queued = { punchId: fullRecord.punchId };
   const result = Function('queued', `
     let staffClockSyncPromise = null;
     let staffClockSyncRequested = false;
     let staffClockStateRevision = 0;
+    let staffClockAvailability = 'ready';
+    let staffClockAuthorizationRecoveryInProgress = false;
     let staffClockPeople = [{ staffId: 'front-desk-test-two', staffName: 'Front Desk Test Two' }];
     let authRequired = 0;
     let saveCount = 0;
@@ -243,15 +1328,22 @@ test('production authorization loss during queued sync locks actions and preserv
     const renderStaffClock = () => {};
     const renderStaffTimeAdmin = () => {};
     const refreshStaffClockSnapshot = () => {};
-    const showStaffClockAuthorizationRequired = () => { authRequired += 1; };
+    const showStaffClockAuthorizationRequired = () => {
+      authRequired += 1;
+      staffClockAvailability = 'authorization-required';
+    };
     const setStaffClockAvailability = () => {};
     ${namedFunctionSource(clientSource, 'syncStaffClockQueue')}
-    return syncStaffClockQueue().then(() => ({
-      authRequired,
-      saveCount,
-      postCount,
-      queue: state.queue
-    }));
+    return (async () => {
+      await syncStaffClockQueue();
+      await syncStaffClockQueue();
+      return {
+        authRequired,
+        saveCount,
+        postCount,
+        queue: state.queue
+      };
+    })();
   `)(queued);
 
   assert.deepEqual(await result, {
@@ -268,6 +1360,7 @@ test('production snapshot 401 locks a stale cached roster behind authorization r
     let staffClockSnapshotPromise = null;
     let staffClockSnapshotRequested = false;
     let staffClockStateRevision = 0;
+    let staffClockAuthorizationRecoveryInProgress = false;
     let staffClockPeople = [{ staffId: 'front-desk-test-two', staffName: 'Front Desk Test Two' }];
     let authRequired = 0;
     let availabilityChanges = 0;
@@ -702,6 +1795,7 @@ test('snapshot refresh replaces history, caches only active roster names, and re
     let staffClockSnapshotPromise = null;
     let staffClockSnapshotRequested = false;
     let staffClockStateRevision = 0;
+    let staffClockAuthorizationRecoveryInProgress = false;
     let staffClockPeople = [];
     let savedState = null;
     let savedPeople = null;
@@ -730,6 +1824,7 @@ test('snapshot refresh replaces history, caches only active roster names, and re
     const saveStaffClockPeople = value => { savedPeople = value; };
     const populateStaffClockPeople = () => { populated += 1; };
     const renderStaffTimeAdmin = () => { adminRendered += 1; };
+    const clearStaffClockPairingMemory = () => {};
     const setStaffClockAvailability = () => {};
     const showStaffClockAuthorizationRequired = () => {};
     ${namedFunctionSource(clientSource, 'reconcileStaffClockSnapshotState')}
@@ -901,6 +1996,8 @@ test('empty retry sync performs no snapshot; one accepted queue triggers exactly
     let staffClockSyncPromise = null;
     let staffClockSyncRequested = false;
     let staffClockStateRevision = 0;
+    let staffClockAvailability = 'ready';
+    let staffClockAuthorizationRecoveryInProgress = false;
     let state = initialState;
     let posts = 0;
     let refreshes = 0;

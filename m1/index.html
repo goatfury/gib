@@ -525,6 +525,39 @@ input, textarea, select {
   margin-top: 12px;
   flex-wrap: wrap;
 }
+.staff-clock-pairing-code-wrap {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(96,165,250,.4);
+  border-radius: 12px;
+  background: rgba(59,130,246,.1);
+}
+.staff-clock-pairing-label {
+  color: #bfdbfe;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.staff-clock-pairing-code {
+  display: block;
+  margin-top: 4px;
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: clamp(28px, 6vw, 42px);
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+.staff-clock-pairing-expiry,
+.staff-clock-pairing-instructions {
+  margin-top: 7px;
+  color: #cbd5e1;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.staff-clock-pairing-instructions strong { color: #fff; }
+.staff-clock-pairing-code-wrap[hidden],
+.staff-clock-pairing-instructions[hidden] { display: none; }
 #btnStaffClockAction,
 #btnStaffClockDone {
   min-height: 48px;
@@ -900,7 +933,7 @@ body.admin-mode .container { max-width: 1120px; }
 }
 
 </style>
-<script src="./installation-profile.generated.js?v=2026-08-27-tablet-recovery-r1"></script>
+<script src="./installation-profile.generated.js?v=2026-08-27-tablet-pairing-r1"></script>
 </head>
 <body>
 <div class="container">
@@ -971,9 +1004,16 @@ body.admin-mode .container { max-width: 1120px; }
     <div id="staffClockAvailability" class="staff-clock-availability" role="status" aria-live="polite" aria-atomic="true">
       <div id="staffClockAvailabilityTitle" class="staff-clock-availability-title">Loading Staff Clock…</div>
       <div id="staffClockAvailabilityDetail" class="staff-clock-availability-detail">Checking this tablet and loading the active staff roster.</div>
+      <div id="staffClockPairingCodeWrap" class="staff-clock-pairing-code-wrap" hidden>
+        <div class="staff-clock-pairing-label">Pairing code</div>
+        <output id="staffClockPairingCode" class="staff-clock-pairing-code"></output>
+        <div id="staffClockPairingExpiry" class="staff-clock-pairing-expiry"></div>
+      </div>
+      <div id="staffClockPairingInstructions" class="staff-clock-pairing-instructions" hidden>
+        On a <strong>separate phone or computer</strong>, open the normal Admin at <span id="staffClockPairingAdminUrl"></span>, sign in, and enter this code under “Authorize a Staff Clock tablet.”
+      </div>
       <div class="staff-clock-availability-actions">
-        <a id="authorizeStaffClockTablet" class="btn brand" href="/m1/admin/?authorizeTablet=1" hidden>Authorize this tablet</a>
-        <button id="retryStaffClock" class="btn" type="button" hidden>Try again</button>
+        <button id="retryStaffClock" class="btn" type="button" hidden>Get a new code</button>
       </div>
     </div>
     <div id="staffClockControls" class="staff-clock-controls" hidden>
@@ -1389,10 +1429,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-27-tablet-recovery-r1';
+} from './sync-core.mjs?v=2026-08-27-tablet-pairing-r1';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-08-27-tablet-recovery-r1';
+const OFFLINE_SHELL_REVISION = '2026-08-27-tablet-pairing-r1';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -1402,56 +1442,10 @@ if ('serviceWorker' in navigator) {
 
 (() => {
   const INSTALLATION = globalThis.M1_INSTALLATION_PROFILE;
-  const expectedInstallation = INSTALLATION?.installationId === 'richmond'
-    ? INSTALLATION.environment === 'production'
-      && (
-        (INSTALLATION.activation === 'pending' && INSTALLATION.writesEnabled === false)
-        || (INSTALLATION.activation === 'active' && INSTALLATION.writesEnabled === true)
-      )
-      ? {
-          schema: 'gib-m1-installation-profile/v1',
-          installationId: 'richmond',
-          gymName: 'Richmond BJJ',
-          siteCode: 'Richmond',
-          deviceLabel: 'Richmond Front Desk Tablet',
-          storagePrefix: 'gib_m1_richmond_production_',
-          environment: 'production',
-          allowedOrigin: 'https://gib-richmond-live.netlify.app',
-          activation: INSTALLATION.activation,
-          writesEnabled: INSTALLATION.writesEnabled,
-          scheduleSource: { mode: 'richmond-website', endpoint: '/api/m1-schedule' },
-          featureFlags: { staffClock: false },
-          backend: { enabled: true, transportTarget: 'richmond-production' }
-        }
-      : INSTALLATION.environment === 'test'
-        ? {
-        schema: 'gib-m1-installation-profile/v1',
-        installationId: 'richmond',
-        gymName: 'Richmond BJJ',
-        siteCode: 'Richmond',
-        deviceLabel: 'Richmond TEST Browser',
-        storagePrefix: 'gib_m1_richmond_',
-        environment: 'test',
-        allowedOrigin: 'https://gib-richmond-test.netlify.app',
-        scheduleSource: { mode: 'richmond-website', endpoint: '/api/m1-schedule' },
-        featureFlags: { staffClock: false },
-        backend: { enabled: true, transportTarget: 'richmond-test' }
-      }
-        : null
-    : INSTALLATION?.installationId === 'rev'
-      ? {
-          schema: 'gib-m1-installation-profile/v1',
-          installationId: 'rev',
-          gymName: 'Revolution BJJ',
-          siteCode: 'Rev',
-          deviceLabel: 'Revolution BJJ front desk',
-          storagePrefix: 'gib_m1_',
-          scheduleSource: { mode: 'rev-website', endpoint: '/api/m1-schedule' },
-          featureFlags: { staffClock: true },
-          backend: { enabled: true, transportTarget: 'rev' }
-        }
-      : null;
-  if (!expectedInstallation || JSON.stringify(INSTALLATION) !== JSON.stringify(expectedInstallation)) {
+  if (
+    globalThis.M1_INSTALLATION_PROFILE_VALID !== true
+    || INSTALLATION?.schema !== 'gib-m1-installation-profile/v1'
+  ) {
     document.body.replaceChildren();
     const blocked = document.createElement('main');
     blocked.className = 'installation-blocked';
@@ -1470,6 +1464,7 @@ if ('serviceWorker' in navigator) {
     && INSTALLATION.activation === 'active'
     && INSTALLATION.writesEnabled === true;
   const STAFF_CLOCK_ENABLED = INSTALLATION.featureFlags.staffClock === true;
+  const STAFF_CLOCK_PAIRING_ENABLED = INSTALLATION.featureFlags.staffClockPairing === true;
   const BACKEND_ENABLED = INSTALLATION.backend.enabled === true;
 
   function richmondProductionKioskCopy(writesEnabled) {
@@ -4021,6 +4016,7 @@ function refreshNameDatalist() {
       || profile.activation !== 'active'
       || profile.writesEnabled !== true
       || profile.featureFlags?.staffClock !== false
+      || profile.featureFlags?.staffClockPairing !== false
       || profile.backend?.enabled !== true
       || profile.backend.transportTarget !== 'richmond-production'
       || options.autoSyncKey !== expectedAutoSyncKey
@@ -4698,6 +4694,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-08-27-tablet-recovery-r1"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-08-27-tablet-pairing-r1"></script>
 </body>
 </html>

@@ -7,16 +7,39 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-08-27-tablet-recovery-r1';
+} from './staff-clock-core.mjs?v=2026-08-27-tablet-pairing-r1';
 
-const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
-const IS_PRODUCTION_ORIGIN = location.origin === PRODUCTION_ORIGIN;
+const installationProfile = globalThis.M1_INSTALLATION_PROFILE;
+const STAFF_CLOCK_PAIRING_ENABLED = installationProfile?.featureFlags?.staffClockPairing === true;
+const STAFF_CLOCK_PAIRING_CONFIG = installationProfile?.staffClockPairing || null;
+const STAFF_CLOCK_PAIRING_CONFIG_VALID = STAFF_CLOCK_PAIRING_ENABLED
+  && Number.isInteger(STAFF_CLOCK_PAIRING_CONFIG?.expiresInSeconds)
+  && STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds >= 60
+  && STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds <= 300
+  && installationProfile?.allowedOrigin === STAFF_CLOCK_PAIRING_CONFIG.origin;
+const STAFF_CLOCK_PAIRING_AVAILABLE = STAFF_CLOCK_PAIRING_CONFIG_VALID
+  && location.origin === STAFF_CLOCK_PAIRING_CONFIG.origin;
+const PRODUCTION_ORIGIN = typeof installationProfile?.allowedOrigin === 'string'
+  ? installationProfile.allowedOrigin
+  : '';
+const IS_PRODUCTION_ORIGIN = Boolean(
+  PRODUCTION_ORIGIN
+  && location.origin === PRODUCTION_ORIGIN
+);
 const TZ = 'America/New_York';
 const BUILD = document.getElementById('buildId')?.textContent?.trim() || '';
 const STAFF_CLOCK_STATE_KEY = 'gib_m1b_staff_clock_state_v1';
 const STAFF_CLOCK_STAFF_CACHE_KEY = 'gib_m1b_staff_clock_staff_v1';
 const STAFF_CLOCK_ENDPOINT = '/api/m1-staff-clock';
+const STAFF_CLOCK_PAIRING_START_ENDPOINT = '/api/m1-tablet-pairing-start';
+const STAFF_CLOCK_PAIRING_POLL_ENDPOINT = '/api/m1-tablet-pairing-poll';
 const STAFF_CLOCK_RETRY_INTERVAL_MS = 30_000;
+const STAFF_CLOCK_PAIRING_POLL_INTERVAL_MS = 2_500;
+const STAFF_CLOCK_PAIRING_APPROVED_POLL_MS = 250;
+const STAFF_CLOCK_PAIRING_MAX_LIFETIME_MS = STAFF_CLOCK_PAIRING_CONFIG_VALID
+  ? STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds * 1_000
+  : 5 * 60_000;
+const STAFF_CLOCK_PAIRING_MAX_DELIVERY_WINDOW_MS = 2 * 60_000;
 const STAFF_CLOCK_STATE_VERSION = 2;
 const STAFF_CLOCK_MAX_INCLUDED_RECORDS = 500;
 const STAFF_CLOCK_MAX_ATTENTION_GROUPS = 600;
@@ -69,6 +92,12 @@ function fmtDate(value) {
   let staffClockStateRevision = 0;
   let staffClockTotalsSelection = 'current';
   let staffClockAvailability = 'loading';
+  let staffClockPairingPromise = null;
+  let staffClockPairingPollTimer = null;
+  let staffClockPairingCode = '';
+  let staffClockPairingExpiresAt = '';
+  let staffClockPairingDeliveryExpiresAt = '';
+  let staffClockAuthorizationRecoveryInProgress = false;
 
   function exactStaffClockKeys(value, expectedKeys) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -574,26 +603,41 @@ function fmtDate(value) {
     const availability = $('#staffClockAvailability');
     const title = $('#staffClockAvailabilityTitle');
     const detail = $('#staffClockAvailabilityDetail');
-    const authorize = $('#authorizeStaffClockTablet');
+    const pairingCodeWrap = $('#staffClockPairingCodeWrap');
+    const pairingCode = $('#staffClockPairingCode');
+    const pairingExpiry = $('#staffClockPairingExpiry');
+    const pairingInstructions = $('#staffClockPairingInstructions');
     const retry = $('#retryStaffClock');
     const controls = $('#staffClockControls');
     const select = $('#staffClockName');
     const action = $('#btnStaffClockAction');
-    if (!availability || !title || !detail || !authorize || !retry || !controls) return;
+    if (
+      !availability
+      || !title
+      || !detail
+      || !pairingCodeWrap
+      || !pairingCode
+      || !pairingExpiry
+      || !pairingInstructions
+      || !retry
+      || !controls
+    ) return;
 
     const ready = staffClockAvailability === 'ready';
     availability.hidden = ready;
     controls.hidden = !ready || staffClockConfirmationActive;
     if (select) select.disabled = !ready;
     if (action && !ready) action.disabled = true;
-    authorize.hidden = true;
+    pairingCodeWrap.hidden = true;
+    pairingCode.textContent = '';
+    pairingExpiry.textContent = '';
+    pairingInstructions.hidden = true;
     retry.hidden = true;
 
     if (ready) return;
     if (staffClockAvailability === 'authorization-required') {
       title.textContent = 'This tablet needs authorization';
-      detail.textContent = 'An Admin can authorize this tablet here. Production credentials are used only in the secure Admin sign-in.';
-      authorize.hidden = !IS_PRODUCTION_ORIGIN;
+      detail.textContent = 'Preparing a short-lived pairing code for an Admin.';
       return;
     }
     if (staffClockAvailability === 'loading') {
@@ -603,11 +647,18 @@ function fmtDate(value) {
     }
     title.textContent = 'Staff Clock is unavailable';
     detail.textContent = 'Staff names could not be loaded. Try again when this tablet is online.';
+    retry.textContent = 'Try again';
     retry.hidden = false;
   }
 
   function showStaffClockAuthorizationRequired() {
     setStaffClockAvailability('authorization-required');
+    if (STAFF_CLOCK_PAIRING_AVAILABLE) {
+      void ensureStaffClockPairing();
+      return;
+    }
+    const detail = $('#staffClockAvailabilityDetail');
+    if (detail) detail.textContent = 'Tablet pairing is unavailable. Ask an owner or manager for help.';
   }
 
   function populateStaffClockPeople() {
@@ -858,7 +909,9 @@ function fmtDate(value) {
         staffId: person.staffId,
         staffName: person.staffName,
         punchAction: expectedAction,
-        site: IS_PRODUCTION_ORIGIN ? 'Rev' : 'Rev TEST',
+        site: IS_PRODUCTION_ORIGIN
+          ? installationProfile.siteCode
+          : `${installationProfile.siteCode} TEST`,
         device: 'Staff Clock tablet',
         build: BUILD,
         note: '',
@@ -933,6 +986,311 @@ function fmtDate(value) {
     } finally {
       if (timeout != null) window.clearTimeout(timeout);
     }
+  }
+
+  function validStaffClockPairingCode(value) {
+    return typeof value === 'string'
+      && /^[0-9A-HJ-KM-NP-TV-Z]{5}-[0-9A-HJ-KM-NP-TV-Z]{5}$/u.test(value);
+  }
+
+  function validStaffClockPairingTimestamp(value) {
+    return typeof value === 'string'
+      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value)
+      && Number.isFinite(Date.parse(value));
+  }
+
+  function validStaffClockPairingPending(value, now = Date.now()) {
+    if (
+      !exactStaffClockKeys(value, [
+        'ok',
+        'result',
+        'pairingCode',
+        'expiresAt',
+        'gymName',
+        'deviceLabel'
+      ])
+      || value.ok !== true
+      || value.result !== 'pending'
+      || !validStaffClockPairingCode(value.pairingCode)
+      || value.gymName !== installationProfile.gymName
+      || value.deviceLabel !== installationProfile.deviceLabel
+    ) return false;
+    if (!validStaffClockPairingTimestamp(value.expiresAt)) return false;
+    const expiresAt = Date.parse(value.expiresAt);
+    return Number.isFinite(expiresAt)
+      && expiresAt > now
+      && expiresAt <= now + STAFF_CLOCK_PAIRING_MAX_LIFETIME_MS;
+  }
+
+  function validStaffClockPairingResult(value, result) {
+    return exactStaffClockKeys(value, ['ok', 'result'])
+      && value.ok === true
+      && value.result === result;
+  }
+
+  function validStaffClockPairingApproved(value, now = Date.now()) {
+    if (
+      !exactStaffClockKeys(value, ['ok', 'result', 'deliveryExpiresAt'])
+      || value.ok !== true
+      || value.result !== 'approved'
+    ) return false;
+    if (!validStaffClockPairingTimestamp(value.deliveryExpiresAt)) return false;
+    const deliveryExpiresAt = Date.parse(value.deliveryExpiresAt);
+    return Number.isFinite(deliveryExpiresAt)
+      && deliveryExpiresAt > now
+      && deliveryExpiresAt <= now + STAFF_CLOCK_PAIRING_MAX_DELIVERY_WINDOW_MS;
+  }
+
+  function validStaffClockPairingExpired(value) {
+    return exactStaffClockKeys(value, ['ok', 'result', 'message'])
+      && value.ok === false
+      && value.result === 'expired'
+      && value.message === 'Pairing code expired. Request a new code.';
+  }
+
+  function validStaffClockPairingAuthorizationRequired(value) {
+    return exactStaffClockKeys(value, ['ok', 'result', 'message'])
+      && value.ok === false
+      && value.result === 'authorization_required'
+      && value.message === 'This tablet needs authorization.';
+  }
+
+  function validStaffClockPairingRejected(value) {
+    return exactStaffClockKeys(value, ['ok', 'message'])
+      && value.ok === false
+      && value.message === 'Tablet pairing request was not accepted.';
+  }
+
+  async function postStaffClockPairing(operation) {
+    const endpoint = operation === 'start'
+      ? STAFF_CLOCK_PAIRING_START_ENDPOINT
+      : operation === 'poll'
+        ? STAFF_CLOCK_PAIRING_POLL_ENDPOINT
+        : '';
+    if (!endpoint) throw new Error('Tablet pairing operation was invalid.');
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeout = controller
+      ? window.setTimeout(() => controller.abort(), 15_000)
+      : null;
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        credentials: 'same-origin',
+        mode: 'same-origin',
+        redirect: 'error',
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        body: JSON.stringify({ operation }),
+        ...(controller ? { signal: controller.signal } : {})
+      });
+      let data = null;
+      try { data = await response.json(); } catch {}
+      if (!response.ok || !data) {
+        const error = new Error(data?.message || 'Tablet pairing is temporarily unavailable.');
+        error.staffClockPairingStatus = Number.isSafeInteger(response?.status) ? response.status : 0;
+        error.staffClockPairingData = data;
+        throw error;
+      }
+      return data;
+    } finally {
+      if (timeout != null) window.clearTimeout(timeout);
+    }
+  }
+
+  function clearStaffClockPairingTimer() {
+    if (staffClockPairingPollTimer != null) window.clearTimeout(staffClockPairingPollTimer);
+    staffClockPairingPollTimer = null;
+  }
+
+  function clearStaffClockPairingMemory() {
+    clearStaffClockPairingTimer();
+    staffClockPairingCode = '';
+    staffClockPairingExpiresAt = '';
+    staffClockPairingDeliveryExpiresAt = '';
+  }
+
+  function staffClockPairingExpiresLabel(value) {
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return '';
+    return `Expires at ${new Intl.DateTimeFormat('en-US', {
+      timeZone: TZ,
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit'
+    }).format(date)} America/New_York time.`;
+  }
+
+  function renderStaffClockPairingPending(message, options = {}) {
+    setStaffClockAvailability('authorization-required');
+    const detail = $('#staffClockAvailabilityDetail');
+    const codeWrap = $('#staffClockPairingCodeWrap');
+    const code = $('#staffClockPairingCode');
+    const expiry = $('#staffClockPairingExpiry');
+    const instructions = $('#staffClockPairingInstructions');
+    const adminUrl = $('#staffClockPairingAdminUrl');
+    const retry = $('#retryStaffClock');
+    if (detail) detail.textContent = message;
+    if (staffClockPairingCode && codeWrap && code && expiry && instructions && adminUrl) {
+      code.textContent = staffClockPairingCode;
+      expiry.textContent = staffClockPairingExpiresLabel(staffClockPairingExpiresAt);
+      adminUrl.textContent = new URL('/m1/admin/', STAFF_CLOCK_PAIRING_CONFIG.origin).href;
+      codeWrap.hidden = false;
+      instructions.hidden = false;
+    }
+    if (retry && options.showRetry === true) {
+      retry.textContent = options.retryLabel || 'Retry pairing';
+      retry.hidden = false;
+    }
+  }
+
+  function renderStaffClockPairingExpired(message = 'Pairing code expired. Request a new code.') {
+    clearStaffClockPairingMemory();
+    renderStaffClockPairingPending(message, {
+      showRetry: true,
+      retryLabel: 'Get a new code'
+    });
+  }
+
+  function scheduleStaffClockPairingPoll(delay = STAFF_CLOCK_PAIRING_POLL_INTERVAL_MS) {
+    clearStaffClockPairingTimer();
+    staffClockPairingPollTimer = window.setTimeout(() => {
+      staffClockPairingPollTimer = null;
+      void runStaffClockPairing('poll');
+    }, delay);
+  }
+
+  function staffClockPairingStillCurrent(now = Date.now()) {
+    const deliveredUntil = Date.parse(staffClockPairingDeliveryExpiresAt);
+    if (Number.isFinite(deliveredUntil)) return deliveredUntil > now;
+    const pairingExpiresAt = Date.parse(staffClockPairingExpiresAt);
+    const expiresAt = Number.isFinite(pairingExpiresAt)
+      ? pairingExpiresAt + STAFF_CLOCK_PAIRING_MAX_DELIVERY_WINDOW_MS
+      : NaN;
+    return Number.isFinite(expiresAt) && expiresAt > now;
+  }
+
+  async function runStaffClockPairing(operation) {
+    if (!STAFF_CLOCK_PAIRING_AVAILABLE) return null;
+    if (staffClockPairingPromise) return staffClockPairingPromise;
+    if (navigator.onLine === false) {
+      renderStaffClockPairingPending(
+        'This tablet is offline. Pairing will retry automatically when the connection returns.',
+        { showRetry: true, retryLabel: staffClockPairingCode ? 'Retry now' : 'Get a new code' }
+      );
+      return null;
+    }
+
+    staffClockPairingPromise = (async () => {
+      try {
+        const data = await postStaffClockPairing(operation);
+        if (validStaffClockPairingPending(data)) {
+          if (
+            operation === 'poll'
+            && staffClockPairingCode
+            && (
+              data.pairingCode !== staffClockPairingCode
+              || data.expiresAt !== staffClockPairingExpiresAt
+            )
+          ) throw new Error('Tablet pairing changed unexpectedly.');
+          staffClockPairingCode = data.pairingCode;
+          staffClockPairingExpiresAt = data.expiresAt;
+          renderStaffClockPairingPending(
+            `${data.gymName} · ${data.deviceLabel} · Waiting for Admin approval.`
+          );
+          scheduleStaffClockPairingPoll();
+          return data;
+        }
+        if (validStaffClockPairingApproved(data)) {
+          staffClockPairingCode = '';
+          staffClockPairingDeliveryExpiresAt = data.deliveryExpiresAt;
+          renderStaffClockPairingPending('Admin approved this tablet. Finishing secure authorization…');
+          scheduleStaffClockPairingPoll(STAFF_CLOCK_PAIRING_APPROVED_POLL_MS);
+          return data;
+        }
+        if (validStaffClockPairingResult(data, 'authorized')) {
+          clearStaffClockPairingMemory();
+          setStaffClockAvailability('loading');
+          // Lock queue delivery before yielding. A lifecycle event can fire between
+          // the authorization response and the authoritative roster refresh.
+          staffClockAuthorizationRecoveryInProgress = true;
+          window.setTimeout(() => {
+            void refreshStaffClockRosterAfterAuthorization();
+          }, 0);
+          return data;
+        }
+        throw new Error('Tablet pairing returned an incomplete response.');
+      } catch (error) {
+        if (
+          error?.staffClockPairingStatus === 401
+          && validStaffClockPairingAuthorizationRequired(error.staffClockPairingData)
+        ) {
+          renderStaffClockPairingExpired(error.staffClockPairingData.message);
+          return null;
+        }
+        if (
+          error?.staffClockPairingStatus === 403
+          && validStaffClockPairingRejected(error.staffClockPairingData)
+        ) {
+          renderStaffClockPairingExpired(error.staffClockPairingData.message);
+          return null;
+        }
+        if (
+          error?.staffClockPairingStatus === 410
+          && validStaffClockPairingExpired(error.staffClockPairingData)
+        ) {
+          renderStaffClockPairingExpired(error.staffClockPairingData.message);
+          return null;
+        }
+        if (staffClockPairingStillCurrent()) {
+          if (Date.parse(staffClockPairingExpiresAt) <= Date.now()) staffClockPairingCode = '';
+          renderStaffClockPairingPending(
+            staffClockPairingCode
+              ? 'Connection interrupted. Pairing will retry automatically without changing this code.'
+              : 'Connection interrupted after approval may have started. Retrying secure delivery automatically.',
+            { showRetry: true, retryLabel: 'Retry now' }
+          );
+          scheduleStaffClockPairingPoll();
+        } else {
+          clearStaffClockPairingMemory();
+          renderStaffClockPairingPending(
+            error?.message || 'Tablet pairing is temporarily unavailable.',
+            { showRetry: true, retryLabel: 'Get a new code' }
+          );
+        }
+        return null;
+      } finally {
+        staffClockPairingPromise = null;
+      }
+    })();
+    return staffClockPairingPromise;
+  }
+
+  function ensureStaffClockPairing() {
+    if (!STAFF_CLOCK_PAIRING_AVAILABLE) return;
+    if (staffClockPairingStillCurrent()) {
+      if (Date.parse(staffClockPairingExpiresAt) <= Date.now()) staffClockPairingCode = '';
+      renderStaffClockPairingPending(
+        staffClockPairingCode
+          ? 'Waiting for Admin approval.'
+          : 'Finishing secure tablet authorization…'
+      );
+      if (!staffClockPairingPromise && staffClockPairingPollTimer == null) {
+        scheduleStaffClockPairingPoll(0);
+      }
+      return;
+    }
+    if (!staffClockPairingPromise && staffClockPairingPollTimer == null) {
+      void runStaffClockPairing('start');
+    }
+  }
+
+  function restartStaffClockPairing() {
+    clearStaffClockPairingMemory();
+    renderStaffClockPairingPending('Requesting a new pairing code…');
+    void runStaffClockPairing('start');
   }
 
   function validatedStaffClockSnapshotStart(value) {
@@ -1162,6 +1520,7 @@ function fmtDate(value) {
       setStaffClockAvailability(staffClockPeople.length ? 'ready' : 'unavailable');
       return null;
     }
+    if (staffClockAuthorizationRecoveryInProgress) return null;
     if (loadStaffClockState().queue.length) {
       void syncStaffClockQueue();
       return null;
@@ -1189,6 +1548,7 @@ function fmtDate(value) {
         }
         saveStaffClockState(nextState);
         saveStaffClockPeople(payload.staff);
+        clearStaffClockPairingMemory();
         setStaffClockAvailability('ready');
         populateStaffClockPeople();
         renderStaffTimeAdmin();
@@ -1209,6 +1569,45 @@ function fmtDate(value) {
       }
     })();
     return staffClockSnapshotPromise;
+  }
+
+  async function refreshStaffClockRosterAfterAuthorization() {
+    try {
+      const payload = await loadStaffClockSnapshotWithRetry();
+      if (!payload) {
+        setStaffClockAvailability('unavailable');
+        return null;
+      }
+      const state = loadStaffClockState();
+      if (!state.queue.length) {
+        const nextState = reconcileStaffClockSnapshotState(state, payload.baseline);
+        if (!nextState) {
+          setStaffClockAvailability('unavailable');
+          return null;
+        }
+        saveStaffClockState(nextState);
+      }
+      saveStaffClockPeople(payload.staff);
+      clearStaffClockPairingMemory();
+      // A pre-existing durable queue is preserved exactly. Keep actions locked
+      // until the ordinary queue worker has delivered it and reconciled a later
+      // server snapshot; authorization itself never posts business data.
+      setStaffClockAvailability(state.queue.length ? 'loading' : 'ready');
+      populateStaffClockPeople();
+      renderStaffTimeAdmin();
+      return payload;
+    } catch (error) {
+      if (IS_PRODUCTION_ORIGIN && error?.staffClockStatus === 401) {
+        showStaffClockAuthorizationRequired();
+      } else {
+        // Authorization recovery is not complete until authoritative server
+        // state is reconciled. A cached roster alone must never unlock punches.
+        setStaffClockAvailability('unavailable');
+      }
+      return null;
+    } finally {
+      staffClockAuthorizationRecoveryInProgress = false;
+    }
   }
 
   function acceptedStaffClockSyncIds(value, batch) {
@@ -1274,6 +1673,10 @@ function fmtDate(value) {
       staffClockSyncRequested = true;
       return staffClockSyncPromise;
     }
+    if (
+      staffClockAvailability === 'authorization-required'
+      || staffClockAuthorizationRecoveryInProgress
+    ) return null;
     if (navigator.onLine === false) return null;
     staffClockSyncPromise = (async () => {
       // Yield once so the promise lock is assigned before an empty startup run
@@ -1749,6 +2152,19 @@ function initializeStaffClockClient() {
   $('#btnStaffClockAction')?.addEventListener('click', performStaffClockAction);
   $('#btnStaffClockDone')?.addEventListener('click', resetStaffClockCard);
   $('#retryStaffClock')?.addEventListener('click', () => {
+    if (
+      staffClockAvailability === 'authorization-required'
+      && STAFF_CLOCK_PAIRING_AVAILABLE
+    ) {
+      clearStaffClockPairingTimer();
+      if (staffClockPairingStillCurrent()) {
+        renderStaffClockPairingPending('Retrying tablet pairing…');
+        void runStaffClockPairing('poll');
+      } else {
+        restartStaffClockPairing();
+      }
+      return;
+    }
     setStaffClockAvailability('loading');
     void refreshStaffClockSnapshot();
   });
@@ -1777,6 +2193,10 @@ function initializeStaffClockClient() {
     void syncStaffClockQueue();
   }, STAFF_CLOCK_RETRY_INTERVAL_MS);
   window.addEventListener('online', () => {
+    if (staffClockAvailability === 'authorization-required') {
+      ensureStaffClockPairing();
+      return;
+    }
     void refreshStaffClockSnapshot();
     void syncStaffClockQueue();
   });
@@ -1795,14 +2215,17 @@ function initializeStaffClockClient() {
   refreshStaffAdminWhenVisible();
 }
 
-const installationProfile = globalThis.M1_INSTALLATION_PROFILE;
 if (
-  installationProfile?.schema === 'gib-m1-installation-profile/v1'
-  && installationProfile.installationId === 'rev'
-  && installationProfile.siteCode === 'Rev'
+  globalThis.M1_INSTALLATION_PROFILE_VALID === true
+  && installationProfile?.schema === 'gib-m1-installation-profile/v1'
+  && typeof installationProfile.installationId === 'string'
+  && installationProfile.installationId.length > 0
+  && typeof installationProfile.siteCode === 'string'
+  && installationProfile.siteCode.length > 0
   && installationProfile.featureFlags?.staffClock === true
   && installationProfile.backend?.enabled === true
-  && installationProfile.backend?.transportTarget === 'rev'
+  && typeof installationProfile.backend?.transportTarget === 'string'
+  && installationProfile.backend.transportTarget.length > 0
 ) {
   initializeStaffClockClient();
 }

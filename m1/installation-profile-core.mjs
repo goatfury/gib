@@ -6,11 +6,16 @@ const PROFILES = Object.freeze({
     siteCode: 'Rev',
     deviceLabel: 'Revolution BJJ front desk',
     storagePrefix: 'gib_m1_',
+    allowedOrigin: 'https://gib-live.netlify.app',
     scheduleSource: Object.freeze({
       mode: 'rev-website',
       endpoint: '/api/m1-schedule'
     }),
-    featureFlags: Object.freeze({ staffClock: true }),
+    featureFlags: Object.freeze({ staffClock: true, staffClockPairing: true }),
+    staffClockPairing: Object.freeze({
+      origin: 'https://gib-live.netlify.app',
+      expiresInSeconds: 300
+    }),
     backend: Object.freeze({ enabled: true, transportTarget: 'rev' })
   }),
   'richmond:test': Object.freeze({
@@ -26,7 +31,7 @@ const PROFILES = Object.freeze({
       mode: 'richmond-website',
       endpoint: '/api/m1-schedule'
     }),
-    featureFlags: Object.freeze({ staffClock: false }),
+    featureFlags: Object.freeze({ staffClock: false, staffClockPairing: false }),
     backend: Object.freeze({ enabled: true, transportTarget: 'richmond-test' })
   }),
   'richmond:production:pending': Object.freeze({
@@ -44,7 +49,7 @@ const PROFILES = Object.freeze({
       mode: 'richmond-website',
       endpoint: '/api/m1-schedule'
     }),
-    featureFlags: Object.freeze({ staffClock: false }),
+    featureFlags: Object.freeze({ staffClock: false, staffClockPairing: false }),
     backend: Object.freeze({ enabled: true, transportTarget: 'richmond-production' })
   }),
   'richmond:production:active': Object.freeze({
@@ -62,7 +67,7 @@ const PROFILES = Object.freeze({
       mode: 'richmond-website',
       endpoint: '/api/m1-schedule'
     }),
-    featureFlags: Object.freeze({ staffClock: false }),
+    featureFlags: Object.freeze({ staffClock: false, staffClockPairing: false }),
     backend: Object.freeze({ enabled: true, transportTarget: 'richmond-production' })
   })
 });
@@ -125,6 +130,7 @@ export function browserInstallationProfileSource(profile) {
   const profile = ${JSON.stringify(profile, null, 2)};
   Object.freeze(profile.scheduleSource);
   Object.freeze(profile.featureFlags);
+  if (profile.staffClockPairing) Object.freeze(profile.staffClockPairing);
   Object.freeze(profile.backend);
   Object.freeze(profile);
   Object.defineProperty(globalThis, 'M1_INSTALLATION_PROFILE', {
@@ -133,9 +139,16 @@ export function browserInstallationProfileSource(profile) {
     configurable: false,
     writable: false
   });
+  Object.defineProperty(globalThis, 'M1_INSTALLATION_PROFILE_VALID', {
+    value: true,
+    enumerable: false,
+    configurable: false,
+    writable: false
+  });
   document.documentElement.dataset.m1Installation = profile.installationId;
   document.documentElement.dataset.m1Environment = profile.environment || '';
   document.documentElement.dataset.m1StaffClock = String(profile.featureFlags.staffClock);
+  document.documentElement.dataset.m1StaffClockPairing = String(profile.featureFlags.staffClockPairing);
 
   if (
     typeof URL === 'undefined'

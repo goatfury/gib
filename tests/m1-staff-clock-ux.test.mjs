@@ -9,6 +9,10 @@ import {
 
 const kioskHtml = readFileSync(new URL('../m1/index.html', import.meta.url), 'utf8');
 const clientSource = readFileSync(new URL('../m1/staff-clock-client.mjs', import.meta.url), 'utf8');
+const installationProfileSource = readFileSync(
+  new URL('../m1/installation-profile-core.mjs', import.meta.url),
+  'utf8'
+);
 
 function between(source, start, end) {
   const from = source.indexOf(start);
@@ -78,17 +82,90 @@ test('the roster is server-derived and limited to one blank initial option in HT
 
 test('missing authorization and empty-roster failures are explicit recovery states', () => {
   const staffMarkup = between(kioskHtml, '<section id="staffClock"', '<section id="admin"');
+  const pairingMarkup = between(
+    staffMarkup,
+    '<div id="staffClockPairingCodeWrap"',
+    '<div class="staff-clock-availability-actions">'
+  );
+  const availabilitySource = between(
+    clientSource,
+    'function setStaffClockAvailability(state)',
+    'function showStaffClockAuthorizationRequired()'
+  );
   assert.ok(staffMarkup.indexOf('id="staffClockAvailability"') < staffMarkup.indexOf('id="staffClockControls"'));
   assert.match(staffMarkup, /id="staffClockControls" class="staff-clock-controls" hidden/u);
   assert.match(staffMarkup, /Loading Staff Clock…/u);
+  assert.match(staffMarkup, /id="staffClockPairingCodeWrap"[^>]*hidden/u);
+  assert.match(staffMarkup, /id="staffClockPairingInstructions"[^>]*hidden/u);
+  assert.match(pairingMarkup, /Pairing code/u);
+  assert.match(pairingMarkup, /separate phone or computer/u);
+  assert.match(pairingMarkup, /id="staffClockPairingAdminUrl"/u);
   assert.match(
-    staffMarkup,
-    /id="authorizeStaffClockTablet"[^>]*href="\/m1\/admin\/\?authorizeTablet=1" hidden>Authorize this tablet/u
+    clientSource,
+    /adminUrl\.textContent = new URL\('\/m1\/admin\/', STAFF_CLOCK_PAIRING_CONFIG\.origin\)\.href/u
   );
-  assert.match(clientSource, /This tablet needs authorization/u);
+  assert.doesNotMatch(pairingMarkup, /<a\b|href=|authorizeTablet/iu);
+  assert.match(availabilitySource, /title\.textContent = 'This tablet needs authorization';/u);
+  assert.match(availabilitySource, /staffClockAvailability === 'ready' && !staffClockPeople\.length/u);
+  assert.match(availabilitySource, /staffClockAvailability = 'unavailable'/u);
+  assert.match(availabilitySource, /controls\.hidden = !ready/u);
+  assert.match(availabilitySource, /select\.disabled = !ready/u);
   assert.match(clientSource, /Staff Clock is unavailable/u);
   assert.match(clientSource, /error\?\.staffClockStatus === 401/u);
   assert.match(clientSource, /staffClockAvailability !== 'ready'/u);
+});
+
+test('tablet pairing uses only an in-memory short code and never navigates to Admin', () => {
+  const pairingSource = between(
+    clientSource,
+    'function validStaffClockPairingCode(value)',
+    'function validatedStaffClockSnapshotStart(value)'
+  );
+
+  assert.match(
+    pairingSource,
+    /\^\[0-9A-HJ-KM-NP-TV-Z\]\{5\}-\[0-9A-HJ-KM-NP-TV-Z\]\{5\}\$/u
+  );
+  assert.match(pairingSource, /staffClockPairingCode = data\.pairingCode/u);
+  assert.match(pairingSource, /staffClockPairingCode = ''/u);
+  assert.doesNotMatch(pairingSource, /localStorage|sessionStorage|URLSearchParams/u);
+  assert.doesNotMatch(
+    pairingSource,
+    /location\.(?:href|assign|replace)|window\.open|document\.location/u
+  );
+  assert.doesNotMatch(kioskHtml, /\?authorizeTablet(?:=1)?/u);
+  assert.doesNotMatch(clientSource, /\?authorizeTablet(?:=1)?/u);
+});
+
+test('tablet pairing is enabled by the installation profile and remains absent from Richmond', () => {
+  const pairingAvailabilitySource = between(
+    clientSource,
+    'const STAFF_CLOCK_PAIRING_ENABLED',
+    'if (\n'
+  );
+
+  assert.equal(
+    (installationProfileSource.match(/featureFlags: Object\.freeze\(\{ staffClock: false, staffClockPairing: false \}\)/gu) || []).length,
+    3
+  );
+  assert.equal(
+    (installationProfileSource.match(/featureFlags: Object\.freeze\(\{ staffClock: true, staffClockPairing: true \}\)/gu) || []).length,
+    1
+  );
+  assert.match(kioskHtml, /const STAFF_CLOCK_ENABLED = INSTALLATION\.featureFlags\.staffClock === true/u);
+  assert.match(
+    kioskHtml,
+    /const STAFF_CLOCK_PAIRING_ENABLED = INSTALLATION\.featureFlags\.staffClockPairing === true/u
+  );
+  assert.match(
+    installationProfileSource,
+    /dataset\.m1StaffClockPairing = String\(profile\.featureFlags\.staffClockPairing\)/u
+  );
+  assert.match(kioskHtml, /html:not\(\[data-m1-staff-clock="true"\]\) #staffClock/u);
+  assert.match(pairingAvailabilitySource, /featureFlags\?\.staffClockPairing === true/u);
+  assert.match(pairingAvailabilitySource, /installationProfile\?\.allowedOrigin === STAFF_CLOCK_PAIRING_CONFIG\.origin/u);
+  assert.match(pairingAvailabilitySource, /location\.origin === STAFF_CLOCK_PAIRING_CONFIG\.origin/u);
+  assert.doesNotMatch(pairingAvailabilitySource, /Richmond|richmond|installationId|siteCode|'rev'/u);
 });
 
 test('Staff Clock state and transport remain isolated from Instructor Sign-In', () => {

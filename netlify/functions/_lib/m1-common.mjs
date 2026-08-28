@@ -52,11 +52,13 @@ export function runtimeTarget(requestUrl = '', installationId, environment, acti
         ? 'test'
         : '';
     }
-    if (url.origin === M1_PRODUCTION_ORIGIN) return 'production';
-    if (
+    if (url.origin === profile?.allowedOrigin) {
+      return profile.environment === 'test' ? 'test' : 'production';
+    }
+    if (profile?.installationId === 'rev' && (
       M1_DEPLOY_PREVIEW_HOST.test(url.hostname)
       || M1_IMMUTABLE_DEPLOY_HOST.test(url.hostname)
-    ) return 'test';
+    )) return 'test';
     return '';
   } catch {
     return '';

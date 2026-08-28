@@ -5,6 +5,10 @@ import vm from 'node:vm';
 
 const adminHtml = readFileSync(new URL('../m1/admin/index.html', import.meta.url), 'utf8')
   .replace(/\r\n?/gu, '\n');
+const installationProfileSource = readFileSync(
+  new URL('../m1/installation-profile-core.mjs', import.meta.url),
+  'utf8'
+);
 
 function sourceBetween(source, start, end) {
   const startIndex = source.indexOf(start);
@@ -499,6 +503,122 @@ function configureLoginEntryRuntime(hostname) {
   return { nodes, result: context.result };
 }
 
+function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } = {}) {
+  const source = sourceBetween(
+    adminHtml,
+    'function validTabletPairingCode(',
+    'async function requestJson('
+  );
+  const now = Date.now();
+  const reviewResponse = {
+    ok: true,
+    result: 'pending',
+    installationId: 'rev',
+    gymName: 'Revolution BJJ',
+    origin: 'https://gib-live.netlify.app',
+    deviceLabel: 'Revolution BJJ front desk',
+    requestedAt: new Date(now - 1_000).toISOString(),
+    expiresAt: new Date(now + 299_000).toISOString()
+  };
+  const approveResponse = {
+    ok: true,
+    result: 'approved',
+    installationId: 'rev',
+    gymName: 'Revolution BJJ',
+    deviceLabel: 'Revolution BJJ front desk',
+    approvedAt: new Date(now).toISOString()
+  };
+  const nodes = {
+    '#tabletPairingCode': { value: 'abcde-fghjk', focusCount: 0, focus() { this.focusCount += 1; } },
+    '#tabletPairingReviewButton': { disabled: false },
+    '#tabletPairingMessage': { message: '', tone: '' },
+    '#tabletPairingReview': { hidden: true },
+    '#tabletPairingGym': { textContent: '' },
+    '#tabletPairingOrigin': { textContent: '' },
+    '#tabletPairingDevice': { textContent: '' },
+    '#tabletPairingRequested': { textContent: '' },
+    '#tabletPairingExpires': { textContent: '' },
+    '#tabletPairingApproveButton': {
+      disabled: false,
+      focusCount: 0,
+      focus() { this.focusCount += 1; }
+    },
+    '#tabletPairingCancelButton': { disabled: false },
+    '#tabletPairingApprovalMessage': { message: '', tone: '' }
+  };
+  const context = vm.createContext({
+    Date,
+    Intl,
+    JSON,
+    Object,
+    nodes,
+    reviewResponse,
+    approveResponse,
+    reviewFailure,
+    approveFailure,
+    calls: [],
+    loggedOutMessage: ''
+  });
+  new vm.Script(`
+    const TIME_ZONE = 'America/New_York';
+    const INSTALLATION = Object.freeze({
+      installationId: 'rev',
+      gymName: 'Revolution BJJ',
+      deviceLabel: 'Revolution BJJ front desk'
+    });
+    const STAFF_CLOCK_PAIRING_CONFIG = Object.freeze({
+      origin: 'https://gib-live.netlify.app',
+      expiresInSeconds: 300
+    });
+    const TABLET_PAIRING_AVAILABLE = true;
+    const API = Object.freeze({ tabletPairing: '/api/m1-admin-tablet-pairing' });
+    let adminRequestToken = 'a'.repeat(64);
+    let reviewedTabletPairingCode = '';
+    function $(selector) { return nodes[selector]; }
+    function clean(value) {
+      return String(value == null ? '' : value).normalize('NFKC').trim().replace(/\\s+/g, ' ');
+    }
+    function exactObjectKeys(value, expectedKeys) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      const actual = Object.keys(value).sort();
+      const expected = [...expectedKeys].sort();
+      return actual.length === expected.length
+        && actual.every((key, index) => key === expected[index]);
+    }
+    function validIsoTimestamp(value) {
+      return typeof value === 'string'
+        && /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$/.test(value)
+        && Number.isFinite(Date.parse(value));
+    }
+    function showMessage(target, message, tone = 'error') {
+      target.message = message;
+      target.tone = tone;
+    }
+    function setLoggedOut(message) { loggedOutMessage = message; }
+    async function requestJson(url, body) {
+      calls.push({ url, body: JSON.parse(JSON.stringify(body)) });
+      if (body.operation === 'review') {
+        if (reviewFailure) throw Object.assign(new Error(reviewFailure), { status: 410 });
+        return JSON.parse(JSON.stringify(reviewResponse));
+      }
+      if (approveFailure) throw Object.assign(new Error(approveFailure), { status: 500 });
+      return JSON.parse(JSON.stringify(approveResponse));
+    }
+    ${source}
+    globalThis.hooks = {
+      validTabletPairingCode,
+      normalizeTabletPairingCode,
+      validTabletPairingReviewResponse,
+      validTabletPairingApproveResponse,
+      clearTabletPairingReview,
+      reviewTabletPairing,
+      approveTabletPairing,
+      reviewedCode: () => reviewedTabletPairingCode
+    };
+  `, { filename: 'admin-tablet-pairing.js' }).runInContext(context);
+  return { context, hooks: context.hooks, nodes, reviewResponse, approveResponse };
+}
+
 test('Daily Review remains first and one compact Staff time section follows it', () => {
   const app = sourceBetween(adminHtml, '<section id="appPanel"', '<div id="toast"');
   const reviewPosition = app.indexOf('id="reviewSection"');
@@ -584,107 +704,253 @@ test('Deploy Preview presents one production-credential-free TEST Admin entry wh
   assert.match(adminHtml, /\.test-entry \.btn\.primary \{ width: 100%; font-size: 1rem; \}/u);
 });
 
-test('Revolution Admin exposes one same-tablet recovery control without a browser-readable grant', () => {
+test('Admin tablet pairing is profile-gated, cross-device, and never persists a code', () => {
   const app = sourceBetween(adminHtml, '<section id="appPanel"', '<div id="toast"');
-  assert.equal(idCount('tabletAuthorization'), 1);
-  assert.equal(idCount('authorizeTabletButton'), 1);
-  assert.match(app, /id="tabletAuthorization"[^>]*hidden/u);
-  assert.match(app, /Authorize this Staff Clock tablet/u);
-  assert.match(app, /Authorization does not change punches, sign-ins, or other tablet data/u);
-  assert.match(adminHtml, /tabletAuthorize:\s*'\/api\/m1-admin-tablet-authorize'/u);
-  assert.match(adminHtml, /tabletInstall:\s*'\/api\/m1-tablet-install'/u);
-  assert.match(adminHtml, /TABLET_AUTHORIZATION_AVAILABLE = !IS_RICHMOND/u);
-  assert.match(adminHtml, /location\.search === '\?authorizeTablet=1'/u);
-  assert.match(adminHtml, /\$\('#tabletAuthorization'\)\.hidden = !TABLET_AUTHORIZATION_AVAILABLE/u);
+  assert.equal(idCount('tabletPairing'), 1);
+  assert.equal(idCount('tabletPairingForm'), 1);
+  assert.equal(idCount('tabletPairingCode'), 1);
+  assert.equal(idCount('tabletPairingReview'), 1);
+  assert.equal(idCount('tabletPairingApproveButton'), 1);
+  assert.equal(idCount('tabletPairingCancelButton'), 1);
+  assert.match(app, /id="tabletPairing"[^>]*hidden/u);
+  assert.match(app, /Authorize a Staff Clock tablet/u);
+  assert.match(app, /Enter the short pairing code shown on the Staff Clock tablet/u);
+  assert.match(app, /Review the exact tablet request before separately confirming authorization/u);
+  assert.match(app, /Review before approving[\s\S]*Gym[\s\S]*Origin[\s\S]*Device[\s\S]*Requested[\s\S]*Expires/u);
+  assert.match(app, /Confirm tablet authorization/u);
+  assert.match(adminHtml, /tabletPairing:\s*'\/api\/m1-admin-tablet-pairing'/u);
 
-  const authorizationSource = sourceBetween(
+  const availabilitySource = sourceBetween(
     adminHtml,
-    'function validTabletAuthorizationIssueResponse(',
+    'const STAFF_CLOCK_PAIRING_ENABLED',
+    'function richmondProductionAdminCopy('
+  );
+  assert.match(availabilitySource, /INSTALLATION\.featureFlags\.staffClockPairing === true/u);
+  assert.match(availabilitySource, /STAFF_CLOCK_PAIRING_CONFIG\.expiresInSeconds >= 60/u);
+  assert.match(availabilitySource, /STAFF_CLOCK_PAIRING_CONFIG\.expiresInSeconds <= 300/u);
+  assert.match(availabilitySource, /INSTALLATION\.allowedOrigin === STAFF_CLOCK_PAIRING_CONFIG\.origin/u);
+  assert.match(availabilitySource, /location\.origin === STAFF_CLOCK_PAIRING_CONFIG\.origin/u);
+  assert.doesNotMatch(availabilitySource, /IS_RICHMOND|installationId\s*===\s*'rev'/u);
+  assert.equal(
+    (installationProfileSource.match(/featureFlags: Object\.freeze\(\{ staffClock: false, staffClockPairing: false \}\)/gu) || []).length,
+    3
+  );
+  assert.equal(
+    (installationProfileSource.match(/featureFlags: Object\.freeze\(\{ staffClock: true, staffClockPairing: true \}\)/gu) || []).length,
+    1
+  );
+  assert.match(adminHtml, /const INSTALLATION = globalThis\.M1_INSTALLATION_PROFILE/u);
+  assert.match(adminHtml, /\$\('#tabletPairing'\)\.hidden = !TABLET_PAIRING_AVAILABLE/u);
+
+  const pairingSource = sourceBetween(
+    adminHtml,
+    'function validTabletPairingCode(',
     'async function requestJson('
   );
-  assert.match(authorizationSource, /requestJson\(API\.tabletAuthorize, \{ operation: 'issue' \}\)/u);
-  assert.match(authorizationSource, /operation: 'installAdminGrant'/u);
-  assert.match(authorizationSource, /location\.replace\('\/m1\/#staffClock'\)/u);
-  assert.doesNotMatch(authorizationSource, /authorizationGrant|localStorage|sessionStorage|URLSearchParams/u);
+  assert.match(pairingSource, /requestJson\(API\.tabletPairing, \{\s*operation: 'review',\s*pairingCode: code\s*\}\)/u);
+  assert.match(pairingSource, /requestJson\(API\.tabletPairing, \{\s*operation: 'approve',\s*pairingCode: code\s*\}\)/u);
+  assert.doesNotMatch(pairingSource, /location|URLSearchParams|localStorage|sessionStorage/u);
+  assert.doesNotMatch(adminHtml, /tabletAuthorize|tabletInstall|authorizeTablet=1|localStorage|sessionStorage|URLSearchParams/u);
 
   const requestSource = sourceBetween(adminHtml, 'async function requestJson(', 'function setLoggedOut(');
   assert.match(requestSource, /headers\[ADMIN_REQUEST_HEADER\] = adminRequestToken/u);
   assert.match(requestSource, /credentials:\s*'same-origin'/u);
+  assert.match(requestSource, /mode:\s*'same-origin'/u);
+  assert.match(requestSource, /redirect:\s*'error'/u);
+  assert.match(requestSource, /cache:\s*'no-store'/u);
 });
 
-test('same-device Admin authorization installs the HttpOnly grant and failures remain visible', async () => {
-  const issueValidator = sourceBetween(
-    adminHtml,
-    'function validTabletAuthorizationIssueResponse(',
-    'function validTabletAuthorizationInstallResponse('
-  );
-  const installValidator = sourceBetween(
-    adminHtml,
-    'function validTabletAuthorizationInstallResponse(',
-    'function focusTabletAuthorization('
-  );
-  const authorizeSource = sourceBetween(
-    adminHtml,
-    'async function authorizeThisTablet(',
-    'async function requestJson('
-  );
-
-  async function run(installFailure = null) {
-    const nodes = {
-      '#authorizeTabletButton': { disabled: false },
-      '#tabletAuthorizationMessage': { message: '', tone: '' }
+test('Admin requests reject redirects and stay on the authenticated same-origin transport', async () => {
+  const requestSource = sourceBetween(adminHtml, 'async function requestJson(', 'function setLoggedOut(');
+  let captured = null;
+  const data = await Function('fetch', `
+    const ADMIN_REQUEST_HEADER = 'X-GIB-M1-Admin-Request-Token';
+    let adminRequestToken = 'a'.repeat(64);
+    ${requestSource}
+    return requestJson('/api/m1-admin-tablet-pairing', {
+      operation: 'review',
+      pairingCode: 'ABCDE-FGHJK'
+    });
+  `)(async (url, options) => {
+    captured = { url, options };
+    return {
+      ok: true,
+      status: 200,
+      async json() { return { ok: true }; }
     };
-    return Function('nodes', 'installFailure', `
-      const TABLET_AUTHORIZATION_AVAILABLE = true;
-      let adminRequestToken = 'a'.repeat(32);
-      const API = { tabletAuthorize: '/issue', tabletInstall: '/install' };
-      const calls = [];
-      let redirected = '';
-      let loggedOut = '';
-      const location = { replace(value) { redirected = value; } };
-      const $ = selector => nodes[selector];
-      function exactObjectKeys(value, expectedKeys) {
-        if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-        const actual = Object.keys(value).sort();
-        const expected = [...expectedKeys].sort();
-        return actual.length === expected.length
-          && actual.every((key, index) => key === expected[index]);
-      }
-      function showMessage(target, message, tone = 'error') {
-        target.message = message;
-        target.tone = tone;
-      }
-      function setLoggedOut(message) { loggedOut = message; }
-      async function requestJson(url, body) {
-        calls.push({ url, body });
-        if (url === '/issue') return { ok: true, issued: true, expiresInSeconds: 90 };
-        if (installFailure) throw Object.assign(new Error(installFailure), { status: 403 });
-        return { ok: true, installed: true };
-      }
-      ${issueValidator}
-      ${installValidator}
-      ${authorizeSource}
-      return authorizeThisTablet().then(() => ({ calls, redirected, loggedOut, nodes }));
-    `)(nodes, installFailure);
+  });
+
+  assert.deepEqual(data, { ok: true });
+  assert.equal(captured.url, '/api/m1-admin-tablet-pairing');
+  assert.equal(captured.options.method, 'POST');
+  assert.equal(captured.options.credentials, 'same-origin');
+  assert.equal(captured.options.mode, 'same-origin');
+  assert.equal(captured.options.redirect, 'error');
+  assert.equal(captured.options.cache, 'no-store');
+  assert.equal(captured.options.headers['X-GIB-M1-Admin-Request-Token'], 'a'.repeat(64));
+  assert.deepEqual(JSON.parse(captured.options.body), {
+    operation: 'review',
+    pairingCode: 'ABCDE-FGHJK'
+  });
+});
+
+test('Admin pairing validators enforce exact Crockford codes and installation-bound responses', () => {
+  const { hooks, reviewResponse, approveResponse } = tabletPairingAdminRuntime();
+  for (const code of ['01234-56789', 'ABCDE-FGHJK', 'MNPQR-STVWX']) {
+    assert.equal(hooks.validTabletPairingCode(code), true, code);
   }
+  for (const code of [
+    'abcde-fghjk',
+    'ABCDE-FGHIJ',
+    'ABCDE-FGHJL',
+    'ABCDE-FGHOJ',
+    'ABCDE-FGHUJ',
+    'ABCD-FGHJK',
+    'ABCDE-FGHJKL',
+    'ABCDEFGHIJ'
+  ]) {
+    assert.equal(hooks.validTabletPairingCode(code), false, code);
+  }
+  assert.equal(hooks.normalizeTabletPairingCode('  abcde - fghjk  '), 'ABCDE-FGHJK');
 
-  const success = await run();
-  assert.deepEqual(JSON.parse(JSON.stringify(success.calls)), [
-    { url: '/issue', body: { operation: 'issue' } },
-    { url: '/install', body: { operation: 'installAdminGrant' } }
+  assert.equal(hooks.validTabletPairingReviewResponse(reviewResponse, 'ABCDE-FGHJK'), true);
+  assert.equal(hooks.validTabletPairingReviewResponse({
+    ...reviewResponse,
+    extra: true
+  }, 'ABCDE-FGHJK'), false);
+  assert.equal(hooks.validTabletPairingReviewResponse({
+    ...reviewResponse,
+    installationId: 'richmond'
+  }, 'ABCDE-FGHJK'), false);
+  assert.equal(hooks.validTabletPairingReviewResponse({
+    ...reviewResponse,
+    origin: 'https://gib-richmond-live.netlify.app'
+  }, 'ABCDE-FGHJK'), false);
+  assert.equal(hooks.validTabletPairingReviewResponse({
+    ...reviewResponse,
+    deviceLabel: 'Another tablet'
+  }, 'ABCDE-FGHJK'), false);
+  assert.equal(hooks.validTabletPairingReviewResponse({
+    ...reviewResponse,
+    expiresAt: new Date(Date.parse(reviewResponse.expiresAt) + 2_000).toISOString()
+  }, 'ABCDE-FGHJK'), false);
+  assert.equal(hooks.validTabletPairingReviewResponse(reviewResponse, 'ABCDE-FGHIJ'), false);
+
+  assert.equal(hooks.validTabletPairingApproveResponse(approveResponse), true);
+  assert.equal(hooks.validTabletPairingApproveResponse({
+    ...approveResponse,
+    installationId: 'richmond'
+  }), false);
+  assert.equal(hooks.validTabletPairingApproveResponse({
+    ...approveResponse,
+    deviceLabel: 'Another tablet'
+  }), false);
+  assert.equal(hooks.validTabletPairingApproveResponse({
+    ...approveResponse,
+    extra: true
+  }), false);
+
+  const approvedAt = Date.parse(approveResponse.approvedAt);
+  assert.equal(hooks.validTabletPairingApproveResponse({
+    ...approveResponse,
+    approvedAt: new Date(approvedAt + 5_000).toISOString()
+  }, approvedAt), true, 'the five-second future-skew boundary is accepted');
+  assert.equal(hooks.validTabletPairingApproveResponse({
+    ...approveResponse,
+    approvedAt: new Date(approvedAt + 5_001).toISOString()
+  }, approvedAt), false, 'timestamps beyond the future-skew boundary are rejected');
+  assert.equal(hooks.validTabletPairingApproveResponse({
+    ...approveResponse,
+    approvedAt: new Date(approvedAt - 120_000).toISOString()
+  }, approvedAt), true, 'the 120-second readback boundary is accepted');
+  assert.equal(hooks.validTabletPairingApproveResponse({
+    ...approveResponse,
+    approvedAt: new Date(approvedAt - 120_001).toISOString()
+  }, approvedAt), false, 'timestamps older than the readback boundary are rejected');
+});
+
+test('Admin pairing reviews first, approves separately, and clears memory and DOM state', async () => {
+  const { context, hooks, nodes } = tabletPairingAdminRuntime();
+
+  await hooks.reviewTabletPairing();
+  assert.deepEqual(JSON.parse(JSON.stringify(context.calls)), [{
+    url: '/api/m1-admin-tablet-pairing',
+    body: { operation: 'review', pairingCode: 'ABCDE-FGHJK' }
+  }]);
+  assert.equal(hooks.reviewedCode(), 'ABCDE-FGHJK');
+  assert.equal(nodes['#tabletPairingCode'].value, 'ABCDE-FGHJK');
+  assert.equal(nodes['#tabletPairingReview'].hidden, false);
+  assert.equal(nodes['#tabletPairingGym'].textContent, 'Revolution BJJ');
+  assert.equal(nodes['#tabletPairingOrigin'].textContent, 'https://gib-live.netlify.app');
+  assert.equal(nodes['#tabletPairingDevice'].textContent, 'Revolution BJJ front desk');
+  assert.match(nodes['#tabletPairingRequested'].textContent, /America\/New_York time/u);
+  assert.match(nodes['#tabletPairingExpires'].textContent, /America\/New_York time/u);
+  assert.equal(nodes['#tabletPairingApproveButton'].focusCount, 1);
+  assert.equal(nodes['#tabletPairingMessage'].tone, 'success');
+
+  await hooks.approveTabletPairing();
+  assert.deepEqual(JSON.parse(JSON.stringify(context.calls)), [
+    {
+      url: '/api/m1-admin-tablet-pairing',
+      body: { operation: 'review', pairingCode: 'ABCDE-FGHJK' }
+    },
+    {
+      url: '/api/m1-admin-tablet-pairing',
+      body: { operation: 'approve', pairingCode: 'ABCDE-FGHJK' }
+    }
   ]);
-  assert.equal(success.redirected, '/m1/#staffClock');
-  assert.equal(success.loggedOut, '');
-  assert.equal(success.nodes['#tabletAuthorizationMessage'].tone, 'success');
+  assert.equal(hooks.reviewedCode(), '');
+  assert.equal(nodes['#tabletPairingCode'].value, '');
+  assert.equal(nodes['#tabletPairingReview'].hidden, true);
+  assert.equal(nodes['#tabletPairingGym'].textContent, '');
+  assert.equal(nodes['#tabletPairingOrigin'].textContent, '');
+  assert.equal(nodes['#tabletPairingDevice'].textContent, '');
+  assert.equal(nodes['#tabletPairingRequested'].textContent, '');
+  assert.equal(nodes['#tabletPairingExpires'].textContent, '');
+  assert.match(nodes['#tabletPairingMessage'].message, /authorized/u);
 
-  const failure = await run('Authorization expired or was already used.');
-  assert.equal(failure.redirected, '');
-  assert.equal(failure.loggedOut, '');
-  assert.equal(failure.nodes['#authorizeTabletButton'].disabled, false);
-  assert.equal(
-    failure.nodes['#tabletAuthorizationMessage'].message,
-    'Authorization expired or was already used.'
+  const eventSource = sourceBetween(
+    adminHtml,
+    "$\('#tabletPairingForm'\).addEventListener('submit'",
+    "$\('#tabletDiagnosticButton'\).addEventListener('click'"
   );
+  assert.match(eventSource, /tabletPairingCode'\)\.addEventListener\('input'[\s\S]*clearTabletPairingReview\(\)/u);
+  assert.match(eventSource, /tabletPairingCancelButton'\)\.addEventListener\('click'[\s\S]*clearTabletPairingReview\(\{ clearCode: true \}\)/u);
+  const sessionSource = sourceBetween(adminHtml, 'function setLoggedOut(', 'async function login(');
+  assert.equal(
+    (sessionSource.match(/clearTabletPairingReview\(\{ clearCode: true \}\)/gu) || []).length,
+    2
+  );
+});
+
+test('Admin pairing rejects changed codes and requires a fresh review after an HTTP approval failure', async () => {
+  const changed = tabletPairingAdminRuntime();
+  await changed.hooks.reviewTabletPairing();
+  changed.nodes['#tabletPairingCode'].value = '01234-56789';
+  await changed.hooks.approveTabletPairing();
+  assert.equal(changed.context.calls.length, 1);
+  assert.equal(changed.hooks.reviewedCode(), '');
+  assert.equal(changed.nodes['#tabletPairingReview'].hidden, true);
+  assert.match(changed.nodes['#tabletPairingMessage'].message, /code changed/u);
+
+  const reviewFailure = tabletPairingAdminRuntime({ reviewFailure: 'Pairing code expired. Request a new code.' });
+  await reviewFailure.hooks.reviewTabletPairing();
+  assert.equal(reviewFailure.nodes['#tabletPairingReviewButton'].disabled, false);
+  assert.equal(reviewFailure.nodes['#tabletPairingReview'].hidden, true);
+  assert.equal(
+    reviewFailure.nodes['#tabletPairingMessage'].message,
+    'Pairing code expired. Request a new code.'
+  );
+
+  const approvalFailure = tabletPairingAdminRuntime({ approveFailure: 'Pairing approval did not complete.' });
+  await approvalFailure.hooks.reviewTabletPairing();
+  await approvalFailure.hooks.approveTabletPairing();
+  assert.equal(approvalFailure.nodes['#tabletPairingApproveButton'].disabled, false);
+  assert.equal(approvalFailure.nodes['#tabletPairingReview'].hidden, true);
+  assert.equal(approvalFailure.hooks.reviewedCode(), '');
+  assert.equal(approvalFailure.nodes['#tabletPairingCode'].value, 'ABCDE-FGHJK');
+  assert.equal(approvalFailure.nodes['#tabletPairingApprovalMessage'].message, '');
+  assert.match(approvalFailure.nodes['#tabletPairingMessage'].message, /review this pairing code again/iu);
 });
 
 test('TEST Admin entry preserves the direct Staff Time hash and focuses it after loading', async () => {
