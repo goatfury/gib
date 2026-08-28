@@ -1265,9 +1265,10 @@ test('pairing is profile-gated and remains absent from both Richmond profiles', 
 });
 
 test('missing or false installation-profile validity causes zero Staff Clock initialization, API, or business activity', () => {
-  const gateStart = clientSource.lastIndexOf('if (\n  globalThis.M1_INSTALLATION_PROFILE_VALID === true');
+  const normalizedClientSource = clientSource.replace(/\r\n?/gu, '\n');
+  const gateStart = normalizedClientSource.lastIndexOf('if (\n  globalThis.M1_INSTALLATION_PROFILE_VALID === true');
   assert.ok(gateStart > 0);
-  const gateSource = clientSource.slice(gateStart);
+  const gateSource = normalizedClientSource.slice(gateStart);
   for (const profileValid of [undefined, false]) {
     const result = Function('profileValid', 'gateSource', `
       const globalThis = profileValid === undefined

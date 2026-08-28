@@ -15,11 +15,14 @@ const installationProfileSource = readFileSync(
 );
 
 function between(source, start, end) {
-  const from = source.indexOf(start);
-  const to = source.indexOf(end, from + start.length);
+  const normalizedSource = source.replace(/\r\n?/gu, '\n');
+  const normalizedStart = start.replace(/\r\n?/gu, '\n');
+  const normalizedEnd = end.replace(/\r\n?/gu, '\n');
+  const from = normalizedSource.indexOf(normalizedStart);
+  const to = normalizedSource.indexOf(normalizedEnd, from + normalizedStart.length);
   assert.notEqual(from, -1, `missing ${start}`);
   assert.notEqual(to, -1, `missing ${end}`);
-  return source.slice(from, to);
+  return normalizedSource.slice(from, to);
 }
 
 function record({ id, timestamp, action, status = 'ACTIVE', source = 'Tablet' }) {
