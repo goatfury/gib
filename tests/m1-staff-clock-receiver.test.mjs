@@ -365,7 +365,9 @@ function createHarness({
   adjustmentRows = null,
   includeStaffSheets = true,
   lockAvailable = true,
-  nowIso = NOW_ISO
+  nowIso = NOW_ISO,
+  cacheCapacity = Number.POSITIVE_INFINITY,
+  historyWindowPageLimit = 64
 } = {}) {
   class FixedDate extends Date {
     constructor(...args) { super(...(args.length ? args : [nowIso])); }
@@ -409,6 +411,15 @@ function createHarness({
     GIB_M1_RECOVERY_TOKEN: 'unit-recovery-token'
   }));
   const cacheValues = new Map();
+  let cachePeakSize = 0;
+  function cachePut(key, value) {
+    cacheValues.delete(key);
+    cacheValues.set(key, String(value));
+    while (cacheValues.size > cacheCapacity) {
+      cacheValues.delete(cacheValues.keys().next().value);
+    }
+    cachePeakSize = Math.max(cachePeakSize, cacheValues.size);
+  }
   let spreadsheetOpens = 0;
   const context = {
     module: { exports: {} }, exports: {}, console, Date: FixedDate,
@@ -418,8 +429,8 @@ function createHarness({
     },
     CacheService: {
       getScriptCache: () => ({
-        get: key => cacheValues.get(key) || null,
-        put(key, value) { cacheValues.set(key, String(value)); },
+        get: key => cacheValues.has(key) ? cacheValues.get(key) : null,
+        put: cachePut,
         remove(key) { cacheValues.delete(key); }
       })
     },
@@ -470,6 +481,7 @@ function createHarness({
   const vmContext = vm.createContext(context);
   vm.runInContext(codeSource, vmContext, { filename: 'Code.gs' });
   vm.runInContext(receiverSource, vmContext, { filename: 'GibM1Receiver.gs' });
+  vmContext.GIB_M1_STAFF_HISTORY_WINDOW_PAGE_LIMIT_ = historyWindowPageLimit;
   return {
     apps: vmContext,
     sheets,
@@ -477,6 +489,7 @@ function createHarness({
     adminAudit,
     properties,
     cacheValues,
+    get cachePeakSize() { return cachePeakSize; },
     get spreadsheetOpens() { return spreadsheetOpens; },
     post(body) {
       const result = vmContext.doPost({ postData: { contents: JSON.stringify(body) } });
@@ -1866,20 +1879,48 @@ test('Admin completed-shift history is bounded, paired, read-only, pageable, and
     { ok: false, target: 'test', result: 'rejected' }
   );
 
-  harness.cacheValues.delete(
-    `gib-m1-staff-v2-history-${review.initial.view.token}-${first.page.nextOffset}`
+  harness.cacheValues.delete('gib-m1-staff-v2-history-window-page-1');
+  const recovered = readStaffHistoryPage(
+    harness,
+    review.initial.view.token,
+    first.page.nextOffset
   );
+  assert.equal(recovered.page.offset, first.page.nextOffset);
+  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, timeReadsAfterReview + 1);
+  assert.equal(
+    harness.sheets.get('Staff Time Adjustments').dataRangeReads,
+    adjustmentReadsAfterReview + 1
+  );
+  const readsAfterRecovery = harness.sheets.get('Staff Time').dataRangeReads;
+  const adjustmentReadsAfterRecovery = harness.sheets.get('Staff Time Adjustments').dataRangeReads;
+  readStaffHistoryPage(harness, review.initial.view.token, recovered.page.nextOffset);
+  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, readsAfterRecovery);
+  assert.equal(
+    harness.sheets.get('Staff Time Adjustments').dataRangeReads,
+    adjustmentReadsAfterRecovery
+  );
+  const activeWindow = JSON.parse(
+    harness.cacheValues.get('gib-m1-staff-v2-history-window')
+  );
+  const recoveredEntry = activeWindow.pages.find(entry => (
+    entry.offset === recovered.page.offset
+  ));
+  const recoveredKey = `gib-m1-staff-v2-history-window-page-${recoveredEntry.slot}`;
+  const alteredPage = JSON.parse(harness.cacheValues.get(recoveredKey));
+  alteredPage.items[0].clockIn.note = 'parseable cache alteration';
+  harness.cacheValues.set(recoveredKey, JSON.stringify(alteredPage));
   assert.deepEqual(
     harness.post(adminBody('staffTimeHistoryPageV2', {
       viewToken: review.initial.view.token,
-      offset: first.page.nextOffset
+      offset: recovered.page.offset
     })),
-    { ok: false, target: 'test', result: 'stale' }
+    { ok: false, target: 'test', result: 'stale' },
+    'a valid-shape page with a digest mismatch fails closed'
   );
-  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, timeReadsAfterReview);
+  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, readsAfterRecovery);
   assert.equal(
     harness.sheets.get('Staff Time Adjustments').dataRangeReads,
-    adjustmentReadsAfterReview
+    adjustmentReadsAfterRecovery
   );
 
   const rebuilt = readPagedStaffView(harness, { admin: true });
@@ -1920,7 +1961,7 @@ test('empty completed-shift history caches one strict page and malformed cache i
   assert.equal(harness.sheets.get('Staff Time').dataRangeReads, timeReadsAfterReview);
 
   harness.cacheValues.set(
-    `gib-m1-staff-v2-history-${review.initial.view.token}-0`,
+    'gib-m1-staff-v2-history-window-page-0',
     JSON.stringify({ ok: true, target: 'test' })
   );
   assert.deepEqual(
@@ -1931,6 +1972,146 @@ test('empty completed-shift history caches one strict page and malformed cache i
     { ok: false, target: 'test', result: 'stale' }
   );
   assert.equal(harness.sheets.get('Staff Time').dataRangeReads, timeReadsAfterReview);
+
+  const rebuilt = readPagedStaffView(harness, { admin: true });
+  const readsAfterRebuild = harness.sheets.get('Staff Time').dataRangeReads;
+  harness.cacheValues.set('gib-m1-staff-v2-history-window-page-0', '{malformed-json');
+  assert.deepEqual(
+    harness.post(adminBody('staffTimeHistoryPageV2', {
+      viewToken: rebuilt.initial.view.token,
+      offset: 0
+    })),
+    { ok: false, target: 'test', result: 'stale' }
+  );
+  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, readsAfterRebuild);
+
+  const rebuiltAgain = readPagedStaffView(harness, { admin: true });
+  const readsAfterSecondRebuild = harness.sheets.get('Staff Time').dataRangeReads;
+  harness.cacheValues.set('gib-m1-staff-v2-history-window', '{malformed-json');
+  assert.deepEqual(
+    harness.post(adminBody('staffTimeHistoryPageV2', {
+      viewToken: rebuiltAgain.initial.view.token,
+      offset: 0
+    })),
+    { ok: false, target: 'test', result: 'stale' }
+  );
+  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, readsAfterSecondRebuild);
+});
+
+test('completed-shift history rotates fixed cache windows and reaches retained history under a low cache cap', () => {
+  const yesterdayRows = ordinaryPeriodTimeRows({
+    count: 600,
+    startIndex: 130_000,
+    date: '2026-08-17',
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test'
+  });
+  const oldestClockIn = timeRow({
+    punchId: generatedPunchId(131_000),
+    timestamp: '2026-06-01T09:00:00-04:00',
+    action: 'clockIn'
+  });
+  const oldestClockOut = timeRow({
+    punchId: generatedPunchId(131_001),
+    timestamp: '2026-06-01T10:00:00-04:00',
+    action: 'clockOut'
+  });
+  const harness = createHarness({
+    timeRows: [oldestClockIn, oldestClockOut, ...yesterdayRows],
+    adjustmentRows: [],
+    cacheCapacity: 8,
+    historyWindowPageLimit: 2
+  });
+
+  const review = readPagedStaffView(harness, { admin: true });
+  const token = review.initial.view.token;
+  const clockInIds = [];
+  let offset = 0;
+  let pageIndex = 0;
+  let rebuildCount = 0;
+  while (offset !== null) {
+    const timeReadsBefore = harness.sheets.get('Staff Time').dataRangeReads;
+    const adjustmentReadsBefore = harness.sheets.get('Staff Time Adjustments').dataRangeReads;
+    const { page } = readStaffHistoryPage(harness, token, offset);
+    const expectedRebuild = pageIndex > 0 && pageIndex % 2 === 0 ? 1 : 0;
+    rebuildCount += expectedRebuild;
+    assert.equal(
+      harness.sheets.get('Staff Time').dataRangeReads,
+      timeReadsBefore + expectedRebuild,
+      `page ${pageIndex + 1} scans Staff Time only when entering a new window`
+    );
+    assert.equal(
+      harness.sheets.get('Staff Time Adjustments').dataRangeReads,
+      adjustmentReadsBefore + expectedRebuild,
+      `page ${pageIndex + 1} scans adjustments only when entering a new window`
+    );
+    assert.ok(page.items.length > 0 && page.items.length <= 50);
+    assert.ok(page.items.every(shift => (
+      shift.clockIn.punchAction === 'clockIn'
+      && shift.clockOut.punchAction === 'clockOut'
+      && shift.clockIn.staffId === shift.clockOut.staffId
+    )));
+    clockInIds.push(...page.items.map(shift => shift.clockIn.punchId));
+    const historyKeys = [...harness.cacheValues.keys()].filter(key => (
+      key === 'gib-m1-staff-v2-history-window'
+      || key.startsWith('gib-m1-staff-v2-history-window-page-')
+    ));
+    const activeWindow = JSON.parse(
+      harness.cacheValues.get('gib-m1-staff-v2-history-window')
+    );
+    assert.equal(
+      historyKeys.length,
+      activeWindow.pages.length + 1,
+      'only the active index and its fixed page slots remain cached'
+    );
+    assert.ok(activeWindow.pages.length > 0 && activeWindow.pages.length <= 2);
+    assert.ok(harness.cacheValues.size <= 8, 'the synthetic shared cache stays within capacity');
+    offset = page.nextOffset;
+    pageIndex += 1;
+  }
+  assert.equal(pageIndex, 7);
+  assert.equal(rebuildCount, 3);
+  assert.equal(clockInIds.length, 301);
+  assert.equal(new Set(clockInIds).size, 301, 'window rotation introduces no gap or duplicate');
+  assert.equal(clockInIds.at(-1), oldestClockIn[0], 'the oldest retained shift remains reachable');
+
+  const windowBeforeInvalidOffset = harness.cacheValues.get('gib-m1-staff-v2-history-window');
+  assert.deepEqual(
+    harness.post(adminBody('staffTimeHistoryPageV2', { viewToken: token, offset: 1 })),
+    { ok: false, target: 'test', result: 'rejected' }
+  );
+  assert.equal(
+    harness.cacheValues.get('gib-m1-staff-v2-history-window'),
+    windowBeforeInvalidOffset,
+    'a noncanonical offset never publishes a replacement window'
+  );
+
+  harness.sheets.get('Staff Time').values.push(
+    timeRow({
+      punchId: generatedPunchId(131_002),
+      timestamp: '2026-08-17T10:30:00-04:00',
+      action: 'clockIn'
+    }),
+    timeRow({
+      punchId: generatedPunchId(131_003),
+      timestamp: '2026-08-17T10:31:00-04:00',
+      action: 'clockOut'
+    })
+  );
+  const nextReview = readPagedStaffView(harness, { admin: true });
+  assert.notEqual(nextReview.initial.view.token, token);
+  const nextWindow = JSON.parse(harness.cacheValues.get('gib-m1-staff-v2-history-window'));
+  assert.equal(nextWindow.token, nextReview.initial.view.token);
+  assert.equal(nextWindow.pages.length, 2);
+  assert.equal(
+    [...harness.cacheValues.keys()].filter(key => (
+      key === 'gib-m1-staff-v2-history-window'
+      || key.startsWith('gib-m1-staff-v2-history-window-page-')
+    )).length,
+    3,
+    'a new token retires rather than accumulates history-window keys'
+  );
+  assert.ok(harness.cachePeakSize <= 8);
 });
 
 test('500-record projection keeps interleaved adjusted pairs atomic for kiosk and Admin views', () => {

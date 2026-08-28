@@ -75,6 +75,7 @@ var GIB_M1_STAFF_AUDIT_LIMIT_ = 500;
 var GIB_M1_STAFF_ATTENTION_LIMIT_ = 600;
 var GIB_M1_STAFF_PAGE_SIZE_ = 500;
 var GIB_M1_STAFF_HISTORY_PAGE_SIZE_ = 50;
+var GIB_M1_STAFF_HISTORY_WINDOW_PAGE_LIMIT_ = 64;
 var GIB_M1_STAFF_PAGE_MAX_BYTES_ = 80000;
 var GIB_M1_STAFF_HISTORY_PAGE_MAX_BYTES_ = 79000;
 var GIB_M1_STAFF_CACHE_MAX_BYTES_ = 90000;
@@ -3292,8 +3293,12 @@ function staffClockCachePageKey_(token, stream, offset) {
   return 'gib-m1-staff-v2-page-' + token + '-' + stream + '-' + offset;
 }
 
-function staffClockCacheHistoryPageKey_(token, offset) {
-  return 'gib-m1-staff-v2-history-' + token + '-' + offset;
+function staffClockCacheHistoryWindowKey_() {
+  return 'gib-m1-staff-v2-history-window';
+}
+
+function staffClockCacheHistoryPageKey_(slot) {
+  return 'gib-m1-staff-v2-history-window-page-' + slot;
 }
 
 function staffClockCacheReadJson_(cache, key) {
@@ -3710,6 +3715,161 @@ function staffClockBoundedHistoryPage_(target, request, shifts) {
   return accepted;
 }
 
+function staffClockHistoryPageMatches_(page, target, request, manifest) {
+  if (
+    !page
+    || !staffClockExactKeys_(page, [
+      'ok', 'target', 'viewToken', 'offset', 'total', 'items', 'nextOffset'
+    ])
+    || page.ok !== true
+    || page.target !== target
+    || page.viewToken !== request.viewToken
+    || page.offset !== request.offset
+    || page.total !== manifest.history.total
+    || !Array.isArray(page.items)
+    || page.items.length > GIB_M1_STAFF_HISTORY_PAGE_SIZE_
+    || (page.items.length === 0 && page.total !== 0)
+    || staffClockPageByteLength_(page) > GIB_M1_STAFF_HISTORY_PAGE_MAX_BYTES_
+  ) return false;
+  var endOffset = page.offset + page.items.length;
+  return endOffset <= page.total
+    && page.nextOffset === (endOffset < page.total ? endOffset : null);
+}
+
+function staffClockHistoryWindowShapeValid_(window) {
+  if (
+    !window
+    || !staffClockExactKeys_(window, [
+      'signature', 'target', 'mode', 'token', 'total', 'digest', 'startOffset', 'pages'
+    ])
+    || !GIB_M1_STAFF_VIEW_TOKEN_PATTERN_.test(window.signature)
+    || typeof window.target !== 'string'
+    || window.mode !== 'admin'
+    || !GIB_M1_STAFF_VIEW_TOKEN_PATTERN_.test(window.token)
+    || typeof window.total !== 'number'
+    || !isFinite(window.total)
+    || Math.floor(window.total) !== window.total
+    || window.total < 0
+    || !GIB_M1_STAFF_VIEW_TOKEN_PATTERN_.test(window.digest)
+    || typeof window.startOffset !== 'number'
+    || !isFinite(window.startOffset)
+    || Math.floor(window.startOffset) !== window.startOffset
+    || window.startOffset < 0
+    || window.startOffset > window.total
+    || !Array.isArray(window.pages)
+    || window.pages.length < 1
+    || window.pages.length > GIB_M1_STAFF_HISTORY_WINDOW_PAGE_LIMIT_
+  ) return false;
+  var previousOffset = -1;
+  for (var index = 0; index < window.pages.length; index += 1) {
+    var entry = window.pages[index];
+    if (
+      !staffClockExactKeys_(entry, ['offset', 'slot', 'digest'])
+      || typeof entry.offset !== 'number'
+      || !isFinite(entry.offset)
+      || Math.floor(entry.offset) !== entry.offset
+      || entry.offset < 0
+      || entry.slot !== index
+      || entry.offset <= previousOffset
+      || entry.offset > window.total
+      || !GIB_M1_STAFF_VIEW_TOKEN_PATTERN_.test(entry.digest)
+    ) return false;
+    previousOffset = entry.offset;
+  }
+  return window.pages[0].offset === window.startOffset;
+}
+
+function staffClockBuildHistoryWindow_(target, token, shifts, startOffset) {
+  var offset = 0;
+  while (offset < startOffset) {
+    var precedingPage = staffClockBoundedHistoryPage_(
+      target,
+      { viewToken: token, offset: offset },
+      shifts
+    );
+    if (
+      !precedingPage
+      || precedingPage.nextOffset === null
+      || precedingPage.nextOffset > startOffset
+    ) return null;
+    offset = precedingPage.nextOffset;
+  }
+  if (offset !== startOffset) return null;
+
+  var pages = [];
+  for (
+    var slot = 0;
+    slot < GIB_M1_STAFF_HISTORY_WINDOW_PAGE_LIMIT_;
+    slot += 1
+  ) {
+    var page = staffClockBoundedHistoryPage_(
+      target,
+      { viewToken: token, offset: offset },
+      shifts
+    );
+    if (!page) return null;
+    pages.push(page);
+    if (page.nextOffset === null) break;
+    offset = page.nextOffset;
+  }
+  return pages;
+}
+
+function staffClockRetireHistoryWindow_(cache) {
+  cache.remove(staffClockCacheHistoryWindowKey_());
+  for (
+    var slot = 0;
+    slot < GIB_M1_STAFF_HISTORY_WINDOW_PAGE_LIMIT_;
+    slot += 1
+  ) {
+    cache.remove(staffClockCacheHistoryPageKey_(slot));
+  }
+}
+
+function staffClockCacheReadJsonStatus_(cache, key) {
+  try {
+    var text = cache.get(key);
+    if (text === null) return { status: 'miss', value: null };
+    return { status: 'hit', value: JSON.parse(text) };
+  } catch (error) {
+    return { status: 'malformed', value: null };
+  }
+}
+
+function staffClockCacheHistoryWindow_(
+  cache,
+  signature,
+  target,
+  token,
+  shifts,
+  digest,
+  startOffset
+) {
+  var pages = staffClockBuildHistoryWindow_(target, token, shifts, startOffset);
+  if (!pages) return null;
+  staffClockRetireHistoryWindow_(cache);
+  var entries = [];
+  pages.forEach(function(page, slot) {
+    staffClockCachePutJson_(cache, staffClockCacheHistoryPageKey_(slot), page);
+    entries.push({
+      offset: page.offset,
+      slot: slot,
+      digest: staffClockSha256Hex_(JSON.stringify(page))
+    });
+  });
+  staffClockCachePutJson_(cache, staffClockCacheHistoryWindowKey_(), {
+    signature: signature,
+    target: target,
+    mode: 'admin',
+    token: token,
+    total: shifts.length,
+    digest: digest,
+    startOffset: startOffset,
+    pages: entries
+  });
+  return pages[0];
+}
+
 function staffClockCacheBuiltView_(cache, state, built) {
   var token = built.summary.view.token;
   var summaryKey = staffClockCacheSummaryKey_(state.signature);
@@ -3740,25 +3900,18 @@ function staffClockCacheBuiltView_(cache, state, built) {
     }
   });
   if (state.mode === 'admin') {
-    var historyOffset = 0;
-    do {
-      var historyRequest = { viewToken: token, offset: historyOffset };
-      var historyPage = staffClockBoundedHistoryPage_(
-        state.target,
-        historyRequest,
-        built.history.items
-      );
-      if (!historyPage) {
-        throw new Error('Staff Clock history page exceeds the safe byte bound.');
-      }
-      staffClockCachePutJson_(
-        cache,
-        staffClockCacheHistoryPageKey_(token, historyOffset),
-        historyPage
-      );
-      if (historyPage.nextOffset === null) break;
-      historyOffset = historyPage.nextOffset;
-    } while (historyOffset < built.history.items.length);
+    var firstHistoryPage = staffClockCacheHistoryWindow_(
+      cache,
+      state.signature,
+      state.target,
+      token,
+      built.history.items,
+      built.history.digest,
+      0
+    );
+    if (!firstHistoryPage) {
+      throw new Error('Staff Clock history page exceeds the safe byte bound.');
+    }
   }
   staffClockCachePutJson_(cache, summaryKey, {
     signature: state.signature,
@@ -3836,37 +3989,93 @@ function staffClockReadHistoryPage_(body) {
   if (manifest.mode !== 'admin' || request.offset > manifest.history.total) {
     return { ok: false, target: target, result: 'rejected' };
   }
-  var page = staffClockCacheReadJson_(
+  var windowRead = staffClockCacheReadJsonStatus_(
     cache,
-    staffClockCacheHistoryPageKey_(request.viewToken, request.offset)
+    staffClockCacheHistoryWindowKey_()
   );
   if (
-    !page
-    || !staffClockExactKeys_(page, [
-      'ok', 'target', 'viewToken', 'offset', 'total', 'items', 'nextOffset'
-    ])
-    || page.ok !== true
-    || page.target !== target
-    || page.viewToken !== request.viewToken
-    || page.offset !== request.offset
-    || page.total !== manifest.history.total
-    || !Array.isArray(page.items)
-    || page.items.length > GIB_M1_STAFF_HISTORY_PAGE_SIZE_
-    || (page.items.length === 0 && page.total !== 0)
-    || staffClockPageByteLength_(page) > GIB_M1_STAFF_HISTORY_PAGE_MAX_BYTES_
+    windowRead.status === 'malformed'
+    || (
+      windowRead.status === 'hit'
+      && !staffClockHistoryWindowShapeValid_(windowRead.value)
+    )
   ) {
     staffClockInvalidateCachedView_(cache, manifest);
     return { ok: false, target: target, result: 'stale' };
   }
-  var endOffset = page.offset + page.items.length;
+  var window = windowRead.value;
   if (
-    endOffset > page.total
-    || page.nextOffset !== (endOffset < page.total ? endOffset : null)
+    window
+    && window.token === request.viewToken
+    && (
+      window.signature !== state.signature
+      || window.target !== target
+      || window.mode !== 'admin'
+      || window.total !== manifest.history.total
+      || window.digest !== manifest.history.digest
+    )
   ) {
     staffClockInvalidateCachedView_(cache, manifest);
     return { ok: false, target: target, result: 'stale' };
   }
-  return page;
+  if (window && window.token === request.viewToken) {
+    for (var index = 0; index < window.pages.length; index += 1) {
+      var entry = window.pages[index];
+      if (entry.offset !== request.offset) continue;
+      var pageRead = staffClockCacheReadJsonStatus_(
+        cache,
+        staffClockCacheHistoryPageKey_(entry.slot)
+      );
+      if (pageRead.status === 'malformed') {
+        staffClockInvalidateCachedView_(cache, manifest);
+        return { ok: false, target: target, result: 'stale' };
+      }
+      var cachedPage = pageRead.value;
+      if (pageRead.status === 'hit') {
+        if (
+          staffClockSha256Hex_(JSON.stringify(cachedPage)) !== entry.digest
+          || !staffClockHistoryPageMatches_(cachedPage, target, request, manifest)
+        ) {
+          staffClockInvalidateCachedView_(cache, manifest);
+          return { ok: false, target: target, result: 'stale' };
+        }
+        return cachedPage;
+      }
+      break;
+    }
+  }
+
+  var rebuilt = staffClockBuildView_(state, true);
+  if (
+    rebuilt.summary.view.token !== request.viewToken
+    || rebuilt.history.items.length !== manifest.history.total
+    || rebuilt.history.digest !== manifest.history.digest
+  ) {
+    staffClockInvalidateCachedView_(cache, manifest);
+    return { ok: false, target: target, result: 'stale' };
+  }
+  var rebuiltPage = staffClockCacheHistoryWindow_(
+    cache,
+    state.signature,
+    target,
+    request.viewToken,
+    rebuilt.history.items,
+    rebuilt.history.digest,
+    request.offset
+  );
+  if (!rebuiltPage) {
+    return { ok: false, target: target, result: 'rejected' };
+  }
+  if (!staffClockHistoryPageMatches_(rebuiltPage, target, request, manifest)) {
+    staffClockInvalidateCachedView_(cache, manifest);
+    return { ok: false, target: target, result: 'stale' };
+  }
+  staffClockCachePutJson_(
+    cache,
+    staffClockCacheManifestKey_(request.viewToken),
+    manifest
+  );
+  return rebuiltPage;
 }
 
 function staffClockWithLock_(busyMessage, callback) {
