@@ -647,6 +647,7 @@ function runCandidateBootstrap({ storageState, cookieState, schedulePayload }) {
     Blob,
     Date: FixedDate,
     M1_INSTALLATION_PROFILE: installationProfile('rev'),
+    M1_INSTALLATION_PROFILE_VALID: true,
     Intl,
     Response,
     TextEncoder,

@@ -152,7 +152,29 @@
       border-color: rgba(64, 215, 160, .55);
     }
     .tablet-authorization p { margin-top: 7px; line-height: 1.45; }
-    .tablet-authorization .btn { margin-top: 14px; }
+    .tablet-pairing-entry {
+      display: grid;
+      grid-template-columns: minmax(190px, 260px) auto;
+      align-items: end;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .tablet-pairing-review {
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid rgba(115, 181, 255, .4);
+      border-radius: 12px;
+      background: rgba(115, 181, 255, .08);
+    }
+    .tablet-pairing-details {
+      display: grid;
+      grid-template-columns: minmax(110px, auto) 1fr;
+      gap: 7px 12px;
+      margin: 12px 0;
+    }
+    .tablet-pairing-details dt { color: var(--muted); font-weight: 700; }
+    .tablet-pairing-details dd { margin: 0; overflow-wrap: anywhere; }
+    .tablet-pairing-review[hidden] { display: none; }
     .date-actions { display: flex; flex-wrap: wrap; gap: 8px; }
     .date-summary { text-align: center; }
     .date-summary strong { display: block; font-size: 1.17rem; }
@@ -491,7 +513,7 @@
       .class-main .btn { width: 100%; }
       .mini-grid, .fixed { grid-template-columns: 1fr 1fr; }
       .staff-period-grid, .staff-fix-grid, .staff-void-form, .staff-adjustment-grid,
-      .staff-adjustment-originals, .signin-void-form { grid-template-columns: 1fr; }
+      .staff-adjustment-originals, .signin-void-form, .tablet-pairing-entry { grid-template-columns: 1fr; }
       .fixed div:nth-child(2) { grid-column: 1 / -1; }
     }
   </style>
@@ -548,11 +570,32 @@
         </div>
       </header>
 
-      <section id="tabletAuthorization" class="panel section tablet-authorization" aria-labelledby="tabletAuthorizationHeading" hidden>
-        <h2 id="tabletAuthorizationHeading">Authorize this Staff Clock tablet</h2>
-        <p class="muted">Use this after a reset, for a replacement tablet, or for another approved Revolution Staff Clock tablet. Authorization does not change punches, sign-ins, or other tablet data.</p>
-        <button id="authorizeTabletButton" class="btn primary" type="button">Authorize this tablet</button>
-        <div id="tabletAuthorizationMessage" class="message" role="status" aria-live="polite"></div>
+      <section id="tabletPairing" class="panel section tablet-authorization" aria-labelledby="tabletPairingHeading" hidden>
+        <h2 id="tabletPairingHeading">Authorize a Staff Clock tablet</h2>
+        <p class="muted">Enter the short pairing code shown on the Staff Clock tablet. Review the exact tablet request before separately confirming authorization.</p>
+        <form id="tabletPairingForm" novalidate>
+          <div class="tablet-pairing-entry">
+            <div class="field">
+              <label for="tabletPairingCode">Pairing code</label>
+              <input id="tabletPairingCode" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="11" placeholder="ABCDE-FGHJK">
+            </div>
+            <button id="tabletPairingReviewButton" class="btn primary" type="submit">Review tablet</button>
+          </div>
+        </form>
+        <div id="tabletPairingMessage" class="message" role="status" aria-live="polite"></div>
+        <div id="tabletPairingReview" class="tablet-pairing-review" hidden>
+          <h3>Review before approving</h3>
+          <dl class="tablet-pairing-details">
+            <dt>Gym</dt><dd id="tabletPairingGym"></dd>
+            <dt>Origin</dt><dd id="tabletPairingOrigin"></dd>
+            <dt>Device</dt><dd id="tabletPairingDevice"></dd>
+            <dt>Requested</dt><dd id="tabletPairingRequested"></dd>
+            <dt>Expires</dt><dd id="tabletPairingExpires"></dd>
+          </dl>
+          <button id="tabletPairingApproveButton" class="btn warn" type="button">Confirm tablet authorization</button>
+          <button id="tabletPairingCancelButton" class="btn ghost" type="button">Cancel</button>
+          <div id="tabletPairingApprovalMessage" class="message" role="status" aria-live="polite"></div>
+        </div>
       </section>
 
       <section class="panel toolbar" aria-label="Date controls">
@@ -715,56 +758,10 @@
       'use strict';
 
       const INSTALLATION = globalThis.M1_INSTALLATION_PROFILE;
-      const expectedInstallation = INSTALLATION?.installationId === 'richmond'
-        ? INSTALLATION.environment === 'production'
-          && (
-            (INSTALLATION.activation === 'pending' && INSTALLATION.writesEnabled === false)
-            || (INSTALLATION.activation === 'active' && INSTALLATION.writesEnabled === true)
-          )
-          ? {
-              schema: 'gib-m1-installation-profile/v1',
-              installationId: 'richmond',
-              gymName: 'Richmond BJJ',
-              siteCode: 'Richmond',
-              deviceLabel: 'Richmond Front Desk Tablet',
-              storagePrefix: 'gib_m1_richmond_production_',
-              environment: 'production',
-              allowedOrigin: 'https://gib-richmond-live.netlify.app',
-              activation: INSTALLATION.activation,
-              writesEnabled: INSTALLATION.writesEnabled,
-              scheduleSource: { mode: 'richmond-website', endpoint: '/api/m1-schedule' },
-              featureFlags: { staffClock: false },
-              backend: { enabled: true, transportTarget: 'richmond-production' }
-            }
-          : INSTALLATION.environment === 'test'
-            ? {
-            schema: 'gib-m1-installation-profile/v1',
-            installationId: 'richmond',
-            gymName: 'Richmond BJJ',
-            siteCode: 'Richmond',
-            deviceLabel: 'Richmond TEST Browser',
-            storagePrefix: 'gib_m1_richmond_',
-            environment: 'test',
-            allowedOrigin: 'https://gib-richmond-test.netlify.app',
-            scheduleSource: { mode: 'richmond-website', endpoint: '/api/m1-schedule' },
-            featureFlags: { staffClock: false },
-            backend: { enabled: true, transportTarget: 'richmond-test' }
-          }
-            : null
-        : INSTALLATION?.installationId === 'rev'
-          ? {
-              schema: 'gib-m1-installation-profile/v1',
-              installationId: 'rev',
-              gymName: 'Revolution BJJ',
-              siteCode: 'Rev',
-              deviceLabel: 'Revolution BJJ front desk',
-              storagePrefix: 'gib_m1_',
-              scheduleSource: { mode: 'rev-website', endpoint: '/api/m1-schedule' },
-              featureFlags: { staffClock: true },
-              backend: { enabled: true, transportTarget: 'rev' }
-            }
-          : null;
-      if (!expectedInstallation || JSON.stringify(INSTALLATION) !== JSON.stringify(expectedInstallation)) {
+      if (
+        globalThis.M1_INSTALLATION_PROFILE_VALID !== true
+        || INSTALLATION?.schema !== 'gib-m1-installation-profile/v1'
+      ) {
         document.body.textContent = 'This installation is unavailable. Nothing was loaded or sent.';
         return;
       }
@@ -776,12 +773,16 @@
       const ADMIN_MUTATIONS_ENABLED = !IS_RICHMOND_PRODUCTION
         || (INSTALLATION.activation === 'active' && INSTALLATION.writesEnabled === true);
       const STAFF_CLOCK_ENABLED = INSTALLATION.featureFlags.staffClock === true;
-      const REVOLUTION_PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
-      const TABLET_AUTHORIZATION_AVAILABLE = !IS_RICHMOND
-        && STAFF_CLOCK_ENABLED
-        && location.origin === REVOLUTION_PRODUCTION_ORIGIN;
-      const TABLET_AUTHORIZATION_REQUESTED = TABLET_AUTHORIZATION_AVAILABLE
-        && location.search === '?authorizeTablet=1';
+      const STAFF_CLOCK_PAIRING_ENABLED = INSTALLATION.featureFlags.staffClockPairing === true;
+      const STAFF_CLOCK_PAIRING_CONFIG = INSTALLATION.staffClockPairing;
+      const TABLET_PAIRING_AVAILABLE = STAFF_CLOCK_ENABLED
+        && STAFF_CLOCK_PAIRING_ENABLED
+        && STAFF_CLOCK_PAIRING_CONFIG
+        && Number.isInteger(STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds)
+        && STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds >= 60
+        && STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds <= 300
+        && INSTALLATION.allowedOrigin === STAFF_CLOCK_PAIRING_CONFIG.origin
+        && location.origin === STAFF_CLOCK_PAIRING_CONFIG.origin;
 
       function richmondProductionAdminCopy(mutationsEnabled) {
         return mutationsEnabled
@@ -816,8 +817,7 @@
         schedule: '/api/m1-schedule',
         scheduleBootstrap: IS_RICHMOND ? '/m1/richmond-schedule.json' : '/m1/shared-schedule.json',
         tabletDiagnostic: '/api/m1-tablet-diagnostic-verifier',
-        tabletAuthorize: '/api/m1-admin-tablet-authorize',
-        tabletInstall: '/api/m1-tablet-install'
+        tabletPairing: '/api/m1-admin-tablet-pairing'
       });
       const ADMIN_REQUEST_HEADER = 'X-GIB-M1-Admin-Request-Token';
       const TABLET_DIAGNOSTIC_PATH = '/m1/tablet-diagnostic.html';
@@ -899,6 +899,7 @@
       let currentAdminName = '';
       let testMode = false;
       let adminRequestToken = '';
+      let reviewedTabletPairingCode = '';
       let currentStaffTime = null;
       let staffTimeLoadGeneration = 0;
       let staffOlderHistoryExpanded = false;
@@ -2814,55 +2815,197 @@
         toast(installed ? 'Repaired sync settings installed' : 'Installation failed safely');
       }
 
-      function validTabletAuthorizationIssueResponse(value) {
-        return exactObjectKeys(value, ['ok', 'issued', 'expiresInSeconds'])
-          && value.ok === true
-          && value.issued === true
-          && Number.isSafeInteger(value.expiresInSeconds)
-          && value.expiresInSeconds >= 1
-          && value.expiresInSeconds <= 120;
+      function validTabletPairingCode(value) {
+        return typeof value === 'string'
+          && /^[0-9A-HJ-KM-NP-TV-Z]{5}-[0-9A-HJ-KM-NP-TV-Z]{5}$/u.test(value);
       }
 
-      function validTabletAuthorizationInstallResponse(value) {
-        return exactObjectKeys(value, ['ok', 'installed'])
-          && value.ok === true
-          && value.installed === true;
+      function normalizeTabletPairingCode(value) {
+        return clean(value).toLocaleUpperCase('en-US').replace(/\s+/g, '');
       }
 
-      function focusTabletAuthorization() {
-        if (!TABLET_AUTHORIZATION_REQUESTED || !TABLET_AUTHORIZATION_AVAILABLE) return;
-        const section = $('#tabletAuthorization');
-        const button = $('#authorizeTabletButton');
-        if (!section || !button || section.hidden || $('#appPanel').hidden) return;
-        section.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        button.focus();
+      function validTabletPairingReviewResponse(value, pairingCode, now = Date.now()) {
+        if (
+          !validTabletPairingCode(pairingCode)
+          || !exactObjectKeys(value, [
+            'ok',
+            'result',
+            'installationId',
+            'gymName',
+            'origin',
+            'deviceLabel',
+            'requestedAt',
+            'expiresAt'
+          ])
+          || value.ok !== true
+          || value.result !== 'pending'
+          || value.installationId !== INSTALLATION.installationId
+          || value.gymName !== INSTALLATION.gymName
+          || value.origin !== STAFF_CLOCK_PAIRING_CONFIG.origin
+          || value.deviceLabel !== INSTALLATION.deviceLabel
+          || !validIsoTimestamp(value.requestedAt)
+          || !validIsoTimestamp(value.expiresAt)
+        ) return false;
+        const requestedAt = Date.parse(value.requestedAt);
+        const expiresAt = Date.parse(value.expiresAt);
+        return Number.isFinite(requestedAt)
+          && Number.isFinite(expiresAt)
+          && requestedAt <= now + 5_000
+          && expiresAt > now
+          && expiresAt > requestedAt
+          && expiresAt - requestedAt <= STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds * 1_000;
       }
 
-      async function authorizeThisTablet() {
-        if (!TABLET_AUTHORIZATION_AVAILABLE || !adminRequestToken) return;
-        const button = $('#authorizeTabletButton');
-        const status = $('#tabletAuthorizationMessage');
+      function validTabletPairingApproveResponse(value, now = Date.now()) {
+        if (
+          !exactObjectKeys(value, [
+            'ok',
+            'result',
+            'installationId',
+            'gymName',
+            'deviceLabel',
+            'approvedAt'
+          ])
+          || value.ok !== true
+          || value.result !== 'approved'
+          || value.installationId !== INSTALLATION.installationId
+          || value.gymName !== INSTALLATION.gymName
+          || value.deviceLabel !== INSTALLATION.deviceLabel
+          || !validIsoTimestamp(value.approvedAt)
+        ) return false;
+        const approvedAt = Date.parse(value.approvedAt);
+        return Number.isFinite(approvedAt)
+          && approvedAt <= now + 5_000
+          && now - approvedAt <= 120_000;
+      }
+
+      function formatTabletPairingTime(value) {
+        const date = new Date(value);
+        if (!Number.isFinite(date.getTime())) return 'Unavailable';
+        return `${new Intl.DateTimeFormat('en-US', {
+          timeZone: TIME_ZONE,
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          second: '2-digit'
+        }).format(date)} America/New_York time`;
+      }
+
+      function clearTabletPairingReview(options = {}) {
+        reviewedTabletPairingCode = '';
+        $('#tabletPairingReview').hidden = true;
+        $('#tabletPairingGym').textContent = '';
+        $('#tabletPairingOrigin').textContent = '';
+        $('#tabletPairingDevice').textContent = '';
+        $('#tabletPairingRequested').textContent = '';
+        $('#tabletPairingExpires').textContent = '';
+        showMessage($('#tabletPairingApprovalMessage'), '');
+        if (options.clearCode === true) $('#tabletPairingCode').value = '';
+      }
+
+      async function reviewTabletPairing() {
+        if (!TABLET_PAIRING_AVAILABLE || !adminRequestToken) return;
+        const code = normalizeTabletPairingCode($('#tabletPairingCode').value);
+        const button = $('#tabletPairingReviewButton');
+        const status = $('#tabletPairingMessage');
+        clearTabletPairingReview();
+        $('#tabletPairingCode').value = code;
+        showMessage(status, '');
+        if (!validTabletPairingCode(code)) {
+          showMessage(status, 'Enter the complete pairing code shown on the Staff Clock tablet.');
+          return;
+        }
+        button.disabled = true;
+        showMessage(status, 'Checking this tablet request…', 'working');
+        try {
+          const data = await requestJson(API.tabletPairing, {
+            operation: 'review',
+            pairingCode: code
+          });
+          if (!validTabletPairingReviewResponse(data, code)) {
+            throw new Error('Tablet pairing review returned an incomplete response.');
+          }
+          reviewedTabletPairingCode = code;
+          $('#tabletPairingGym').textContent = data.gymName;
+          $('#tabletPairingOrigin').textContent = data.origin;
+          $('#tabletPairingDevice').textContent = data.deviceLabel;
+          $('#tabletPairingRequested').textContent = formatTabletPairingTime(data.requestedAt);
+          $('#tabletPairingExpires').textContent = formatTabletPairingTime(data.expiresAt);
+          $('#tabletPairingReview').hidden = false;
+          showMessage(status, 'Review these details before confirming.', 'success');
+          $('#tabletPairingApproveButton').focus();
+        } catch (error) {
+          if (error.status === 401) {
+            setLoggedOut('Admin login expired. Sign in again to review tablet pairing.');
+          } else if (error.status === 410) {
+            clearTabletPairingReview({ clearCode: true });
+            showMessage(status, error.message || 'The pairing code expired. Ask the tablet for a new code.');
+          } else {
+            showMessage(status, error.message || 'Tablet pairing could not be reviewed.');
+          }
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      async function approveTabletPairing() {
+        if (!TABLET_PAIRING_AVAILABLE || !adminRequestToken) return;
+        const code = normalizeTabletPairingCode($('#tabletPairingCode').value);
+        const button = $('#tabletPairingApproveButton');
+        const status = $('#tabletPairingApprovalMessage');
+        if (!reviewedTabletPairingCode || code !== reviewedTabletPairingCode) {
+          clearTabletPairingReview();
+          showMessage($('#tabletPairingMessage'), 'The pairing code changed. Review the tablet again.');
+          return;
+        }
         button.disabled = true;
         showMessage(status, 'Authorizing this tablet…', 'working');
         try {
-          const issue = await requestJson(API.tabletAuthorize, { operation: 'issue' });
-          if (!validTabletAuthorizationIssueResponse(issue)) {
-            throw new Error('Tablet authorization could not be issued safely.');
-          }
-          const installed = await requestJson(API.tabletInstall, {
-            operation: 'installAdminGrant'
+          const data = await requestJson(API.tabletPairing, {
+            operation: 'approve',
+            pairingCode: code
           });
-          if (!validTabletAuthorizationInstallResponse(installed)) {
-            throw new Error('Tablet authorization could not be installed safely.');
+          if (!validTabletPairingApproveResponse(data)) {
+            throw new Error('Tablet pairing approval returned an incomplete response.');
           }
-          showMessage(status, 'Tablet authorized. Returning to Staff Clock…', 'success');
-          location.replace('/m1/#staffClock');
+          clearTabletPairingReview({ clearCode: true });
+          showMessage(
+            $('#tabletPairingMessage'),
+            `${data.deviceLabel} authorized. The tablet will reload its active roster automatically.`,
+            'success'
+          );
         } catch (error) {
           if (error.status === 401) {
-            setLoggedOut('Admin login expired. Sign in again to authorize this tablet.');
+            setLoggedOut('Admin login expired. Sign in again to authorize the tablet.');
+          } else if (error.status === 410) {
+            clearTabletPairingReview({ clearCode: true });
+            showMessage(
+              $('#tabletPairingMessage'),
+              error.message || 'The pairing code expired. Ask the tablet for a new code.'
+            );
+          } else if (error.status === 403 || error.status === 409) {
+            clearTabletPairingReview({ clearCode: true });
+            showMessage(
+              $('#tabletPairingMessage'),
+              error.status === 409
+                ? 'This pairing request was already handled. Check the tablet or use a fresh code.'
+                : 'Authorization did not complete. Use a separate Admin device and review a fresh code.'
+            );
+          } else if (Number.isInteger(error.status) && error.status > 0) {
+            // The server clears the one-time review cookie on every HTTP
+            // failure. Keep the code for convenience, but require a fresh
+            // review before another confirmation attempt.
+            clearTabletPairingReview();
+            showMessage(
+              $('#tabletPairingMessage'),
+              'Authorization did not complete. Review this pairing code again.'
+            );
           } else {
-            showMessage(status, error.message || 'Tablet authorization did not complete. Try again.');
+            showMessage(status, error.message || 'Tablet pairing approval did not complete.');
           }
+        } finally {
           button.disabled = false;
         }
       }
@@ -2874,6 +3017,8 @@
           method: 'POST',
           headers,
           credentials: 'same-origin',
+          mode: 'same-origin',
+          redirect: 'error',
           cache: 'no-store',
           body: JSON.stringify(body)
         });
@@ -2890,6 +3035,7 @@
 
       function setLoggedOut(message = '') {
         clearDiagnosticRun(true);
+        clearTabletPairingReview({ clearCode: true });
         reviewLoadGeneration += 1;
         staffTimeLoadGeneration += 1;
         currentRecords = [];
@@ -2933,7 +3079,8 @@
         testMode = data.test === true;
         $('#loginPanel').hidden = true;
         $('#appPanel').hidden = false;
-        showMessage($('#tabletAuthorizationMessage'), '');
+        clearTabletPairingReview({ clearCode: true });
+        showMessage($('#tabletPairingMessage'), '');
         $('#sessionLabel').textContent = `${currentAdminName} · ${IS_RICHMOND
           ? IS_RICHMOND_PRODUCTION
             ? `Richmond production Sheet · ${ADMIN_MUTATIONS_ENABLED ? 'active session' : 'read-only pending activation'}`
@@ -2965,13 +3112,11 @@
           adminRequestToken = data.requestToken;
           $('#loginPassphrase').value = '';
           setLoggedIn(data);
-          if (typeof focusTabletAuthorization === 'function') focusTabletAuthorization();
           await loadReview(defaultYesterday());
           if (STAFF_CLOCK_ENABLED) {
             await loadStaffTime();
             focusStaffTimeHash();
           }
-          if (typeof focusTabletAuthorization === 'function') focusTabletAuthorization();
         } catch (error) {
           showMessage($('#loginMessage'), error.message);
         } finally {
@@ -4720,7 +4865,7 @@
         $('#calendarDate').max = nyDate();
         $('#searchDate').max = nyDate();
         configureAdminLoginEntry();
-        $('#tabletAuthorization').hidden = !TABLET_AUTHORIZATION_AVAILABLE;
+        $('#tabletPairing').hidden = !TABLET_PAIRING_AVAILABLE;
         const diagnosticOriginAllowed = !IS_RICHMOND && validTabletDiagnosticOrigin();
         $('#installSyncSettingsButton').hidden = true;
         $('#tabletDiagnosticButton').hidden = !diagnosticOriginAllowed;
@@ -4733,12 +4878,6 @@
           // A fresh page has no memory-only Admin request token, even if an old
           // session cookie exists. Wait for the explicit login before Admin API calls.
           setLoggedOut();
-          if (TABLET_AUTHORIZATION_REQUESTED) {
-            showMessage(
-              $('#loginMessage'),
-              'Choose Andrew Smith or Stuart Turner, then sign in to authorize this tablet.'
-            );
-          }
           if (IS_RICHMOND_PRODUCTION && !ADMIN_MUTATIONS_ENABLED) {
             await loadProductionLedgerStatus();
           }
@@ -4757,7 +4896,20 @@
         if (event.key === 'Enter') login(false);
       });
       $('#logoutButton').addEventListener('click', logout);
-      $('#authorizeTabletButton').addEventListener('click', authorizeThisTablet);
+      $('#tabletPairingForm').addEventListener('submit', event => {
+        event.preventDefault();
+        reviewTabletPairing();
+      });
+      $('#tabletPairingCode').addEventListener('input', () => {
+        clearTabletPairingReview();
+        showMessage($('#tabletPairingMessage'), '');
+      });
+      $('#tabletPairingApproveButton').addEventListener('click', approveTabletPairing);
+      $('#tabletPairingCancelButton').addEventListener('click', () => {
+        clearTabletPairingReview({ clearCode: true });
+        showMessage($('#tabletPairingMessage'), '');
+        $('#tabletPairingCode').focus();
+      });
       $('#tabletDiagnosticButton').addEventListener('click', () => openTabletDiagnostic('diagnostic'));
       $('#previousDay').addEventListener('click', () => loadReview(shiftDate(currentDate, -1)));
       $('#yesterday').addEventListener('click', () => loadReview(defaultYesterday()));

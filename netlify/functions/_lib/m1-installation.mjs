@@ -26,6 +26,29 @@ export function staffClockEnabled(installationId, environment, activation) {
   return deploymentInstallationProfile(installationId, environment, activation)?.featureFlags.staffClock === true;
 }
 
+export function staffClockPairingProfile(installationId, environment, activation) {
+  const profile = deploymentInstallationProfile(installationId, environment, activation);
+  const pairing = profile?.staffClockPairing;
+  if (
+    profile?.featureFlags?.staffClock !== true
+    || profile?.featureFlags?.staffClockPairing !== true
+    || profile?.backend?.enabled !== true
+    || !pairing
+    || typeof pairing !== 'object'
+    || pairing.origin !== profile.allowedOrigin
+    || !Number.isInteger(pairing.expiresInSeconds)
+    || pairing.expiresInSeconds < 60
+    || pairing.expiresInSeconds > 300
+  ) return null;
+  return Object.freeze({
+    installationId: profile.installationId,
+    gymName: profile.gymName,
+    deviceLabel: profile.deviceLabel,
+    origin: pairing.origin,
+    expiresInSeconds: pairing.expiresInSeconds
+  });
+}
+
 export function remoteScheduleEnabled(installationId, environment, activation) {
   const mode = deploymentInstallationProfile(installationId, environment, activation)?.scheduleSource.mode;
   return mode === 'rev-website' || mode === 'richmond-website';
