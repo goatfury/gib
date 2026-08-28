@@ -706,12 +706,18 @@ function runCandidateBootstrap({ storageState, cookieState, schedulePayload }) {
 }
 
 async function settleBootstrap(run, expectScheduleRequest) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  if (!expectScheduleRequest) {
     await new Promise(resolve => setImmediate(resolve));
-    if (!expectScheduleRequest) return;
-    if (run.requests.length === 1 && run.clearedTimers.length >= 1) return;
+    return;
   }
-  assert.fail('The candidate schedule bootstrap did not settle.');
+  const deadline = Date.now() + 2_000;
+  do {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    if (run.requests.length === 1 && run.clearedTimers.length >= 1) return;
+  } while (Date.now() < deadline);
+  assert.fail(
+    `The candidate schedule bootstrap did not settle (requests=${run.requests.length}, clearedTimers=${run.clearedTimers.length}).`
+  );
 }
 
 function assertOriginalBytesPreserved(before, after, label) {
