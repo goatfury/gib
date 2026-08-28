@@ -592,8 +592,10 @@
             <dt>Requested</dt><dd id="tabletPairingRequested"></dd>
             <dt>Expires</dt><dd id="tabletPairingExpires"></dd>
           </dl>
+          <p class="record-detail">This reviewed confirmation remains valid for up to 15 minutes.</p>
           <button id="tabletPairingApproveButton" class="btn warn" type="button">Confirm tablet authorization</button>
-          <button id="tabletPairingCancelButton" class="btn ghost" type="button">Cancel</button>
+          <button id="tabletPairingRejectButton" class="btn ghost" type="button">Reject pairing request</button>
+          <button id="tabletPairingCancelButton" class="btn ghost" type="button">Close review</button>
           <div id="tabletPairingApprovalMessage" class="message" role="status" aria-live="polite"></div>
         </div>
       </section>
@@ -735,9 +737,11 @@
           <details class="staff-time-details">
             <summary>Staff Time records</summary>
             <div id="staffTimeRecords" class="staff-time-list"></div>
+            <h3>Completed shift history</h3>
+            <div id="staffCompletedShiftHistory" class="staff-time-list"></div>
             <div class="staff-history-controls">
               <button id="staffTimeOlderHistory" class="btn ghost small" type="button"
-                aria-controls="staffTimeRecords" aria-expanded="false" hidden>Show older history</button>
+                aria-controls="staffCompletedShiftHistory" hidden>Load older completed shifts</button>
               <span id="staffTimeHistoryScope" class="record-detail"></span>
             </div>
           </details>
@@ -780,9 +784,10 @@
         && STAFF_CLOCK_PAIRING_CONFIG
         && Number.isInteger(STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds)
         && STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds >= 60
-        && STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds <= 300
+        && STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds <= 12 * 60 * 60
         && INSTALLATION.allowedOrigin === STAFF_CLOCK_PAIRING_CONFIG.origin
         && location.origin === STAFF_CLOCK_PAIRING_CONFIG.origin;
+      const TABLET_PAIRING_REVIEW_LIFETIME_MS = 15 * 60_000;
 
       function richmondProductionAdminCopy(mutationsEnabled) {
         return mutationsEnabled
@@ -869,6 +874,8 @@
       const STAFF_TIME_VIEW_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
       const STAFF_TIME_PAGE_LIMIT = 500;
       const STAFF_TIME_PAGE_MAX_BYTES = 200_000;
+      const STAFF_TIME_HISTORY_PAGE_LIMIT = 50;
+      const STAFF_TIME_HISTORY_PAGE_MAX_BYTES = 80_000;
       const STAFF_TIME_RECORD_LIMIT = 500;
       const STAFF_TIME_ATTENTION_LIMIT = 600;
       const STAFF_TIME_AUDIT_LIMIT = 500;
@@ -902,7 +909,8 @@
       let reviewedTabletPairingCode = '';
       let currentStaffTime = null;
       let staffTimeLoadGeneration = 0;
-      let staffOlderHistoryExpanded = false;
+      let currentStaffHistoryPage = null;
+      let staffHistoryPageLoading = false;
       let diagnosticWindow = null;
       let diagnosticRunId = '';
       let diagnosticPurpose = '';
@@ -1910,43 +1918,45 @@
       }
 
       function validStaffAdjustmentAuditHistory(value, recordById) {
-        const auditsByPair = new Map();
+        const auditsByPunch = new Map();
         const adjustmentRequestIds = new Set();
+        function remember(punchId, audit, originalAt, correctedAt) {
+          if (!auditsByPunch.has(punchId)) auditsByPunch.set(punchId, []);
+          auditsByPunch.get(punchId).push({ audit, originalAt, correctedAt });
+        }
         for (const audit of value.audit) {
           if (audit.operation !== 'adjust') continue;
-          const key = `${audit.clockInPunchId}\u0000${audit.clockOutPunchId}`;
-          if (!auditsByPair.has(key)) auditsByPair.set(key, []);
-          auditsByPair.get(key).push(audit);
+          remember(
+            audit.clockInPunchId,
+            audit,
+            audit.originalClockInAt,
+            audit.correctedClockInAt
+          );
+          remember(
+            audit.clockOutPunchId,
+            audit,
+            audit.originalClockOutAt,
+            audit.correctedClockOutAt
+          );
           adjustmentRequestIds.add(audit.requestId);
         }
-        for (const audits of auditsByPair.values()) {
-          const latest = audits[0];
-          const clockIn = recordById.get(latest.clockInPunchId);
-          const clockOut = recordById.get(latest.clockOutPunchId);
+        for (const [punchId, entries] of auditsByPunch) {
+          const latest = entries[0];
+          const record = recordById.get(punchId);
           if (
-            !clockIn
-            || !clockOut
-            || !Object.hasOwn(clockIn, 'adjustmentRequestId')
-            || !Object.hasOwn(clockOut, 'adjustmentRequestId')
-            || clockIn.adjustmentRequestId !== latest.requestId
-            || clockOut.adjustmentRequestId !== latest.requestId
-            || clockIn.timestamp !== latest.correctedClockInAt
-            || clockOut.timestamp !== latest.correctedClockOutAt
+            !record
+            || !Object.hasOwn(record, 'adjustmentRequestId')
+            || record.adjustmentRequestId !== latest.audit.requestId
+            || record.timestamp !== latest.correctedAt
           ) return false;
-          for (let index = 0; index < audits.length - 1; index += 1) {
-            const newer = audits[index];
-            const older = audits[index + 1];
-            if (
-              newer.originalClockInAt !== older.correctedClockInAt
-              || newer.originalClockOutAt !== older.correctedClockOutAt
-            ) return false;
+          for (let index = 0; index < entries.length - 1; index += 1) {
+            const newer = entries[index];
+            const older = entries[index + 1];
+            if (newer.originalAt !== older.correctedAt) return false;
           }
           if (!value.view.auditTruncated) {
-            const oldest = audits[audits.length - 1];
-            if (
-              oldest.originalClockInAt !== clockIn.originalTimestamp
-              || oldest.originalClockOutAt !== clockOut.originalTimestamp
-            ) return false;
+            const oldest = entries[entries.length - 1];
+            if (oldest.originalAt !== record.originalTimestamp) return false;
           }
         }
         if (!value.view.auditTruncated && value.records.some(record => (
@@ -2089,6 +2099,78 @@
             ? validStaffAttention
             : validStaffAudit;
         return value.items.every(validator);
+      }
+
+      function validStaffCompletedShift(value) {
+        if (!exactObjectKeys(value, ['clockIn', 'clockOut', 'latestAdjustment'])) return false;
+        const { clockIn, clockOut, latestAdjustment } = value;
+        if (
+          !validStaffRecord(clockIn)
+          || !validStaffRecord(clockOut)
+          || clockIn.punchId === clockOut.punchId
+          || clockIn.staffId !== clockOut.staffId
+          || clockIn.staffName !== clockOut.staffName
+          || clockIn.punchAction !== 'clockIn'
+          || clockOut.punchAction !== 'clockOut'
+          || clockIn.status !== 'ACTIVE'
+          || clockOut.status !== 'ACTIVE'
+          || Date.parse(clockOut.timestamp) <= Date.parse(clockIn.timestamp)
+        ) return false;
+        const clockInRequestId = Object.hasOwn(clockIn, 'adjustmentRequestId')
+          ? clockIn.adjustmentRequestId
+          : '';
+        const clockOutRequestId = Object.hasOwn(clockOut, 'adjustmentRequestId')
+          ? clockOut.adjustmentRequestId
+          : '';
+        const sharedRequestId = clockInRequestId === clockOutRequestId
+          ? clockInRequestId
+          : '';
+        if (!sharedRequestId) return latestAdjustment === null;
+        if (latestAdjustment === null) return false;
+        return validStaffAudit(latestAdjustment)
+          && latestAdjustment.operation === 'adjust'
+          && latestAdjustment.requestId === sharedRequestId
+          && latestAdjustment.staffId === clockIn.staffId
+          && latestAdjustment.staffName === clockIn.staffName
+          && latestAdjustment.clockInPunchId === clockIn.punchId
+          && latestAdjustment.clockOutPunchId === clockOut.punchId
+          && latestAdjustment.correctedClockInAt === clockIn.timestamp
+          && latestAdjustment.correctedClockOutAt === clockOut.timestamp;
+      }
+
+      function validStaffTimeHistoryPageResponse(value, expected) {
+        if (!exactObjectKeys(value, [
+          'ok', 'test', 'adminName', 'viewToken', 'offset', 'total', 'items', 'nextOffset'
+        ])) return false;
+        if (
+          !expected
+          || value.ok !== true
+          || typeof value.test !== 'boolean'
+          || value.test !== testMode
+          || value.adminName !== currentAdminName
+          || value.viewToken !== expected.viewToken
+          || value.offset !== expected.offset
+          || !validStaffTimeCount(value.offset)
+          || !validStaffTimeCount(value.total)
+          || value.offset > value.total
+          || !Array.isArray(value.items)
+          || value.items.length > STAFF_TIME_HISTORY_PAGE_LIMIT
+          || staffTimeJsonByteLength(value) > STAFF_TIME_HISTORY_PAGE_MAX_BYTES
+        ) return false;
+        const punchIds = new Set();
+        for (const shift of value.items) {
+          if (
+            !validStaffCompletedShift(shift)
+            || punchIds.has(shift.clockIn.punchId)
+            || punchIds.has(shift.clockOut.punchId)
+          ) return false;
+          punchIds.add(shift.clockIn.punchId);
+          punchIds.add(shift.clockOut.punchId);
+        }
+        const endOffset = value.offset + value.items.length;
+        return endOffset <= value.total
+          && !(value.items.length === 0 && value.offset < value.total)
+          && value.nextOffset === (endOffset < value.total ? endOffset : null);
       }
 
       function staffTimeStreamIdentity(stream, item) {
@@ -2290,6 +2372,23 @@
         return items;
       }
 
+      async function fetchStaffTimeHistoryPage(initial, offset, generation) {
+        const expected = {
+          viewToken: initial.view.token,
+          offset
+        };
+        const page = await requestJson(API.staffTime, {
+          operation: 'historyPage',
+          viewToken: expected.viewToken,
+          offset: expected.offset
+        });
+        if (generation !== staffTimeLoadGeneration) return null;
+        if (!validStaffTimeHistoryPageResponse(page, expected)) {
+          throw new Error('Staff time returned an incomplete completed-shift history page. Nothing was changed.');
+        }
+        return page;
+      }
+
       function assembleStaffTimeReview(initial, records, needsAttention, audit) {
         const todayPunches = records
           .filter(record => record.date === initial.view.today)
@@ -2343,7 +2442,11 @@
           generation
         );
         if (!audit) return null;
-        return assembleStaffTimeReview(initial, records, needsAttention, audit);
+        const historyPage = await fetchStaffTimeHistoryPage(initial, 0, generation);
+        if (!historyPage) return null;
+        const review = assembleStaffTimeReview(initial, records, needsAttention, audit);
+        currentStaffHistoryPage = historyPage;
+        return review;
       }
 
       function validStaffTimeStaleError(error) {
@@ -2876,7 +2979,22 @@
         const approvedAt = Date.parse(value.approvedAt);
         return Number.isFinite(approvedAt)
           && approvedAt <= now + 5_000
-          && now - approvedAt <= 120_000;
+          && now - approvedAt <= TABLET_PAIRING_REVIEW_LIFETIME_MS;
+      }
+
+      function validTabletPairingRejectResponse(value) {
+        return exactObjectKeys(value, [
+          'ok',
+          'result',
+          'installationId',
+          'gymName',
+          'deviceLabel'
+        ])
+          && value.ok === true
+          && value.result === 'rejected'
+          && value.installationId === INSTALLATION.installationId
+          && value.gymName === INSTALLATION.gymName
+          && value.deviceLabel === INSTALLATION.deviceLabel;
       }
 
       function formatTabletPairingTime(value) {
@@ -2934,7 +3052,7 @@
           $('#tabletPairingRequested').textContent = formatTabletPairingTime(data.requestedAt);
           $('#tabletPairingExpires').textContent = formatTabletPairingTime(data.expiresAt);
           $('#tabletPairingReview').hidden = false;
-          showMessage(status, 'Review these details before confirming.', 'success');
+          showMessage(status, 'Review these details. Confirm or reject within 15 minutes.', 'success');
           $('#tabletPairingApproveButton').focus();
         } catch (error) {
           if (error.status === 401) {
@@ -3010,6 +3128,64 @@
         }
       }
 
+      async function rejectTabletPairing() {
+        if (!TABLET_PAIRING_AVAILABLE || !adminRequestToken) return;
+        const code = normalizeTabletPairingCode($('#tabletPairingCode').value);
+        const button = $('#tabletPairingRejectButton');
+        const approveButton = $('#tabletPairingApproveButton');
+        const status = $('#tabletPairingApprovalMessage');
+        if (!reviewedTabletPairingCode || code !== reviewedTabletPairingCode) {
+          clearTabletPairingReview();
+          showMessage($('#tabletPairingMessage'), 'The pairing code changed. Review the tablet again.');
+          return;
+        }
+        button.disabled = true;
+        approveButton.disabled = true;
+        showMessage(status, 'Rejecting this pairing request…', 'working');
+        try {
+          const data = await requestJson(API.tabletPairing, {
+            operation: 'reject',
+            pairingCode: code
+          });
+          if (!validTabletPairingRejectResponse(data)) {
+            throw new Error('Tablet pairing rejection returned an incomplete response.');
+          }
+          clearTabletPairingReview({ clearCode: true });
+          showMessage(
+            $('#tabletPairingMessage'),
+            `${data.deviceLabel} pairing rejected. That code can no longer be approved.`,
+            'success'
+          );
+        } catch (error) {
+          if (error.status === 401) {
+            setLoggedOut('Admin login expired. Sign in again to review tablet pairing.');
+          } else if (error.status === 410) {
+            clearTabletPairingReview({ clearCode: true });
+            showMessage(
+              $('#tabletPairingMessage'),
+              error.message || 'The pairing code expired. Ask the tablet for a new code.'
+            );
+          } else if (error.status === 403 || error.status === 409) {
+            clearTabletPairingReview({ clearCode: true });
+            showMessage(
+              $('#tabletPairingMessage'),
+              'This pairing request was already handled. Check the tablet or use a fresh code.'
+            );
+          } else if (Number.isInteger(error.status) && error.status > 0) {
+            clearTabletPairingReview();
+            showMessage(
+              $('#tabletPairingMessage'),
+              'Rejection did not complete. Review this pairing code again.'
+            );
+          } else {
+            showMessage(status, error.message || 'Tablet pairing rejection did not complete.');
+          }
+        } finally {
+          button.disabled = false;
+          approveButton.disabled = false;
+        }
+      }
+
       async function requestJson(url, body) {
         const headers = { 'Content-Type': 'application/json' };
         if (adminRequestToken) headers[ADMIN_REQUEST_HEADER] = adminRequestToken;
@@ -3043,7 +3219,8 @@
         currentAuditHistory = [];
         persistentReviewOutcome = null;
         currentStaffTime = null;
-        staffOlderHistoryExpanded = false;
+        currentStaffHistoryPage = null;
+        staffHistoryPageLoading = false;
         currentAdminName = '';
         adminRequestToken = '';
         $('#appPanel').hidden = true;
@@ -3062,9 +3239,10 @@
         $('#staffNeedsAttentionSection').hidden = true;
         $('#staffPeriodTotals').replaceChildren();
         $('#staffTimeRecords').replaceChildren();
+        $('#staffCompletedShiftHistory').replaceChildren();
         $('#staffTimeOlderHistory').hidden = true;
-        $('#staffTimeOlderHistory').setAttribute('aria-expanded', 'false');
-        $('#staffTimeOlderHistory').textContent = 'Show older history';
+        $('#staffTimeOlderHistory').disabled = false;
+        $('#staffTimeOlderHistory').textContent = 'Load older completed shifts';
         $('#staffTimeHistoryScope').textContent = '';
         $('#staffTimeAudit').replaceChildren();
         $('#staffCorrectionName').replaceChildren(makeElement('option', '', 'Choose staff'));
@@ -3400,10 +3578,9 @@
           Date.parse(right.timestamp) - Date.parse(left.timestamp)
           || right.punchId.localeCompare(left.punchId)
         ));
-        const olderCount = records.filter(record => record.date < cutoff).length;
-        const visibleRecords = staffOlderHistoryExpanded
-          ? records
-          : records.filter(record => record.date >= cutoff && record.date <= data.view.today);
+        const visibleRecords = records.filter(record => (
+          record.date >= cutoff && record.date <= data.view.today
+        ));
         const completedShifts = staffCompletedShiftByClockIn(records);
         const recordRows = visibleRecords.map(record => staffRecordElement(
           record,
@@ -3420,14 +3597,52 @@
         } else if (!visibleRecords.length) {
           recordList.appendChild(staffEmpty('No punches in the latest seven calendar days.'));
         }
+      }
 
+      function staffCompletedShiftElement(shift) {
+        const row = staffTimeRow(
+          `${shift.clockIn.staffName} · Completed shift`,
+          `${staffTimestampLabel(shift.clockIn.timestamp)} to ${staffTimestampLabel(shift.clockOut.timestamp)}`
+        );
+        row.appendChild(staffBadge(shift.clockIn.source, shift.clockIn.source === 'Admin-added' ? 'admin' : ''));
+        if (shift.latestAdjustment) {
+          row.appendChild(staffBadge('Adjusted', 'admin'));
+          row.appendChild(makeElement(
+            'div',
+            'record-detail staff-adjustment-evidence',
+            [
+              `Original source time: ${staffTimestampLabel(shift.clockIn.originalTimestamp || shift.clockIn.timestamp)} to ${staffTimestampLabel(shift.clockOut.originalTimestamp || shift.clockOut.timestamp)}`,
+              `Corrected time: ${staffTimestampLabel(shift.clockIn.timestamp)} to ${staffTimestampLabel(shift.clockOut.timestamp)}`,
+              `Latest audit: ${shift.latestAdjustment.reason} · ${shift.latestAdjustment.result}`
+            ].join(' · ')
+          ));
+        }
+        row.appendChild(staffAdjustmentForm(shift));
+        return row;
+      }
+
+      function renderStaffTimeHistory() {
+        const page = currentStaffHistoryPage;
+        const history = $('#staffCompletedShiftHistory');
         const toggle = $('#staffTimeOlderHistory');
-        toggle.hidden = olderCount === 0;
-        toggle.setAttribute('aria-expanded', staffOlderHistoryExpanded ? 'true' : 'false');
-        toggle.textContent = staffOlderHistoryExpanded ? 'Hide older history' : 'Show older history';
-        $('#staffTimeHistoryScope').textContent = staffOlderHistoryExpanded
-          ? `Showing all ${records.length.toLocaleString('en-US')} returned punches, newest first.`
-          : `Showing ${cutoff} through ${data.view.today}, newest first. ${olderCount.toLocaleString('en-US')} older ${olderCount === 1 ? 'punch is' : 'punches are'} preserved. Items needing attention remain above.`;
+        if (!page) {
+          history.replaceChildren(staffEmpty('Completed shift history is unavailable.'));
+          toggle.hidden = true;
+          $('#staffTimeHistoryScope').textContent = '';
+          return;
+        }
+        history.replaceChildren(...page.items.map(staffCompletedShiftElement));
+        if (page.total === 0) {
+          history.appendChild(staffEmpty('No completed shifts yet.'));
+          $('#staffTimeHistoryScope').textContent = 'No completed shifts are retained.';
+        } else {
+          const first = page.offset + 1;
+          const last = page.offset + page.items.length;
+          $('#staffTimeHistoryScope').textContent = `Showing completed shifts ${first.toLocaleString('en-US')}–${last.toLocaleString('en-US')} of ${page.total.toLocaleString('en-US')}, newest first.`;
+        }
+        toggle.hidden = page.nextOffset === null;
+        toggle.disabled = staffHistoryPageLoading;
+        toggle.textContent = staffHistoryPageLoading ? 'Loading…' : 'Load older completed shifts';
       }
 
       function renderStaffTime(data) {
@@ -3472,6 +3687,7 @@
         );
 
         renderStaffTimeRecords(data);
+        renderStaffTimeHistory();
 
         const audit = $('#staffTimeAudit');
         const auditRows = data.audit.map(item => {
@@ -4055,9 +4271,13 @@
           || !STAFF_PUNCH_ID_PATTERN.test(clockOutPunchId)
           || clockInPunchId === clockOutPunchId
         ) return null;
-        const completedShift = currentStaffTime
+        const historyShift = currentStaffHistoryPage?.items.find(shift => (
+          shift.clockIn.punchId === clockInPunchId
+          && shift.clockOut.punchId === clockOutPunchId
+        )) || null;
+        const completedShift = historyShift || (currentStaffTime
           ? staffCompletedShiftByClockIn(currentStaffTime.records).get(clockInPunchId)
-          : null;
+          : null);
         if (!completedShift || completedShift.clockOut.punchId !== clockOutPunchId) return null;
         const readCorrectedTimestamp = (control, offsetControl) => {
           const [date, time] = String(control?.value || '').split('T');
@@ -4163,6 +4383,8 @@
 
       async function loadStaffTime(options = {}) {
         const generation = ++staffTimeLoadGeneration;
+        currentStaffHistoryPage = null;
+        staffHistoryPageLoading = false;
         if (options.quiet !== true) {
           $('#staff-time').classList.add('loading');
           showMessage($('#staffTimeMessage'), 'Loading Staff time…', 'working');
@@ -4185,6 +4407,41 @@
           return false;
         } finally {
           if (generation === staffTimeLoadGeneration) $('#staff-time').classList.remove('loading');
+        }
+      }
+
+      async function loadOlderStaffTimeHistory() {
+        if (
+          staffHistoryPageLoading
+          || !currentStaffTime
+          || !currentStaffHistoryPage
+          || currentStaffHistoryPage.nextOffset === null
+        ) return;
+        const generation = staffTimeLoadGeneration;
+        staffHistoryPageLoading = true;
+        renderStaffTimeHistory();
+        try {
+          const page = await fetchStaffTimeHistoryPage(
+            currentStaffTime,
+            currentStaffHistoryPage.nextOffset,
+            generation
+          );
+          if (!page || generation !== staffTimeLoadGeneration) return;
+          currentStaffHistoryPage = page;
+        } catch (error) {
+          if (generation !== staffTimeLoadGeneration) return;
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Admin login required.');
+          } else if (validStaffTimeStaleError(error)) {
+            await loadStaffTime({ quiet: true });
+          } else {
+            showMessage($('#staffTimeMessage'), error.message);
+          }
+        } finally {
+          if (generation === staffTimeLoadGeneration) {
+            staffHistoryPageLoading = false;
+            renderStaffTimeHistory();
+          }
         }
       }
 
@@ -4905,6 +5162,7 @@
         showMessage($('#tabletPairingMessage'), '');
       });
       $('#tabletPairingApproveButton').addEventListener('click', approveTabletPairing);
+      $('#tabletPairingRejectButton').addEventListener('click', rejectTabletPairing);
       $('#tabletPairingCancelButton').addEventListener('click', () => {
         clearTabletPairingReview({ clearCode: true });
         showMessage($('#tabletPairingMessage'), '');
@@ -4929,38 +5187,36 @@
         event.preventDefault();
         submitStaffCorrection(event.currentTarget);
       });
-      $('#staffTimeOlderHistory').addEventListener('click', () => {
-        if (!currentStaffTime) return;
-        staffOlderHistoryExpanded = !staffOlderHistoryExpanded;
-        renderStaffTimeRecords(currentStaffTime);
-      });
-      $('#staffTimeRecords').addEventListener('click', event => {
-        const cancel = event.target.closest('[data-staff-adjust-cancel]');
-        if (!cancel) return;
-        const form = cancel.closest('[data-staff-adjust-form]');
-        if (!form || form.getAttribute('aria-busy') === 'true') return;
-        clearStaffAdjustmentReview(form);
-        showMessage(form.querySelector('.staff-adjust-status'), 'Review canceled. Edit the times or reason, then review again.');
-        form.elements.correctedClockIn.focus();
-      });
-      $('#staffTimeRecords').addEventListener('input', event => {
-        const form = event.target.closest('[data-staff-adjust-form]');
-        if (form && form.getAttribute('aria-busy') !== 'true') {
+      $('#staffTimeOlderHistory').addEventListener('click', loadOlderStaffTimeHistory);
+      ['#staffTimeRecords', '#staffCompletedShiftHistory'].forEach(selector => {
+        $(selector).addEventListener('click', event => {
+          const cancel = event.target.closest('[data-staff-adjust-cancel]');
+          if (!cancel) return;
+          const form = cancel.closest('[data-staff-adjust-form]');
+          if (!form || form.getAttribute('aria-busy') === 'true') return;
           clearStaffAdjustmentReview(form);
-          showMessage(form.querySelector('.staff-adjust-status'), '');
-        }
-      });
-      $('#staffTimeRecords').addEventListener('submit', event => {
-        const adjustmentForm = event.target.closest('[data-staff-adjust-form]');
-        if (adjustmentForm) {
+          showMessage(form.querySelector('.staff-adjust-status'), 'Review canceled. Edit the times or reason, then review again.');
+          form.elements.correctedClockIn.focus();
+        });
+        $(selector).addEventListener('input', event => {
+          const form = event.target.closest('[data-staff-adjust-form]');
+          if (form && form.getAttribute('aria-busy') !== 'true') {
+            clearStaffAdjustmentReview(form);
+            showMessage(form.querySelector('.staff-adjust-status'), '');
+          }
+        });
+        $(selector).addEventListener('submit', event => {
+          const adjustmentForm = event.target.closest('[data-staff-adjust-form]');
+          if (adjustmentForm) {
+            event.preventDefault();
+            submitStaffAdjustment(adjustmentForm);
+            return;
+          }
+          const voidForm = event.target.closest('[data-staff-void-form]');
+          if (!voidForm) return;
           event.preventDefault();
-          submitStaffAdjustment(adjustmentForm);
-          return;
-        }
-        const voidForm = event.target.closest('[data-staff-void-form]');
-        if (!voidForm) return;
-        event.preventDefault();
-        submitStaffVoid(voidForm);
+          submitStaffVoid(voidForm);
+        });
       });
       $('#reviewSection').addEventListener('click', event => {
         const toggle = event.target.closest('.add-toggle');

@@ -14,6 +14,8 @@ import {
   sanitizeStaffTimeAdjustmentResult,
   sanitizeStaffTimeCorrectionRequest,
   sanitizeStaffTimeCorrectionResult,
+  sanitizeStaffTimeHistoryPage,
+  sanitizeStaffTimeHistoryPageRequest,
   sanitizeStaffTimeReview,
   sanitizeStaffViewPage,
   sanitizeStaffViewPageRequest,
@@ -66,8 +68,12 @@ function validPreviewSameOriginRequest(request) {
 function adminFailureResponse(google, operation) {
   const failureClass = googleFailureClass(google);
   const unreachable = failureClass === 'UNREACHABLE';
-  const label = operation === 'review' || operation === 'reviewPage'
-    ? operation === 'reviewPage' ? 'Staff time review page' : 'Staff time review'
+  const label = operation === 'review' || operation === 'reviewPage' || operation === 'historyPage'
+    ? operation === 'reviewPage'
+      ? 'Staff time review page'
+      : operation === 'historyPage'
+        ? 'Staff time history page'
+        : 'Staff time review'
     : operation === 'correct'
       ? 'Staff time correction'
       : operation === 'adjust'
@@ -130,6 +136,7 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
   if (
     operation !== 'review'
     && operation !== 'reviewPage'
+    && operation !== 'historyPage'
     && operation !== 'correct'
     && operation !== 'adjust'
     && operation !== 'void'
@@ -189,6 +196,38 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
       viewToken: page.viewToken,
       stream: page.stream,
       offset: page.offset,
+      items: page.items,
+      nextOffset: page.nextOffset
+    });
+  }
+
+  if (operation === 'historyPage') {
+    const pageRequest = sanitizeStaffTimeHistoryPageRequest(parsed.value);
+    if (!pageRequest) {
+      return jsonResponse(400, { ok: false, message: 'Staff time history page was rejected.' });
+    }
+    const google = await postGoogle(runtime, 'staffTimeHistoryPageV2', {
+      viewToken: pageRequest.viewToken,
+      offset: pageRequest.offset
+    }, fetchImpl);
+    if (google.readable && isStaffViewStale(google.value, target)) {
+      return jsonResponse(409, {
+        ok: false,
+        result: 'stale',
+        code: 'STAFF_TIME_VIEW_STALE'
+      });
+    }
+    const page = google.readable
+      ? sanitizeStaffTimeHistoryPage(google.value, target, pageRequest, { now: dateNow })
+      : null;
+    if (!page) return adminFailureResponse(google, operation);
+    return jsonResponse(200, {
+      ok: true,
+      test: runtime.preview,
+      adminName: auth.session.adminName,
+      viewToken: page.viewToken,
+      offset: page.offset,
+      total: page.total,
       items: page.items,
       nextOffset: page.nextOffset
     });

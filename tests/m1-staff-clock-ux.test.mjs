@@ -103,6 +103,7 @@ test('missing authorization and empty-roster failures are explicit recovery stat
   assert.match(pairingMarkup, /Pairing code/u);
   assert.match(pairingMarkup, /separate phone or computer/u);
   assert.match(pairingMarkup, /id="staffClockPairingAdminUrl"/u);
+  assert.match(staffMarkup, /id="cancelStaffClockPairing"[^>]*hidden>Cancel pairing request/u);
   assert.match(
     clientSource,
     /adminUrl\.textContent = new URL\('\/m1\/admin\/', STAFF_CLOCK_PAIRING_CONFIG\.origin\)\.href/u
@@ -131,6 +132,9 @@ test('tablet pairing uses only an in-memory short code and never navigates to Ad
   );
   assert.match(pairingSource, /staffClockPairingCode = data\.pairingCode/u);
   assert.match(pairingSource, /staffClockPairingCode = ''/u);
+  assert.match(pairingSource, /STAFF_CLOCK_PAIRING_CANCEL_ENDPOINT/u);
+  assert.match(pairingSource, /operation === 'cancel'/u);
+  assert.match(pairingSource, /month: 'short'[\s\S]*day: 'numeric'[\s\S]*year: 'numeric'/u);
   assert.doesNotMatch(pairingSource, /localStorage|sessionStorage|URLSearchParams/u);
   assert.doesNotMatch(
     pairingSource,

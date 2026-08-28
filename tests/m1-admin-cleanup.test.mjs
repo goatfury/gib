@@ -17,6 +17,7 @@ const BASELINE_BUTTON_IDS = Object.freeze([
   'toggleClasses',
   'btnSignIn',
   'retryStaffClock',
+  'cancelStaffClockPairing',
   'btnStaffClockAction',
   'btnStaffClockDone',
   'btnKiosk',

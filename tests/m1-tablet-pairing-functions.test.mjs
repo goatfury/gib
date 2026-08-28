@@ -25,11 +25,13 @@ import {
   TABLET_PAIRING_CODE_PATTERN,
   TABLET_PAIRING_DELIVERY_GRACE_SECONDS,
   TABLET_PAIRING_GENESIS_SECONDS,
+  TABLET_PAIRING_MAX_SECONDS,
   TABLET_PAIRING_PENDING_COOKIE,
   TABLET_PAIRING_PENDING_MAX_SECONDS,
   TABLET_PAIRING_PURPOSE,
   TABLET_PAIRING_PURGE_SECONDS,
   TABLET_PAIRING_REVIEW_COOKIE,
+  TABLET_PAIRING_REVIEW_MAX_SECONDS,
   createPairingPendingToken,
   emptyPairingRequestRecord,
   normalizePairingCode,
@@ -55,6 +57,11 @@ import {
   config as cleanupConfig,
   handleTabletPairingCleanup
 } from '../netlify/functions/m1-tablet-pairing-cleanup.mjs';
+import {
+  TABLET_PAIRING_CANCEL_PATH,
+  config as cancelConfig,
+  handleTabletPairingCancel
+} from '../netlify/functions/m1-tablet-pairing-cancel.mjs';
 import {
   TABLET_PAIRING_POLL_PATH,
   config as pollConfig,
@@ -261,6 +268,19 @@ async function pollPairing(store, pendingCookie, {
   return { response, responseBody: await body(response) };
 }
 
+async function cancelPairing(store, pendingCookie, {
+  now = NOW_MS,
+  path = TABLET_PAIRING_CANCEL_PATH,
+  bodyValue = { operation: 'cancel' },
+  dependencies = {}
+} = {}) {
+  const response = await handleTabletPairingCancel(request(path, {
+    body: bodyValue,
+    cookie: pendingCookie
+  }), { env: ENV, now, store, ...dependencies });
+  return { response, responseBody: await body(response) };
+}
+
 async function reviewPairing(store, pairingCode, {
   now = NOW_MS,
   cookie = adminCookie(),
@@ -299,6 +319,20 @@ async function approvePairing(store, pairingCode, reviewCookie, {
     randomBytes: fillRandom(fill),
     ...dependencies
   });
+  return { response, responseBody: await body(response) };
+}
+
+async function rejectPairing(store, pairingCode, reviewCookie, {
+  now = NOW_MS,
+  cookie = adminCookie(),
+  requestToken = ADMIN_REQUEST_TOKEN,
+  dependencies = {}
+} = {}) {
+  const response = await handleAdminTabletPairing(request(ADMIN_TABLET_PAIRING_PATH, {
+    body: { operation: 'reject', pairingCode },
+    cookie: [cookie, reviewCookie].filter(Boolean).join('; '),
+    requestToken
+  }), { env: ENV, now, store, ...dependencies });
   return { response, responseBody: await body(response) };
 }
 
@@ -358,7 +392,7 @@ test('pairing profile and literal routes expose Rev only with independent bounde
     gymName: 'Revolution BJJ',
     deviceLabel: 'Revolution BJJ front desk',
     origin: PRODUCTION_ORIGIN,
-    expiresInSeconds: 300
+    expiresInSeconds: 12 * 60 * 60
   });
   assert.equal(staffClockPairingProfile('richmond', 'test'), null);
   assert.equal(staffClockPairingProfile('richmond', 'production', 'active'), null);
@@ -370,13 +404,19 @@ test('pairing profile and literal routes expose Rev only with independent bounde
     path: TABLET_PAIRING_POLL_PATH,
     rateLimit: { windowLimit: 120, windowSize: 60, aggregateBy: ['ip', 'domain'] }
   });
+  assert.deepEqual(cancelConfig, {
+    path: TABLET_PAIRING_CANCEL_PATH,
+    rateLimit: { windowLimit: 10, windowSize: 60, aggregateBy: ['ip', 'domain'] }
+  });
   assert.deepEqual(adminPairingConfig, {
     path: ADMIN_TABLET_PAIRING_PATH,
     rateLimit: { windowLimit: 10, windowSize: 300, aggregateBy: ['ip', 'domain'] }
   });
   assert.deepEqual(cleanupConfig, { schedule: '*/5 * * * *' });
+  assert.equal(TABLET_PAIRING_MAX_SECONDS, 12 * 60 * 60);
   assert.equal(TABLET_PAIRING_DELIVERY_GRACE_SECONDS, 120);
-  assert.equal(TABLET_PAIRING_PENDING_MAX_SECONDS, 420);
+  assert.equal(TABLET_PAIRING_REVIEW_MAX_SECONDS, 15 * 60);
+  assert.equal(TABLET_PAIRING_PENDING_MAX_SECONDS, (12 * 60 * 60) + 120);
   assert.equal(PAIRING_CLEANUP_LIMIT_PER_PREFIX, 30);
   assert.equal(PAIRING_CLEANUP_CONCURRENCY, 5);
   assert.ok(PAIRING_CLEANUP_LIMIT_PER_PREFIX * 12 > 180);
@@ -393,9 +433,9 @@ test('pairing profile and literal routes expose Rev only with independent bounde
   }), null);
 });
 
-test('configured pairing lifetimes accept the full 60-to-300-second range and bind every signed deadline', () => {
+test('configured pairing lifetimes accept the full 60-second-to-12-hour range and bind every signed deadline', () => {
   const requestId = Buffer.alloc(32, 0x2a).toString('base64url');
-  for (const expiresInSeconds of [60, 61, 119, 120, 299, 300]) {
+  for (const expiresInSeconds of [60, 61, 119, 120, 299, 300, 43_199, 43_200]) {
     const profile = Object.freeze({
       ...staffClockPairingProfile(),
       expiresInSeconds
@@ -441,7 +481,7 @@ test('configured pairing lifetimes accept the full 60-to-300-second range and bi
     );
   }
 
-  for (const expiresInSeconds of [59, 301]) {
+  for (const expiresInSeconds of [59, 43_201]) {
     assert.throws(() => pairingCodeFromRequest(INSTALL_SECRET, {
       ...staffClockPairingProfile(),
       expiresInSeconds
@@ -457,7 +497,7 @@ test('start returns one 50-bit Crockford display code and securely reuses it onl
     ok: true,
     result: 'pending',
     pairingCode: started.responseBody.pairingCode,
-    expiresAt: new Date((NOW_SECONDS + 300) * 1_000).toISOString(),
+    expiresAt: new Date((NOW_SECONDS + (12 * 60 * 60)) * 1_000).toISOString(),
     gymName: 'Revolution BJJ',
     deviceLabel: 'Revolution BJJ front desk'
   });
@@ -467,7 +507,7 @@ test('start returns one 50-bit Crockford display code and securely reuses it onl
   const pendingHeader = setCookies(started.response)[0];
   assert.match(pendingHeader, /^__Host-gib_m1_tablet_pairing=/u);
   assert.match(pendingHeader, /; Path=\//u);
-  assert.match(pendingHeader, /; Max-Age=420/u);
+  assert.match(pendingHeader, /; Max-Age=43320/u);
   assert.match(pendingHeader, /; Secure/u);
   assert.match(pendingHeader, /; HttpOnly/u);
   assert.match(pendingHeader, /; SameSite=Strict/u);
@@ -483,7 +523,7 @@ test('start returns one 50-bit Crockford display code and securely reuses it onl
   const before = store.values.size;
   const admissionBefore = structuredClone(store.values.get(TABLET_PAIRING_ADMISSION_KEY).value);
   const reused = await startPairing(store, {
-    now: NOW_MS + 10_000,
+    now: NOW_MS + (60 * 60 * 1_000),
     cookie: started.pendingCookie,
     fill: 0x52
   });
@@ -507,6 +547,218 @@ test('start returns one 50-bit Crockford display code and securely reuses it onl
   for (const stored of store.values.values()) {
     assert.equal(JSON.stringify(stored.value).includes(started.responseBody.pairingCode), false);
   }
+});
+
+test('a 5:45 AM code survives reload, 6:45 AM approval, and a delayed tablet reconnect', async () => {
+  const store = new StrongStore();
+  const generatedAt = Date.parse('2026-08-28T05:45:00-04:00');
+  const reloadedAt = Date.parse('2026-08-28T06:15:00-04:00');
+  const approvedAt = Date.parse('2026-08-28T06:45:00-04:00');
+  const reconnectedAt = Date.parse('2026-08-28T07:15:00-04:00');
+  const started = await startPairing(store, { now: generatedAt, fill: 0x53 });
+  assert.equal(started.response.status, 200);
+  assert.equal(
+    started.responseBody.expiresAt,
+    new Date(Date.parse('2026-08-28T17:45:00-04:00')).toISOString()
+  );
+
+  const reloaded = await startPairing(store, {
+    now: reloadedAt,
+    cookie: started.pendingCookie,
+    fill: 0x54
+  });
+  assert.equal(reloaded.response.status, 200);
+  assert.deepEqual(reloaded.responseBody, started.responseBody);
+  assert.equal(reloaded.pendingCookie, '');
+
+  const approvalAdminCookie = adminCookie({ now: approvedAt });
+  const reviewed = await reviewPairing(store, started.responseBody.pairingCode, {
+    now: approvedAt,
+    cookie: approvalAdminCookie
+  });
+  assert.equal(reviewed.response.status, 200);
+  const approved = await approvePairing(
+    store,
+    started.responseBody.pairingCode,
+    reviewed.reviewCookie,
+    {
+      now: approvedAt,
+      cookie: approvalAdminCookie,
+      fill: 0x55
+    }
+  );
+  assert.equal(approved.response.status, 200);
+  assert.equal(approved.responseBody.result, 'approved');
+
+  const freshReview = await reviewPairing(store, started.responseBody.pairingCode, {
+    now: approvedAt + 1_000,
+    cookie: adminCookie({ now: approvedAt + 1_000 })
+  });
+  assert.equal(freshReview.response.status, 404, 'approval immediately invalidates fresh code review');
+
+  const delivered = await pollPairing(store, started.pendingCookie, { now: reconnectedAt });
+  assert.equal(delivered.response.status, 200);
+  assert.deepEqual(delivered.responseBody, {
+    ok: true,
+    result: 'approved',
+    expiresAt: started.responseBody.expiresAt,
+    deliveryExpiresAt: new Date(
+      Date.parse('2026-08-28T17:47:00-04:00')
+    ).toISOString()
+  });
+  const deviceCookie = responseCookiePair(delivered.response, PRODUCTION_DEVICE_COOKIE);
+  assert.ok(deviceCookie);
+  const authorized = await pollPairing(store, started.pendingCookie, {
+    now: reconnectedAt + 1_000,
+    deviceCookie
+  });
+  assert.deepEqual(authorized.responseBody, { ok: true, result: 'authorized' });
+});
+
+test('Admin review possession remains usable for 15 minutes and expires at the boundary', async () => {
+  const beforeBoundaryStore = new StrongStore();
+  const beforeBoundary = await startPairing(beforeBoundaryStore, { fill: 0x56 });
+  const beforeReview = await reviewPairing(
+    beforeBoundaryStore,
+    beforeBoundary.responseBody.pairingCode
+  );
+  const beforeApproval = await approvePairing(
+    beforeBoundaryStore,
+    beforeBoundary.responseBody.pairingCode,
+    beforeReview.reviewCookie,
+    { now: NOW_MS + (899 * 1_000), fill: 0x57 }
+  );
+  assert.equal(beforeApproval.response.status, 200);
+
+  const atBoundaryStore = new StrongStore();
+  const atBoundary = await startPairing(atBoundaryStore, { fill: 0x58 });
+  const atBoundaryReview = await reviewPairing(
+    atBoundaryStore,
+    atBoundary.responseBody.pairingCode
+  );
+  const atBoundaryApproval = await approvePairing(
+    atBoundaryStore,
+    atBoundary.responseBody.pairingCode,
+    atBoundaryReview.reviewCookie,
+    { now: NOW_MS + (900 * 1_000), fill: 0x59 }
+  );
+  assert.equal(atBoundaryApproval.response.status, 403);
+  assert.equal(clearedCookie(atBoundaryApproval.response, TABLET_PAIRING_REVIEW_COOKIE), true);
+});
+
+test('Admin rejection and tablet cancellation are explicit, bound, terminal, and retry-safe', async () => {
+  const rejectedStore = new StrongStore();
+  const rejectedStarted = await startPairing(rejectedStore, { fill: 0x5a });
+  const rejectedReview = await reviewPairing(
+    rejectedStore,
+    rejectedStarted.responseBody.pairingCode
+  );
+  const rejected = await rejectPairing(
+    rejectedStore,
+    rejectedStarted.responseBody.pairingCode,
+    rejectedReview.reviewCookie
+  );
+  assert.equal(rejected.response.status, 200);
+  assert.deepEqual(rejected.responseBody, {
+    ok: true,
+    result: 'rejected',
+    installationId: 'rev',
+    gymName: 'Revolution BJJ',
+    deviceLabel: 'Revolution BJJ front desk'
+  });
+  const rejectedRetry = await rejectPairing(
+    rejectedStore,
+    rejectedStarted.responseBody.pairingCode,
+    rejectedReview.reviewCookie
+  );
+  assert.equal(rejectedRetry.response.status, 200);
+  assert.deepEqual(rejectedRetry.responseBody, rejected.responseBody);
+  const rejectedPoll = await pollPairing(rejectedStore, rejectedStarted.pendingCookie);
+  assert.equal(rejectedPoll.response.status, 409);
+  assert.deepEqual(rejectedPoll.responseBody, {
+    ok: false,
+    result: 'rejected',
+    message: 'Pairing request was rejected by an Admin.'
+  });
+  assert.equal(clearedCookie(rejectedPoll.response, TABLET_PAIRING_PENDING_COOKIE), true);
+  assert.equal(
+    setCookies(rejectedPoll.response).some(value => value.startsWith(`${PRODUCTION_DEVICE_COOKIE}=`)),
+    false
+  );
+  const rejectedFreshReview = await reviewPairing(
+    rejectedStore,
+    rejectedStarted.responseBody.pairingCode
+  );
+  assert.equal(rejectedFreshReview.response.status, 404);
+
+  const cancelledStore = new StrongStore();
+  const cancelledStarted = await startPairing(cancelledStore, { fill: 0x5b });
+  const cancelled = await cancelPairing(cancelledStore, cancelledStarted.pendingCookie);
+  assert.equal(cancelled.response.status, 200);
+  assert.deepEqual(cancelled.responseBody, { ok: true, result: 'cancelled' });
+  assert.equal(clearedCookie(cancelled.response, TABLET_PAIRING_PENDING_COOKIE), true);
+  const cancelledRetry = await cancelPairing(cancelledStore, cancelledStarted.pendingCookie);
+  assert.equal(cancelledRetry.response.status, 200);
+  assert.deepEqual(cancelledRetry.responseBody, cancelled.responseBody);
+  const cancelledPoll = await pollPairing(cancelledStore, cancelledStarted.pendingCookie);
+  assert.equal(cancelledPoll.response.status, 409);
+  assert.deepEqual(cancelledPoll.responseBody, {
+    ok: false,
+    result: 'cancelled',
+    message: 'Pairing request was cancelled on this tablet.'
+  });
+  assert.equal(clearedCookie(cancelledPoll.response, TABLET_PAIRING_PENDING_COOKIE), true);
+  const cancelledReview = await reviewPairing(
+    cancelledStore,
+    cancelledStarted.responseBody.pairingCode
+  );
+  assert.equal(cancelledReview.response.status, 404);
+
+  const replacement = await startPairing(cancelledStore, {
+    now: NOW_MS + 1_000,
+    cookie: cancelledStarted.pendingCookie,
+    fill: 0x5c
+  });
+  assert.equal(replacement.response.status, 200);
+  assert.equal(replacement.responseBody.result, 'pending');
+  assert.notEqual(replacement.responseBody.pairingCode, cancelledStarted.responseBody.pairingCode);
+});
+
+test('an approval that wins a cancellation race still delivers the one device credential', async () => {
+  const store = new StrongStore();
+  const started = await startPairing(store, { fill: 0x5d });
+  const reviewed = await reviewPairing(store, started.responseBody.pairingCode);
+
+  let releaseCancellation;
+  let signalCancellationWrite;
+  const cancellationWrite = new Promise(resolve => { signalCancellationWrite = resolve; });
+  const cancellationGate = new Promise(resolve => { releaseCancellation = resolve; });
+  const originalSet = store.set.bind(store);
+  store.set = async (key, serialized, options) => {
+    const value = JSON.parse(serialized);
+    if (options?.onlyIfMatch && value.status === 'cancelled') {
+      signalCancellationWrite();
+      await cancellationGate;
+    }
+    return originalSet(key, serialized, options);
+  };
+
+  const cancelling = cancelPairing(store, started.pendingCookie);
+  await cancellationWrite;
+  const approved = await approvePairing(
+    store,
+    started.responseBody.pairingCode,
+    reviewed.reviewCookie,
+    { fill: 0x5e }
+  );
+  assert.equal(approved.response.status, 200);
+  releaseCancellation();
+
+  const cancelResult = await cancelling;
+  assert.equal(cancelResult.response.status, 200);
+  assert.equal(cancelResult.responseBody.result, 'approved');
+  assert.ok(responseCookiePair(cancelResult.response, PRODUCTION_DEVICE_COOKIE));
+  assert.equal(clearedCookie(cancelResult.response, TABLET_PAIRING_PENDING_COOKIE), false);
 });
 
 test('global admission allows 120 distinct requests, rejects the 121st without request writes, and resets next hour', async () => {
@@ -695,14 +947,14 @@ test('separate-device Admin review shows exact context, then approval delivers i
       origin: PRODUCTION_ORIGIN,
       deviceLabel: 'Revolution BJJ front desk',
       requestedAt: new Date(NOW_SECONDS * 1_000).toISOString(),
-      expiresAt: new Date((NOW_SECONDS + 300) * 1_000).toISOString()
+      expiresAt: new Date((NOW_SECONDS + (12 * 60 * 60)) * 1_000).toISOString()
     });
     const reviewHeader = setCookies(reviewed.response)[0];
     assert.match(reviewHeader, /^__Host-gib_m1_tablet_pairing_review=/u);
     assert.match(reviewHeader, /; Secure/u);
     assert.match(reviewHeader, /; HttpOnly/u);
     assert.match(reviewHeader, /; SameSite=Strict/u);
-    assert.match(reviewHeader, /; Max-Age=120/u);
+    assert.match(reviewHeader, /; Max-Age=900/u);
     assert.equal(JSON.stringify(reviewed.responseBody).includes(started.pendingCookie), false);
     assert.deepEqual(approved.responseBody, {
       ok: true,
@@ -720,7 +972,8 @@ test('separate-device Admin review shows exact context, then approval delivers i
     assert.deepEqual(firstPoll.responseBody, {
       ok: true,
       result: 'approved',
-      deliveryExpiresAt: new Date((NOW_SECONDS + 120) * 1_000).toISOString()
+      expiresAt: new Date((NOW_SECONDS + 43_200) * 1_000).toISOString(),
+      deliveryExpiresAt: new Date((NOW_SECONDS + 43_320) * 1_000).toISOString()
     });
     const firstDevice = responseCookiePair(firstPoll.response, PRODUCTION_DEVICE_COOKIE);
     const deviceHeader = setCookies(firstPoll.response).find(value => (
@@ -740,7 +993,8 @@ test('separate-device Admin review shows exact context, then approval delivers i
     assert.deepEqual(lostResponseRetry.responseBody, {
       ok: true,
       result: 'approved',
-      deliveryExpiresAt: new Date((NOW_SECONDS + 120) * 1_000).toISOString()
+      expiresAt: new Date((NOW_SECONDS + 43_200) * 1_000).toISOString(),
+      deliveryExpiresAt: new Date((NOW_SECONDS + 43_320) * 1_000).toISOString()
     });
     assert.equal(responseCookiePair(lostResponseRetry.response, PRODUCTION_DEVICE_COOKIE), firstDevice);
 
@@ -1031,7 +1285,7 @@ test('a lost Admin success response reads back after tablet consumption only for
   assert.equal(otherSessionRetry.response.status, 409);
 });
 
-test('consumed codes cannot be reviewed again or redelivered without the issued device, while exact Admin readback lasts 119 seconds', async () => {
+test('consumed codes cannot be reviewed again or redelivered without the issued device, while exact Admin readback lasts 15 minutes', async () => {
   const store = new StrongStore();
   const started = await startPairing(store, { fill: 0x6a });
   const reviewed = await reviewPairing(store, started.responseBody.pairingCode);
@@ -1081,7 +1335,7 @@ test('consumed codes cannot be reviewed again or redelivered without the issued 
   );
   assert.equal(noReviewedPossession.response.status, 403);
 
-  for (const delaySeconds of [61, 119]) {
+  for (const delaySeconds of [61, 899]) {
     const readback = await approvePairing(
       store,
       started.responseBody.pairingCode,
@@ -1091,13 +1345,14 @@ test('consumed codes cannot be reviewed again or redelivered without the issued 
     assert.equal(readback.response.status, 200, `${delaySeconds}-second readback`);
     assert.deepEqual(readback.responseBody, approved.responseBody);
   }
-  const afterReviewAndDeliveryDeadline = await approvePairing(
+  const afterReviewDeadline = await approvePairing(
     store,
     started.responseBody.pairingCode,
     reviewed.reviewCookie,
-    { now: NOW_MS + (120 * 1_000) }
+    { now: NOW_MS + (900 * 1_000) }
   );
-  assert.equal(afterReviewAndDeliveryDeadline.response.status, 410);
+  assert.equal(afterReviewDeadline.response.status, 403);
+  assert.equal(clearedCookie(afterReviewDeadline.response, TABLET_PAIRING_REVIEW_COOKIE), true);
 });
 
 test('concurrent Admin approvals have exactly one CAS winner and concurrent polls reissue one deterministic credential', async () => {
@@ -1139,7 +1394,7 @@ test('approval and delivery deadlines are absolute, distinct, and retain state u
   const pendingStore = new StrongStore();
   const pending = await startPairing(pendingStore, { fill: 0x76 });
   const expiredPoll = await pollPairing(pendingStore, pending.pendingCookie, {
-    now: NOW_MS + (300 * 1_000)
+    now: NOW_MS + (43_200 * 1_000)
   });
   assert.equal(expiredPoll.response.status, 410);
   assert.deepEqual(expiredPoll.responseBody, {
@@ -1153,28 +1408,31 @@ test('approval and delivery deadlines are absolute, distinct, and retain state u
 
   const lateStore = new StrongStore();
   const late = await startPairing(lateStore, { fill: 0x77 });
-  const lateNow = NOW_MS + (299 * 1_000);
+  const lateNow = NOW_MS + (43_199 * 1_000);
+  const lateAdminCookie = adminCookie({ now: lateNow });
   const lateReview = await reviewPairing(lateStore, late.responseBody.pairingCode, {
-    now: lateNow
+    now: lateNow,
+    cookie: lateAdminCookie
   });
   assert.equal(lateReview.response.status, 200);
   const lateApprove = await approvePairing(
     lateStore,
     late.responseBody.pairingCode,
     lateReview.reviewCookie,
-    { now: lateNow, fill: 0x78 }
+    { now: lateNow, cookie: lateAdminCookie, fill: 0x78 }
   );
   assert.equal(lateApprove.response.status, 200);
   const justBeforeDeliveryExpiry = await pollPairing(lateStore, late.pendingCookie, {
-    now: NOW_MS + (418 * 1_000)
+    now: NOW_MS + (43_319 * 1_000)
   });
   assert.deepEqual(justBeforeDeliveryExpiry.responseBody, {
     ok: true,
     result: 'approved',
-    deliveryExpiresAt: new Date((NOW_SECONDS + 419) * 1_000).toISOString()
+    expiresAt: new Date((NOW_SECONDS + 43_200) * 1_000).toISOString(),
+    deliveryExpiresAt: new Date((NOW_SECONDS + 43_320) * 1_000).toISOString()
   });
   const atDeliveryExpiry = await pollPairing(lateStore, late.pendingCookie, {
-    now: NOW_MS + (419 * 1_000)
+    now: NOW_MS + (43_320 * 1_000)
   });
   assert.equal(atDeliveryExpiry.response.status, 410);
   assert.equal(lateStore.values.size, 3);
@@ -1184,9 +1442,11 @@ test('approval and delivery deadlines are absolute, distinct, and retain state u
 test('an expiry poll cannot delete a concurrently approved request', async () => {
   const store = new StrongStore();
   const started = await startPairing(store, { fill: 0x68 });
-  const nearDeadline = NOW_MS + (299 * 1_000);
+  const nearDeadline = NOW_MS + (43_199 * 1_000);
+  const nearDeadlineAdminCookie = adminCookie({ now: nearDeadline });
   const reviewed = await reviewPairing(store, started.responseBody.pairingCode, {
-    now: nearDeadline
+    now: nearDeadline,
+    cookie: nearDeadlineAdminCookie
   });
   assert.equal(reviewed.response.status, 200);
 
@@ -1208,11 +1468,11 @@ test('an expiry poll cannot delete a concurrently approved request', async () =>
     store,
     started.responseBody.pairingCode,
     reviewed.reviewCookie,
-    { now: nearDeadline, fill: 0x69 }
+    { now: nearDeadline, cookie: nearDeadlineAdminCookie, fill: 0x69 }
   );
   await approvalWrite;
   const expiredPoll = await pollPairing(store, started.pendingCookie, {
-    now: NOW_MS + (300 * 1_000)
+    now: NOW_MS + (43_200 * 1_000)
   });
   assert.equal(expiredPoll.response.status, 410);
   assert.equal(store.calls.some(([operation]) => operation === 'delete'), false);
@@ -1221,7 +1481,7 @@ test('an expiry poll cannot delete a concurrently approved request', async () =>
   const approved = await approving;
   assert.equal(approved.response.status, 200);
   const delivered = await pollPairing(store, started.pendingCookie, {
-    now: NOW_MS + (301 * 1_000)
+    now: NOW_MS + (43_201 * 1_000)
   });
   assert.equal(delivered.response.status, 200);
   assert.equal(delivered.responseBody.result, 'approved');
@@ -1240,6 +1500,10 @@ test('every pairing operation rejects wrong-origin and Richmond requests before 
       origin: wrongOrigin,
       body: { operation: 'poll' }
     }), { env: ENV, now: NOW_MS, store }),
+    handleTabletPairingCancel(request(TABLET_PAIRING_CANCEL_PATH, {
+      origin: wrongOrigin,
+      body: { operation: 'cancel' }
+    }), { env: ENV, now: NOW_MS, store }),
     handleAdminTabletPairing(request(ADMIN_TABLET_PAIRING_PATH, {
       origin: wrongOrigin,
       body: { operation: 'review', pairingCode: '01234-56789' }
@@ -1247,10 +1511,14 @@ test('every pairing operation rejects wrong-origin and Richmond requests before 
     handleAdminTabletPairing(request(ADMIN_TABLET_PAIRING_PATH, {
       origin: wrongOrigin,
       body: { operation: 'approve', pairingCode: '01234-56789' }
+    }), { env: ENV, now: NOW_MS, store }),
+    handleAdminTabletPairing(request(ADMIN_TABLET_PAIRING_PATH, {
+      origin: wrongOrigin,
+      body: { operation: 'reject', pairingCode: '01234-56789' }
     }), { env: ENV, now: NOW_MS, store })
   ];
   const wrongOriginResponses = await Promise.all(wrongOriginCandidates);
-  assert.deepEqual(wrongOriginResponses.map(value => value.status), [404, 404, 404, 404]);
+  assert.deepEqual(wrongOriginResponses.map(value => value.status), [404, 404, 404, 404, 404, 404]);
   assert.equal(store.calls.length, 0);
 
   const richmondOrigin = 'https://gib-richmond-live.netlify.app';
@@ -1271,6 +1539,10 @@ test('every pairing operation rejects wrong-origin and Richmond requests before 
       origin: richmondOrigin,
       body: { operation: 'poll' }
     }), richmondDependencies),
+    handleTabletPairingCancel(request(TABLET_PAIRING_CANCEL_PATH, {
+      origin: richmondOrigin,
+      body: { operation: 'cancel' }
+    }), richmondDependencies),
     handleAdminTabletPairing(request(ADMIN_TABLET_PAIRING_PATH, {
       origin: richmondOrigin,
       body: { operation: 'review', pairingCode: '01234-56789' }
@@ -1278,10 +1550,14 @@ test('every pairing operation rejects wrong-origin and Richmond requests before 
     handleAdminTabletPairing(request(ADMIN_TABLET_PAIRING_PATH, {
       origin: richmondOrigin,
       body: { operation: 'approve', pairingCode: '01234-56789' }
+    }), richmondDependencies),
+    handleAdminTabletPairing(request(ADMIN_TABLET_PAIRING_PATH, {
+      origin: richmondOrigin,
+      body: { operation: 'reject', pairingCode: '01234-56789' }
     }), richmondDependencies)
   ];
   const richmondResponses = await Promise.all(richmondCandidates);
-  assert.deepEqual(richmondResponses.map(value => value.status), [404, 404, 404, 404]);
+  assert.deepEqual(richmondResponses.map(value => value.status), [404, 404, 404, 404, 404, 404]);
   assert.equal(store.calls.length, 0);
 });
 

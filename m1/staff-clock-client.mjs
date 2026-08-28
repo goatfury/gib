@@ -7,7 +7,7 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-08-27-tablet-pairing-r1';
+} from './staff-clock-core.mjs?v=2026-08-28-tablet-pairing-r2';
 
 const installationProfile = globalThis.M1_INSTALLATION_PROFILE;
 const STAFF_CLOCK_PAIRING_ENABLED = installationProfile?.featureFlags?.staffClockPairing === true;
@@ -15,7 +15,7 @@ const STAFF_CLOCK_PAIRING_CONFIG = installationProfile?.staffClockPairing || nul
 const STAFF_CLOCK_PAIRING_CONFIG_VALID = STAFF_CLOCK_PAIRING_ENABLED
   && Number.isInteger(STAFF_CLOCK_PAIRING_CONFIG?.expiresInSeconds)
   && STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds >= 60
-  && STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds <= 300
+  && STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds <= 12 * 60 * 60
   && installationProfile?.allowedOrigin === STAFF_CLOCK_PAIRING_CONFIG.origin;
 const STAFF_CLOCK_PAIRING_AVAILABLE = STAFF_CLOCK_PAIRING_CONFIG_VALID
   && location.origin === STAFF_CLOCK_PAIRING_CONFIG.origin;
@@ -33,12 +33,13 @@ const STAFF_CLOCK_STAFF_CACHE_KEY = 'gib_m1b_staff_clock_staff_v1';
 const STAFF_CLOCK_ENDPOINT = '/api/m1-staff-clock';
 const STAFF_CLOCK_PAIRING_START_ENDPOINT = '/api/m1-tablet-pairing-start';
 const STAFF_CLOCK_PAIRING_POLL_ENDPOINT = '/api/m1-tablet-pairing-poll';
+const STAFF_CLOCK_PAIRING_CANCEL_ENDPOINT = '/api/m1-tablet-pairing-cancel';
 const STAFF_CLOCK_RETRY_INTERVAL_MS = 30_000;
-const STAFF_CLOCK_PAIRING_POLL_INTERVAL_MS = 2_500;
+const STAFF_CLOCK_PAIRING_POLL_INTERVAL_MS = 30_000;
 const STAFF_CLOCK_PAIRING_APPROVED_POLL_MS = 250;
 const STAFF_CLOCK_PAIRING_MAX_LIFETIME_MS = STAFF_CLOCK_PAIRING_CONFIG_VALID
   ? STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds * 1_000
-  : 5 * 60_000;
+  : 12 * 60 * 60_000;
 const STAFF_CLOCK_PAIRING_MAX_DELIVERY_WINDOW_MS = 2 * 60_000;
 const STAFF_CLOCK_STATE_VERSION = 2;
 const STAFF_CLOCK_MAX_INCLUDED_RECORDS = 500;
@@ -608,6 +609,7 @@ function fmtDate(value) {
     const pairingExpiry = $('#staffClockPairingExpiry');
     const pairingInstructions = $('#staffClockPairingInstructions');
     const retry = $('#retryStaffClock');
+    const cancel = $('#cancelStaffClockPairing');
     const controls = $('#staffClockControls');
     const select = $('#staffClockName');
     const action = $('#btnStaffClockAction');
@@ -633,6 +635,7 @@ function fmtDate(value) {
     pairingExpiry.textContent = '';
     pairingInstructions.hidden = true;
     retry.hidden = true;
+    if (cancel) cancel.hidden = true;
 
     if (ready) return;
     if (staffClockAvailability === 'authorization-required') {
@@ -1030,15 +1033,21 @@ function fmtDate(value) {
 
   function validStaffClockPairingApproved(value, now = Date.now()) {
     if (
-      !exactStaffClockKeys(value, ['ok', 'result', 'deliveryExpiresAt'])
+      !exactStaffClockKeys(value, ['ok', 'result', 'expiresAt', 'deliveryExpiresAt'])
       || value.ok !== true
       || value.result !== 'approved'
     ) return false;
-    if (!validStaffClockPairingTimestamp(value.deliveryExpiresAt)) return false;
+    if (
+      !validStaffClockPairingTimestamp(value.expiresAt)
+      || !validStaffClockPairingTimestamp(value.deliveryExpiresAt)
+    ) return false;
+    const expiresAt = Date.parse(value.expiresAt);
     const deliveryExpiresAt = Date.parse(value.deliveryExpiresAt);
-    return Number.isFinite(deliveryExpiresAt)
+    return Number.isFinite(expiresAt)
+      && Number.isFinite(deliveryExpiresAt)
       && deliveryExpiresAt > now
-      && deliveryExpiresAt <= now + STAFF_CLOCK_PAIRING_MAX_DELIVERY_WINDOW_MS;
+      && expiresAt <= now + STAFF_CLOCK_PAIRING_MAX_LIFETIME_MS
+      && deliveryExpiresAt === expiresAt + STAFF_CLOCK_PAIRING_MAX_DELIVERY_WINDOW_MS;
   }
 
   function validStaffClockPairingExpired(value) {
@@ -1061,12 +1070,26 @@ function fmtDate(value) {
       && value.message === 'Tablet pairing request was not accepted.';
   }
 
+  function validStaffClockPairingTerminal(value, result) {
+    const messages = {
+      rejected: 'Pairing request was rejected by an Admin.',
+      cancelled: 'Pairing request was cancelled on this tablet.'
+    };
+    return Object.hasOwn(messages, result)
+      && exactStaffClockKeys(value, ['ok', 'result', 'message'])
+      && value.ok === false
+      && value.result === result
+      && value.message === messages[result];
+  }
+
   async function postStaffClockPairing(operation) {
     const endpoint = operation === 'start'
       ? STAFF_CLOCK_PAIRING_START_ENDPOINT
       : operation === 'poll'
         ? STAFF_CLOCK_PAIRING_POLL_ENDPOINT
-        : '';
+        : operation === 'cancel'
+          ? STAFF_CLOCK_PAIRING_CANCEL_ENDPOINT
+          : '';
     if (!endpoint) throw new Error('Tablet pairing operation was invalid.');
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     const timeout = controller
@@ -1117,6 +1140,9 @@ function fmtDate(value) {
     if (!Number.isFinite(date.getTime())) return '';
     return `Expires at ${new Intl.DateTimeFormat('en-US', {
       timeZone: TZ,
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
       hour: 'numeric',
       minute: '2-digit',
       second: '2-digit'
@@ -1132,6 +1158,7 @@ function fmtDate(value) {
     const instructions = $('#staffClockPairingInstructions');
     const adminUrl = $('#staffClockPairingAdminUrl');
     const retry = $('#retryStaffClock');
+    const cancel = $('#cancelStaffClockPairing');
     if (detail) detail.textContent = message;
     if (staffClockPairingCode && codeWrap && code && expiry && instructions && adminUrl) {
       code.textContent = staffClockPairingCode;
@@ -1139,6 +1166,7 @@ function fmtDate(value) {
       adminUrl.textContent = new URL('/m1/admin/', STAFF_CLOCK_PAIRING_CONFIG.origin).href;
       codeWrap.hidden = false;
       instructions.hidden = false;
+      if (cancel) cancel.hidden = false;
     }
     if (retry && options.showRetry === true) {
       retry.textContent = options.retryLabel || 'Retry pairing';
@@ -1152,6 +1180,78 @@ function fmtDate(value) {
       showRetry: true,
       retryLabel: 'Get a new code'
     });
+  }
+
+  async function cancelStaffClockPairing() {
+    if (!STAFF_CLOCK_PAIRING_AVAILABLE || staffClockPairingPromise) return null;
+    clearStaffClockPairingTimer();
+    const cancel = $('#cancelStaffClockPairing');
+    if (navigator.onLine === false) {
+      renderStaffClockPairingPending(
+        'This tablet is offline. Reconnect before cancelling this pairing request.',
+        { showRetry: true, retryLabel: 'Retry now' }
+      );
+      return null;
+    }
+    if (cancel) cancel.disabled = true;
+    renderStaffClockPairingPending('Cancelling this pairing request…');
+    staffClockPairingPromise = (async () => {
+      try {
+        const data = await postStaffClockPairing('cancel');
+        if (validStaffClockPairingApproved(data)) {
+          if (
+            staffClockPairingExpiresAt
+            && data.expiresAt !== staffClockPairingExpiresAt
+          ) throw new Error('Tablet pairing changed unexpectedly.');
+          staffClockPairingCode = '';
+          staffClockPairingExpiresAt = data.expiresAt;
+          staffClockPairingDeliveryExpiresAt = data.deliveryExpiresAt;
+          renderStaffClockPairingPending('Admin approval completed first. Finishing secure authorization…');
+          scheduleStaffClockPairingPoll(STAFF_CLOCK_PAIRING_APPROVED_POLL_MS);
+          return data;
+        }
+        if (validStaffClockPairingResult(data, 'authorized')) {
+          clearStaffClockPairingMemory();
+          setStaffClockAvailability('loading');
+          staffClockAuthorizationRecoveryInProgress = true;
+          window.setTimeout(() => {
+            void refreshStaffClockRosterAfterAuthorization();
+          }, 0);
+          return data;
+        }
+        if (!validStaffClockPairingResult(data, 'cancelled')) {
+          throw new Error('Tablet pairing cancellation returned an incomplete response.');
+        }
+        clearStaffClockPairingMemory();
+        renderStaffClockPairingPending('Pairing request cancelled. No Admin can approve that code.', {
+          showRetry: true,
+          retryLabel: 'Get a new code'
+        });
+        return data;
+      } catch (error) {
+        if (
+          error?.staffClockPairingStatus === 410
+          && validStaffClockPairingExpired(error.staffClockPairingData)
+        ) {
+          renderStaffClockPairingExpired(error.staffClockPairingData.message);
+          return null;
+        }
+        if (staffClockPairingStillCurrent()) {
+          renderStaffClockPairingPending(
+            'Cancellation did not complete. This code remains pending and will keep checking automatically.',
+            { showRetry: true, retryLabel: 'Retry now' }
+          );
+          scheduleStaffClockPairingPoll();
+        } else {
+          renderStaffClockPairingExpired(error?.message || 'Pairing request could not be cancelled.');
+        }
+        return null;
+      } finally {
+        if (cancel) cancel.disabled = false;
+        staffClockPairingPromise = null;
+      }
+    })();
+    return staffClockPairingPromise;
   }
 
   function scheduleStaffClockPairingPoll(delay = STAFF_CLOCK_PAIRING_POLL_INTERVAL_MS) {
@@ -1204,7 +1304,12 @@ function fmtDate(value) {
           return data;
         }
         if (validStaffClockPairingApproved(data)) {
+          if (
+            staffClockPairingExpiresAt
+            && data.expiresAt !== staffClockPairingExpiresAt
+          ) throw new Error('Tablet pairing changed unexpectedly.');
           staffClockPairingCode = '';
+          staffClockPairingExpiresAt = data.expiresAt;
           staffClockPairingDeliveryExpiresAt = data.deliveryExpiresAt;
           renderStaffClockPairingPending('Admin approved this tablet. Finishing secure authorization…');
           scheduleStaffClockPairingPoll(STAFF_CLOCK_PAIRING_APPROVED_POLL_MS);
@@ -1233,6 +1338,16 @@ function fmtDate(value) {
         if (
           error?.staffClockPairingStatus === 403
           && validStaffClockPairingRejected(error.staffClockPairingData)
+        ) {
+          renderStaffClockPairingExpired(error.staffClockPairingData.message);
+          return null;
+        }
+        if (
+          error?.staffClockPairingStatus === 409
+          && validStaffClockPairingTerminal(
+            error.staffClockPairingData,
+            error.staffClockPairingData?.result
+          )
         ) {
           renderStaffClockPairingExpired(error.staffClockPairingData.message);
           return null;
@@ -1285,6 +1400,12 @@ function fmtDate(value) {
     if (!staffClockPairingPromise && staffClockPairingPollTimer == null) {
       void runStaffClockPairing('start');
     }
+  }
+
+  function resumeStaffClockPairing() {
+    if (!STAFF_CLOCK_PAIRING_AVAILABLE || staffClockPairingPromise) return;
+    clearStaffClockPairingTimer();
+    void runStaffClockPairing(staffClockPairingStillCurrent() ? 'poll' : 'start');
   }
 
   function restartStaffClockPairing() {
@@ -2168,6 +2289,9 @@ function initializeStaffClockClient() {
     setStaffClockAvailability('loading');
     void refreshStaffClockSnapshot();
   });
+  $('#cancelStaffClockPairing')?.addEventListener('click', () => {
+    void cancelStaffClockPairing();
+  });
 
   const admin = $('#admin');
   if (admin && typeof MutationObserver === 'function') {
@@ -2194,7 +2318,7 @@ function initializeStaffClockClient() {
   }, STAFF_CLOCK_RETRY_INTERVAL_MS);
   window.addEventListener('online', () => {
     if (staffClockAvailability === 'authorization-required') {
-      ensureStaffClockPairing();
+      resumeStaffClockPairing();
       return;
     }
     void refreshStaffClockSnapshot();
@@ -2202,12 +2326,20 @@ function initializeStaffClockClient() {
   });
   ['focus', 'pageshow'].forEach(eventName => {
     window.addEventListener(eventName, () => {
+      if (staffClockAvailability === 'authorization-required') {
+        resumeStaffClockPairing();
+        return;
+      }
       void refreshStaffClockSnapshot();
       void syncStaffClockQueue();
     });
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
+      if (staffClockAvailability === 'authorization-required') {
+        resumeStaffClockPairing();
+        return;
+      }
       void refreshStaffClockSnapshot();
       void syncStaffClockQueue();
     }

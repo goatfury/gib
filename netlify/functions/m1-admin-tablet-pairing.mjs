@@ -117,7 +117,7 @@ async function readPendingByCode(store, runtime, profile, pairingCode, now) {
     return Object.freeze({ kind: 'expired' });
   }
   if (
-    request.value.status !== 'pending'
+    ['approved', 'consumed'].includes(request.value.status)
     && request.value.deliveryExpiresAt <= currentSeconds
   ) {
     return Object.freeze({ kind: 'expired' });
@@ -140,6 +140,16 @@ function approvedEnvelope(record) {
     gymName: record.gymName,
     deviceLabel: record.deviceLabel,
     approvedAt: isoTimestamp(record.approvedAt)
+  };
+}
+
+function rejectedEnvelope(record) {
+  return {
+    ok: true,
+    result: 'rejected',
+    installationId: record.installationId,
+    gymName: record.gymName,
+    deviceLabel: record.deviceLabel
   };
 }
 
@@ -256,7 +266,8 @@ async function approvePairing(request, value, runtime, profile, session, store, 
       credentialIssuedAt: currentSeconds,
       deliveryNonce,
       credentialHash: pairingCredentialHash(credential),
-      deliveryExpiresAt: currentSeconds + TABLET_PAIRING_DELIVERY_GRACE_SECONDS
+      deliveryExpiresAt: pending.record.approvalExpiresAt
+        + TABLET_PAIRING_DELIVERY_GRACE_SECONDS
     };
   } catch {
     return withReviewCleared(unavailableResponse());
@@ -283,6 +294,59 @@ async function approvePairing(request, value, runtime, profile, session, store, 
   return jsonResponse(200, approvedEnvelope(approved));
 }
 
+async function rejectPairing(request, value, runtime, profile, session, store, now) {
+  const pairingCode = normalizePairingCode(value.pairingCode);
+  if (!pairingCode) return withReviewCleared(rejectedCodeResponse());
+  const pending = await readPendingByCode(store, runtime, profile, pairingCode, now);
+  if (pending?.kind === 'expired') {
+    return withReviewCleared(expiredCodeResponse());
+  }
+  const review = readPairingReviewToken(
+    cookieValue(request, TABLET_PAIRING_REVIEW_COOKIE),
+    runtime.installSecret,
+    profile,
+    session,
+    now
+  );
+  if (
+    !pending
+    || !review
+    || !['pending', 'rejected'].includes(pending.kind)
+    || review.requestKey !== pending.requestKey
+    || review.codeHash !== pending.codeHash
+  ) return withReviewCleared(rejectedCodeResponse(403));
+  if (requestOwnsPendingTablet(request, runtime, profile, pending, now)) {
+    return withReviewCleared(rejectedCodeResponse(403));
+  }
+  if (pending.kind === 'rejected') {
+    return jsonResponse(200, rejectedEnvelope(pending.record));
+  }
+
+  const rejected = {
+    ...pending.record,
+    status: 'rejected'
+  };
+  if (!validPairingRequestRecord(rejected, profile)) {
+    return withReviewCleared(unavailableResponse());
+  }
+  const updated = await updatePairingBlob(
+    store,
+    pending.requestKey,
+    rejected,
+    pending.etag
+  );
+  if (!updated) {
+    const latest = await readPendingByCode(store, runtime, profile, pairingCode, now);
+    if (
+      latest?.kind === 'rejected'
+      && review.requestKey === latest.requestKey
+      && review.codeHash === latest.codeHash
+    ) return jsonResponse(200, rejectedEnvelope(latest.record));
+    return withReviewCleared(rejectedCodeResponse(409));
+  }
+  return jsonResponse(200, rejectedEnvelope(rejected));
+}
+
 export async function handleAdminTabletPairing(request, dependencies = {}) {
   const profile = staffClockPairingProfile(
     dependencies.installationId,
@@ -298,7 +362,7 @@ export async function handleAdminTabletPairing(request, dependencies = {}) {
     || !parsed.value
     || typeof parsed.value !== 'object'
     || Array.isArray(parsed.value)
-    || !['review', 'approve'].includes(parsed.value.operation)
+    || !['review', 'approve', 'reject'].includes(parsed.value.operation)
     || Object.keys(parsed.value).length !== 2
     || typeof parsed.value.pairingCode !== 'string'
   ) return withReviewCleared(invalidResponse());
@@ -338,15 +402,26 @@ export async function handleAdminTabletPairing(request, dependencies = {}) {
         now
       );
     }
-    return await approvePairing(
+    if (parsed.value.operation === 'approve') {
+      return await approvePairing(
+        request,
+        parsed.value,
+        runtime,
+        profile,
+        auth.session,
+        store,
+        now,
+        dependencies.randomBytes
+      );
+    }
+    return await rejectPairing(
       request,
       parsed.value,
       runtime,
       profile,
       auth.session,
       store,
-      now,
-      dependencies.randomBytes
+      now
     );
   } catch {
     return withReviewCleared(unavailableResponse());

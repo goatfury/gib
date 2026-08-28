@@ -42,6 +42,8 @@ function validatorRuntime() {
     const STAFF_TIME_VIEW_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
     const STAFF_TIME_PAGE_LIMIT = 500;
     const STAFF_TIME_PAGE_MAX_BYTES = 200_000;
+    const STAFF_TIME_HISTORY_PAGE_LIMIT = 50;
+    const STAFF_TIME_HISTORY_PAGE_MAX_BYTES = 80_000;
     const STAFF_TIME_RECORD_LIMIT = 500;
     const STAFF_TIME_ATTENTION_LIMIT = 600;
     const STAFF_TIME_AUDIT_LIMIT = 500;
@@ -74,6 +76,8 @@ function validatorRuntime() {
     globalThis.hooks = {
       validStaffTimeReviewStartResponse,
       validStaffTimeReviewPageResponse,
+      validStaffCompletedShift,
+      validStaffTimeHistoryPageResponse,
       validStaffTimeReviewResponse,
       validStaffMutationResponse
     };
@@ -282,6 +286,36 @@ function staffRecord(index) {
   };
 }
 
+function completedHistoryShift(index = 950, overrides = {}) {
+  const clockIn = {
+    ...staffRecord(index),
+    timestamp: '2026-08-11T09:00:00-04:00',
+    date: '2026-08-11',
+    punchAction: 'clockIn'
+  };
+  const clockOut = {
+    ...staffRecord(index + 1),
+    timestamp: '2026-08-11T17:00:00-04:00',
+    date: '2026-08-11',
+    punchAction: 'clockOut'
+  };
+  return { clockIn, clockOut, latestAdjustment: null, ...overrides };
+}
+
+function completedHistoryPage(overrides = {}) {
+  return {
+    ok: true,
+    test: true,
+    adminName: 'Andrew Smith',
+    viewToken: VIEW_TOKEN,
+    offset: 0,
+    total: 0,
+    items: [],
+    nextOffset: null,
+    ...overrides
+  };
+}
+
 function staffAudit(index, record, operation = 'correct') {
   const suffix = (index + 1).toString(16).padStart(12, '0');
   return {
@@ -299,7 +333,7 @@ function staffAudit(index, record, operation = 'correct') {
   };
 }
 
-function renderStaffTimeRuntime(data, { showOlder = false } = {}) {
+function renderStaffTimeRuntime(data, { historyPage = completedHistoryPage() } = {}) {
   const functions = sourceBetween(
     adminHtml,
     'function makeElement(',
@@ -341,11 +375,14 @@ function renderStaffTimeRuntime(data, { showOlder = false } = {}) {
     Object,
     nodes,
     data: structuredClone(data),
+    historyPage: structuredClone(historyPage),
     createElement: tagName => new FakeElement(tagName)
   });
   new vm.Script(`
     const TIME_ZONE = 'America/New_York';
     let currentStaffTime = null;
+    let currentStaffHistoryPage = historyPage;
+    let staffHistoryPageLoading = false;
     const document = { createElement };
     function $(selector) {
       if (!nodes[selector]) nodes[selector] = createElement('div');
@@ -366,7 +403,6 @@ function renderStaffTimeRuntime(data, { showOlder = false } = {}) {
         && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}-(?:04|05):00$/.test(value)
         && Number.isFinite(Date.parse(value));
     }
-    let staffOlderHistoryExpanded = ${showOlder ? 'true' : 'false'};
     ${functions}
     renderStaffTime(data);
   `, { filename: 'staff-time-admin-render.js' }).runInContext(context);
@@ -387,7 +423,11 @@ function countElements(element, predicate) {
   );
 }
 
-async function runPagination(initial, streams, { staleOnce = false, pageSize = 500 } = {}) {
+async function runPagination(initial, streams, {
+  staleOnce = false,
+  pageSize = 500,
+  historyPage = completedHistoryPage()
+} = {}) {
   const functions = sourceBetween(
     adminHtml,
     'function validStaffId(',
@@ -404,6 +444,7 @@ async function runPagination(initial, streams, { staleOnce = false, pageSize = 5
     streams,
     staleOnce,
     pageSize,
+    historyPage,
     calls: []
   });
   new vm.Script(`
@@ -413,6 +454,8 @@ async function runPagination(initial, streams, { staleOnce = false, pageSize = 5
     const STAFF_TIME_VIEW_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
     const STAFF_TIME_PAGE_LIMIT = 500;
     const STAFF_TIME_PAGE_MAX_BYTES = 200_000;
+    const STAFF_TIME_HISTORY_PAGE_LIMIT = 50;
+    const STAFF_TIME_HISTORY_PAGE_MAX_BYTES = 80_000;
     const STAFF_TIME_RECORD_LIMIT = 500;
     const STAFF_TIME_ATTENTION_LIMIT = 600;
     const STAFF_TIME_AUDIT_LIMIT = 500;
@@ -421,6 +464,7 @@ async function runPagination(initial, streams, { staleOnce = false, pageSize = 5
     let testMode = true;
     let currentAdminName = 'Andrew Smith';
     let staffTimeLoadGeneration = 7;
+    let currentStaffHistoryPage = null;
     let staleRemaining = staleOnce ? 1 : 0;
     function clean(value) {
       return String(value == null ? '' : value).normalize('NFKC').trim().replace(/\\s+/g, ' ');
@@ -447,6 +491,13 @@ async function runPagination(initial, streams, { staleOnce = false, pageSize = 5
     async function requestJson(_url, body) {
       calls.push(JSON.parse(JSON.stringify(body)));
       if (body.operation === 'review') return JSON.parse(JSON.stringify(initial));
+      if (body.operation === 'historyPage') {
+        return JSON.parse(JSON.stringify({
+          ...historyPage,
+          viewToken: body.viewToken,
+          offset: body.offset
+        }));
+      }
       if (staleRemaining && body.stream === 'records') {
         staleRemaining -= 1;
         const error = new Error('stale');
@@ -503,7 +554,7 @@ function configureLoginEntryRuntime(hostname) {
   return { nodes, result: context.result };
 }
 
-function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } = {}) {
+function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '', rejectFailure = '' } = {}) {
   const source = sourceBetween(
     adminHtml,
     'function validTabletPairingCode(',
@@ -517,8 +568,8 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
     gymName: 'Revolution BJJ',
     origin: 'https://gib-live.netlify.app',
     deviceLabel: 'Revolution BJJ front desk',
-    requestedAt: new Date(now - 1_000).toISOString(),
-    expiresAt: new Date(now + 299_000).toISOString()
+    requestedAt: new Date(now - 60 * 60_000).toISOString(),
+    expiresAt: new Date(now + 11 * 60 * 60_000).toISOString()
   };
   const approveResponse = {
     ok: true,
@@ -527,6 +578,13 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
     gymName: 'Revolution BJJ',
     deviceLabel: 'Revolution BJJ front desk',
     approvedAt: new Date(now).toISOString()
+  };
+  const rejectResponse = {
+    ok: true,
+    result: 'rejected',
+    installationId: 'rev',
+    gymName: 'Revolution BJJ',
+    deviceLabel: 'Revolution BJJ front desk'
   };
   const nodes = {
     '#tabletPairingCode': { value: 'abcde-fghjk', focusCount: 0, focus() { this.focusCount += 1; } },
@@ -543,6 +601,7 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
       focusCount: 0,
       focus() { this.focusCount += 1; }
     },
+    '#tabletPairingRejectButton': { disabled: false },
     '#tabletPairingCancelButton': { disabled: false },
     '#tabletPairingApprovalMessage': { message: '', tone: '' }
   };
@@ -554,8 +613,10 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
     nodes,
     reviewResponse,
     approveResponse,
+    rejectResponse,
     reviewFailure,
     approveFailure,
+    rejectFailure,
     calls: [],
     loggedOutMessage: ''
   });
@@ -568,9 +629,10 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
     });
     const STAFF_CLOCK_PAIRING_CONFIG = Object.freeze({
       origin: 'https://gib-live.netlify.app',
-      expiresInSeconds: 300
+      expiresInSeconds: 43_200
     });
     const TABLET_PAIRING_AVAILABLE = true;
+    const TABLET_PAIRING_REVIEW_LIFETIME_MS = 15 * 60_000;
     const API = Object.freeze({ tabletPairing: '/api/m1-admin-tablet-pairing' });
     let adminRequestToken = 'a'.repeat(64);
     let reviewedTabletPairingCode = '';
@@ -601,6 +663,10 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
         if (reviewFailure) throw Object.assign(new Error(reviewFailure), { status: 410 });
         return JSON.parse(JSON.stringify(reviewResponse));
       }
+      if (body.operation === 'reject') {
+        if (rejectFailure) throw Object.assign(new Error(rejectFailure), { status: 500 });
+        return JSON.parse(JSON.stringify(rejectResponse));
+      }
       if (approveFailure) throw Object.assign(new Error(approveFailure), { status: 500 });
       return JSON.parse(JSON.stringify(approveResponse));
     }
@@ -610,13 +676,15 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
       normalizeTabletPairingCode,
       validTabletPairingReviewResponse,
       validTabletPairingApproveResponse,
+      validTabletPairingRejectResponse,
       clearTabletPairingReview,
       reviewTabletPairing,
       approveTabletPairing,
+      rejectTabletPairing,
       reviewedCode: () => reviewedTabletPairingCode
     };
   `, { filename: 'admin-tablet-pairing.js' }).runInContext(context);
-  return { context, hooks: context.hooks, nodes, reviewResponse, approveResponse };
+  return { context, hooks: context.hooks, nodes, reviewResponse, approveResponse, rejectResponse };
 }
 
 test('Daily Review remains first and one compact Staff time section follows it', () => {
@@ -633,9 +701,10 @@ test('Daily Review remains first and one compact Staff time section follows it',
   assert.match(app, /<details id="staffPayPeriods"[^>]*>\s*<summary>Pay-period totals<\/summary>/u);
   assert.doesNotMatch(app.match(/<details id="staffPayPeriods"[^>]*>/u)?.[0] || '', /\bopen\b/u);
   assert.match(app, /Fix missed punch/u);
-  assert.match(app, /Staff Time records[\s\S]*Show older history[\s\S]*Staff time audit/u);
+  assert.match(app, /Staff Time records[\s\S]*Completed shift history[\s\S]*Load older completed shifts[\s\S]*Staff time audit/u);
   assert.equal(idCount('staffTimeOlderHistory'), 1);
-  assert.match(app, /aria-controls="staffTimeRecords" aria-expanded="false" hidden/u);
+  assert.equal(idCount('staffCompletedShiftHistory'), 1);
+  assert.match(app, /aria-controls="staffCompletedShiftHistory" hidden/u);
 });
 
 test('Staff time reuses the existing secured Admin request path and loads only after login', () => {
@@ -656,6 +725,9 @@ test('Staff time reuses the existing secured Admin request path and loads only a
   );
   assert.match(pagingSource, /requestJson\(API\.staffTime, \{\s*operation: 'reviewPage'/u);
   assert.match(pagingSource, /validStaffTimeReviewPageResponse\(page/u);
+  assert.match(pagingSource, /requestJson\(API\.staffTime, \{\s*operation: 'historyPage'/u);
+  assert.match(pagingSource, /validStaffTimeHistoryPageResponse\(page, expected\)/u);
+  assert.match(pagingSource, /fetchStaffTimeHistoryPage\(initial, 0, generation\)/u);
   assert.match(pagingSource, /requestJson\(API\.staffTime, \{ operation: 'review' \}\)/u);
   assert.match(pagingSource, /validStaffTimeReviewStartResponse\(initial\)/u);
   const loadSource = sourceBetween(adminHtml, 'async function loadStaffTime(', 'async function submitStaffCorrection(');
@@ -711,6 +783,7 @@ test('Admin tablet pairing is profile-gated, cross-device, and never persists a 
   assert.equal(idCount('tabletPairingCode'), 1);
   assert.equal(idCount('tabletPairingReview'), 1);
   assert.equal(idCount('tabletPairingApproveButton'), 1);
+  assert.equal(idCount('tabletPairingRejectButton'), 1);
   assert.equal(idCount('tabletPairingCancelButton'), 1);
   assert.match(app, /id="tabletPairing"[^>]*hidden/u);
   assert.match(app, /Authorize a Staff Clock tablet/u);
@@ -718,6 +791,8 @@ test('Admin tablet pairing is profile-gated, cross-device, and never persists a 
   assert.match(app, /Review the exact tablet request before separately confirming authorization/u);
   assert.match(app, /Review before approving[\s\S]*Gym[\s\S]*Origin[\s\S]*Device[\s\S]*Requested[\s\S]*Expires/u);
   assert.match(app, /Confirm tablet authorization/u);
+  assert.match(app, /Reject pairing request/u);
+  assert.match(app, /remains valid for up to 15 minutes/u);
   assert.match(adminHtml, /tabletPairing:\s*'\/api\/m1-admin-tablet-pairing'/u);
 
   const availabilitySource = sourceBetween(
@@ -727,7 +802,7 @@ test('Admin tablet pairing is profile-gated, cross-device, and never persists a 
   );
   assert.match(availabilitySource, /INSTALLATION\.featureFlags\.staffClockPairing === true/u);
   assert.match(availabilitySource, /STAFF_CLOCK_PAIRING_CONFIG\.expiresInSeconds >= 60/u);
-  assert.match(availabilitySource, /STAFF_CLOCK_PAIRING_CONFIG\.expiresInSeconds <= 300/u);
+  assert.match(availabilitySource, /STAFF_CLOCK_PAIRING_CONFIG\.expiresInSeconds <= 12 \* 60 \* 60/u);
   assert.match(availabilitySource, /INSTALLATION\.allowedOrigin === STAFF_CLOCK_PAIRING_CONFIG\.origin/u);
   assert.match(availabilitySource, /location\.origin === STAFF_CLOCK_PAIRING_CONFIG\.origin/u);
   assert.doesNotMatch(availabilitySource, /IS_RICHMOND|installationId\s*===\s*'rev'/u);
@@ -749,6 +824,7 @@ test('Admin tablet pairing is profile-gated, cross-device, and never persists a 
   );
   assert.match(pairingSource, /requestJson\(API\.tabletPairing, \{\s*operation: 'review',\s*pairingCode: code\s*\}\)/u);
   assert.match(pairingSource, /requestJson\(API\.tabletPairing, \{\s*operation: 'approve',\s*pairingCode: code\s*\}\)/u);
+  assert.match(pairingSource, /requestJson\(API\.tabletPairing, \{\s*operation: 'reject',\s*pairingCode: code\s*\}\)/u);
   assert.doesNotMatch(pairingSource, /location|URLSearchParams|localStorage|sessionStorage/u);
   assert.doesNotMatch(adminHtml, /tabletAuthorize|tabletInstall|authorizeTablet=1|localStorage|sessionStorage|URLSearchParams/u);
 
@@ -794,8 +870,8 @@ test('Admin requests reject redirects and stay on the authenticated same-origin 
   });
 });
 
-test('Admin pairing validators enforce exact Crockford codes and installation-bound responses', () => {
-  const { hooks, reviewResponse, approveResponse } = tabletPairingAdminRuntime();
+test('Admin pairing validators accept 12-hour requests and bind approval/rejection responses to this installation', () => {
+  const { hooks, reviewResponse, approveResponse, rejectResponse } = tabletPairingAdminRuntime();
   for (const code of ['01234-56789', 'ABCDE-FGHJK', 'MNPQR-STVWX']) {
     assert.equal(hooks.validTabletPairingCode(code), true, code);
   }
@@ -814,6 +890,10 @@ test('Admin pairing validators enforce exact Crockford codes and installation-bo
   assert.equal(hooks.normalizeTabletPairingCode('  abcde - fghjk  '), 'ABCDE-FGHJK');
 
   assert.equal(hooks.validTabletPairingReviewResponse(reviewResponse, 'ABCDE-FGHJK'), true);
+  assert.equal(
+    Date.parse(reviewResponse.expiresAt) - Date.parse(reviewResponse.requestedAt),
+    12 * 60 * 60_000
+  );
   assert.equal(hooks.validTabletPairingReviewResponse({
     ...reviewResponse,
     extra: true
@@ -861,12 +941,22 @@ test('Admin pairing validators enforce exact Crockford codes and installation-bo
   }, approvedAt), false, 'timestamps beyond the future-skew boundary are rejected');
   assert.equal(hooks.validTabletPairingApproveResponse({
     ...approveResponse,
-    approvedAt: new Date(approvedAt - 120_000).toISOString()
-  }, approvedAt), true, 'the 120-second readback boundary is accepted');
+    approvedAt: new Date(approvedAt - 15 * 60_000).toISOString()
+  }, approvedAt), true, 'the 15-minute review readback boundary is accepted');
   assert.equal(hooks.validTabletPairingApproveResponse({
     ...approveResponse,
-    approvedAt: new Date(approvedAt - 120_001).toISOString()
+    approvedAt: new Date(approvedAt - 15 * 60_000 - 1).toISOString()
   }, approvedAt), false, 'timestamps older than the readback boundary are rejected');
+
+  assert.equal(hooks.validTabletPairingRejectResponse(rejectResponse), true);
+  assert.equal(hooks.validTabletPairingRejectResponse({
+    ...rejectResponse,
+    installationId: 'richmond'
+  }), false);
+  assert.equal(hooks.validTabletPairingRejectResponse({
+    ...rejectResponse,
+    extra: true
+  }), false);
 });
 
 test('Admin pairing reviews first, approves separately, and clears memory and DOM state', async () => {
@@ -915,12 +1005,35 @@ test('Admin pairing reviews first, approves separately, and clears memory and DO
     "$\('#tabletDiagnosticButton'\).addEventListener('click'"
   );
   assert.match(eventSource, /tabletPairingCode'\)\.addEventListener\('input'[\s\S]*clearTabletPairingReview\(\)/u);
+  assert.match(eventSource, /tabletPairingRejectButton'\)\.addEventListener\('click', rejectTabletPairing\)/u);
   assert.match(eventSource, /tabletPairingCancelButton'\)\.addEventListener\('click'[\s\S]*clearTabletPairingReview\(\{ clearCode: true \}\)/u);
   const sessionSource = sourceBetween(adminHtml, 'function setLoggedOut(', 'async function login(');
   assert.equal(
     (sessionSource.match(/clearTabletPairingReview\(\{ clearCode: true \}\)/gu) || []).length,
     2
   );
+});
+
+test('Admin explicitly rejects a reviewed request and invalidates the displayed code', async () => {
+  const { context, hooks, nodes } = tabletPairingAdminRuntime();
+  await hooks.reviewTabletPairing();
+  await hooks.rejectTabletPairing();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.calls)), [
+    {
+      url: '/api/m1-admin-tablet-pairing',
+      body: { operation: 'review', pairingCode: 'ABCDE-FGHJK' }
+    },
+    {
+      url: '/api/m1-admin-tablet-pairing',
+      body: { operation: 'reject', pairingCode: 'ABCDE-FGHJK' }
+    }
+  ]);
+  assert.equal(hooks.reviewedCode(), '');
+  assert.equal(nodes['#tabletPairingCode'].value, '');
+  assert.equal(nodes['#tabletPairingReview'].hidden, true);
+  assert.match(nodes['#tabletPairingMessage'].message, /pairing rejected/u);
+  assert.match(nodes['#tabletPairingMessage'].message, /can no longer be approved/u);
 });
 
 test('Admin pairing rejects changed codes and requires a fresh review after an HTTP approval failure', async () => {
@@ -1290,6 +1403,10 @@ test('10k+ Staff time totals use bounded priority streams, variable pages, and b
   assert.ok(calls.filter(call => call.operation === 'reviewPage').every(call => (
     Object.keys(call).sort().join(',') === 'offset,operation,stream,viewToken'
   )));
+  assert.deepEqual(
+    calls.filter(call => call.operation === 'historyPage'),
+    [{ operation: 'historyPage', viewToken: VIEW_TOKEN, offset: 0 }]
+  );
 
   const nodes = renderStaffTimeRuntime(data);
   assert.equal(nodes['#staffTimeSummary'].textContent, '1 clocked in · 10,501 today');
@@ -1324,6 +1441,10 @@ test('a stale Staff time page restarts the whole view once', async () => {
     calls.filter(call => call.operation === 'reviewPage').map(call => call.stream),
     ['records', 'records', 'audit']
   );
+  assert.deepEqual(
+    calls.filter(call => call.operation === 'historyPage'),
+    [{ operation: 'historyPage', viewToken: VIEW_TOKEN, offset: 0 }]
+  );
 });
 
 test('rendering covers all review collections with safe Admin-added, VOID, totals, and audit labels', () => {
@@ -1345,7 +1466,7 @@ test('rendering covers all review collections with safe Admin-added, VOID, total
   assert.doesNotMatch(adminHtml, /\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML/u);
 });
 
-test('Staff Time records default to the latest seven New York calendar days and reveal fetched history newest first', () => {
+test('Staff Time records keep a seven-day priority view while bounded completed-shift pages replace newest first', () => {
   const data = reviewResponse();
   data.records = [
     {
@@ -1379,42 +1500,152 @@ test('Staff Time records default to the latest seven New York calendar days and 
     adjustmentTotal: 0
   };
 
-  const defaultNodes = renderStaffTimeRuntime(data);
+  const firstHistoryPage = completedHistoryPage({
+    total: 2,
+    items: [completedHistoryShift(950)],
+    nextOffset: 1
+  });
+  const defaultNodes = renderStaffTimeRuntime(data, { historyPage: firstHistoryPage });
   assert.equal(defaultNodes['#staffTimeRecords'].children.length, 2);
   assert.match(elementText(defaultNodes['#staffTimeRecords'].children[0]), /Aug 18/u);
   assert.match(elementText(defaultNodes['#staffTimeRecords'].children[1]), /Aug 12/u);
   assert.doesNotMatch(elementText(defaultNodes['#staffTimeRecords']), /Aug 11/u);
   assert.doesNotMatch(elementText(defaultNodes['#staffTimeRecords']), /Aug 19/u);
+  assert.equal(defaultNodes['#staffCompletedShiftHistory'].children.length, 1);
+  assert.match(elementText(defaultNodes['#staffCompletedShiftHistory']), /Aug 11/u);
   assert.equal(defaultNodes['#staffTimeOlderHistory'].hidden, false);
-  assert.equal(defaultNodes['#staffTimeOlderHistory'].textContent, 'Show older history');
-  assert.equal(defaultNodes['#staffTimeOlderHistory'].attributes['aria-expanded'], 'false');
-  assert.match(defaultNodes['#staffTimeHistoryScope'].textContent, /2026-08-12 through 2026-08-18, newest first/u);
-  assert.match(defaultNodes['#staffTimeHistoryScope'].textContent, /Items needing attention remain above/u);
-  assert.match(defaultNodes['#staffTimeHistoryScope'].textContent, /1 older punch is preserved/u);
+  assert.equal(defaultNodes['#staffTimeOlderHistory'].textContent, 'Load older completed shifts');
+  assert.match(defaultNodes['#staffTimeHistoryScope'].textContent, /Showing completed shifts 1–1 of 2, newest first/u);
 
-  const expandedNodes = renderStaffTimeRuntime(data, { showOlder: true });
-  assert.equal(expandedNodes['#staffTimeRecords'].children.length, 4);
-  assert.match(elementText(expandedNodes['#staffTimeRecords'].children[3]), /Aug 11/u);
-  assert.equal(expandedNodes['#staffTimeOlderHistory'].textContent, 'Hide older history');
-  assert.equal(expandedNodes['#staffTimeOlderHistory'].attributes['aria-expanded'], 'true');
+  const olderShift = completedHistoryShift(960, {
+    clockIn: {
+      ...completedHistoryShift(960).clockIn,
+      timestamp: '2026-07-01T09:00:00-04:00',
+      date: '2026-07-01'
+    },
+    clockOut: {
+      ...completedHistoryShift(960).clockOut,
+      timestamp: '2026-07-01T17:00:00-04:00',
+      date: '2026-07-01'
+    }
+  });
+  const olderNodes = renderStaffTimeRuntime(data, {
+    historyPage: completedHistoryPage({
+      offset: 1,
+      total: 2,
+      items: [olderShift],
+      nextOffset: null
+    })
+  });
+  assert.equal(olderNodes['#staffCompletedShiftHistory'].children.length, 1);
+  assert.match(elementText(olderNodes['#staffCompletedShiftHistory']), /Jul 1/u);
+  assert.doesNotMatch(elementText(olderNodes['#staffCompletedShiftHistory']), /Aug 11/u);
+  assert.equal(olderNodes['#staffTimeOlderHistory'].hidden, true);
+  assert.match(olderNodes['#staffTimeHistoryScope'].textContent, /Showing completed shifts 2–2 of 2, newest first/u);
   assert.equal(data.records.length, 4);
 
-  const toggleSource = sourceBetween(
+  const loadOlderSource = sourceBetween(
     adminHtml,
-    "$('#staffTimeOlderHistory').addEventListener('click'",
-    "$('#staffTimeRecords').addEventListener('input'"
+    'async function loadOlderStaffTimeHistory()',
+    'async function submitStaffCorrection('
   );
-  assert.match(toggleSource, /staffOlderHistoryExpanded = !staffOlderHistoryExpanded/u);
-  assert.match(toggleSource, /renderStaffTimeRecords\(currentStaffTime\)/u);
+  assert.match(loadOlderSource, /currentStaffHistoryPage\.nextOffset/u);
+  assert.match(loadOlderSource, /currentStaffHistoryPage = page/u);
+  assert.match(adminHtml, /\$\('#staffTimeOlderHistory'\)\.addEventListener\('click', loadOlderStaffTimeHistory\)/u);
+});
+
+test('one history page accepts and renders a legitimate mixed re-pair without attaching the former audit', async () => {
+  const { validStaffCompletedShift, validStaffTimeHistoryPageResponse } = validatorRuntime();
+  const baseShift = completedHistoryShift(970);
+  const mixedShift = {
+    ...baseShift,
+    clockIn: {
+      ...baseShift.clockIn,
+      timestamp: '2026-08-11T08:55:00-04:00',
+      originalTimestamp: baseShift.clockIn.timestamp,
+      originalDate: baseShift.clockIn.date,
+      adjustmentRequestId: REQUEST_ONE
+    },
+    latestAdjustment: null
+  };
+  assert.equal(validStaffCompletedShift(mixedShift), true);
+
+  const sharedWithoutAudit = structuredClone(mixedShift);
+  sharedWithoutAudit.clockOut.originalTimestamp = sharedWithoutAudit.clockOut.timestamp;
+  sharedWithoutAudit.clockOut.originalDate = sharedWithoutAudit.clockOut.date;
+  sharedWithoutAudit.clockOut.adjustmentRequestId = REQUEST_ONE;
+  assert.equal(validStaffCompletedShift(sharedWithoutAudit), false);
+
+  const adjusted = adjustedReviewResponse();
+  const completeAdjustedShift = {
+    clockIn: adjusted.records[0],
+    clockOut: adjusted.records[1],
+    latestAdjustment: adjusted.audit[0]
+  };
+  assert.equal(validStaffCompletedShift(completeAdjustedShift), true);
+  assert.equal(validStaffCompletedShift({
+    ...completeAdjustedShift,
+    latestAdjustment: {
+      ...completeAdjustedShift.latestAdjustment,
+      correctedClockOutAt: '2026-08-18T17:31:00-04:00'
+    }
+  }), false);
+
+  const page = completedHistoryPage({
+    total: 1,
+    items: [mixedShift]
+  });
+  assert.equal(validStaffTimeHistoryPageResponse(page, {
+    viewToken: VIEW_TOKEN,
+    offset: 0
+  }), true);
+
+  const initialReview = reviewResponse();
+  const { calls } = await runPagination(
+    reviewStartResponse(),
+    {
+      records: initialReview.records,
+      attention: initialReview.needsAttention,
+      audit: initialReview.audit
+    },
+    { historyPage: page }
+  );
+  assert.deepEqual(
+    calls.filter(call => call.operation === 'historyPage'),
+    [{ operation: 'historyPage', viewToken: VIEW_TOKEN, offset: 0 }]
+  );
+
+  const renderData = reviewResponse();
+  renderData.records = [];
+  const nodes = renderStaffTimeRuntime(renderData, { historyPage: page });
+  assert.equal(countElements(
+    nodes['#staffCompletedShiftHistory'],
+    element => element.className === 'staff-adjustment-form'
+  ), 1);
+  const historyText = elementText(nodes['#staffCompletedShiftHistory']);
+  assert.match(historyText, /Adjust punch/u);
+  assert.doesNotMatch(historyText, /Latest audit:/u);
 });
 
 test('completed shifts render one clear adjustment form plus original and corrected audit evidence', () => {
-  const nodes = renderStaffTimeRuntime(adjustedReviewResponse());
+  const data = adjustedReviewResponse();
+  const historyShift = {
+    clockIn: data.records[0],
+    clockOut: data.records[1],
+    latestAdjustment: data.audit[0]
+  };
+  data.records = [];
+  const nodes = renderStaffTimeRuntime(data, {
+    historyPage: completedHistoryPage({
+      total: 1,
+      items: [historyShift]
+    })
+  });
   assert.equal(countElements(
-    nodes['#staffTimeRecords'],
+    nodes['#staffCompletedShiftHistory'],
     element => element.className === 'staff-adjustment-form'
   ), 1);
-  const recordText = elementText(nodes['#staffTimeRecords']);
+  const recordText = elementText(nodes['#staffCompletedShiftHistory']);
   assert.match(recordText, /Adjust punch/u);
   assert.match(recordText, /Current clock-in \(before this change\)/u);
   assert.match(recordText, /Current clock-out \(before this change\)/u);
@@ -1562,6 +1793,8 @@ test('correction, adjustment, and VOID mutations require reasons, confirmation, 
     'function readStaffAdjustment(',
     'function setStaffFormWorking('
   );
+  assert.match(readAdjustmentSource, /currentStaffHistoryPage\?\.items\.find/u);
+  assert.match(readAdjustmentSource, /historyShift \|\| \(currentStaffTime/u);
   assert.match(readAdjustmentSource, /staffCompletedShiftByClockIn\(currentStaffTime\.records\)/u);
   assert.match(readAdjustmentSource, /staffId: completedShift\.clockIn\.staffId/u);
   assert.match(readAdjustmentSource, /staffName: completedShift\.clockIn\.staffName/u);
@@ -1611,9 +1844,12 @@ test('correction, adjustment, and VOID mutations require reasons, confirmation, 
 
   const adjustmentEvents = sourceBetween(
     adminHtml,
-    "$('#staffTimeRecords').addEventListener('click'",
-    "$('#staffTimeRecords').addEventListener('submit'"
+    "['#staffTimeRecords', '#staffCompletedShiftHistory'].forEach(selector => {",
+    "$('#reviewSection').addEventListener('click'"
   );
+  assert.match(adjustmentEvents, /\$\(selector\)\.addEventListener\('click'/u);
+  assert.match(adjustmentEvents, /\$\(selector\)\.addEventListener\('input'/u);
+  assert.match(adjustmentEvents, /\$\(selector\)\.addEventListener\('submit'/u);
   assert.match(adjustmentEvents, /data-staff-adjust-cancel/u);
   assert.match(adjustmentEvents, /clearStaffAdjustmentReview\(form\)/u);
   assert.match(adjustmentEvents, /Review canceled\. Edit the times or reason/u);

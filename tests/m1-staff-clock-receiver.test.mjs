@@ -10,6 +10,7 @@ import {
   sanitizeStaffTimeAdjustmentRequest,
   sanitizeStaffTimeAdjustmentResult,
   sanitizeStaffTimeCorrectionResult,
+  sanitizeStaffTimeHistoryPage,
   sanitizeStaffTimeReview,
   sanitizeStaffTimeVoidResult
 } from '../netlify/functions/_lib/m1-staff-clock-contracts.mjs';
@@ -18,6 +19,7 @@ const ROOT = new URL('../', import.meta.url);
 const read = relative => readFileSync(new URL(relative, ROOT), 'utf8');
 const codeSource = read('integrations/google-apps-script/Code.gs');
 const receiverSource = read('integrations/google-apps-script/GibM1Receiver.gs');
+const adminHtml = read('m1/admin/index.html').replace(/\r\n?/gu, '\n');
 
 const NOW_ISO = '2026-08-18T22:00:00.000Z';
 const EXPECTED_TITLE = 'RBJJ M1 \u2014 TEST';
@@ -62,6 +64,66 @@ const IDS = Object.freeze({
   adjustRequestTwo: 'gib-m1-staff-request-10000000-0000-4000-8000-000000000005',
   adjustRequestThree: 'gib-m1-staff-request-10000000-0000-4000-8000-000000000006'
 });
+
+function sourceBetween(source, start, end) {
+  const startIndex = source.indexOf(start);
+  const endIndex = source.indexOf(end, startIndex + start.length);
+  assert.notEqual(startIndex, -1, `Missing source marker: ${start}`);
+  assert.notEqual(endIndex, -1, `Missing source marker: ${end}`);
+  return source.slice(startIndex, endIndex);
+}
+
+function adminStaffTimeReviewValidator() {
+  const functions = sourceBetween(
+    adminHtml,
+    'function validStaffId(',
+    'function validDiagnosticIssueResponse('
+  );
+  const context = vm.createContext({ Date, Object, Set, Map, JSON, TextEncoder });
+  new vm.Script(`
+    const STAFF_PUNCH_ID_PATTERN = /^gib-m1-staff-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    const STAFF_REQUEST_ID_PATTERN = /^gib-m1-staff-request-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    const STAFF_TIMESTAMP_PATTERN = /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}-(?:04|05):00$/;
+    const STAFF_TIME_VIEW_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+    const STAFF_TIME_PAGE_LIMIT = 500;
+    const STAFF_TIME_PAGE_MAX_BYTES = 200_000;
+    const STAFF_TIME_RECORD_LIMIT = 500;
+    const STAFF_TIME_ATTENTION_LIMIT = 600;
+    const STAFF_TIME_AUDIT_LIMIT = 500;
+    const SITE = 'Rev';
+    let testMode = true;
+    let currentAdminName = 'Andrew Smith';
+    function clean(value) {
+      return String(value == null ? '' : value).normalize('NFKC').trim().replace(/\\s+/g, ' ');
+    }
+    function isObject(value) {
+      return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+    }
+    function exactObjectKeys(value, expectedKeys) {
+      if (!isObject(value)) return false;
+      const actual = Object.keys(value).sort();
+      const expected = [...expectedKeys].sort();
+      return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+    }
+    function validReviewDate(value) {
+      if (typeof value !== 'string' || !/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return false;
+      const [year, month, day] = value.split('-').map(Number);
+      const parsed = new Date(Date.UTC(year, month - 1, day));
+      return parsed.getUTCFullYear() === year
+        && parsed.getUTCMonth() === month - 1
+        && parsed.getUTCDate() === day;
+    }
+    function shiftDate(dateString, days) {
+      const [year, month, day] = dateString.split('-').map(Number);
+      return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+    }
+    ${functions}
+    globalThis.validate = validStaffTimeReviewResponse;
+  `, { filename: 'staff-time-atomic-admin-validator.js' }).runInContext(context);
+  return value => context.validate(value);
+}
+
+const validateAdminStaffTimeReview = adminStaffTimeReviewValidator();
 
 function makeSheet(initialRows = []) {
   const values = initialRows.map(row => [...row]);
@@ -223,10 +285,84 @@ function ordinaryPeriodTimeRows({ count, startIndex, date, staffId, staffName })
   });
 }
 
+function interleavedAdjustedPairFixture() {
+  const date = '2026-08-18';
+  const pairCounts = [84, 84, 83];
+  const pairs = [];
+  const timestampAt = seconds => {
+    const hour = String(Math.floor(seconds / 3600)).padStart(2, '0');
+    const minute = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
+    const second = String(seconds % 60).padStart(2, '0');
+    return `${date}T${hour}:${minute}:${second}-04:00`;
+  };
+
+  for (let round = 0; round < Math.max(...pairCounts); round += 1) {
+    STAFF_ROWS.forEach(([staffId, staffName], staffIndex) => {
+      if (round >= pairCounts[staffIndex]) return;
+      const pairIndex = pairs.length;
+      const originalInSeconds = (5 * 60 * 60) + (round * 60) + staffIndex;
+      const originalOutSeconds = originalInSeconds + 20;
+      const clockInPunchId = generatedPunchId(90_000 + pairIndex * 2);
+      const clockOutPunchId = generatedPunchId(90_001 + pairIndex * 2);
+      const requestId = generatedRequestId(90_000 + pairIndex);
+      const originalClockInAt = timestampAt(originalInSeconds);
+      const originalClockOutAt = timestampAt(originalOutSeconds);
+      const correctedClockInAt = timestampAt(originalInSeconds + 5);
+      const correctedClockOutAt = timestampAt(originalOutSeconds + 5);
+      pairs.push({
+        requestId,
+        staffId,
+        staffName,
+        clockInPunchId,
+        clockOutPunchId,
+        originalClockInAt,
+        originalClockOutAt,
+        correctedClockInAt,
+        correctedClockOutAt
+      });
+    });
+  }
+
+  const timeRows = pairs.flatMap(pair => [
+    timeRow({
+      punchId: pair.clockInPunchId,
+      timestamp: pair.originalClockInAt,
+      staffId: pair.staffId,
+      staffName: pair.staffName,
+      action: 'clockIn'
+    }),
+    timeRow({
+      punchId: pair.clockOutPunchId,
+      timestamp: pair.originalClockOutAt,
+      staffId: pair.staffId,
+      staffName: pair.staffName,
+      action: 'clockOut'
+    })
+  ]).sort((left, right) => Date.parse(left[1]) - Date.parse(right[1]));
+  const adjustmentRows = pairs.map((pair, index) => [
+    pair.requestId,
+    timestampAt((15 * 60 * 60) + index),
+    'Andrew Smith',
+    pair.staffId,
+    pair.staffName,
+    pair.clockInPunchId,
+    pair.clockOutPunchId,
+    pair.originalClockInAt,
+    pair.originalClockOutAt,
+    pair.correctedClockInAt,
+    pair.correctedClockOutAt,
+    'both',
+    'Correct interleaved TEST shift',
+    'adjusted'
+  ]);
+  return { pairs, pairCounts, timeRows, adjustmentRows };
+}
+
 function createHarness({
   staffRows = STAFF_ROWS,
   timeRows = [],
   auditRows = [],
+  adjustmentRows = null,
   includeStaffSheets = true,
   lockAvailable = true,
   nowIso = NOW_ISO
@@ -251,6 +387,9 @@ function createHarness({
     sheets.set('Staff Clock Staff', makeSheet([STAFF_HEADERS, ...staffRows]));
     sheets.set('Staff Time', makeSheet([TIME_HEADERS, ...timeRows]));
     sheets.set('Staff Time Audit', makeSheet([AUDIT_HEADERS, ...auditRows]));
+    if (Array.isArray(adjustmentRows)) {
+      sheets.set('Staff Time Adjustments', makeSheet([ADJUSTMENT_HEADERS, ...adjustmentRows]));
+    }
   }
   const spreadsheet = {
     getId: () => 'unit-test-spreadsheet-id',
@@ -401,6 +540,43 @@ function readPagedStaffView(harness, { admin = false } = {}) {
     pageByteLengths[stream] = byteLengths;
   }
   return { initial, streams, pageSizes, pageByteLengths };
+}
+
+function readStaffHistoryPage(harness, viewToken, offset) {
+  const expected = { viewToken, offset };
+  const raw = harness.post(adminBody('staffTimeHistoryPageV2', expected));
+  const page = sanitizeStaffTimeHistoryPage(raw, 'test', expected, {
+    now: new Date(NOW_ISO)
+  });
+  assert.ok(page, `staffTimeHistoryPageV2 returns a strict page at ${offset}`);
+  return { raw, page };
+}
+
+function assembledAdminStaffTimeReview(paged) {
+  const records = paged.streams.records;
+  return {
+    ok: true,
+    test: true,
+    adminName: 'Andrew Smith',
+    staff: paged.initial.staff,
+    records,
+    clockedInNow: paged.initial.clockedInNow,
+    todayPunches: records
+      .filter(record => record.date === paged.initial.view.today)
+      .map(record => ({
+        punchId: record.punchId,
+        staffId: record.staffId,
+        staffName: record.staffName,
+        punchAction: record.punchAction,
+        timestamp: record.timestamp,
+        source: record.source,
+        status: record.status
+      })),
+    needsAttention: paged.streams.attention,
+    periods: paged.initial.periods,
+    audit: paged.streams.audit,
+    view: paged.initial.view
+  };
 }
 
 function punch({
@@ -878,6 +1054,125 @@ test('adjusting clock-in, clock-out, or both preserves raw punches and drives cr
     kioskView.streams.records.find(record => record.punchId === IDS.in).timestamp,
     '2026-08-17T23:15:00-04:00'
   );
+});
+
+test('an adjusted punch can be safely re-paired after its former partner is voided', () => {
+  const replacementClockOutId = generatedPunchId(130_000);
+  const firstAdjustmentId = generatedRequestId(130_001);
+  const voidRequestId = generatedRequestId(130_002);
+  const replacementRequestId = generatedRequestId(130_003);
+  const secondAdjustmentId = generatedRequestId(130_004);
+  const harness = createHarness({
+    timeRows: [
+      timeRow({ timestamp: '2026-08-18T09:00:00-04:00' }),
+      timeRow({
+        punchId: IDS.out,
+        timestamp: '2026-08-18T10:00:00-04:00',
+        action: 'clockOut'
+      })
+    ]
+  });
+
+  assert.equal(harness.post(adjustment({
+    requestId: firstAdjustmentId,
+    originalClockInAt: '2026-08-18T09:00:00-04:00',
+    originalClockOutAt: '2026-08-18T10:00:00-04:00',
+    correctedClockInAt: '2026-08-18T08:55:00-04:00',
+    correctedClockOutAt: '2026-08-18T10:00:00-04:00',
+    reason: 'Correct first TEST pair'
+  })).result, 'adjusted');
+  assert.equal(harness.post(adminBody('staffTimeVoid', {
+    requestId: voidRequestId,
+    punchId: IDS.out,
+    reason: 'Replace TEST clock out'
+  })).result, 'voided');
+  assert.equal(harness.post(correction({
+    requestId: replacementRequestId,
+    punchId: replacementClockOutId,
+    timestamp: '2026-08-18T10:15:00-04:00',
+    date: '2026-08-18',
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test',
+    punchAction: 'clockOut',
+    reason: 'Add replacement TEST clock out'
+  })).result, 'added');
+
+  const mixedReview = readPagedStaffView(harness, { admin: true });
+  const mixedHistory = readStaffHistoryPage(
+    harness,
+    mixedReview.initial.view.token,
+    0
+  );
+  const mixedPair = mixedHistory.page.items.find(shift => (
+    shift.clockIn.punchId === IDS.in
+    && shift.clockOut.punchId === replacementClockOutId
+  ));
+  assert.ok(mixedPair, 'the legitimate re-pair remains reachable through completed-shift history');
+  assert.equal(mixedPair.clockIn.adjustmentRequestId, firstAdjustmentId);
+  assert.equal(Object.hasOwn(mixedPair.clockOut, 'adjustmentRequestId'), false);
+  assert.equal(
+    mixedPair.latestAdjustment,
+    null,
+    'an audit for the former partner is not misrepresented as evidence for the replacement pair'
+  );
+
+  assert.equal(harness.post(adjustment({
+    requestId: secondAdjustmentId,
+    clockOutPunchId: replacementClockOutId,
+    originalClockInAt: mixedPair.clockIn.timestamp,
+    originalClockOutAt: mixedPair.clockOut.timestamp,
+    correctedClockInAt: '2026-08-18T08:50:00-04:00',
+    correctedClockOutAt: '2026-08-18T10:20:00-04:00',
+    reason: 'Correct replacement TEST pair'
+  })).result, 'adjusted');
+
+  const kiosk = readPagedStaffView(harness);
+  const admin = readPagedStaffView(harness, { admin: true });
+  const expectedPunchIds = [IDS.in, IDS.out, replacementClockOutId].sort();
+  assert.deepEqual(
+    kiosk.streams.records.map(record => record.punchId).sort(),
+    expectedPunchIds,
+    'the full adjustment-pair chain remains readable and selected atomically'
+  );
+  assert.deepEqual(
+    admin.streams.records.map(record => record.punchId).sort(),
+    expectedPunchIds
+  );
+  assert.equal(kiosk.initial.view.recordCount, 3);
+  assert.equal(kiosk.initial.view.recordTotal, 3);
+  assert.equal(kiosk.initial.view.recordsTruncated, false);
+
+  const recordsById = Object.fromEntries(
+    admin.streams.records.map(record => [record.punchId, record])
+  );
+  assert.equal(recordsById[IDS.in].adjustmentRequestId, secondAdjustmentId);
+  assert.equal(recordsById[IDS.out].adjustmentRequestId, firstAdjustmentId);
+  assert.equal(recordsById[replacementClockOutId].adjustmentRequestId, secondAdjustmentId);
+  const adjustmentAudit = admin.streams.audit.filter(record => record.operation === 'adjust');
+  assert.deepEqual(
+    adjustmentAudit.map(record => record.requestId).sort(),
+    [firstAdjustmentId, secondAdjustmentId].sort()
+  );
+  assert.ok(adjustmentAudit.every(record => (
+    recordsById[record.clockInPunchId] && recordsById[record.clockOutPunchId]
+  )));
+  assert.equal(validateAdminStaffTimeReview(assembledAdminStaffTimeReview(admin)), true);
+
+  const repairedHistory = readStaffHistoryPage(
+    harness,
+    admin.initial.view.token,
+    0
+  );
+  const repairedPair = repairedHistory.page.items.find(shift => (
+    shift.clockIn.punchId === IDS.in
+    && shift.clockOut.punchId === replacementClockOutId
+  ));
+  assert.ok(repairedPair);
+  assert.equal(repairedPair.clockIn.adjustmentRequestId, secondAdjustmentId);
+  assert.equal(repairedPair.clockOut.adjustmentRequestId, secondAdjustmentId);
+  assert.equal(repairedPair.latestAdjustment.requestId, secondAdjustmentId);
+  assert.equal(repairedPair.latestAdjustment.clockInPunchId, IDS.in);
+  assert.equal(repairedPair.latestAdjustment.clockOutPunchId, replacementClockOutId);
 });
 
 test('an exact adjustment retry is idempotent while changed payloads and stale preimages conflict', () => {
@@ -1461,6 +1756,293 @@ test('maximum-length Unicode records stay under the receiver byte ceiling across
   );
   assert.deepEqual(harness.sheets.get('Staff Time').values, before);
   assert.deepEqual(harness.sheets.get('Staff Time').operations, []);
+});
+
+test('Admin completed-shift history is bounded, paired, read-only, pageable, and stale-safe', () => {
+  const yesterdayRows = ordinaryPeriodTimeRows({
+    count: 1200,
+    startIndex: 110_000,
+    date: '2026-08-17',
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test'
+  });
+  const olderClockIn = timeRow({
+    punchId: generatedPunchId(120_000),
+    timestamp: '2026-07-01T09:00:00-04:00',
+    action: 'clockIn'
+  });
+  const olderClockOut = timeRow({
+    punchId: generatedPunchId(120_001),
+    timestamp: '2026-07-01T10:00:00-04:00',
+    action: 'clockOut'
+  });
+  const olderAdjustmentRequestId = generatedRequestId(120_010);
+  const harness = createHarness({
+    timeRows: [olderClockIn, olderClockOut, ...yesterdayRows],
+    adjustmentRows: [[
+      olderAdjustmentRequestId,
+      '2026-08-18T18:00:00-04:00',
+      'Andrew Smith',
+      'mandy-test',
+      'Mandy Test',
+      olderClockIn[0],
+      olderClockOut[0],
+      '2026-07-01T09:00:00-04:00',
+      '2026-07-01T10:00:00-04:00',
+      '2026-07-01T08:55:00-04:00',
+      '2026-07-01T10:00:00-04:00',
+      'clockIn',
+      'Correct retained TEST shift start',
+      'adjusted'
+    ]]
+  });
+  const originalSheets = new Map(
+    [...harness.sheets].map(([name, sheet]) => [name, structuredClone(sheet.values)])
+  );
+
+  const review = readPagedStaffView(harness, { admin: true });
+  assert.equal(review.initial.view.recordCount, 0, 'ordinary prior-day punches stay out of the priority projection');
+  const historyManifest = JSON.parse(harness.cacheValues.get(
+    `gib-m1-staff-v2-manifest-${review.initial.view.token}`
+  ));
+  assert.deepEqual(
+    Object.keys(historyManifest.history).sort(),
+    ['digest', 'total'],
+    'the manifest binds only bounded history metadata'
+  );
+  assert.equal(historyManifest.history.total, 601);
+  assert.match(historyManifest.history.digest, /^[a-f0-9]{64}$/);
+  const timeReadsAfterReview = harness.sheets.get('Staff Time').dataRangeReads;
+  const adjustmentReadsAfterReview = harness.sheets.get('Staff Time Adjustments').dataRangeReads;
+  const first = readStaffHistoryPage(harness, review.initial.view.token, 0);
+  assert.equal(first.page.total, 601);
+  assert.ok(first.page.items.length > 0 && first.page.items.length <= 50);
+  assert.ok(Buffer.byteLength(JSON.stringify(first.raw), 'utf8') <= 79_000);
+  assert.notEqual(first.page.nextOffset, null, 'the older retained shift requires a later bounded page');
+  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, timeReadsAfterReview);
+  assert.equal(
+    harness.sheets.get('Staff Time Adjustments').dataRangeReads,
+    adjustmentReadsAfterReview
+  );
+  assert.ok(first.page.items.every(shift => (
+    shift.clockIn.punchAction === 'clockIn'
+    && shift.clockOut.punchAction === 'clockOut'
+    && shift.clockIn.staffId === shift.clockOut.staffId
+    && Date.parse(shift.clockIn.timestamp) < Date.parse(shift.clockOut.timestamp)
+  )));
+  assert.ok(first.page.items.every(shift => shift.clockIn.date === '2026-08-17'));
+
+  let later = first;
+  let historyPageCount = 1;
+  while (later.page.nextOffset !== null) {
+    later = readStaffHistoryPage(harness, review.initial.view.token, later.page.nextOffset);
+    historyPageCount += 1;
+    assert.ok(Buffer.byteLength(JSON.stringify(later.raw), 'utf8') <= 79_000);
+    assert.equal(harness.sheets.get('Staff Time').dataRangeReads, timeReadsAfterReview);
+    assert.equal(
+      harness.sheets.get('Staff Time Adjustments').dataRangeReads,
+      adjustmentReadsAfterReview
+    );
+  }
+  assert.ok(historyPageCount > 10, 'the large retained fixture spans many immutable pages');
+  assert.equal(later.page.items.length, 1);
+  assert.equal(later.page.items[0].clockIn.punchId, olderClockIn[0]);
+  assert.equal(later.page.items[0].clockOut.punchId, olderClockOut[0]);
+  assert.equal(later.page.items[0].clockIn.timestamp, '2026-07-01T08:55:00-04:00');
+  assert.equal(later.page.items[0].clockIn.originalTimestamp, '2026-07-01T09:00:00-04:00');
+  assert.equal(later.page.items[0].latestAdjustment.requestId, olderAdjustmentRequestId);
+  assert.equal(later.page.nextOffset, null);
+
+  for (const [name, before] of originalSheets) {
+    assert.deepEqual(harness.sheets.get(name).values, before, `${name} remains read-only`);
+    assert.deepEqual(harness.sheets.get(name).operations, [], `${name} receives no write operations`);
+  }
+
+  assert.deepEqual(
+    harness.post(adminBody('staffTimeHistoryPageV2', {
+      viewToken: review.initial.view.token,
+      offset: -1
+    })),
+    { ok: false, target: 'test', result: 'rejected' }
+  );
+
+  harness.cacheValues.delete(
+    `gib-m1-staff-v2-history-${review.initial.view.token}-${first.page.nextOffset}`
+  );
+  assert.deepEqual(
+    harness.post(adminBody('staffTimeHistoryPageV2', {
+      viewToken: review.initial.view.token,
+      offset: first.page.nextOffset
+    })),
+    { ok: false, target: 'test', result: 'stale' }
+  );
+  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, timeReadsAfterReview);
+  assert.equal(
+    harness.sheets.get('Staff Time Adjustments').dataRangeReads,
+    adjustmentReadsAfterReview
+  );
+
+  const rebuilt = readPagedStaffView(harness, { admin: true });
+
+  harness.sheets.get('Staff Time').values.push(
+    timeRow({
+      punchId: generatedPunchId(120_002),
+      timestamp: '2026-08-18T20:00:00-04:00',
+      action: 'clockIn'
+    }),
+    timeRow({
+      punchId: generatedPunchId(120_003),
+      timestamp: '2026-08-18T21:00:00-04:00',
+      action: 'clockOut'
+    })
+  );
+  assert.deepEqual(
+    harness.post(adminBody('staffTimeHistoryPageV2', {
+      viewToken: rebuilt.initial.view.token,
+      offset: 0
+    })),
+    {
+      ok: false,
+      target: 'test',
+      result: 'stale'
+    }
+  );
+});
+
+test('empty completed-shift history caches one strict page and malformed cache is stale without sheet rereads', () => {
+  const harness = createHarness();
+  const review = readPagedStaffView(harness, { admin: true });
+  const timeReadsAfterReview = harness.sheets.get('Staff Time').dataRangeReads;
+  const empty = readStaffHistoryPage(harness, review.initial.view.token, 0);
+  assert.deepEqual(empty.page.items, []);
+  assert.equal(empty.page.total, 0);
+  assert.equal(empty.page.nextOffset, null);
+  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, timeReadsAfterReview);
+
+  harness.cacheValues.set(
+    `gib-m1-staff-v2-history-${review.initial.view.token}-0`,
+    JSON.stringify({ ok: true, target: 'test' })
+  );
+  assert.deepEqual(
+    harness.post(adminBody('staffTimeHistoryPageV2', {
+      viewToken: review.initial.view.token,
+      offset: 0
+    })),
+    { ok: false, target: 'test', result: 'stale' }
+  );
+  assert.equal(harness.sheets.get('Staff Time').dataRangeReads, timeReadsAfterReview);
+});
+
+test('500-record projection keeps interleaved adjusted pairs atomic for kiosk and Admin views', () => {
+  const fixture = interleavedAdjustedPairFixture();
+  assert.equal(fixture.pairs.length, 251);
+  assert.equal(fixture.timeRows.length, 502);
+  assert.deepEqual(fixture.pairCounts, [84, 84, 83]);
+  const harness = createHarness({
+    timeRows: fixture.timeRows,
+    adjustmentRows: fixture.adjustmentRows
+  });
+  const before = new Map([...harness.sheets].map(([name, sheet]) => (
+    [name, structuredClone(sheet.values)]
+  )));
+
+  const kiosk = readPagedStaffView(harness);
+  assert.equal(kiosk.initial.view.recordCount, 500);
+  assert.equal(kiosk.initial.view.recordTotal, 502);
+  assert.equal(kiosk.initial.view.todayPunchCount, 500);
+  assert.equal(kiosk.initial.view.todayPunchTotal, 502);
+  assert.equal(kiosk.initial.view.adjustmentCount, 500);
+  assert.equal(kiosk.initial.view.adjustmentTotal, 502);
+  assert.equal(kiosk.initial.view.recordsTruncated, true);
+  assert.equal(kiosk.initial.view.auditCount, 0);
+  assert.equal(kiosk.initial.view.auditTotal, 0);
+  assert.equal(kiosk.initial.view.auditTruncated, false);
+  assert.equal(kiosk.pageSizes.records.reduce((sum, size) => sum + size, 0), 500);
+  assert.ok(kiosk.pageSizes.records.length > 1);
+  assert.ok(kiosk.pageSizes.records.every(size => size > 0 && size <= 500));
+  assert.ok(kiosk.pageByteLengths.records.every(size => size <= 80_000));
+  assert.deepEqual(kiosk.streams.attention, []);
+  assert.deepEqual(
+    kiosk.initial.periods.current.totals.map(total => [
+      total.staffId,
+      total.completedShifts,
+      total.totalSeconds,
+      total.needsAttention
+    ]),
+    [
+      ['mandy-test', 84, 1_680, false],
+      ['front-desk-test-two', 84, 1_680, false],
+      ['front-desk-test-three', 83, 1_660, false]
+    ],
+    'full-history totals stay authoritative outside the bounded record projection'
+  );
+
+  const selectedByRequest = new Map();
+  for (const record of kiosk.streams.records) {
+    assert.ok(record.adjustmentRequestId, 'every fixture record carries adjustment evidence');
+    if (!selectedByRequest.has(record.adjustmentRequestId)) {
+      selectedByRequest.set(record.adjustmentRequestId, []);
+    }
+    selectedByRequest.get(record.adjustmentRequestId).push(record);
+  }
+  assert.equal(selectedByRequest.size, 250);
+  for (const records of selectedByRequest.values()) {
+    assert.equal(records.length, 2, 'a selected adjustment contains both linked punches');
+    assert.deepEqual(
+      records.map(record => record.punchAction).sort(),
+      ['clockIn', 'clockOut']
+    );
+    assert.equal(new Set(records.map(record => record.staffId)).size, 1);
+  }
+  const kioskIds = new Set(kiosk.streams.records.map(record => record.punchId));
+  const omittedPairs = fixture.pairs.filter(pair => (
+    !kioskIds.has(pair.clockInPunchId) || !kioskIds.has(pair.clockOutPunchId)
+  ));
+  assert.equal(omittedPairs.length, 1);
+  assert.equal(kioskIds.has(omittedPairs[0].clockInPunchId), false);
+  assert.equal(kioskIds.has(omittedPairs[0].clockOutPunchId), false);
+
+  const admin = readPagedStaffView(harness, { admin: true });
+  assert.deepEqual(
+    admin.streams.records.map(record => record.punchId),
+    kiosk.streams.records.map(record => record.punchId),
+    'Admin and kiosk read the same complete bounded record projection'
+  );
+  assert.equal(admin.initial.view.recordCount, 500);
+  assert.equal(admin.initial.view.recordTotal, 502);
+  assert.equal(admin.initial.view.adjustmentCount, 500);
+  assert.equal(admin.initial.view.adjustmentTotal, 502);
+  assert.equal(admin.initial.view.auditCount, 250);
+  assert.equal(admin.initial.view.auditTotal, 251);
+  assert.equal(admin.initial.view.auditTruncated, true);
+  assert.equal(admin.pageSizes.records.reduce((sum, size) => sum + size, 0), 500);
+  assert.equal(admin.pageSizes.audit.reduce((sum, size) => sum + size, 0), 250);
+  assert.ok(admin.pageSizes.records.every(size => size > 0 && size <= 500));
+  assert.ok(admin.pageSizes.audit.every(size => size > 0 && size <= 500));
+  assert.ok(admin.pageByteLengths.records.every(size => size <= 80_000));
+  assert.ok(admin.pageByteLengths.audit.every(size => size <= 80_000));
+
+  const auditRequests = new Set();
+  for (const audit of admin.streams.audit) {
+    assert.equal(audit.operation, 'adjust');
+    assert.ok(kioskIds.has(audit.clockInPunchId));
+    assert.ok(kioskIds.has(audit.clockOutPunchId));
+    assert.ok(selectedByRequest.has(audit.requestId));
+    assert.equal(auditRequests.has(audit.requestId), false);
+    auditRequests.add(audit.requestId);
+  }
+  assert.equal(auditRequests.size, selectedByRequest.size);
+  assert.equal(auditRequests.has(omittedPairs[0].requestId), false);
+  assert.equal(
+    validateAdminStaffTimeReview(assembledAdminStaffTimeReview(admin)),
+    true,
+    'the browser Admin cross-stream validator accepts the complete projection'
+  );
+
+  for (const [name, sheet] of harness.sheets) {
+    assert.deepEqual(sheet.values, before.get(name), `${name} remains byte-for-byte equivalent`);
+    assert.deepEqual(sheet.operations, [], `${name} receives no write operation`);
+  }
 });
 
 test('Admin audit projection keeps only cross-linked included records when more than 500 adjustments reorder', () => {

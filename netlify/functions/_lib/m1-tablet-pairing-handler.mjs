@@ -94,6 +94,29 @@ function expiredResponse() {
   }), clearPairingPendingCookieHeader());
 }
 
+function rejectedResponse() {
+  return withCookie(jsonResponse(409, {
+    ok: false,
+    result: 'rejected',
+    message: 'Pairing request was rejected by an Admin.'
+  }), clearPairingPendingCookieHeader());
+}
+
+function cancelledResponse() {
+  return withCookie(jsonResponse(409, {
+    ok: false,
+    result: 'cancelled',
+    message: 'Pairing request was cancelled on this tablet.'
+  }), clearPairingPendingCookieHeader());
+}
+
+function cancelledSuccessResponse() {
+  return withCookie(jsonResponse(200, {
+    ok: true,
+    result: 'cancelled'
+  }), clearPairingPendingCookieHeader());
+}
+
 async function readPendingState(request, runtime, profile, store, now) {
   const rawToken = cookieValue(request, TABLET_PAIRING_PENDING_COOKIE);
   if (!rawToken) return Object.freeze({ kind: 'missing' });
@@ -237,6 +260,63 @@ async function authorizedResponseAfterConsume(request, pendingState, runtime, pr
   }), clearPairingPendingCookieHeader());
 }
 
+async function cancelPairing(request, pendingState, runtime, profile, store, now) {
+  if (pendingState.kind === 'missing') return unauthorizedResponse();
+  if (pendingState.kind !== 'found') {
+    return withCookie(jsonResponse(403, {
+      ok: false,
+      message: 'Tablet pairing request was not accepted.'
+    }), clearPairingPendingCookieHeader());
+  }
+  if (pendingState.record.status === 'rejected') return rejectedResponse();
+  if (pendingState.record.status === 'cancelled') return cancelledSuccessResponse();
+
+  const currentSeconds = Math.floor(now / 1_000);
+  if (
+    pendingState.record.status === 'pending'
+    && pendingState.record.approvalExpiresAt <= currentSeconds
+  ) return expiredResponse();
+  if (['approved', 'consumed'].includes(pendingState.record.status)) {
+    return pollPairing(request, pendingState, runtime, profile, store, now);
+  }
+  if (pendingState.record.status !== 'pending') return unavailableResponse();
+
+  const cancelled = {
+    ...pendingState.record,
+    status: 'cancelled'
+  };
+  if (!validPairingRequestRecord(cancelled, profile)) return unavailableResponse();
+  const updated = await updatePairingBlob(
+    store,
+    pendingState.requestKey,
+    cancelled,
+    pendingState.etag
+  );
+  if (updated) return cancelledSuccessResponse();
+
+  const latest = await readPairingBlob(store, pendingState.requestKey);
+  if (
+    !latest
+    || !validPairingRequestRecord(latest.value, profile)
+    || latest.value.requestIdHash !== pendingState.requestKey.split('/').at(-1)
+    || latest.value.codeHash !== pendingState.record.codeHash
+  ) return unavailableResponse();
+  if (latest.value.status === 'cancelled') return cancelledSuccessResponse();
+  if (latest.value.status === 'rejected') return rejectedResponse();
+  if (
+    latest.value.status === 'pending'
+    && latest.value.approvalExpiresAt <= currentSeconds
+  ) return expiredResponse();
+  if (['approved', 'consumed'].includes(latest.value.status)) {
+    return pollPairing(request, Object.freeze({
+      ...pendingState,
+      record: latest.value,
+      etag: latest.etag
+    }), runtime, profile, store, now);
+  }
+  return unavailableResponse();
+}
+
 async function pollPairing(request, pendingState, runtime, profile, store, now) {
   if (pendingState.kind === 'missing') return unauthorizedResponse();
   if (pendingState.kind !== 'found') {
@@ -245,6 +325,9 @@ async function pollPairing(request, pendingState, runtime, profile, store, now) 
       message: 'Tablet pairing request was not accepted.'
     }), clearPairingPendingCookieHeader());
   }
+
+  if (pendingState.record.status === 'rejected') return rejectedResponse();
+  if (pendingState.record.status === 'cancelled') return cancelledResponse();
 
   const currentSeconds = Math.floor(now / 1_000);
   const stateExpiresAt = pendingState.record.status === 'pending'
@@ -284,6 +367,7 @@ async function pollPairing(request, pendingState, runtime, profile, store, now) 
   return jsonResponse(200, {
     ok: true,
     result: 'approved',
+    expiresAt: isoTimestamp(pendingState.record.approvalExpiresAt),
     deliveryExpiresAt: isoTimestamp(pendingState.record.deliveryExpiresAt)
   }, {
     'Set-Cookie': productionDeviceCookieHeader(credential)
@@ -296,7 +380,7 @@ export async function handleTabletPairingOperation(
   path,
   dependencies = {}
 ) {
-  if (!['start', 'poll'].includes(expectedOperation)) return notFoundResponse();
+  if (!['start', 'poll', 'cancel'].includes(expectedOperation)) return notFoundResponse();
   const profile = staffClockPairingProfile(
     dependencies.installationId,
     dependencies.environment,
@@ -347,6 +431,13 @@ export async function handleTabletPairingOperation(
   if (expectedOperation === 'poll') {
     try {
       return await pollPairing(request, pendingState, runtime, profile, store, now);
+    } catch {
+      return unavailableResponse();
+    }
+  }
+  if (expectedOperation === 'cancel') {
+    try {
+      return await cancelPairing(request, pendingState, runtime, profile, store, now);
     } catch {
       return unavailableResponse();
     }

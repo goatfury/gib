@@ -14,6 +14,7 @@ import {
   PRODUCTION_ORIGIN
 } from '../netlify/functions/_lib/m1-production-runtime.mjs';
 import {
+  MAX_STAFF_CLOCK_HISTORY_SHIFTS,
   MAX_STAFF_CLOCK_PAGE_ITEMS,
   STAFF_PUNCH_ID_PATTERN,
   STAFF_REQUEST_ID_PATTERN,
@@ -22,6 +23,8 @@ import {
   sanitizeStaffTimeAdjustmentRequest,
   sanitizeStaffTimeAdjustmentResult,
   sanitizeStaffTimeCorrectionRequest,
+  sanitizeStaffTimeHistoryPage,
+  sanitizeStaffTimeHistoryPageRequest,
   sanitizeStaffTimeReview,
   sanitizeStaffViewPage,
   sanitizeStaffViewPageRequest,
@@ -425,6 +428,36 @@ function viewPage(target = 'test', stream = 'records', overrides = {}) {
   };
 }
 
+function historyShift(overrides = {}) {
+  return {
+    clockIn: publicRecord({
+      timestamp: '2026-08-17T09:00:00-04:00',
+      date: '2026-08-17'
+    }),
+    clockOut: publicRecord({
+      punchId: SECOND_PUNCH_ID,
+      timestamp: '2026-08-17T17:00:00-04:00',
+      date: '2026-08-17',
+      punchAction: 'clockOut'
+    }),
+    latestAdjustment: null,
+    ...overrides
+  };
+}
+
+function historyPage(overrides = {}) {
+  return {
+    ok: true,
+    target: 'test',
+    viewToken: VIEW_TOKEN,
+    offset: 0,
+    total: 1,
+    items: [historyShift()],
+    nextOffset: null,
+    ...overrides
+  };
+}
+
 function productionDeviceCookie(credential = PRODUCTION_DEVICE_CREDENTIAL) {
   return `${PRODUCTION_DEVICE_COOKIE}=${encodeURIComponent(credential)}`;
 }
@@ -570,6 +603,123 @@ test('initial Staff Clock summary and paginated view contracts require exact fie
     adminAuditRequest,
     { now: NOW }
   ), null);
+});
+
+test('completed-shift history contracts require bounded complete pairs and exact paging', () => {
+  const request = sanitizeStaffTimeHistoryPageRequest({
+    operation: 'historyPage',
+    viewToken: VIEW_TOKEN,
+    offset: 0
+  });
+  assert.deepEqual(request, {
+    operation: 'historyPage',
+    viewToken: VIEW_TOKEN,
+    offset: 0
+  });
+  assert.ok(sanitizeStaffTimeHistoryPage(historyPage(), 'test', request, { now: NOW }));
+
+  const baseShift = historyShift();
+  const mixedShift = historyShift({
+    clockIn: {
+      ...baseShift.clockIn,
+      timestamp: '2026-08-17T08:55:00-04:00',
+      originalTimestamp: baseShift.clockIn.timestamp,
+      originalDate: baseShift.clockIn.date,
+      adjustmentRequestId: REQUEST_ID
+    }
+  });
+  assert.ok(sanitizeStaffTimeHistoryPage(historyPage({
+    items: [mixedShift]
+  }), 'test', request, { now: NOW }), 'a mixed legitimate re-pair is readable without a mislinked audit');
+
+  const sharedWithoutAudit = structuredClone(mixedShift);
+  sharedWithoutAudit.clockOut.originalTimestamp = sharedWithoutAudit.clockOut.timestamp;
+  sharedWithoutAudit.clockOut.originalDate = sharedWithoutAudit.clockOut.date;
+  sharedWithoutAudit.clockOut.adjustmentRequestId = REQUEST_ID;
+  assert.equal(sanitizeStaffTimeHistoryPage(historyPage({
+    items: [sharedWithoutAudit]
+  }), 'test', request, { now: NOW }), null, 'a shared adjustment ID requires its exact linked audit');
+
+  const exactAdjustmentAudit = {
+    requestId: REQUEST_ID,
+    actionTime: '2026-08-18T16:45:00-04:00',
+    adminName: 'Andrew Smith',
+    operation: 'adjust',
+    staffId: sharedWithoutAudit.clockIn.staffId,
+    staffName: sharedWithoutAudit.clockIn.staffName,
+    clockInPunchId: sharedWithoutAudit.clockIn.punchId,
+    clockOutPunchId: sharedWithoutAudit.clockOut.punchId,
+    originalClockInAt: sharedWithoutAudit.clockIn.originalTimestamp,
+    originalClockOutAt: sharedWithoutAudit.clockOut.originalTimestamp,
+    correctedClockInAt: sharedWithoutAudit.clockIn.timestamp,
+    correctedClockOutAt: sharedWithoutAudit.clockOut.timestamp,
+    changed: 'clockIn',
+    reason: 'Correct retained TEST shift start',
+    result: 'adjusted'
+  };
+  assert.ok(sanitizeStaffTimeHistoryPage(historyPage({
+    items: [{ ...sharedWithoutAudit, latestAdjustment: exactAdjustmentAudit }]
+  }), 'test', request, { now: NOW }), 'a complete latest adjustment pair keeps one exact audit');
+  assert.equal(sanitizeStaffTimeHistoryPage(historyPage({
+    items: [{
+      ...sharedWithoutAudit,
+      latestAdjustment: {
+        ...exactAdjustmentAudit,
+        correctedClockOutAt: '2026-08-17T16:59:00-04:00'
+      }
+    }]
+  }), 'test', request, { now: NOW }), null, 'drifted latest audit evidence is rejected');
+
+  assert.equal(sanitizeStaffTimeHistoryPageRequest({ ...request, extra: true }), null);
+  assert.equal(sanitizeStaffTimeHistoryPageRequest({ ...request, offset: -1 }), null);
+  assert.equal(sanitizeStaffTimeHistoryPageRequest({
+    ...request,
+    viewToken: 'A'.repeat(64)
+  }), null);
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    extra: true
+  }, 'test', request, { now: NOW }), null);
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    items: [{ ...historyShift(), clockOut: null }]
+  }, 'test', request, { now: NOW }), null);
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    items: [historyShift(), historyShift()],
+    total: 2,
+    nextOffset: null
+  }, 'test', request, { now: NOW }), null);
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    total: 2,
+    nextOffset: null
+  }, 'test', request, { now: NOW }), null);
+  assert.ok(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    total: 2,
+    nextOffset: 1
+  }, 'test', request, { now: NOW }));
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    items: [historyShift({ latestAdjustment: audit() })]
+  }, 'test', request, { now: NOW }), null);
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    total: MAX_STAFF_CLOCK_HISTORY_SHIFTS + 1,
+    items: Array(MAX_STAFF_CLOCK_HISTORY_SHIFTS + 1).fill(historyShift()),
+    nextOffset: null
+  }, 'test', request, { now: NOW }), null);
+  const hugeShift = historyShift({
+    clockIn: { ...historyShift().clockIn, note: '😀'.repeat(120) },
+    clockOut: { ...historyShift().clockOut, note: '😀'.repeat(120) }
+  });
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    total: MAX_STAFF_CLOCK_HISTORY_SHIFTS,
+    items: Array(MAX_STAFF_CLOCK_HISTORY_SHIFTS).fill(hugeShift),
+    nextOffset: null
+  }, 'test', request, { now: NOW }), null);
 });
 
 test('tablet route is exact, rate-limited, same-origin, and pins TEST transport', async () => {
@@ -1123,6 +1273,82 @@ test('Admin reviewPage adds exact records, attention, and audit streams and maps
     result: 'stale',
     code: 'STAFF_TIME_VIEW_STALE'
   });
+});
+
+test('Admin historyPage pins a bounded completed-shift page and maps stale or malformed views safely', async () => {
+  const body = {
+    operation: 'historyPage',
+    viewToken: VIEW_TOKEN,
+    offset: 0
+  };
+  let upstream;
+  const response = await handleAdminStaffTime(adminRequest({ body }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async (url, options) => {
+      upstream = { url, body: JSON.parse(options.body) };
+      return googleResponse(historyPage());
+    }
+  });
+  assert.equal(response.status, 200);
+  assert.equal(upstream.url, TEST_WEBHOOK_URL);
+  assert.deepEqual(upstream.body, {
+    viewToken: VIEW_TOKEN,
+    offset: 0,
+    token: TEST_WEBHOOK_TOKEN,
+    action: 'staffTimeHistoryPageV2',
+    target: 'test',
+    adminActionToken: TEST_ADMIN_TOKEN
+  });
+  assert.deepEqual(await responseBody(response), {
+    ok: true,
+    test: true,
+    adminName: 'Andrew Smith',
+    viewToken: VIEW_TOKEN,
+    offset: 0,
+    total: 1,
+    items: [historyShift()],
+    nextOffset: null
+  });
+
+  const stale = await handleAdminStaffTime(adminRequest({ body }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async () => googleResponse({ ok: false, target: 'test', result: 'stale' })
+  });
+  assert.equal(stale.status, 409);
+  assert.deepEqual(await responseBody(stale), {
+    ok: false,
+    result: 'stale',
+    code: 'STAFF_TIME_VIEW_STALE'
+  });
+
+  const malformed = await handleAdminStaffTime(adminRequest({ body }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async () => googleResponse(historyPage({
+      items: [{ ...historyShift(), clockOut: null }]
+    }))
+  });
+  assert.equal(malformed.status, 502);
+
+  let called = false;
+  const rejected = await handleAdminStaffTime(adminRequest({
+    body: { ...body, extra: true }
+  }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async () => {
+      called = true;
+      return googleResponse(historyPage());
+    }
+  });
+  assert.equal(rejected.status, 400);
+  assert.equal(called, false);
 });
 
 test('Admin correction pins attribution and replay identity, then validates the full confirmation', async () => {

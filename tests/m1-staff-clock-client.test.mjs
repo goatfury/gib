@@ -186,6 +186,7 @@ function createPairingHarness(responses, options = {}) {
     '#staffClockPairingInstructions': { hidden: true },
     '#staffClockPairingAdminUrl': { textContent: '' },
     '#retryStaffClock': { hidden: true, textContent: '' },
+    '#cancelStaffClockPairing': { hidden: true, disabled: false },
     '#staffClockControls': { hidden: false },
     '#staffClockName': { disabled: false },
     '#btnStaffClockAction': { disabled: false }
@@ -225,9 +226,9 @@ function createPairingHarness(responses, options = {}) {
       const TZ = 'America/New_York';
       const STAFF_CLOCK_PAIRING_AVAILABLE = true;
       const STAFF_CLOCK_PAIRING_CONFIG = { origin: 'https://gib-live.netlify.app' };
-      const STAFF_CLOCK_PAIRING_POLL_INTERVAL_MS = 2_500;
+      const STAFF_CLOCK_PAIRING_POLL_INTERVAL_MS = 30_000;
       const STAFF_CLOCK_PAIRING_APPROVED_POLL_MS = 250;
-      const STAFF_CLOCK_PAIRING_MAX_LIFETIME_MS = 5 * 60_000;
+      const STAFF_CLOCK_PAIRING_MAX_LIFETIME_MS = 12 * 60 * 60_000;
       const STAFF_CLOCK_PAIRING_MAX_DELIVERY_WINDOW_MS = 2 * 60_000;
       let staffClockPairingPromise = null;
       let staffClockPairingPollTimer = null;
@@ -269,11 +270,13 @@ function createPairingHarness(responses, options = {}) {
       ${namedFunctionSource(clientSource, 'validStaffClockPairingExpired')}
       ${namedFunctionSource(clientSource, 'validStaffClockPairingAuthorizationRequired')}
       ${namedFunctionSource(clientSource, 'validStaffClockPairingRejected')}
+      ${namedFunctionSource(clientSource, 'validStaffClockPairingTerminal')}
       ${namedFunctionSource(clientSource, 'clearStaffClockPairingTimer')}
       ${namedFunctionSource(clientSource, 'clearStaffClockPairingMemory')}
       ${namedFunctionSource(clientSource, 'staffClockPairingExpiresLabel')}
       ${namedFunctionSource(clientSource, 'renderStaffClockPairingPending')}
       ${namedFunctionSource(clientSource, 'renderStaffClockPairingExpired')}
+      ${namedFunctionSource(clientSource, 'cancelStaffClockPairing')}
       ${namedFunctionSource(clientSource, 'scheduleStaffClockPairingPoll')}
       ${namedFunctionSource(clientSource, 'staffClockPairingStillCurrent')}
       ${namedFunctionSource(clientSource, 'runStaffClockPairing')}
@@ -283,6 +286,7 @@ function createPairingHarness(responses, options = {}) {
         run: runStaffClockPairing,
         ensure: ensureStaffClockPairing,
         restart: restartStaffClockPairing,
+        cancel: cancelStaffClockPairing,
         advanceTo(value) { nowRef.value = value; },
         flushZeroTimers() {
           timers.filter(timer => !timer.cancelled && timer.delay === 0).forEach(timer => {
@@ -306,10 +310,12 @@ function createPairingHarness(responses, options = {}) {
             title: nodes['#staffClockAvailabilityTitle'].textContent,
             detail: nodes['#staffClockAvailabilityDetail'].textContent,
             displayedCode: nodes['#staffClockPairingCode'].textContent,
+            expiryLabel: nodes['#staffClockPairingExpiry'].textContent,
             codeHidden: nodes['#staffClockPairingCodeWrap'].hidden,
             instructionsHidden: nodes['#staffClockPairingInstructions'].hidden,
             retryHidden: nodes['#retryStaffClock'].hidden,
             retryLabel: nodes['#retryStaffClock'].textContent,
+            cancelHidden: nodes['#cancelStaffClockPairing'].hidden,
             controlsHidden: nodes['#staffClockControls'].hidden
           };
         }
@@ -331,7 +337,7 @@ test('Staff Clock is isolated from the inherited inline kiosk client', () => {
   const inlineModule = kioskHtml.match(/<script type="module">([\s\S]*?)<\/script>/u)?.[1] || '';
   assert.match(
     kioskHtml,
-    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-08-27-tablet-pairing-r1"><\/script>/u
+    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-08-28-tablet-pairing-r2"><\/script>/u
   );
   assert.doesNotMatch(inlineModule, /staff-clock-core|staffClockSyncPunch|syncStaffClockQueue|renderStaffTimeAdmin/u);
 });
@@ -346,6 +352,7 @@ test('fresh and reset tablets never expose an empty functional Staff Clock selec
     '#staffClockPairingExpiry': { textContent: 'stale expiry' },
     '#staffClockPairingInstructions': { hidden: false },
     '#retryStaffClock': { hidden: true },
+    '#cancelStaffClockPairing': { hidden: false },
     '#staffClockControls': { hidden: false },
     '#staffClockName': { disabled: false },
     '#btnStaffClockAction': { disabled: false }
@@ -376,6 +383,7 @@ test('fresh and reset tablets never expose an empty functional Staff Clock selec
   assert.equal(nodes['#staffClockPairingCode'].textContent, '');
   assert.equal(nodes['#staffClockPairingExpiry'].textContent, '');
   assert.equal(nodes['#retryStaffClock'].hidden, true);
+  assert.equal(nodes['#cancelStaffClockPairing'].hidden, true);
   assert.equal(nodes['#staffClockAvailabilityTitle'].textContent, 'This tablet needs authorization');
 
   harness.setStaffClockAvailability('unavailable');
@@ -429,11 +437,13 @@ test('tablet pairing start and poll use separate same-origin endpoints with exac
   const post = Function('fetch', 'window', `
     const STAFF_CLOCK_PAIRING_START_ENDPOINT = '/api/m1-tablet-pairing-start';
     const STAFF_CLOCK_PAIRING_POLL_ENDPOINT = '/api/m1-tablet-pairing-poll';
+    const STAFF_CLOCK_PAIRING_CANCEL_ENDPOINT = '/api/m1-tablet-pairing-cancel';
     return (${namedFunctionSource(clientSource, 'postStaffClockPairing')});
   `)(fetch, fakeWindow);
 
   await post('start');
   await post('poll');
+  await post('cancel');
   await assert.rejects(post('review'), /operation was invalid/u);
   assert.deepEqual(calls.map(({ endpoint, options }) => ({
     endpoint,
@@ -464,14 +474,24 @@ test('tablet pairing start and poll use separate same-origin endpoints with exac
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: { operation: 'poll' }
+    },
+    {
+      endpoint: '/api/m1-tablet-pairing-cancel',
+      method: 'POST',
+      credentials: 'same-origin',
+      mode: 'same-origin',
+      redirect: 'error',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: { operation: 'cancel' }
     }
   ]);
 });
 
 test('pending to approved to authorized pairing clears the code and refreshes the roster automatically', async () => {
   const now = Date.parse('2026-08-27T14:00:00-04:00');
-  const expiresAt = new Date(now + 5 * 60_000).toISOString();
-  const deliveryExpiresAt = new Date(now + 90_000).toISOString();
+  const expiresAt = new Date(now + 12 * 60 * 60_000).toISOString();
+  const deliveryExpiresAt = new Date(Date.parse(expiresAt) + 120_000).toISOString();
   const harness = createPairingHarness([
     {
       ok: true,
@@ -481,7 +501,7 @@ test('pending to approved to authorized pairing clears the code and refreshes th
       gymName: 'Revolution BJJ',
       deviceLabel: 'Revolution BJJ front desk'
     },
-    { ok: true, result: 'approved', deliveryExpiresAt },
+    { ok: true, result: 'approved', expiresAt, deliveryExpiresAt },
     { ok: true, result: 'authorized' }
   ], { now });
 
@@ -494,7 +514,7 @@ test('pending to approved to authorized pairing clears the code and refreshes th
   assert.equal(state.codeHidden, false);
   assert.equal(state.instructionsHidden, false);
   assert.equal(state.controlsHidden, true);
-  assert.deepEqual(state.activeTimerDelays, [2_500]);
+  assert.deepEqual(state.activeTimerDelays, [30_000]);
 
   await harness.run('poll');
   state = harness.state();
@@ -516,6 +536,50 @@ test('pending to approved to authorized pairing clears the code and refreshes th
   assert.deepEqual(state.activeTimerDelays, [0]);
   harness.flushZeroTimers();
   assert.equal(harness.state().refreshCount, 1);
+});
+
+test('tablet cancellation is explicit and an approval that wins the race still completes authorization', async () => {
+  const now = Date.parse('2026-08-28T06:45:00-04:00');
+  const pending = {
+    ok: true,
+    result: 'pending',
+    pairingCode: 'ABCDE-FGHJK',
+    expiresAt: new Date(now + 11 * 60 * 60_000).toISOString(),
+    gymName: 'Revolution BJJ',
+    deviceLabel: 'Revolution BJJ front desk'
+  };
+
+  const cancelled = createPairingHarness([
+    pending,
+    { ok: true, result: 'cancelled' }
+  ], { now });
+  await cancelled.run('start');
+  await cancelled.cancel();
+  assert.deepEqual(cancelled.state().calls, ['start', 'cancel']);
+  assert.equal(cancelled.state().code, '');
+  assert.equal(cancelled.state().cancelHidden, true);
+  assert.equal(cancelled.state().retryLabel, 'Get a new code');
+  assert.match(cancelled.state().detail, /No Admin can approve that code/u);
+
+  const approvalWon = createPairingHarness([
+    pending,
+    {
+      ok: true,
+      result: 'approved',
+      expiresAt: pending.expiresAt,
+      deliveryExpiresAt: new Date(Date.parse(pending.expiresAt) + 120_000).toISOString()
+    },
+    { ok: true, result: 'authorized' }
+  ], { now });
+  await approvalWon.run('start');
+  await approvalWon.cancel();
+  assert.equal(approvalWon.state().code, '');
+  assert.match(approvalWon.state().detail, /approval completed first/u);
+  assert.deepEqual(approvalWon.state().activeTimerDelays, [250]);
+  await approvalWon.run('poll');
+  approvalWon.flushZeroTimers();
+  assert.equal(approvalWon.state().refreshCount, 1);
+  assert.deepEqual(approvalWon.state().calls, ['start', 'cancel', 'poll']);
 });
 
 test('an authorized pairing response locks queue sync before its deferred roster callback', async () => {
@@ -551,7 +615,7 @@ test('an authorized pairing response locks queue sync before its deferred roster
   );
 });
 
-test('authorization callback is snapshot-only, preserves a nonempty queue byte-for-byte, rebuilds roster cache, and keeps controls locked', async () => {
+test('5:45 pairing survives reload and delayed post-approval reconnect, then repopulates the roster automatically', async () => {
   const staff = [
     { staffId: 'mandy', staffName: 'Mandy' },
     { staffId: 'marvin', staffName: 'Marvin' }
@@ -727,27 +791,48 @@ test('authorization callback is snapshot-only, preserves a nonempty queue byte-f
     preservedStaffClockState
   );
 
-  const now = Date.parse('2026-08-27T14:00:00-04:00');
+  const generatedAt = Date.parse('2026-08-28T05:45:00-04:00');
+  const approvedAt = Date.parse('2026-08-28T06:45:00-04:00');
+  const reconnectedAt = Date.parse('2026-08-28T07:15:00-04:00');
+  assert.ok(reconnectedAt - approvedAt > 2 * 60_000);
+  const expiresAt = new Date(generatedAt + 12 * 60 * 60_000).toISOString();
+  const pending = {
+    ok: true,
+    result: 'pending',
+    pairingCode: 'ABCDE-FGHJK',
+    expiresAt,
+    gymName: 'Revolution BJJ',
+    deviceLabel: 'Revolution BJJ front desk'
+  };
+  const beforeReload = createPairingHarness([
+    pending,
+    { throws: true, message: 'network interrupted' }
+  ], { now: generatedAt });
+  await beforeReload.run('start');
+  await beforeReload.run('poll');
+  assert.equal(beforeReload.state().code, pending.pairingCode);
+  assert.match(beforeReload.state().detail, /without changing this code/u);
+  assert.match(beforeReload.state().expiryLabel, /Aug 28, 2026/u);
+  assert.match(beforeReload.state().expiryLabel, /5:45:00 PM/u);
+
+  // A new browser runtime represents a tablet reload. The HttpOnly request
+  // cookie is recovered by the server, which returns the same code and expiry.
   const pairingHarness = createPairingHarness([
-    {
-      ok: true,
-      result: 'pending',
-      pairingCode: 'ABCDE-FGHJK',
-      expiresAt: new Date(now + 5 * 60_000).toISOString(),
-      gymName: 'Revolution BJJ',
-      deviceLabel: 'Revolution BJJ front desk'
-    },
+    pending,
     {
       ok: true,
       result: 'approved',
-      deliveryExpiresAt: new Date(now + 120_000).toISOString()
+      expiresAt,
+      deliveryExpiresAt: new Date(Date.parse(expiresAt) + 120_000).toISOString()
     },
     { ok: true, result: 'authorized' }
   ], {
-    now,
+    now: reconnectedAt,
     onRefresh: snapshotHarness.refreshStaffClockRosterAfterAuthorization
   });
   await pairingHarness.run('start');
+  assert.equal(pairingHarness.state().code, beforeReload.state().code);
+  assert.equal(pairingHarness.state().expiresAt, beforeReload.state().expiresAt);
   await pairingHarness.run('poll');
   await pairingHarness.run('poll');
   pairingHarness.flushZeroTimers();
@@ -926,6 +1011,15 @@ test('authorization recovery keeps a cached roster and durable queue locked and 
 });
 
 test('blank reset state saves an authoritative open Mandy shift and immediately renders Clock out with both roster names cached', async () => {
+  class FixedDate extends Date {
+    constructor(...args) {
+      super(...(args.length ? args : ['2026-08-27T10:00:00-04:00']));
+    }
+
+    static now() {
+      return Date.parse('2026-08-27T10:00:00-04:00');
+    }
+  }
   const staff = [
     { staffId: 'mandy', staffName: 'Mandy' },
     { staffId: 'marvin', staffName: 'Marvin' }
@@ -972,6 +1066,7 @@ test('blank reset state saves an authoritative open Mandy shift and immediately 
     'validStaffMember',
     'mergeStaffRecords',
     'evaluateStaffState',
+    'Date',
     `
       const STAFF_CLOCK_STATE_KEY = 'gib_m1b_staff_clock_state_v1';
       const STAFF_CLOCK_STAFF_CACHE_KEY = 'gib_m1b_staff_clock_staff_v1';
@@ -1083,7 +1178,7 @@ test('blank reset state saves an authoritative open Mandy shift and immediately 
         }
       };
     `
-  )(payload, validStaffMember, mergeStaffRecords, evaluateStaffState);
+  )(payload, validStaffMember, mergeStaffRecords, evaluateStaffState, FixedDate);
 
   assert.deepEqual(await harness.run(), payload);
   assert.deepEqual(harness.result(), {
@@ -1120,7 +1215,8 @@ test('reload recovery accepts approved or authorized directly from the start end
     {
       ok: true,
       result: 'approved',
-      deliveryExpiresAt: new Date(now + 120_000).toISOString()
+      expiresAt: new Date(now + 12 * 60 * 60_000).toISOString(),
+      deliveryExpiresAt: new Date(now + (12 * 60 * 60_000) + 120_000).toISOString()
     }
   ], { now });
   await approved.run('start');
@@ -1140,7 +1236,7 @@ test('reload recovery accepts approved or authorized directly from the start end
 
 test('pairing expiry and network interruption remain visible, retryable, and bounded', async () => {
   const now = Date.parse('2026-08-27T14:00:00-04:00');
-  const expiresAt = new Date(now + 5 * 60_000).toISOString();
+  const expiresAt = new Date(now + 12 * 60 * 60_000).toISOString();
   const pending = {
     ok: true,
     result: 'pending',
@@ -1179,24 +1275,24 @@ test('pairing expiry and network interruption remain visible, retryable, and bou
   assert.equal(state.code, 'ABCDE-FGHJK');
   assert.match(state.detail, /retry automatically without changing this code/u);
   assert.equal(state.retryLabel, 'Retry now');
-  assert.deepEqual(state.activeTimerDelays, [2_500]);
+  assert.deepEqual(state.activeTimerDelays, [30_000]);
 
   interrupted.advanceTo(Date.parse(expiresAt) + 1);
   await interrupted.run('poll');
   state = interrupted.state();
-  assert.equal(state.code, '', 'the display code is cleared at its five-minute expiry');
+  assert.equal(state.code, '', 'the display code is cleared at its 12-hour expiry');
   assert.equal(state.displayedCode, '');
   assert.match(state.detail, /after approval may have started/u);
-  assert.deepEqual(state.activeTimerDelays, [2_500]);
+  assert.deepEqual(state.activeTimerDelays, [30_000]);
 });
 
-test('terminal pairing 401 and 403 clear stale codes and leave only a fresh-code recovery action', async () => {
+test('terminal authorization, rejection, and cancellation clear stale codes and leave a fresh-code action', async () => {
   const now = Date.parse('2026-08-27T14:00:00-04:00');
   const pending = {
     ok: true,
     result: 'pending',
     pairingCode: 'ABCDE-FGHJK',
-    expiresAt: new Date(now + 5 * 60_000).toISOString(),
+    expiresAt: new Date(now + 12 * 60 * 60_000).toISOString(),
     gymName: 'Revolution BJJ',
     deviceLabel: 'Revolution BJJ front desk'
   };
@@ -1213,6 +1309,20 @@ test('terminal pairing 401 and 403 clear stale codes and leave only a fresh-code
       ok: false,
       message: 'Tablet pairing request was not accepted.'
     }
+  }, {
+    status: 409,
+    data: {
+      ok: false,
+      result: 'rejected',
+      message: 'Pairing request was rejected by an Admin.'
+    }
+  }, {
+    status: 409,
+    data: {
+      ok: false,
+      result: 'cancelled',
+      message: 'Pairing request was cancelled on this tablet.'
+    }
   }];
 
   for (const terminal of terminalResponses) {
@@ -1222,7 +1332,7 @@ test('terminal pairing 401 and 403 clear stale codes and leave only a fresh-code
     ], { now });
     await harness.run('start');
     assert.equal(harness.state().displayedCode, pending.pairingCode);
-    assert.deepEqual(harness.state().activeTimerDelays, [2_500]);
+    assert.deepEqual(harness.state().activeTimerDelays, [30_000]);
 
     await harness.run('poll');
     const state = harness.state();
@@ -1237,6 +1347,7 @@ test('terminal pairing 401 and 403 clear stale codes and leave only a fresh-code
     assert.equal(state.controlsHidden, true);
     assert.equal(state.retryHidden, false);
     assert.equal(state.retryLabel, 'Get a new code');
+    assert.equal(state.cancelHidden, true);
     assert.equal(state.detail, terminal.data.message);
     assert.deepEqual(state.activeTimerDelays, []);
   }

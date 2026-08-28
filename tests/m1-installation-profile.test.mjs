@@ -94,7 +94,7 @@ test('Rev stays the exact default while Richmond is a fixed isolated TEST instal
     featureFlags: { staffClock: true, staffClockPairing: true },
     staffClockPairing: {
       origin: PRODUCTION_ORIGIN,
-      expiresInSeconds: 300
+      expiresInSeconds: 43_200
     },
     backend: { enabled: true, transportTarget: 'rev' }
   });
@@ -122,12 +122,12 @@ test('Rev stays the exact default while Richmond is a fixed isolated TEST instal
     gymName: 'Revolution BJJ',
     deviceLabel: 'Revolution BJJ front desk',
     origin: PRODUCTION_ORIGIN,
-    expiresInSeconds: 300
+    expiresInSeconds: 43_200
   });
   assert.equal(staffClockPairingProfile('richmond'), null);
 });
 
-test('server pairing profiles require Staff Clock, pairing, backend, same origin, and a 60-to-300-second lifetime', () => {
+test('server pairing profiles require Staff Clock, pairing, backend, same origin, and a 60-second-to-12-hour lifetime', () => {
   const functionStart = serverInstallationSource.indexOf('export function staffClockPairingProfile(');
   const functionEnd = serverInstallationSource.indexOf(
     '\nexport function remoteScheduleEnabled(',
@@ -144,7 +144,7 @@ test('server pairing profiles require Staff Clock, pairing, backend, same origin
     return staffClockPairingProfile();
   `)(() => profile);
 
-  for (const expiresInSeconds of [60, 61, 119, 120, 299, 300]) {
+  for (const expiresInSeconds of [60, 61, 119, 120, 300, 43_199, 43_200]) {
     assert.deepEqual(evaluate({
       ...structuredClone(base),
       staffClockPairing: {
@@ -186,7 +186,7 @@ test('server pairing profiles require Staff Clock, pairing, backend, same origin
     },
     {
       ...structuredClone(base),
-      staffClockPairing: { ...base.staffClockPairing, expiresInSeconds: 301 }
+      staffClockPairing: { ...base.staffClockPairing, expiresInSeconds: 43_201 }
     },
     {
       ...structuredClone(base),

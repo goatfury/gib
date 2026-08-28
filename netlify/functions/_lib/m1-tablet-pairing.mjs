@@ -12,9 +12,9 @@ export const TABLET_PAIRING_PENDING_COOKIE = '__Host-gib_m1_tablet_pairing';
 export const TABLET_PAIRING_REVIEW_COOKIE = '__Host-gib_m1_tablet_pairing_review';
 export const TABLET_PAIRING_PURPOSE = 'tablet-device-pairing';
 export const TABLET_PAIRING_REVIEW_PURPOSE = 'tablet-device-pairing-review';
-export const TABLET_PAIRING_MAX_SECONDS = 300;
+export const TABLET_PAIRING_MAX_SECONDS = 12 * 60 * 60;
 export const TABLET_PAIRING_DELIVERY_GRACE_SECONDS = 120;
-export const TABLET_PAIRING_REVIEW_MAX_SECONDS = 120;
+export const TABLET_PAIRING_REVIEW_MAX_SECONDS = 15 * 60;
 export const TABLET_PAIRING_PENDING_MAX_SECONDS = TABLET_PAIRING_MAX_SECONDS
   + TABLET_PAIRING_DELIVERY_GRACE_SECONDS;
 export const TABLET_PAIRING_PURGE_SECONDS = 24 * 60 * 60;
@@ -537,12 +537,12 @@ export function validPairingRequestRecord(value, profile) {
     || value.requestedAt < 1
     || value.approvalExpiresAt !== value.requestedAt + profile.expiresInSeconds
     || value.purgeAfter !== value.requestedAt + TABLET_PAIRING_PURGE_SECONDS
-    || !['pending', 'approved', 'consumed'].includes(value.status)
+    || !['pending', 'approved', 'consumed', 'rejected', 'cancelled'].includes(value.status)
     || !Number.isInteger(value.approvedAt)
     || !Number.isInteger(value.credentialIssuedAt)
     || !Number.isInteger(value.consumedAt)
   ) return false;
-  if (value.status === 'pending') {
+  if (['pending', 'rejected', 'cancelled'].includes(value.status)) {
     return value.approvedAt === 0
       && value.approvedByHash === ''
       && value.credentialIssuedAt === 0
@@ -555,7 +555,7 @@ export function validPairingRequestRecord(value, profile) {
     value.approvedAt < value.requestedAt
     || value.approvedAt >= value.approvalExpiresAt
     || !HASH_PATTERN.test(value.approvedByHash)
-    || value.deliveryExpiresAt !== value.approvedAt + TABLET_PAIRING_DELIVERY_GRACE_SECONDS
+    || value.deliveryExpiresAt !== value.approvalExpiresAt + TABLET_PAIRING_DELIVERY_GRACE_SECONDS
   ) return false;
   if (
     value.credentialIssuedAt < value.approvedAt

@@ -933,7 +933,7 @@ body.admin-mode .container { max-width: 1120px; }
 }
 
 </style>
-<script src="./installation-profile.generated.js?v=2026-08-27-tablet-pairing-r1"></script>
+<script src="./installation-profile.generated.js?v=2026-08-28-tablet-pairing-r2"></script>
 </head>
 <body>
 <div class="container">
@@ -1014,6 +1014,7 @@ body.admin-mode .container { max-width: 1120px; }
       </div>
       <div class="staff-clock-availability-actions">
         <button id="retryStaffClock" class="btn" type="button" hidden>Get a new code</button>
+        <button id="cancelStaffClockPairing" class="btn" type="button" hidden>Cancel pairing request</button>
       </div>
     </div>
     <div id="staffClockControls" class="staff-clock-controls" hidden>
@@ -1429,10 +1430,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-27-tablet-pairing-r1';
+} from './sync-core.mjs?v=2026-08-28-tablet-pairing-r2';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-08-27-tablet-pairing-r1';
+const OFFLINE_SHELL_REVISION = '2026-08-28-tablet-pairing-r2';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -4694,6 +4695,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-08-27-tablet-pairing-r1"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-08-28-tablet-pairing-r2"></script>
 </body>
 </html>
