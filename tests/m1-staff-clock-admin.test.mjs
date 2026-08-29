@@ -1623,6 +1623,87 @@ test('review validation requires every canonical Staff time field and rejects dr
   assert.equal(validStaffTimeReviewResponse(extraField), false);
 });
 
+test('completed-shift lookups order New York fall-back shifts by parsed instant', () => {
+  const { validStaffTimeShiftLookupResponse } = validatorRuntime();
+  const fallBackShift = (index, clockInAt, clockOutAt) => {
+    const base = completedHistoryShift(index);
+    return {
+      ...base,
+      clockIn: {
+        ...base.clockIn,
+        timestamp: clockInAt,
+        date: '2026-11-01'
+      },
+      clockOut: {
+        ...base.clockOut,
+        timestamp: clockOutAt,
+        date: '2026-11-01'
+      }
+    };
+  };
+  const newerStandardTimeShift = fallBackShift(
+    820,
+    '2026-11-01T01:10:00-05:00',
+    '2026-11-01T01:20:00-05:00'
+  );
+  const olderDaylightTimeShift = fallBackShift(
+    830,
+    '2026-11-01T01:50:00-04:00',
+    '2026-11-01T01:55:00-04:00'
+  );
+  const newestFirst = [newerStandardTimeShift, olderDaylightTimeShift];
+  const chronologicallyReversed = [...newestFirst].reverse();
+  assert.ok(
+    newerStandardTimeShift.clockIn.timestamp < olderDaylightTimeShift.clockIn.timestamp,
+    'the ISO strings intentionally sort opposite to their real instants'
+  );
+  assert.ok(
+    Date.parse(newerStandardTimeShift.clockIn.timestamp) > Date.parse(olderDaylightTimeShift.clockIn.timestamp),
+    'the -05:00 shift is the newer real instant'
+  );
+
+  const recentExpected = {
+    viewToken: VIEW_TOKEN,
+    mode: 'recent',
+    today: '2026-11-01',
+    staffId: '',
+    date: ''
+  };
+  const recent = shiftLookup({
+    dateFrom: '2026-10-26',
+    dateThrough: '2026-11-01',
+    total: 2,
+    items: newestFirst
+  });
+  assert.equal(validStaffTimeShiftLookupResponse(recent, recentExpected), true);
+  assert.equal(validStaffTimeShiftLookupResponse({
+    ...recent,
+    items: chronologicallyReversed
+  }, recentExpected), false);
+
+  const exactExpected = {
+    viewToken: VIEW_TOKEN,
+    mode: 'exactDate',
+    today: '2026-11-01',
+    staffId: 'mandy-test',
+    date: '2026-11-01'
+  };
+  const exact = shiftLookup({
+    mode: 'exactDate',
+    dateFrom: '2026-11-01',
+    dateThrough: '2026-11-01',
+    staffId: 'mandy-test',
+    date: '2026-11-01',
+    total: 2,
+    items: newestFirst
+  });
+  assert.equal(validStaffTimeShiftLookupResponse(exact, exactExpected), true);
+  assert.equal(validStaffTimeShiftLookupResponse({
+    ...exact,
+    items: chronologicallyReversed
+  }, exactExpected), false);
+});
+
 test('10k+ Staff time totals use bounded priority streams, variable pages, and bounded DOM', async () => {
   const records = Array.from({ length: 500 }, (_, index) => staffRecord(index));
   records[0] = {

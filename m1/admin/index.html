@@ -2417,8 +2417,9 @@
           || value.date !== expected.date
         ) return false;
         const punchIds = new Set();
-        let previousClockIn = '';
+        let previousClockInMs = Number.POSITIVE_INFINITY;
         for (const shift of value.items) {
+          const clockInMs = Date.parse(shift.clockIn.timestamp);
           if (
             !validStaffCompletedShift(shift)
             || shift.clockIn.date < value.dateFrom
@@ -2426,11 +2427,12 @@
             || (value.mode === 'exactDate' && shift.clockIn.staffId !== value.staffId)
             || punchIds.has(shift.clockIn.punchId)
             || punchIds.has(shift.clockOut.punchId)
-            || (previousClockIn && shift.clockIn.timestamp > previousClockIn)
+            || !Number.isFinite(clockInMs)
+            || clockInMs > previousClockInMs
           ) return false;
           punchIds.add(shift.clockIn.punchId);
           punchIds.add(shift.clockOut.punchId);
-          previousClockIn = shift.clockIn.timestamp;
+          previousClockInMs = clockInMs;
         }
         return true;
       }
