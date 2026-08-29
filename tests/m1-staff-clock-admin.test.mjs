@@ -42,6 +42,8 @@ function validatorRuntime() {
     const STAFF_TIME_VIEW_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
     const STAFF_TIME_PAGE_LIMIT = 500;
     const STAFF_TIME_PAGE_MAX_BYTES = 200_000;
+    const STAFF_TIME_SHIFT_LOOKUP_LIMIT = 20;
+    const STAFF_TIME_SHIFT_LOOKUP_MAX_BYTES = 80_000;
     const STAFF_TIME_RECORD_LIMIT = 500;
     const STAFF_TIME_ATTENTION_LIMIT = 600;
     const STAFF_TIME_AUDIT_LIMIT = 500;
@@ -74,6 +76,8 @@ function validatorRuntime() {
     globalThis.hooks = {
       validStaffTimeReviewStartResponse,
       validStaffTimeReviewPageResponse,
+      validStaffCompletedShift,
+      validStaffTimeShiftLookupResponse,
       validStaffTimeReviewResponse,
       validStaffMutationResponse
     };
@@ -102,6 +106,10 @@ function reviewResponse() {
     test: true,
     adminName: 'Andrew Smith',
     staff: [{ staffId: 'mandy-test', staffName: 'Mandy Test' }],
+    shiftStaff: [
+      { staffId: 'mandy-test', staffName: 'Mandy Test' },
+      { staffId: 'front-desk-test-three', staffName: 'Front Desk Test Three' }
+    ],
     records: [record],
     clockedInNow: [{
       punchId: PUNCH_ONE,
@@ -257,6 +265,7 @@ function reviewStartResponse(overrides = {}) {
     test: true,
     adminName: 'Andrew Smith',
     staff: review.staff,
+    shiftStaff: review.shiftStaff,
     clockedInNow: review.clockedInNow,
     periods: review.periods,
     view: review.view,
@@ -282,6 +291,40 @@ function staffRecord(index) {
   };
 }
 
+function completedHistoryShift(index = 950, overrides = {}) {
+  const clockIn = {
+    ...staffRecord(index),
+    timestamp: '2026-08-11T09:00:00-04:00',
+    date: '2026-08-11',
+    punchAction: 'clockIn'
+  };
+  const clockOut = {
+    ...staffRecord(index + 1),
+    timestamp: '2026-08-11T17:00:00-04:00',
+    date: '2026-08-11',
+    punchAction: 'clockOut'
+  };
+  return { clockIn, clockOut, latestAdjustment: null, ...overrides };
+}
+
+function shiftLookup(overrides = {}) {
+  return {
+    ok: true,
+    test: true,
+    adminName: 'Andrew Smith',
+    viewToken: VIEW_TOKEN,
+    mode: 'recent',
+    dateFrom: '2026-08-12',
+    dateThrough: '2026-08-18',
+    staffId: '',
+    date: '',
+    total: 0,
+    items: [],
+    truncated: false,
+    ...overrides
+  };
+}
+
 function staffAudit(index, record, operation = 'correct') {
   const suffix = (index + 1).toString(16).padStart(12, '0');
   return {
@@ -299,7 +342,20 @@ function staffAudit(index, record, operation = 'correct') {
   };
 }
 
-function renderStaffTimeRuntime(data, { showOlder = false } = {}) {
+function renderStaffTimeRuntime(data, {
+  recentLookup = shiftLookup(),
+  recentLoading = false,
+  recentError = '',
+  recentVisibleLimit = 8,
+  olderLookup = null,
+  olderQuery = null,
+  olderLoading = false,
+  olderError = '',
+  advancedLoading = false,
+  advancedLoaded = true,
+  advancedError = '',
+  renderAdvancedStateOnly = false
+} = {}) {
   const functions = sourceBetween(
     adminHtml,
     'function makeElement(',
@@ -334,18 +390,53 @@ function renderStaffTimeRuntime(data, { showOlder = false } = {}) {
       this.attributes[name] = String(value);
     }
   }
-  const nodes = {};
+  const nodes = {
+    '#staffNeedsAttentionSection': new FakeElement('section'),
+    '#staffCorrectionPanel': new FakeElement('section')
+  };
+  nodes['#staffCorrectionPanel'].hidden = true;
   const context = vm.createContext({
     Date,
     Intl,
     Object,
     nodes,
     data: structuredClone(data),
+    recentLookup: structuredClone(recentLookup),
+    recentLoading,
+    recentError,
+    recentVisibleLimit,
+    olderLookup: structuredClone(olderLookup),
+    olderQuery: structuredClone(olderQuery),
+    olderLoading,
+    olderError,
+    advancedLoading,
+    advancedLoaded,
+    advancedError,
+    renderAdvancedStateOnly,
     createElement: tagName => new FakeElement(tagName)
   });
   new vm.Script(`
     const TIME_ZONE = 'America/New_York';
+    const STAFF_RECENT_INITIAL_LIMIT = 8;
+    const STAFF_RECENT_INCREMENT = 8;
+    const STAFF_RECENT_MAX_VISIBLE = 20;
+    const STAFF_ATTENTION_ACTIONS = Object.freeze({
+      missing_clock_out: Object.freeze({ punchAction: 'clockOut', linkedPunchAction: 'clockIn' }),
+      clock_out_without_clock_in: Object.freeze({ punchAction: 'clockIn', linkedPunchAction: 'clockOut' })
+    });
     let currentStaffTime = null;
+    let currentStaffRecentLookup = recentLookup;
+    let currentStaffAttention = data.needsAttention;
+    let staffRecentVisibleLimit = recentVisibleLimit;
+    let staffRecentLoading = recentLoading;
+    let staffRecentLoadError = recentError;
+    let currentStaffOlderShiftLookup = olderLookup;
+    let currentStaffOlderShiftQuery = olderQuery;
+    let staffOlderShiftLoading = olderLoading;
+    let staffOlderShiftError = olderError;
+    let staffAdvancedLoading = advancedLoading;
+    let staffAdvancedLoaded = advancedLoaded;
+    let staffAdvancedError = advancedError;
     const document = { createElement };
     function $(selector) {
       if (!nodes[selector]) nodes[selector] = createElement('div');
@@ -357,6 +448,9 @@ function renderStaffTimeRuntime(data, { showOlder = false } = {}) {
       field.appendChild(input);
       return field;
     }
+    function showMessage(element, message) {
+      element.textContent = message || '';
+    }
     function shiftDate(dateString, days) {
       const [year, month, day] = dateString.split('-').map(Number);
       return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
@@ -366,9 +460,13 @@ function renderStaffTimeRuntime(data, { showOlder = false } = {}) {
         && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}-(?:04|05):00$/.test(value)
         && Number.isFinite(Date.parse(value));
     }
-    let staffOlderHistoryExpanded = ${showOlder ? 'true' : 'false'};
     ${functions}
-    renderStaffTime(data);
+    if (renderAdvancedStateOnly) {
+      renderStaffTimePrimary(data);
+      renderStaffTimeAdvancedState();
+    } else {
+      renderStaffTime(data);
+    }
   `, { filename: 'staff-time-admin-render.js' }).runInContext(context);
   return nodes;
 }
@@ -387,7 +485,12 @@ function countElements(element, predicate) {
   );
 }
 
-async function runPagination(initial, streams, { staleOnce = false, pageSize = 500 } = {}) {
+async function runPagination(initial, streams, {
+  staleOnce = false,
+  pageSize = 500,
+  recentLookup = shiftLookup(),
+  shiftLookupFailure = false
+} = {}) {
   const functions = sourceBetween(
     adminHtml,
     'function validStaffId(',
@@ -404,6 +507,8 @@ async function runPagination(initial, streams, { staleOnce = false, pageSize = 5
     streams,
     staleOnce,
     pageSize,
+    recentLookup,
+    shiftLookupFailure,
     calls: []
   });
   new vm.Script(`
@@ -413,14 +518,23 @@ async function runPagination(initial, streams, { staleOnce = false, pageSize = 5
     const STAFF_TIME_VIEW_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
     const STAFF_TIME_PAGE_LIMIT = 500;
     const STAFF_TIME_PAGE_MAX_BYTES = 200_000;
+    const STAFF_TIME_SHIFT_LOOKUP_LIMIT = 20;
+    const STAFF_TIME_SHIFT_LOOKUP_MAX_BYTES = 80_000;
     const STAFF_TIME_RECORD_LIMIT = 500;
     const STAFF_TIME_ATTENTION_LIMIT = 600;
     const STAFF_TIME_AUDIT_LIMIT = 500;
+    const STAFF_TIME_READ_TIMEOUT_MS = 25_000;
+    const STAFF_TIME_READ_REQUEST_OPTIONS = Object.freeze({
+      timeoutMs: STAFF_TIME_READ_TIMEOUT_MS,
+      timeoutMessage: 'Staff Time took too long to load. Retry below.'
+    });
     const SITE = 'Rev';
     const API = { staffTime: '/staff-time' };
     let testMode = true;
     let currentAdminName = 'Andrew Smith';
     let staffTimeLoadGeneration = 7;
+    let currentStaffRecentLookup = null;
+    let staffRecentLoadError = '';
     let staleRemaining = staleOnce ? 1 : 0;
     function clean(value) {
       return String(value == null ? '' : value).normalize('NFKC').trim().replace(/\\s+/g, ' ');
@@ -447,6 +561,14 @@ async function runPagination(initial, streams, { staleOnce = false, pageSize = 5
     async function requestJson(_url, body) {
       calls.push(JSON.parse(JSON.stringify(body)));
       if (body.operation === 'review') return JSON.parse(JSON.stringify(initial));
+      if (body.operation === 'shiftLookup') {
+        if (shiftLookupFailure) throw new Error('matching receiver unavailable');
+        return JSON.parse(JSON.stringify({
+          ...recentLookup,
+          viewToken: body.viewToken,
+          mode: body.mode
+        }));
+      }
       if (staleRemaining && body.stream === 'records') {
         staleRemaining -= 1;
         const error = new Error('stale');
@@ -469,10 +591,26 @@ async function runPagination(initial, streams, { staleOnce = false, pageSize = 5
       };
     }
     ${functions}
-    globalThis.hooks = { loadStaffTimeReviewView };
+    globalThis.hooks = {
+      loadStaffTimeReviewView,
+      loadStaffTimeAdvancedReview,
+      validStaffTimeStaleError,
+      lookupState: () => ({
+        lookup: currentStaffRecentLookup,
+        error: staffRecentLoadError
+      })
+    };
   `, { filename: 'staff-time-admin-pagination.js' }).runInContext(context);
-  const data = await context.hooks.loadStaffTimeReviewView(7);
-  return { data, calls: context.calls };
+  let start = await context.hooks.loadStaffTimeReviewView(7);
+  let data;
+  try {
+    data = await context.hooks.loadStaffTimeAdvancedReview(start, 7);
+  } catch (error) {
+    if (!context.hooks.validStaffTimeStaleError(error)) throw error;
+    start = await context.hooks.loadStaffTimeReviewView(7);
+    data = await context.hooks.loadStaffTimeAdvancedReview(start, 7);
+  }
+  return { data, calls: context.calls, lookupState: context.hooks.lookupState() };
 }
 
 function configureLoginEntryRuntime(hostname) {
@@ -503,7 +641,7 @@ function configureLoginEntryRuntime(hostname) {
   return { nodes, result: context.result };
 }
 
-function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } = {}) {
+function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '', rejectFailure = '' } = {}) {
   const source = sourceBetween(
     adminHtml,
     'function validTabletPairingCode(',
@@ -517,8 +655,8 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
     gymName: 'Revolution BJJ',
     origin: 'https://gib-live.netlify.app',
     deviceLabel: 'Revolution BJJ front desk',
-    requestedAt: new Date(now - 1_000).toISOString(),
-    expiresAt: new Date(now + 299_000).toISOString()
+    requestedAt: new Date(now - 60 * 60_000).toISOString(),
+    expiresAt: new Date(now + 11 * 60 * 60_000).toISOString()
   };
   const approveResponse = {
     ok: true,
@@ -527,6 +665,13 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
     gymName: 'Revolution BJJ',
     deviceLabel: 'Revolution BJJ front desk',
     approvedAt: new Date(now).toISOString()
+  };
+  const rejectResponse = {
+    ok: true,
+    result: 'rejected',
+    installationId: 'rev',
+    gymName: 'Revolution BJJ',
+    deviceLabel: 'Revolution BJJ front desk'
   };
   const nodes = {
     '#tabletPairingCode': { value: 'abcde-fghjk', focusCount: 0, focus() { this.focusCount += 1; } },
@@ -543,6 +688,7 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
       focusCount: 0,
       focus() { this.focusCount += 1; }
     },
+    '#tabletPairingRejectButton': { disabled: false },
     '#tabletPairingCancelButton': { disabled: false },
     '#tabletPairingApprovalMessage': { message: '', tone: '' }
   };
@@ -554,8 +700,10 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
     nodes,
     reviewResponse,
     approveResponse,
+    rejectResponse,
     reviewFailure,
     approveFailure,
+    rejectFailure,
     calls: [],
     loggedOutMessage: ''
   });
@@ -568,9 +716,10 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
     });
     const STAFF_CLOCK_PAIRING_CONFIG = Object.freeze({
       origin: 'https://gib-live.netlify.app',
-      expiresInSeconds: 300
+      expiresInSeconds: 43_200
     });
     const TABLET_PAIRING_AVAILABLE = true;
+    const TABLET_PAIRING_REVIEW_LIFETIME_MS = 15 * 60_000;
     const API = Object.freeze({ tabletPairing: '/api/m1-admin-tablet-pairing' });
     let adminRequestToken = 'a'.repeat(64);
     let reviewedTabletPairingCode = '';
@@ -601,6 +750,10 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
         if (reviewFailure) throw Object.assign(new Error(reviewFailure), { status: 410 });
         return JSON.parse(JSON.stringify(reviewResponse));
       }
+      if (body.operation === 'reject') {
+        if (rejectFailure) throw Object.assign(new Error(rejectFailure), { status: 500 });
+        return JSON.parse(JSON.stringify(rejectResponse));
+      }
       if (approveFailure) throw Object.assign(new Error(approveFailure), { status: 500 });
       return JSON.parse(JSON.stringify(approveResponse));
     }
@@ -610,32 +763,51 @@ function tabletPairingAdminRuntime({ reviewFailure = '', approveFailure = '' } =
       normalizeTabletPairingCode,
       validTabletPairingReviewResponse,
       validTabletPairingApproveResponse,
+      validTabletPairingRejectResponse,
       clearTabletPairingReview,
       reviewTabletPairing,
       approveTabletPairing,
+      rejectTabletPairing,
       reviewedCode: () => reviewedTabletPairingCode
     };
   `, { filename: 'admin-tablet-pairing.js' }).runInContext(context);
-  return { context, hooks: context.hooks, nodes, reviewResponse, approveResponse };
+  return { context, hooks: context.hooks, nodes, reviewResponse, approveResponse, rejectResponse };
 }
 
-test('Daily Review remains first and one compact Staff time section follows it', () => {
+test('Admin exposes exactly two compact, mutually exclusive manager modes', () => {
   const app = sourceBetween(adminHtml, '<section id="appPanel"', '<div id="toast"');
-  const reviewPosition = app.indexOf('id="reviewSection"');
-  const instructorSearchPosition = app.indexOf('Find an Instructor');
+  const dailyPosition = app.indexOf('id="sign-ins"');
   const staffPosition = app.indexOf('id="staff-time"');
-  assert.ok(reviewPosition >= 0);
-  assert.ok(instructorSearchPosition > reviewPosition);
-  assert.ok(staffPosition > instructorSearchPosition);
+  assert.ok(dailyPosition >= 0);
+  assert.ok(staffPosition > dailyPosition);
+  assert.equal((app.match(/class="(?:[^"]* )?mode-panel(?: [^"]*)?"/gu) || []).length, 2);
+  assert.match(app, /role="tablist"[^>]*aria-label="Admin mode"[\s\S]*href="#sign-ins"[^>]*role="tab"[\s\S]*href="#staff-time"[^>]*role="tab"/u);
+  assert.match(app, /<section id="sign-ins"[^>]*role="tabpanel"/u);
+  assert.match(app, /<section id="staff-time"[^>]*role="tabpanel"[^>]*hidden/u);
   assert.equal(idCount('staff-time'), 1);
-  assert.match(app, /<details id="staff-time"[^>]*\bopen\b[^>]*\btabindex="-1"/u);
-  assert.match(app, /Clocked in now[\s\S]*Today’s punches[\s\S]*Needs attention/u);
+  assert.match(app, /Needs attention[\s\S]*Clocked in now[\s\S]*Recent completed shifts/u);
   assert.match(app, /<details id="staffPayPeriods"[^>]*>\s*<summary>Pay-period totals<\/summary>/u);
   assert.doesNotMatch(app.match(/<details id="staffPayPeriods"[^>]*>/u)?.[0] || '', /\bopen\b/u);
-  assert.match(app, /Fix missed punch/u);
-  assert.match(app, /Staff Time records[\s\S]*Show older history[\s\S]*Staff time audit/u);
-  assert.equal(idCount('staffTimeOlderHistory'), 1);
-  assert.match(app, /aria-controls="staffTimeRecords" aria-expanded="false" hidden/u);
+  assert.match(app, /id="staffCorrectionOpen"[^>]*aria-controls="staffCorrectionPanel"[^>]*aria-expanded="false"[^>]*>Add missed punch/u);
+  assert.match(app, /<section id="staffCorrectionPanel"[^>]*hidden/u);
+  assert.match(app, /Recent completed shifts[\s\S]*Find an older shift[\s\S]*Advanced records and audit/u);
+  assert.equal(idCount('staffRecentShifts'), 1);
+  assert.equal(idCount('staffOlderShiftFinder'), 1);
+  assert.equal(idCount('staffOlderShiftResults'), 1);
+  assert.equal(idCount('staffTimeAdvanced'), 1);
+  assert.match(app, /<details id="staffOlderShiftFinder"[^>]*>[\s\S]*<summary>Find an older shift<\/summary>/u);
+  assert.match(app, /<details id="staffTimeAdvanced"[^>]*>[\s\S]*Advanced records and audit[\s\S]*staffTimeRecords[\s\S]*staffTimeAudit/u);
+  const advancedMarkup = sourceBetween(app, '<details id="staffTimeAdvanced"', '</details>\n        </div>\n      </section>');
+  assert.match(advancedMarkup, /Today’s punches[\s\S]*Staff Time records[\s\S]*Staff time audit/u);
+  assert.doesNotMatch(advancedMarkup, /Needs attention/u);
+  assert.match(advancedMarkup, /Open this section to load advanced records and audit/u);
+  assert.match(advancedMarkup, /staffTimeAdvancedRetry[^>]*hidden/u);
+  assert.doesNotMatch(app.match(/<details id="staffOlderShiftFinder"[^>]*>/u)?.[0] || '', /\bopen\b/u);
+  assert.doesNotMatch(app.match(/<details id="staffTimeAdvanced"[^>]*>/u)?.[0] || '', /\bopen\b/u);
+  assert.doesNotMatch(app, /Load older completed shifts|staffTimeOlderHistory|staffCompletedShiftHistory/u);
+  const staffStyles = sourceBetween(adminHtml, '.staff-time-panel {', '@media (max-width:');
+  assert.match(staffStyles, /overflow:\s*visible/u);
+  assert.doesNotMatch(staffStyles, /overflow-y:\s*(?:auto|scroll)|max-height/u);
 });
 
 test('Staff time reuses the existing secured Admin request path and loads only after login', () => {
@@ -656,7 +828,14 @@ test('Staff time reuses the existing secured Admin request path and loads only a
   );
   assert.match(pagingSource, /requestJson\(API\.staffTime, \{\s*operation: 'reviewPage'/u);
   assert.match(pagingSource, /validStaffTimeReviewPageResponse\(page/u);
-  assert.match(pagingSource, /requestJson\(API\.staffTime, \{ operation: 'review' \}\)/u);
+  assert.match(pagingSource, /operation: 'shiftLookup'/u);
+  assert.match(pagingSource, /mode: 'recent'/u);
+  assert.match(pagingSource, /validStaffTimeShiftLookupResponse\(lookup, expected\)/u);
+  assert.match(pagingSource, /fetchStaffTimeShiftLookup\(\s*initial,\s*\{ mode: 'recent' \},\s*generation/u);
+  assert.match(
+    pagingSource,
+    /requestJson\(\s*API\.staffTime,\s*\{ operation: 'review' \},\s*STAFF_TIME_READ_REQUEST_OPTIONS/u
+  );
   assert.match(pagingSource, /validStaffTimeReviewStartResponse\(initial\)/u);
   const loadSource = sourceBetween(adminHtml, 'async function loadStaffTime(', 'async function submitStaffCorrection(');
   assert.match(loadSource, /loadStaffTimeReviewView\(generation\)/u);
@@ -711,13 +890,15 @@ test('Admin tablet pairing is profile-gated, cross-device, and never persists a 
   assert.equal(idCount('tabletPairingCode'), 1);
   assert.equal(idCount('tabletPairingReview'), 1);
   assert.equal(idCount('tabletPairingApproveButton'), 1);
+  assert.equal(idCount('tabletPairingRejectButton'), 1);
   assert.equal(idCount('tabletPairingCancelButton'), 1);
   assert.match(app, /id="tabletPairing"[^>]*hidden/u);
   assert.match(app, /Authorize a Staff Clock tablet/u);
-  assert.match(app, /Enter the short pairing code shown on the Staff Clock tablet/u);
-  assert.match(app, /Review the exact tablet request before separately confirming authorization/u);
+  assert.match(app, /Enter the short code from the Staff Clock tablet, then review the exact request/u);
   assert.match(app, /Review before approving[\s\S]*Gym[\s\S]*Origin[\s\S]*Device[\s\S]*Requested[\s\S]*Expires/u);
   assert.match(app, /Confirm tablet authorization/u);
+  assert.match(app, /Reject pairing request/u);
+  assert.match(app, /remains valid for up to 15 minutes/u);
   assert.match(adminHtml, /tabletPairing:\s*'\/api\/m1-admin-tablet-pairing'/u);
 
   const availabilitySource = sourceBetween(
@@ -727,7 +908,7 @@ test('Admin tablet pairing is profile-gated, cross-device, and never persists a 
   );
   assert.match(availabilitySource, /INSTALLATION\.featureFlags\.staffClockPairing === true/u);
   assert.match(availabilitySource, /STAFF_CLOCK_PAIRING_CONFIG\.expiresInSeconds >= 60/u);
-  assert.match(availabilitySource, /STAFF_CLOCK_PAIRING_CONFIG\.expiresInSeconds <= 300/u);
+  assert.match(availabilitySource, /STAFF_CLOCK_PAIRING_CONFIG\.expiresInSeconds <= 12 \* 60 \* 60/u);
   assert.match(availabilitySource, /INSTALLATION\.allowedOrigin === STAFF_CLOCK_PAIRING_CONFIG\.origin/u);
   assert.match(availabilitySource, /location\.origin === STAFF_CLOCK_PAIRING_CONFIG\.origin/u);
   assert.doesNotMatch(availabilitySource, /IS_RICHMOND|installationId\s*===\s*'rev'/u);
@@ -749,6 +930,7 @@ test('Admin tablet pairing is profile-gated, cross-device, and never persists a 
   );
   assert.match(pairingSource, /requestJson\(API\.tabletPairing, \{\s*operation: 'review',\s*pairingCode: code\s*\}\)/u);
   assert.match(pairingSource, /requestJson\(API\.tabletPairing, \{\s*operation: 'approve',\s*pairingCode: code\s*\}\)/u);
+  assert.match(pairingSource, /requestJson\(API\.tabletPairing, \{\s*operation: 'reject',\s*pairingCode: code\s*\}\)/u);
   assert.doesNotMatch(pairingSource, /location|URLSearchParams|localStorage|sessionStorage/u);
   assert.doesNotMatch(adminHtml, /tabletAuthorize|tabletInstall|authorizeTablet=1|localStorage|sessionStorage|URLSearchParams/u);
 
@@ -794,8 +976,8 @@ test('Admin requests reject redirects and stay on the authenticated same-origin 
   });
 });
 
-test('Admin pairing validators enforce exact Crockford codes and installation-bound responses', () => {
-  const { hooks, reviewResponse, approveResponse } = tabletPairingAdminRuntime();
+test('Admin pairing validators accept 12-hour requests and bind approval/rejection responses to this installation', () => {
+  const { hooks, reviewResponse, approveResponse, rejectResponse } = tabletPairingAdminRuntime();
   for (const code of ['01234-56789', 'ABCDE-FGHJK', 'MNPQR-STVWX']) {
     assert.equal(hooks.validTabletPairingCode(code), true, code);
   }
@@ -814,6 +996,10 @@ test('Admin pairing validators enforce exact Crockford codes and installation-bo
   assert.equal(hooks.normalizeTabletPairingCode('  abcde - fghjk  '), 'ABCDE-FGHJK');
 
   assert.equal(hooks.validTabletPairingReviewResponse(reviewResponse, 'ABCDE-FGHJK'), true);
+  assert.equal(
+    Date.parse(reviewResponse.expiresAt) - Date.parse(reviewResponse.requestedAt),
+    12 * 60 * 60_000
+  );
   assert.equal(hooks.validTabletPairingReviewResponse({
     ...reviewResponse,
     extra: true
@@ -861,12 +1047,22 @@ test('Admin pairing validators enforce exact Crockford codes and installation-bo
   }, approvedAt), false, 'timestamps beyond the future-skew boundary are rejected');
   assert.equal(hooks.validTabletPairingApproveResponse({
     ...approveResponse,
-    approvedAt: new Date(approvedAt - 120_000).toISOString()
-  }, approvedAt), true, 'the 120-second readback boundary is accepted');
+    approvedAt: new Date(approvedAt - 15 * 60_000).toISOString()
+  }, approvedAt), true, 'the 15-minute review readback boundary is accepted');
   assert.equal(hooks.validTabletPairingApproveResponse({
     ...approveResponse,
-    approvedAt: new Date(approvedAt - 120_001).toISOString()
+    approvedAt: new Date(approvedAt - 15 * 60_000 - 1).toISOString()
   }, approvedAt), false, 'timestamps older than the readback boundary are rejected');
+
+  assert.equal(hooks.validTabletPairingRejectResponse(rejectResponse), true);
+  assert.equal(hooks.validTabletPairingRejectResponse({
+    ...rejectResponse,
+    installationId: 'richmond'
+  }), false);
+  assert.equal(hooks.validTabletPairingRejectResponse({
+    ...rejectResponse,
+    extra: true
+  }), false);
 });
 
 test('Admin pairing reviews first, approves separately, and clears memory and DOM state', async () => {
@@ -915,12 +1111,35 @@ test('Admin pairing reviews first, approves separately, and clears memory and DO
     "$\('#tabletDiagnosticButton'\).addEventListener('click'"
   );
   assert.match(eventSource, /tabletPairingCode'\)\.addEventListener\('input'[\s\S]*clearTabletPairingReview\(\)/u);
+  assert.match(eventSource, /tabletPairingRejectButton'\)\.addEventListener\('click', rejectTabletPairing\)/u);
   assert.match(eventSource, /tabletPairingCancelButton'\)\.addEventListener\('click'[\s\S]*clearTabletPairingReview\(\{ clearCode: true \}\)/u);
   const sessionSource = sourceBetween(adminHtml, 'function setLoggedOut(', 'async function login(');
   assert.equal(
     (sessionSource.match(/clearTabletPairingReview\(\{ clearCode: true \}\)/gu) || []).length,
     2
   );
+});
+
+test('Admin explicitly rejects a reviewed request and invalidates the displayed code', async () => {
+  const { context, hooks, nodes } = tabletPairingAdminRuntime();
+  await hooks.reviewTabletPairing();
+  await hooks.rejectTabletPairing();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.calls)), [
+    {
+      url: '/api/m1-admin-tablet-pairing',
+      body: { operation: 'review', pairingCode: 'ABCDE-FGHJK' }
+    },
+    {
+      url: '/api/m1-admin-tablet-pairing',
+      body: { operation: 'reject', pairingCode: 'ABCDE-FGHJK' }
+    }
+  ]);
+  assert.equal(hooks.reviewedCode(), '');
+  assert.equal(nodes['#tabletPairingCode'].value, '');
+  assert.equal(nodes['#tabletPairingReview'].hidden, true);
+  assert.match(nodes['#tabletPairingMessage'].message, /pairing rejected/u);
+  assert.match(nodes['#tabletPairingMessage'].message, /can no longer be approved/u);
 });
 
 test('Admin pairing rejects changed codes and requires a fresh review after an HTTP approval failure', async () => {
@@ -953,9 +1172,9 @@ test('Admin pairing rejects changed codes and requires a fresh review after an H
   assert.match(approvalFailure.nodes['#tabletPairingMessage'].message, /review this pairing code again/iu);
 });
 
-test('TEST Admin entry preserves the direct Staff Time hash and focuses it after loading', async () => {
+test('TEST Admin entry preserves the direct Staff Clock hash and activates only that mode', async () => {
   const loginSource = sourceBetween(adminHtml, 'async function login(', 'async function logout(');
-  const focusSource = sourceBetween(adminHtml, 'function focusStaffTimeHash(', 'async function loadStaffTime(');
+  const modeSource = sourceBetween(adminHtml, 'function requestedManagerMode(', 'function setLoggedOut(');
   const nodes = {
     '#loginMessage': {},
     '#loginAdminName': { value: 'Stuart Turner' },
@@ -963,10 +1182,21 @@ test('TEST Admin entry preserves the direct Staff Time hash and focuses it after
     '#loginButton': { disabled: false },
     '#loginPassphrase': { value: 'production credential must not be used' },
     '#appPanel': { hidden: true },
+    '#sign-ins': {
+      hidden: false,
+      focus() { this.focused = true; }
+    },
     '#staff-time': {
-      open: false,
+      hidden: true,
       focus() { this.focused = true; },
-      scrollIntoView() { this.scrolled = true; }
+    },
+    '#dailyModeControl': {
+      attributes: {},
+      setAttribute(name, value) { this.attributes[name] = String(value); }
+    },
+    '#staffModeControl': {
+      attributes: {},
+      setAttribute(name, value) { this.attributes[name] = String(value); }
     }
   };
   const context = vm.createContext({
@@ -988,11 +1218,16 @@ test('TEST Admin entry preserves the direct Staff Time hash and focuses it after
       calls.push({ url, body: JSON.parse(JSON.stringify(body)) });
       return { requestToken: 'a'.repeat(32), adminName: body.adminName, test: true };
     }
-    function setLoggedIn() { nodes['#appPanel'].hidden = false; events.push('logged-in'); }
+    function setLoggedIn() {
+      nodes['#appPanel'].hidden = false;
+      events.push('logged-in');
+      applyManagerMode();
+    }
+    function beginStaffShiftLookupLoading() { events.push('shift-loading'); }
     function defaultYesterday() { return '2026-08-26'; }
     async function loadReview() { events.push('review-loaded'); }
     async function loadStaffTime() { events.push('staff-loaded'); }
-    ${focusSource}
+    ${modeSource}
     ${loginSource}
     globalThis.hooks = { login };
   `, { filename: 'test-admin-direct-staff-time.js' }).runInContext(context);
@@ -1004,21 +1239,179 @@ test('TEST Admin entry preserves the direct Staff Time hash and focuses it after
     passphrase: '',
     testShortcut: true
   });
-  assert.deepEqual(Array.from(context.events), ['logged-in', 'review-loaded', 'staff-loaded']);
-  assert.equal(nodes['#staff-time'].open, true);
+  assert.deepEqual(
+    Array.from(context.events),
+    ['logged-in', 'shift-loading', 'staff-loaded', 'review-loaded']
+  );
+  assert.equal(nodes['#sign-ins'].hidden, true);
+  assert.equal(nodes['#staff-time'].hidden, false);
+  assert.equal(nodes['#dailyModeControl'].attributes['aria-selected'], 'false');
+  assert.equal(nodes['#staffModeControl'].attributes['aria-selected'], 'true');
   assert.equal(nodes['#staff-time'].focused, true);
-  assert.equal(nodes['#staff-time'].scrolled, true);
   assert.equal(context.location.hash, '#staff-time');
+});
+
+test('repeated Arrow, Home, and End navigation keeps focus on the manager mode tabs', () => {
+  const modeSource = sourceBetween(adminHtml, 'function requestedManagerMode(', 'function setLoggedOut(');
+  const keyboardSource = sourceBetween(
+    adminHtml,
+    "$('#managerModes').addEventListener('keydown'",
+    "$('#previousDay').addEventListener('click'"
+  );
+  const hashSource = sourceBetween(
+    adminHtml,
+    "window.addEventListener('hashchange'",
+    "window.addEventListener('message'"
+  );
+
+  const document = { activeElement: null };
+  let managerKeydown = null;
+  let hashChange = null;
+  const focusable = (href = '') => ({
+    hidden: false,
+    href,
+    attributes: {},
+    focus() { document.activeElement = this; },
+    getAttribute(name) { return name === 'href' ? this.href : this.attributes[name]; },
+    setAttribute(name, value) { this.attributes[name] = String(value); }
+  });
+  const nodes = {
+    '#appPanel': { hidden: false },
+    '#managerModes': {
+      addEventListener(type, handler) {
+        if (type === 'keydown') managerKeydown = handler;
+      },
+      contains(element) {
+        return element === nodes['#dailyModeControl'] || element === nodes['#staffModeControl'];
+      }
+    },
+    '#dailyModeControl': focusable('#sign-ins'),
+    '#staffModeControl': focusable('#staff-time'),
+    '#sign-ins': focusable(),
+    '#staff-time': focusable()
+  };
+  const location = { currentHash: '#sign-ins' };
+  Object.defineProperty(location, 'hash', {
+    get() { return this.currentHash; },
+    set(value) {
+      this.currentHash = value;
+      if (hashChange) hashChange();
+    }
+  });
+  const window = {
+    requestAnimationFrame(callback) { callback(); },
+    addEventListener(type, handler) {
+      if (type === 'hashchange') hashChange = handler;
+    }
+  };
+  const context = vm.createContext({ document, location, nodes, window });
+  new vm.Script(`
+    const STAFF_CLOCK_ENABLED = true;
+    function $(selector) { return nodes[selector]; }
+    ${modeSource}
+    ${keyboardSource}
+    ${hashSource}
+    globalThis.hooks = { applyManagerMode };
+  `, { filename: 'staff-time-manager-tabs.js' }).runInContext(context);
+
+  assert.ok(managerKeydown);
+  assert.ok(hashChange);
+  context.hooks.applyManagerMode();
+  nodes['#dailyModeControl'].focus();
+  const press = key => {
+    let prevented = false;
+    managerKeydown({ key, preventDefault() { prevented = true; } });
+    assert.equal(prevented, true);
+  };
+  press('ArrowRight');
+  assert.equal(document.activeElement, nodes['#staffModeControl']);
+  press('ArrowLeft');
+  assert.equal(document.activeElement, nodes['#dailyModeControl']);
+  press('End');
+  assert.equal(document.activeElement, nodes['#staffModeControl']);
+  press('Home');
+  assert.equal(document.activeElement, nodes['#dailyModeControl']);
+});
+
+test('#staff-time starts Staff Clock loading without waiting for Daily sign-ins', async () => {
+  const loginSource = sourceBetween(adminHtml, 'async function login(', 'async function logout(');
+  const context = vm.createContext({ events: [], releaseDaily: null });
+  new vm.Script(`
+    const API = { login: '/login' };
+    const IS_RICHMOND_PRODUCTION = false;
+    const ADMIN_MUTATIONS_ENABLED = true;
+    const STAFF_CLOCK_ENABLED = true;
+    const location = { hash: '#staff-time' };
+    let adminRequestToken = '';
+    const nodes = {
+      '#loginMessage': {},
+      '#loginAdminName': { value: 'Stuart Turner' },
+      '#testLoginButton': { disabled: false },
+      '#loginButton': { disabled: false },
+      '#loginPassphrase': { value: 'must-not-be-used' }
+    };
+    function $(selector) { return nodes[selector]; }
+    function showMessage(target, message) { target.message = message; }
+    async function requestJson(_url, body) {
+      events.push('login');
+      return { requestToken: 'a'.repeat(32), adminName: body.adminName, test: true };
+    }
+    function setLoggedIn() { events.push('logged-in'); }
+    function beginStaffShiftLookupLoading() { events.push('staff-loading-state'); }
+    function defaultYesterday() { return '2026-08-26'; }
+    function requestedManagerMode() { return location.hash === '#staff-time' ? 'staff-time' : 'sign-ins'; }
+    function applyManagerMode() { events.push('mode-applied'); }
+    function loadReview() {
+      events.push('daily-start');
+      return new Promise(resolve => { releaseDaily = resolve; });
+    }
+    async function loadStaffTime() { events.push('staff-start'); }
+    ${loginSource}
+    globalThis.hooks = { login, release: () => releaseDaily() };
+  `, { filename: 'staff-time-direct-load-priority.js' }).runInContext(context);
+
+  const loginPromise = context.hooks.login(true);
+  await new Promise(resolve => setImmediate(resolve));
+  const staffStartedBeforeDailyFinished = context.events.includes('staff-start');
+  context.hooks.release();
+  await loginPromise;
+  assert.equal(staffStartedBeforeDailyFinished, true);
+  assert.ok(context.events.indexOf('staff-start') > context.events.indexOf('staff-loading-state'));
+});
+
+test('a fresh Admin entry resets stale page scroll before review begins', () => {
+  const sessionSource = sourceBetween(adminHtml, 'function setLoggedIn(', 'async function login(');
+  assert.match(sessionSource, /const firstEntry = \$\('#appPanel'\)\.hidden/u);
+  assert.match(
+    sessionSource,
+    /if \(firstEntry\) \{[\s\S]*window\.requestAnimationFrame\([\s\S]*window\.scrollTo\(0, 0\)/u
+  );
 });
 
 test('review validation requires every canonical Staff time field and rejects drift', () => {
   const {
     validStaffTimeReviewStartResponse,
     validStaffTimeReviewPageResponse,
+    validStaffTimeShiftLookupResponse,
     validStaffTimeReviewResponse
   } = validatorRuntime();
   const start = reviewStartResponse();
   assert.equal(validStaffTimeReviewStartResponse(start), true);
+  const alternateClockedIn = structuredClone(start);
+  alternateClockedIn.clockedInNow = [{
+    punchId: PUNCH_TWO,
+    staffId: 'front-desk-test-three',
+    staffName: 'Front Desk Test Three',
+    clockInAt: '2026-08-18T09:00:00-04:00'
+  }];
+  assert.equal(validStaffTimeReviewStartResponse(alternateClockedIn), true);
+  const unknownClockedInStaff = structuredClone(start);
+  unknownClockedInStaff.clockedInNow[0].staffId = 'unknown-test-staff';
+  unknownClockedInStaff.clockedInNow[0].staffName = 'Unknown Test Staff';
+  assert.equal(validStaffTimeReviewStartResponse(unknownClockedInStaff), false);
+  const mismatchedClockedInName = structuredClone(start);
+  mismatchedClockedInName.clockedInNow[0].staffName = 'Front Desk Test Three';
+  assert.equal(validStaffTimeReviewStartResponse(mismatchedClockedInName), false);
   assert.equal(validStaffTimeReviewStartResponse({ ...start, records: [] }), false);
   assert.equal(validStaffTimeReviewStartResponse({
     ...start,
@@ -1058,6 +1451,57 @@ test('review validation requires every canonical Staff time field and rejects dr
   };
   assert.ok(new TextEncoder().encode(JSON.stringify(oversizedPage)).byteLength > 200_000);
   assert.equal(validStaffTimeReviewPageResponse(oversizedPage, expectedPage), false);
+
+  const recentShift = completedHistoryShift(880, {
+    clockIn: {
+      ...completedHistoryShift(880).clockIn,
+      timestamp: '2026-08-12T09:00:00-04:00',
+      date: '2026-08-12'
+    },
+    clockOut: {
+      ...completedHistoryShift(880).clockOut,
+      timestamp: '2026-08-12T17:00:00-04:00',
+      date: '2026-08-12'
+    }
+  });
+  const recentLookup = shiftLookup({ total: 1, items: [recentShift] });
+  const expectedRecentLookup = {
+    viewToken: VIEW_TOKEN,
+    mode: 'recent',
+    today: '2026-08-18',
+    staffId: '',
+    date: ''
+  };
+  assert.equal(validStaffTimeShiftLookupResponse(recentLookup, expectedRecentLookup), true);
+  assert.equal(validStaffTimeShiftLookupResponse({ ...recentLookup, extra: true }, expectedRecentLookup), false);
+  assert.equal(validStaffTimeShiftLookupResponse({ ...recentLookup, truncated: true }, expectedRecentLookup), false);
+  assert.equal(validStaffTimeShiftLookupResponse({
+    ...recentLookup,
+    total: 1,
+    items: [],
+    truncated: true
+  }, expectedRecentLookup), false);
+  assert.equal(validStaffTimeShiftLookupResponse({ ...recentLookup, dateFrom: '2026-08-11' }, expectedRecentLookup), false);
+
+  const exactLookup = shiftLookup({
+    mode: 'exactDate',
+    dateFrom: '2026-08-11',
+    dateThrough: '2026-08-11',
+    staffId: 'mandy-test',
+    date: '2026-08-11',
+    total: 1,
+    items: [completedHistoryShift(890)]
+  });
+  const expectedExactLookup = {
+    viewToken: VIEW_TOKEN,
+    mode: 'exactDate',
+    today: '2026-08-18',
+    staffId: 'mandy-test',
+    date: '2026-08-11'
+  };
+  assert.equal(validStaffTimeShiftLookupResponse(exactLookup, expectedExactLookup), true);
+  assert.equal(validStaffTimeShiftLookupResponse({ ...exactLookup, staffId: 'andrew-test' }, expectedExactLookup), false);
+  assert.equal(validStaffTimeShiftLookupResponse({ ...exactLookup, date: '2026-08-10' }, expectedExactLookup), false);
 
   const valid = reviewResponse();
   assert.equal(validStaffTimeReviewResponse(valid), true);
@@ -1179,6 +1623,87 @@ test('review validation requires every canonical Staff time field and rejects dr
   assert.equal(validStaffTimeReviewResponse(extraField), false);
 });
 
+test('completed-shift lookups order New York fall-back shifts by parsed instant', () => {
+  const { validStaffTimeShiftLookupResponse } = validatorRuntime();
+  const fallBackShift = (index, clockInAt, clockOutAt) => {
+    const base = completedHistoryShift(index);
+    return {
+      ...base,
+      clockIn: {
+        ...base.clockIn,
+        timestamp: clockInAt,
+        date: '2026-11-01'
+      },
+      clockOut: {
+        ...base.clockOut,
+        timestamp: clockOutAt,
+        date: '2026-11-01'
+      }
+    };
+  };
+  const newerStandardTimeShift = fallBackShift(
+    820,
+    '2026-11-01T01:10:00-05:00',
+    '2026-11-01T01:20:00-05:00'
+  );
+  const olderDaylightTimeShift = fallBackShift(
+    830,
+    '2026-11-01T01:50:00-04:00',
+    '2026-11-01T01:55:00-04:00'
+  );
+  const newestFirst = [newerStandardTimeShift, olderDaylightTimeShift];
+  const chronologicallyReversed = [...newestFirst].reverse();
+  assert.ok(
+    newerStandardTimeShift.clockIn.timestamp < olderDaylightTimeShift.clockIn.timestamp,
+    'the ISO strings intentionally sort opposite to their real instants'
+  );
+  assert.ok(
+    Date.parse(newerStandardTimeShift.clockIn.timestamp) > Date.parse(olderDaylightTimeShift.clockIn.timestamp),
+    'the -05:00 shift is the newer real instant'
+  );
+
+  const recentExpected = {
+    viewToken: VIEW_TOKEN,
+    mode: 'recent',
+    today: '2026-11-01',
+    staffId: '',
+    date: ''
+  };
+  const recent = shiftLookup({
+    dateFrom: '2026-10-26',
+    dateThrough: '2026-11-01',
+    total: 2,
+    items: newestFirst
+  });
+  assert.equal(validStaffTimeShiftLookupResponse(recent, recentExpected), true);
+  assert.equal(validStaffTimeShiftLookupResponse({
+    ...recent,
+    items: chronologicallyReversed
+  }, recentExpected), false);
+
+  const exactExpected = {
+    viewToken: VIEW_TOKEN,
+    mode: 'exactDate',
+    today: '2026-11-01',
+    staffId: 'mandy-test',
+    date: '2026-11-01'
+  };
+  const exact = shiftLookup({
+    mode: 'exactDate',
+    dateFrom: '2026-11-01',
+    dateThrough: '2026-11-01',
+    staffId: 'mandy-test',
+    date: '2026-11-01',
+    total: 2,
+    items: newestFirst
+  });
+  assert.equal(validStaffTimeShiftLookupResponse(exact, exactExpected), true);
+  assert.equal(validStaffTimeShiftLookupResponse({
+    ...exact,
+    items: chronologicallyReversed
+  }, exactExpected), false);
+});
+
 test('10k+ Staff time totals use bounded priority streams, variable pages, and bounded DOM', async () => {
   const records = Array.from({ length: 500 }, (_, index) => staffRecord(index));
   records[0] = {
@@ -1270,16 +1795,21 @@ test('10k+ Staff time totals use bounded priority streams, variable pages, and b
   assert.deepEqual(
     calls.filter(call => call.operation === 'reviewPage').map(call => [call.stream, call.offset]),
     [
-      ['records', 0],
-      ['records', 0],
-      ['records', 137],
-      ['records', 274],
-      ['records', 411],
       ['attention', 0],
       ['attention', 137],
       ['attention', 274],
       ['attention', 411],
       ['attention', 548],
+      ['records', 0],
+      ['attention', 0],
+      ['attention', 137],
+      ['attention', 274],
+      ['attention', 411],
+      ['attention', 548],
+      ['records', 0],
+      ['records', 137],
+      ['records', 274],
+      ['records', 411],
       ['audit', 0],
       ['audit', 137],
       ['audit', 274],
@@ -1290,9 +1820,26 @@ test('10k+ Staff time totals use bounded priority streams, variable pages, and b
   assert.ok(calls.filter(call => call.operation === 'reviewPage').every(call => (
     Object.keys(call).sort().join(',') === 'offset,operation,stream,viewToken'
   )));
+  assert.deepEqual(
+    calls.filter(call => call.operation === 'shiftLookup'),
+    [
+      { operation: 'shiftLookup', viewToken: VIEW_TOKEN, mode: 'recent' },
+      { operation: 'shiftLookup', viewToken: VIEW_TOKEN, mode: 'recent' }
+    ]
+  );
+  assert.ok(
+    calls.findIndex(call => call.operation === 'reviewPage' && call.stream === 'attention')
+      < calls.findIndex(call => call.operation === 'shiftLookup'),
+    'Needs attention must load before recent completed shifts'
+  );
+  assert.ok(
+    calls.findIndex(call => call.operation === 'shiftLookup')
+      < calls.findIndex(call => call.operation === 'reviewPage' && call.stream === 'records'),
+    'recent completed shifts must load before Advanced records and audit'
+  );
 
   const nodes = renderStaffTimeRuntime(data);
-  assert.equal(nodes['#staffTimeSummary'].textContent, '1 clocked in · 10,501 today');
+  assert.equal(nodes['#staffTimeSummary'].textContent, '600 need attention · 1 clocked in');
   assert.equal(nodes['#staffTodayPunches'].children.length, 499);
   assert.equal(nodes['#staffNeedsAttention'].children.length, 600);
   assert.equal(nodes['#staffTimeRecords'].children.length, 501);
@@ -1324,6 +1871,596 @@ test('a stale Staff time page restarts the whole view once', async () => {
     calls.filter(call => call.operation === 'reviewPage').map(call => call.stream),
     ['records', 'records', 'audit']
   );
+  assert.deepEqual(
+    calls.filter(call => call.operation === 'shiftLookup'),
+    [
+      { operation: 'shiftLookup', viewToken: VIEW_TOKEN, mode: 'recent' },
+      { operation: 'shiftLookup', viewToken: VIEW_TOKEN, mode: 'recent' }
+    ]
+  );
+});
+
+test('recent completed shifts have explicit loading, success, failure, and retry states with no pagination', async () => {
+  const loadingNodes = renderStaffTimeRuntime(reviewResponse(), {
+    recentLookup: null,
+    recentLoading: true
+  });
+  assert.match(elementText(loadingNodes['#staffRecentShifts']), /Loading recent completed shifts/u);
+  assert.equal(loadingNodes['#staffRecentShifts'].attributes['aria-busy'], 'true');
+  assert.equal(loadingNodes['#staffRecentShiftsRetry'].hidden, true);
+  assert.match(loadingNodes['#staffRecentShiftsMessage'].textContent, /last seven New York calendar days/u);
+
+  const recentShift = completedHistoryShift(980, {
+    clockIn: {
+      ...completedHistoryShift(980).clockIn,
+      timestamp: '2026-08-12T09:00:00-04:00',
+      date: '2026-08-12',
+      staffName: 'Front Desk Test Three'
+    },
+    clockOut: {
+      ...completedHistoryShift(980).clockOut,
+      timestamp: '2026-08-12T17:00:00-04:00',
+      date: '2026-08-12',
+      staffName: 'Front Desk Test Three'
+    }
+  });
+  const recent = shiftLookup({ total: 1, items: [recentShift] });
+  const review = reviewResponse();
+  const { data, calls, lookupState } = await runPagination(
+    reviewStartResponse(),
+    {
+      records: review.records,
+      attention: review.needsAttention,
+      audit: review.audit
+    },
+    { recentLookup: recent }
+  );
+  assert.deepEqual(
+    calls.filter(call => call.operation === 'shiftLookup'),
+    [{ operation: 'shiftLookup', viewToken: VIEW_TOKEN, mode: 'recent' }]
+  );
+  assert.equal(lookupState.lookup.items.length, 1);
+  const successNodes = renderStaffTimeRuntime(data, { recentLookup: recent });
+  assert.match(elementText(successNodes['#staffRecentShifts']), /Front Desk Test Three/u);
+  assert.equal(successNodes['#staffRecentShifts'].children.length, 1);
+  assert.match(successNodes['#staffRecentShiftsMessage'].textContent, /2026-08-12 through 2026-08-18/u);
+
+  const tenRecentShifts = Array.from({ length: 10 }, (_, index) => completedHistoryShift(1000 + index * 2));
+  const cappedLookup = shiftLookup({ total: 10, items: tenRecentShifts });
+  const cappedNodes = renderStaffTimeRuntime(data, { recentLookup: cappedLookup });
+  assert.equal(cappedNodes['#staffRecentShifts'].children.length, 8);
+  assert.equal(cappedNodes['#staffRecentShowMore'].hidden, false);
+  assert.match(cappedNodes['#staffRecentShiftsMessage'].textContent, /Showing newest 8 of 10/u);
+  assert.match(elementText(cappedNodes['#staffRecentShifts'].children[0]), /Duration 8 hr 0 min/u);
+  const expandedNodes = renderStaffTimeRuntime(data, {
+    recentLookup: cappedLookup,
+    recentVisibleLimit: 16
+  });
+  assert.equal(expandedNodes['#staffRecentShifts'].children.length, 10);
+  assert.equal(expandedNodes['#staffRecentShowMore'].hidden, true);
+
+  const failure = await runPagination(
+    reviewStartResponse(),
+    {
+      records: review.records,
+      attention: review.needsAttention,
+      audit: review.audit
+    },
+    { shiftLookupFailure: true }
+  );
+  assert.equal(failure.data.records.length, review.records.length);
+  assert.equal(failure.lookupState.lookup, null);
+  assert.match(failure.lookupState.error, /matching receiver unavailable/u);
+  const failureNodes = renderStaffTimeRuntime(failure.data, {
+    recentLookup: null,
+    recentError: failure.lookupState.error
+  });
+  assert.match(elementText(failureNodes['#staffRecentShifts']), /matching receiver unavailable/u);
+  assert.equal(failureNodes['#staffRecentShiftsRetry'].hidden, false);
+  assert.match(failureNodes['#staffRecentShiftsMessage'].textContent, /did not load.*Retry below/u);
+
+  const beginSource = sourceBetween(
+    adminHtml,
+    'function beginStaffShiftLookupLoading()',
+    'function renderStaffRecentShifts()'
+  );
+  const renderSource = sourceBetween(
+    adminHtml,
+    'function renderStaffRecentShifts()',
+    'function renderStaffTime(data)'
+  );
+  const retrySource = sourceBetween(
+    adminHtml,
+    'async function retryStaffRecentShifts()',
+    'function readStaffOlderShiftQuery('
+  );
+  assert.match(beginSource, /staffRecentLoading = true[\s\S]*renderStaffRecentShifts\(\)/u);
+  assert.match(renderSource, /aria-busy[\s\S]*Loading recent completed shifts/u);
+  assert.match(renderSource, /Recent completed shifts did not load\. Retry below/u);
+  assert.match(renderSource, /lookup\.items\.slice\(0, staffRecentVisibleLimit\)/u);
+  assert.match(retrySource, /fetchStaffTimeShiftLookup\([\s\S]*mode: 'recent'/u);
+  assert.match(retrySource, /staffRecentVisibleLimit = Math\.min\([\s\S]*STAFF_RECENT_MAX_VISIBLE[\s\S]*STAFF_RECENT_INCREMENT/u);
+  assert.doesNotMatch(adminHtml, /operation: 'historyPage'|Load older completed shifts/u);
+});
+
+test('Needs attention allows only one exact clocked-in match before Advanced validation', async () => {
+  const data = reviewResponse();
+  const frontDeskClockOut = {
+    ...staffRecord(818),
+    punchId: PUNCH_TWO,
+    staffId: 'front-desk-test-three',
+    staffName: 'Front Desk Test Three',
+    punchAction: 'clockOut',
+    timestamp: '2026-08-18T17:00:00-04:00',
+    date: '2026-08-18'
+  };
+  data.records = [data.records[0], frontDeskClockOut];
+  data.needsAttention = [
+    {
+      staffId: 'mandy-test',
+      staffName: 'Mandy Test',
+      code: 'missing_clock_out',
+      message: 'Mandy Test is missing a clock-out.',
+      linkedPunchIds: [PUNCH_ONE],
+      occurrenceCount: 1
+    },
+    {
+      staffId: 'front-desk-test-three',
+      staffName: 'Front Desk Test Three',
+      code: 'clock_out_without_clock_in',
+      message: 'Front Desk Test Three has a clock-out without a matching clock-in.',
+      linkedPunchIds: [PUNCH_TWO],
+      occurrenceCount: 1
+    },
+    {
+      staffId: 'mandy-test',
+      staffName: 'Mandy Test',
+      code: 'shift_too_long',
+      message: 'Mandy Test has a shift that needs review.',
+      linkedPunchIds: [PUNCH_ONE, PUNCH_TWO],
+      occurrenceCount: 1
+    }
+  ];
+  const attentionActions = nodes => nodes['#staffNeedsAttention'].children.map(row => row.children.find(
+    child => child.className === 'btn ghost small staff-attention-action'
+  ));
+  const assertReviewOnly = action => {
+    assert.ok(action);
+    assert.equal(action.textContent, 'Review records');
+    assert.equal(action.dataset.staffAttentionAdvanced, 'true');
+    assert.equal(Object.hasOwn(action.dataset, 'staffCorrectionStaff'), false);
+    assert.equal(Object.hasOwn(action.dataset, 'staffCorrectionAction'), false);
+  };
+  const assertResolveOnly = (action, label, staffId, code) => {
+    assert.ok(action);
+    assert.equal(action.textContent, label);
+    assert.equal(action.dataset.staffAttentionResolve, 'true');
+    assert.equal(action.dataset.staffAttentionStaff, staffId);
+    assert.equal(action.dataset.staffAttentionCode, code);
+    assert.equal(Object.hasOwn(action.dataset, 'staffCorrectionStaff'), false);
+    assert.equal(Object.hasOwn(action.dataset, 'staffCorrectionAction'), false);
+  };
+  const assertDirectCorrection = (action, staffId, punchAction) => {
+    assert.ok(action);
+    assert.equal(action.textContent, `Add missed ${punchAction === 'clockOut' ? 'Clock Out' : 'Clock In'}`);
+    assert.equal(action.dataset.staffCorrectionStaff, staffId);
+    assert.equal(action.dataset.staffCorrectionAction, punchAction);
+    assert.equal(Object.hasOwn(action.dataset, 'staffAttentionResolve'), false);
+    assert.equal(Object.hasOwn(action.dataset, 'staffAttentionAdvanced'), false);
+  };
+
+  const primaryShell = {
+    ...data,
+    records: [],
+    todayPunches: [],
+    audit: []
+  };
+  const primaryNodes = renderStaffTimeRuntime(primaryShell, {
+    advancedLoaded: false,
+    renderAdvancedStateOnly: true
+  });
+  assert.equal(primaryNodes['#staffNeedsAttentionSection'].hidden, false);
+  assert.equal(primaryNodes['#staffNeedsAttention'].children.length, 3);
+  const primaryActions = attentionActions(primaryNodes);
+  assertDirectCorrection(primaryActions[0], 'mandy-test', 'clockOut');
+  assertResolveOnly(
+    primaryActions[1],
+    'Review records',
+    'front-desk-test-three',
+    'clock_out_without_clock_in'
+  );
+  assertReviewOnly(primaryActions[2]);
+
+  const validatedNodes = renderStaffTimeRuntime(data, { advancedLoaded: true });
+  const validatedActions = attentionActions(validatedNodes);
+  assert.ok(validatedActions.every(Boolean));
+  assertDirectCorrection(validatedActions[0], 'mandy-test', 'clockOut');
+  assertResolveOnly(
+    validatedActions[1],
+    'Review records',
+    'front-desk-test-three',
+    'clock_out_without_clock_in'
+  );
+  assertReviewOnly(validatedActions[2]);
+
+  const invalidData = {
+    ...data,
+    needsAttention: [
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test',
+        code: 'missing_clock_out',
+        message: 'Linked punch is missing.',
+        linkedPunchIds: [],
+        occurrenceCount: 1
+      },
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test',
+        code: 'missing_clock_out',
+        message: 'Linked punch is unknown.',
+        linkedPunchIds: [staffRecord(819).punchId],
+        occurrenceCount: 1
+      },
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test',
+        code: 'missing_clock_out',
+        message: 'More than one punch is linked.',
+        linkedPunchIds: [PUNCH_ONE, PUNCH_TWO],
+        occurrenceCount: 1
+      },
+      {
+        staffId: 'front-desk-test-three',
+        staffName: 'Front Desk Test Three',
+        code: 'missing_clock_out',
+        message: 'The linked clock-in belongs to another staff member.',
+        linkedPunchIds: [PUNCH_ONE],
+        occurrenceCount: 1
+      },
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test Mismatch',
+        code: 'missing_clock_out',
+        message: 'The linked clock-in has a mismatched staff name.',
+        linkedPunchIds: [PUNCH_ONE],
+        occurrenceCount: 1
+      },
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test',
+        code: 'missing_clock_out',
+        message: 'More than one attention occurrence is grouped here.',
+        linkedPunchIds: [PUNCH_ONE],
+        occurrenceCount: 2
+      },
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test',
+        code: 'shift_too_long',
+        message: 'Another attention code is not directly correctable.',
+        linkedPunchIds: [PUNCH_ONE],
+        occurrenceCount: 1
+      },
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test',
+        code: 'missing_clock_out',
+        message: 'Linked punch belongs to another staff member.',
+        linkedPunchIds: [PUNCH_TWO],
+        occurrenceCount: 1
+      }
+    ]
+  };
+  const invalidNodes = renderStaffTimeRuntime(invalidData, { advancedLoaded: true });
+  const invalidActions = attentionActions(invalidNodes);
+  invalidActions.slice(0, 6).forEach((action, index) => {
+    const item = invalidData.needsAttention[index];
+    assertResolveOnly(action, 'Review records', item.staffId, item.code);
+  });
+  assertReviewOnly(invalidActions[6]);
+  assertResolveOnly(invalidActions[7], 'Review records', 'mandy-test', 'missing_clock_out');
+
+  const resolutionSource = sourceBetween(
+    adminHtml,
+    'function validatedStaffAttentionAction(',
+    'function renderStaffTimeAdvanced('
+  );
+  const resolveFixture = async (item, records, advancedResult = true) => {
+    const calls = { loads: 0, opened: [], advancedOpened: 0 };
+    const nodes = {
+      '#staffTimeMessage': {},
+      '#staffTimeAdvanced': {
+        open: false,
+        querySelector() { return { focus() {} }; },
+        scrollIntoView() { calls.advancedOpened += 1; }
+      }
+    };
+    const action = {
+      textContent: 'Review linked punch',
+      disabled: false,
+      isConnected: true,
+      dataset: {
+        staffAttentionStaff: item.staffId,
+        staffAttentionCode: item.code
+      }
+    };
+    const context = vm.createContext({
+      action,
+      advancedResult,
+      calls,
+      item: structuredClone(item),
+      nodes,
+      records: structuredClone(records)
+    });
+    new vm.Script(`
+      const STAFF_ATTENTION_ACTIONS = Object.freeze({
+        missing_clock_out: Object.freeze({ punchAction: 'clockOut', linkedPunchAction: 'clockIn' }),
+        clock_out_without_clock_in: Object.freeze({ punchAction: 'clockIn', linkedPunchAction: 'clockOut' })
+      });
+      let staffAdvancedLoaded = false;
+      let currentStaffTime = { needsAttention: [item], records };
+      function $(selector) { return nodes[selector]; }
+      function showMessage() {}
+      async function loadStaffTimeAdvanced() {
+        calls.loads += 1;
+        if (advancedResult) staffAdvancedLoaded = true;
+        return advancedResult;
+      }
+      function openStaffCorrectionPanel(value) { calls.opened.push(value); }
+      ${resolutionSource}
+      globalThis.hooks = { resolveStaffAttentionAction };
+    `, { filename: 'staff-attention-exact-link.js' }).runInContext(context);
+    await context.hooks.resolveStaffAttentionAction(action);
+    return calls;
+  };
+
+  const validOrphanOut = await resolveFixture(data.needsAttention[1], data.records);
+  assert.deepEqual(JSON.parse(JSON.stringify(validOrphanOut.opened)), [{
+    staffId: 'front-desk-test-three',
+    punchAction: 'clockIn'
+  }]);
+
+  for (const invalidItem of [
+    invalidData.needsAttention[0],
+    invalidData.needsAttention[1],
+    invalidData.needsAttention[2],
+    invalidData.needsAttention[3],
+    invalidData.needsAttention[4],
+    invalidData.needsAttention[7]
+  ]) {
+    const invalidResolution = await resolveFixture(invalidItem, invalidData.records);
+    assert.equal(invalidResolution.loads, 1);
+    assert.deepEqual(invalidResolution.opened, []);
+    assert.equal(invalidResolution.advancedOpened, 1);
+  }
+
+  const formMarkup = sourceBetween(
+    adminHtml,
+    '<section id="staffCorrectionPanel"',
+    '</section>\n\n          <section class="staff-time-block"'
+  );
+  assert.match(formMarkup, /\bhidden\b/u);
+  assert.match(formMarkup, /id="staffCorrectionCancel"/u);
+  const actionSource = sourceBetween(
+    adminHtml,
+    "$('#staffNeedsAttention').addEventListener('click'",
+    "$('#staffCorrectionForm').addEventListener('input'"
+  );
+  assert.match(actionSource, /data-staff-attention-resolve/u);
+  assert.match(actionSource, /resolveStaffAttentionAction/u);
+  assert.match(actionSource, /data-staff-correction-staff/u);
+
+  const directCalls = { advanced: 0, opened: [], resolved: 0 };
+  let attentionClick = null;
+  const directAction = {
+    dataset: {
+      staffCorrectionStaff: 'mandy-test',
+      staffCorrectionAction: 'clockOut'
+    }
+  };
+  const directContext = vm.createContext({ directAction, directCalls });
+  new vm.Script(`
+    const list = {
+      addEventListener(type, handler) {
+        if (type === 'click') globalThis.attentionClick = handler;
+      }
+    };
+    function $(selector) { return selector === '#staffNeedsAttention' ? list : null; }
+    function showStaffAdvancedTask() { directCalls.advanced += 1; }
+    function openStaffCorrectionPanel(value) { directCalls.opened.push(value); }
+    async function resolveStaffAttentionAction() { directCalls.resolved += 1; }
+    ${actionSource}
+  `, { filename: 'staff-attention-direct-clock-out.js' }).runInContext(directContext);
+  attentionClick = directContext.attentionClick;
+  assert.ok(attentionClick);
+  attentionClick({
+    target: {
+      closest(selector) {
+        return selector === '[data-staff-correction-staff]' ? directAction : null;
+      }
+    }
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(directCalls.opened)), [{
+    staffId: 'mandy-test',
+    punchAction: 'clockOut'
+  }]);
+  assert.equal(directCalls.advanced, 0);
+  assert.equal(directCalls.resolved, 0);
+});
+
+test('attention correction and Advanced actions scroll their opened target into view', () => {
+  const openCorrectionSource = sourceBetween(
+    adminHtml,
+    'function openStaffCorrectionPanel(',
+    'function closeStaffCorrectionPanel('
+  );
+  assert.match(
+    openCorrectionSource,
+    /panel\.hidden = false[\s\S]*panel\.scrollIntoView\(/u
+  );
+
+  const attentionSource = sourceBetween(
+    adminHtml,
+    "$('#staffNeedsAttention').addEventListener('click'",
+    "$('#staffCorrectionForm').addEventListener('input'"
+  );
+  assert.match(attentionSource, /showStaffAdvancedTask\(\)/u);
+  const advancedTaskSource = sourceBetween(
+    adminHtml,
+    'function showStaffAdvancedTask(',
+    'async function resolveStaffAttentionAction('
+  );
+  assert.match(advancedTaskSource, /\.open = true[\s\S]*\.focus\([\s\S]*\.scrollIntoView\(/u);
+});
+
+test('older shift finder is collapsed and handles exact staff-date success, no-results, error, and retry', () => {
+  const finderMarkup = sourceBetween(
+    adminHtml,
+    '<details id="staffOlderShiftFinder"',
+    '<details id="staffTimeAdvanced"'
+  );
+  assert.match(finderMarkup, /<summary>Find an older shift<\/summary>/u);
+  assert.doesNotMatch(finderMarkup.match(/<details[^>]*>/u)?.[0] || '', /\bopen\b/u);
+  assert.match(finderMarkup, /id="staffOlderShiftStaff" name="staffId" required/u);
+  assert.match(finderMarkup, /id="staffOlderShiftDate" name="date" type="date" required/u);
+  assert.match(finderMarkup, /id="staffOlderShiftRetry"[^>]*hidden/u);
+
+  const query = { mode: 'exactDate', staffId: 'mandy-test', date: '2026-07-01' };
+  const loadingNodes = renderStaffTimeRuntime(reviewResponse(), {
+    olderQuery: query,
+    olderLoading: true
+  });
+  assert.match(elementText(loadingNodes['#staffOlderShiftResults']), /Loading the selected staff member and exact date/u);
+  assert.equal(loadingNodes['#staffOlderShiftResults'].attributes['aria-busy'], 'true');
+  assert.equal(loadingNodes['#staffOlderShiftSubmit'].disabled, true);
+  assert.match(loadingNodes['#staffOlderShiftMessage'].textContent, /Finding the older completed shift/u);
+
+  const olderShift = completedHistoryShift(985, {
+    clockIn: {
+      ...completedHistoryShift(985).clockIn,
+      timestamp: '2026-07-01T09:00:00-04:00',
+      date: '2026-07-01'
+    },
+    clockOut: {
+      ...completedHistoryShift(985).clockOut,
+      timestamp: '2026-07-01T17:00:00-04:00',
+      date: '2026-07-01'
+    }
+  });
+  const exactLookup = shiftLookup({
+    mode: 'exactDate',
+    dateFrom: query.date,
+    dateThrough: query.date,
+    staffId: query.staffId,
+    date: query.date,
+    total: 1,
+    items: [olderShift]
+  });
+  const successNodes = renderStaffTimeRuntime(reviewResponse(), {
+    olderLookup: exactLookup,
+    olderQuery: query
+  });
+  assert.match(elementText(successNodes['#staffOlderShiftResults']), /Jul 1/u);
+  assert.match(successNodes['#staffOlderShiftMessage'].textContent, /Found 1 completed shift/u);
+
+  const emptyLookup = shiftLookup({
+    mode: 'exactDate',
+    dateFrom: query.date,
+    dateThrough: query.date,
+    staffId: query.staffId,
+    date: query.date
+  });
+  const emptyNodes = renderStaffTimeRuntime(reviewResponse(), {
+    olderLookup: emptyLookup,
+    olderQuery: query
+  });
+  assert.match(elementText(emptyNodes['#staffOlderShiftResults']), /No completed shifts found/u);
+
+  const errorNodes = renderStaffTimeRuntime(reviewResponse(), {
+    olderQuery: query,
+    olderError: 'The older shift could not be loaded. Lookup timed out.'
+  });
+  assert.match(elementText(errorNodes['#staffOlderShiftResults']), /Lookup timed out/u);
+  assert.equal(errorNodes['#staffOlderShiftRetry'].hidden, false);
+  assert.match(errorNodes['#staffOlderShiftMessage'].textContent, /same staff member and exact date/u);
+
+  const fetchSource = sourceBetween(
+    adminHtml,
+    'async function fetchStaffTimeShiftLookup(',
+    'function assembleStaffTimeReview('
+  );
+  assert.match(fetchSource, /operation: 'shiftLookup'[\s\S]*mode: 'exactDate'[\s\S]*staffId: expected\.staffId[\s\S]*date: expected\.date/u);
+  const searchSource = sourceBetween(
+    adminHtml,
+    'function readStaffOlderShiftQuery(',
+    'async function submitStaffCorrection('
+  );
+  assert.match(searchSource, /date > shiftDate\(currentStaffTime\.view\.today, -7\)/u);
+  assert.match(searchSource, /currentStaffOlderShiftQuery = query/u);
+  assert.match(searchSource, /staffOlderShiftLoadGeneration/u);
+  assert.match(searchSource, /retryStaffOlderShiftLookup[\s\S]*currentStaffOlderShiftQuery/u);
+  assert.match(
+    searchSource,
+    /validStaffTimeStaleError\(error\)[\s\S]*await loadStaffTime\(\{ quiet: true \}\)[\s\S]*currentStaffOlderShiftQuery = query[\s\S]*Staff time changed while searching\. Retry the same staff member and date\.[\s\S]*renderStaffOlderShiftLookup\(\)/u
+  );
+});
+
+test('recent and older workflows stay usable while Advanced loads or fails explicitly', () => {
+  const recentShift = completedHistoryShift(986, {
+    clockIn: {
+      ...completedHistoryShift(986).clockIn,
+      timestamp: '2026-08-18T09:00:00-04:00',
+      date: '2026-08-18'
+    },
+    clockOut: {
+      ...completedHistoryShift(986).clockOut,
+      timestamp: '2026-08-18T17:00:00-04:00',
+      date: '2026-08-18'
+    }
+  });
+  const recent = shiftLookup({ total: 1, items: [recentShift] });
+  const loadingNodes = renderStaffTimeRuntime(reviewResponse(), {
+    recentLookup: recent,
+    advancedLoading: true,
+    advancedLoaded: false,
+    renderAdvancedStateOnly: true
+  });
+  assert.match(elementText(loadingNodes['#staffRecentShifts']), /Duration 8 hr 0 min/u);
+  assert.match(elementText(loadingNodes['#staffTimeRecords']), /Loading individual punch records/u);
+  assert.match(elementText(loadingNodes['#staffTimeAudit']), /Loading the correction audit/u);
+  assert.equal(loadingNodes['#staffTimeAdvancedRetry'].hidden, true);
+  assert.equal(loadingNodes['#staffNeedsAttentionSection'].hidden, false);
+  assert.match(elementText(loadingNodes['#staffNeedsAttention']), /No Staff Clock issues need attention/u);
+
+  const errorNodes = renderStaffTimeRuntime(reviewResponse(), {
+    recentLookup: recent,
+    advancedLoaded: false,
+    advancedError: 'Advanced records and audit could not be loaded. Lookup timed out.',
+    renderAdvancedStateOnly: true
+  });
+  assert.match(elementText(errorNodes['#staffRecentShifts']), /Duration 8 hr 0 min/u);
+  assert.match(elementText(errorNodes['#staffTimeRecords']), /Lookup timed out/u);
+  assert.equal(errorNodes['#staffTimeAdvancedRetry'].hidden, false);
+  assert.match(errorNodes['#staffTimeAdvancedMessage'].textContent, /did not load.*Retry below/u);
+  assert.equal(errorNodes['#staffNeedsAttentionSection'].hidden, false);
+
+  const primaryLoad = sourceBetween(
+    adminHtml,
+    'async function loadStaffTimeReviewOnce(',
+    'async function loadStaffTimeAdvancedReview('
+  );
+  const advancedLoad = sourceBetween(
+    adminHtml,
+    'async function loadStaffTimeAdvancedReview(',
+    'function validStaffTimeStaleError('
+  );
+  assert.match(
+    primaryLoad,
+    /fetchStaffTimeReviewStream\([\s\S]*'attention'[\s\S]*fetchStaffTimeShiftLookup/u
+  );
+  assert.match(advancedLoad, /'records'[\s\S]*'audit'/u);
+  assert.doesNotMatch(advancedLoad, /'attention'/u);
 });
 
 test('rendering covers all review collections with safe Admin-added, VOID, totals, and audit labels', () => {
@@ -1345,7 +2482,7 @@ test('rendering covers all review collections with safe Admin-added, VOID, total
   assert.doesNotMatch(adminHtml, /\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML/u);
 });
 
-test('Staff Time records default to the latest seven New York calendar days and reveal fetched history newest first', () => {
+test('recent completed shifts render one row per pair while Advanced keeps the raw records', () => {
   const data = reviewResponse();
   data.records = [
     {
@@ -1379,42 +2516,156 @@ test('Staff Time records default to the latest seven New York calendar days and 
     adjustmentTotal: 0
   };
 
-  const defaultNodes = renderStaffTimeRuntime(data);
-  assert.equal(defaultNodes['#staffTimeRecords'].children.length, 2);
-  assert.match(elementText(defaultNodes['#staffTimeRecords'].children[0]), /Aug 18/u);
-  assert.match(elementText(defaultNodes['#staffTimeRecords'].children[1]), /Aug 12/u);
-  assert.doesNotMatch(elementText(defaultNodes['#staffTimeRecords']), /Aug 11/u);
-  assert.doesNotMatch(elementText(defaultNodes['#staffTimeRecords']), /Aug 19/u);
-  assert.equal(defaultNodes['#staffTimeOlderHistory'].hidden, false);
-  assert.equal(defaultNodes['#staffTimeOlderHistory'].textContent, 'Show older history');
-  assert.equal(defaultNodes['#staffTimeOlderHistory'].attributes['aria-expanded'], 'false');
-  assert.match(defaultNodes['#staffTimeHistoryScope'].textContent, /2026-08-12 through 2026-08-18, newest first/u);
-  assert.match(defaultNodes['#staffTimeHistoryScope'].textContent, /Items needing attention remain above/u);
-  assert.match(defaultNodes['#staffTimeHistoryScope'].textContent, /1 older punch is preserved/u);
-
-  const expandedNodes = renderStaffTimeRuntime(data, { showOlder: true });
-  assert.equal(expandedNodes['#staffTimeRecords'].children.length, 4);
-  assert.match(elementText(expandedNodes['#staffTimeRecords'].children[3]), /Aug 11/u);
-  assert.equal(expandedNodes['#staffTimeOlderHistory'].textContent, 'Hide older history');
-  assert.equal(expandedNodes['#staffTimeOlderHistory'].attributes['aria-expanded'], 'true');
+  const recent = shiftLookup({
+    total: 2,
+    items: [
+      completedHistoryShift(950, {
+        clockIn: {
+          ...completedHistoryShift(950).clockIn,
+          timestamp: '2026-08-18T09:00:00-04:00',
+          date: '2026-08-18'
+        },
+        clockOut: {
+          ...completedHistoryShift(950).clockOut,
+          timestamp: '2026-08-18T17:00:00-04:00',
+          date: '2026-08-18'
+        }
+      }),
+      completedHistoryShift(960, {
+        clockIn: {
+          ...completedHistoryShift(960).clockIn,
+          timestamp: '2026-08-12T09:00:00-04:00',
+          date: '2026-08-12'
+        },
+        clockOut: {
+          ...completedHistoryShift(960).clockOut,
+          timestamp: '2026-08-12T17:00:00-04:00',
+          date: '2026-08-12'
+        }
+      })
+    ]
+  });
+  const nodes = renderStaffTimeRuntime(data, { recentLookup: recent });
+  assert.equal(nodes['#staffRecentShifts'].children.length, 2);
+  assert.match(elementText(nodes['#staffRecentShifts'].children[0]), /Aug 18/u);
+  assert.match(elementText(nodes['#staffRecentShifts'].children[1]), /Aug 12/u);
+  assert.equal(nodes['#staffTimeRecords'].children.length, 4);
+  assert.match(elementText(nodes['#staffTimeRecords']), /Aug 11/u);
+  assert.match(elementText(nodes['#staffTimeRecords']), /Aug 19/u);
+  assert.match(nodes['#staffRecentShiftsMessage'].textContent, /Showing newest 2 of 2 completed shifts/u);
   assert.equal(data.records.length, 4);
+  assert.doesNotMatch(adminHtml, /operation: 'historyPage'|Load older completed shifts/u);
+});
 
-  const toggleSource = sourceBetween(
-    adminHtml,
-    "$('#staffTimeOlderHistory').addEventListener('click'",
-    "$('#staffTimeRecords').addEventListener('input'"
+test('one recent lookup accepts and renders a legitimate mixed re-pair without attaching the former audit', async () => {
+  const { validStaffCompletedShift, validStaffTimeShiftLookupResponse } = validatorRuntime();
+  const baseShift = completedHistoryShift(970);
+  const mixedShift = {
+    ...baseShift,
+    clockIn: {
+      ...baseShift.clockIn,
+      timestamp: '2026-08-12T08:55:00-04:00',
+      date: '2026-08-12',
+      originalTimestamp: baseShift.clockIn.timestamp,
+      originalDate: baseShift.clockIn.date,
+      adjustmentRequestId: REQUEST_ONE
+    },
+    clockOut: {
+      ...baseShift.clockOut,
+      timestamp: '2026-08-12T17:00:00-04:00',
+      date: '2026-08-12',
+      device: 'Admin Staff Time',
+      note: 'Missed clock-out',
+      source: 'Admin-added',
+      adminName: 'Andrew Smith'
+    },
+    latestAdjustment: null
+  };
+  assert.equal(validStaffCompletedShift(mixedShift), true);
+
+  const sharedWithoutAudit = structuredClone(mixedShift);
+  sharedWithoutAudit.clockOut.originalTimestamp = sharedWithoutAudit.clockOut.timestamp;
+  sharedWithoutAudit.clockOut.originalDate = sharedWithoutAudit.clockOut.date;
+  sharedWithoutAudit.clockOut.adjustmentRequestId = REQUEST_ONE;
+  assert.equal(validStaffCompletedShift(sharedWithoutAudit), false);
+
+  const adjusted = adjustedReviewResponse();
+  const completeAdjustedShift = {
+    clockIn: adjusted.records[0],
+    clockOut: adjusted.records[1],
+    latestAdjustment: adjusted.audit[0]
+  };
+  assert.equal(validStaffCompletedShift(completeAdjustedShift), true);
+  assert.equal(validStaffCompletedShift({
+    ...completeAdjustedShift,
+    latestAdjustment: {
+      ...completeAdjustedShift.latestAdjustment,
+      correctedClockOutAt: '2026-08-18T17:31:00-04:00'
+    }
+  }), false);
+
+  const lookup = shiftLookup({
+    total: 1,
+    items: [mixedShift]
+  });
+  assert.equal(validStaffTimeShiftLookupResponse(lookup, {
+    viewToken: VIEW_TOKEN,
+    mode: 'recent',
+    today: '2026-08-18',
+    staffId: '',
+    date: ''
+  }), true);
+
+  const initialReview = reviewResponse();
+  const { calls } = await runPagination(
+    reviewStartResponse(),
+    {
+      records: initialReview.records,
+      attention: initialReview.needsAttention,
+      audit: initialReview.audit
+    },
+    { recentLookup: lookup }
   );
-  assert.match(toggleSource, /staffOlderHistoryExpanded = !staffOlderHistoryExpanded/u);
-  assert.match(toggleSource, /renderStaffTimeRecords\(currentStaffTime\)/u);
+  assert.deepEqual(
+    calls.filter(call => call.operation === 'shiftLookup'),
+    [{ operation: 'shiftLookup', viewToken: VIEW_TOKEN, mode: 'recent' }]
+  );
+
+  const renderData = reviewResponse();
+  renderData.records = [];
+  const nodes = renderStaffTimeRuntime(renderData, { recentLookup: lookup });
+  assert.equal(countElements(
+    nodes['#staffRecentShifts'],
+    element => element.className === 'staff-adjustment-form'
+  ), 1);
+  const historyText = elementText(nodes['#staffRecentShifts']);
+  assert.match(historyText, /Adjust punch/u);
+  assert.match(historyText, /Clock-in · Tablet/u);
+  assert.match(historyText, /Clock-out · Admin-added/u);
+  assert.match(historyText, /Existing punch correction/u);
+  assert.match(historyText, /Clock-in retains an earlier correction/u);
+  assert.doesNotMatch(historyText, /Latest audit:/u);
 });
 
 test('completed shifts render one clear adjustment form plus original and corrected audit evidence', () => {
-  const nodes = renderStaffTimeRuntime(adjustedReviewResponse());
+  const data = adjustedReviewResponse();
+  const historyShift = {
+    clockIn: data.records[0],
+    clockOut: data.records[1],
+    latestAdjustment: data.audit[0]
+  };
+  data.records = [];
+  const nodes = renderStaffTimeRuntime(data, {
+    recentLookup: shiftLookup({
+      total: 1,
+      items: [historyShift]
+    })
+  });
   assert.equal(countElements(
-    nodes['#staffTimeRecords'],
+    nodes['#staffRecentShifts'],
     element => element.className === 'staff-adjustment-form'
   ), 1);
-  const recordText = elementText(nodes['#staffTimeRecords']);
+  const recordText = elementText(nodes['#staffRecentShifts']);
   assert.match(recordText, /Adjust punch/u);
   assert.match(recordText, /Current clock-in \(before this change\)/u);
   assert.match(recordText, /Current clock-out \(before this change\)/u);
@@ -1562,6 +2813,9 @@ test('correction, adjustment, and VOID mutations require reasons, confirmation, 
     'function readStaffAdjustment(',
     'function setStaffFormWorking('
   );
+  assert.match(readAdjustmentSource, /currentStaffRecentLookup\?\.items/u);
+  assert.match(readAdjustmentSource, /currentStaffOlderShiftLookup\?\.items/u);
+  assert.match(readAdjustmentSource, /lookupShift \|\| \(currentStaffTime/u);
   assert.match(readAdjustmentSource, /staffCompletedShiftByClockIn\(currentStaffTime\.records\)/u);
   assert.match(readAdjustmentSource, /staffId: completedShift\.clockIn\.staffId/u);
   assert.match(readAdjustmentSource, /staffName: completedShift\.clockIn\.staffName/u);
@@ -1611,9 +2865,12 @@ test('correction, adjustment, and VOID mutations require reasons, confirmation, 
 
   const adjustmentEvents = sourceBetween(
     adminHtml,
-    "$('#staffTimeRecords').addEventListener('click'",
-    "$('#staffTimeRecords').addEventListener('submit'"
+    "['#staffRecentShifts', '#staffOlderShiftResults', '#staffTimeRecords'].forEach(selector => {",
+    "$('#reviewSection').addEventListener('click'"
   );
+  assert.match(adjustmentEvents, /\$\(selector\)\.addEventListener\('click'/u);
+  assert.match(adjustmentEvents, /\$\(selector\)\.addEventListener\('input'/u);
+  assert.match(adjustmentEvents, /\$\(selector\)\.addEventListener\('submit'/u);
   assert.match(adjustmentEvents, /data-staff-adjust-cancel/u);
   assert.match(adjustmentEvents, /clearStaffAdjustmentReview\(form\)/u);
   assert.match(adjustmentEvents, /Review canceled\. Edit the times or reason/u);
@@ -1755,7 +3012,7 @@ test('Adjust punch uses inline review first and sends only after the second expl
   const reviewFunctions = sourceBetween(
     adminHtml,
     'function clearStaffAdjustmentReview(',
-    'function focusStaffTimeHash('
+    'async function loadStaffTime('
   );
   const submitFunction = sourceBetween(
     adminHtml,
@@ -1840,12 +3097,19 @@ test('Adjust punch uses inline review first and sends only after the second expl
   assert.equal(context.hooks.submit.textContent, 'Confirm and save adjustment');
 });
 
-test('#staff-time opens and focuses the existing panel without another login or secret', () => {
-  const focusSource = sourceBetween(adminHtml, 'function focusStaffTimeHash(', 'async function loadStaffTime(');
-  assert.match(focusSource, /location\.hash !== '#staff-time'/u);
-  assert.match(focusSource, /panel\.open = true/u);
-  assert.match(focusSource, /panel\.focus/u);
-  assert.match(adminHtml, /window\.addEventListener\('hashchange', focusStaffTimeHash\)/u);
-  const staffMarkup = sourceBetween(adminHtml, '<details id="staff-time"', '</details>\n    </section>');
+test('deep links select one manager mode and the default remains Daily sign-ins', () => {
+  const modeSource = sourceBetween(adminHtml, 'function requestedManagerMode(', 'function setLoggedOut(');
+  assert.match(modeSource, /STAFF_CLOCK_ENABLED && location\.hash === '#staff-time'[\s\S]*\? 'staff-time'[\s\S]*: 'sign-ins'/u);
+  assert.match(modeSource, /daily\.hidden = staffActive/u);
+  assert.match(modeSource, /staff\.hidden = !staffActive \|\| !STAFF_CLOCK_ENABLED/u);
+  assert.match(modeSource, /dailyControl\.setAttribute\('aria-selected', staffActive \? 'false' : 'true'\)/u);
+  assert.match(modeSource, /staffControl\.setAttribute\('aria-selected', staffActive \? 'true' : 'false'\)/u);
+  assert.match(modeSource, /panel\.focus\(\{ preventScroll: true \}\)/u);
+  assert.doesNotMatch(modeSource, /\.open\s*=/u);
+  assert.match(
+    adminHtml,
+    /window\.addEventListener\('hashchange'[\s\S]*managerModes[\s\S]*contains\(document\.activeElement\)[\s\S]*applyManagerMode\(\{ focus: !modeControlHasFocus \}\)/u
+  );
+  const staffMarkup = sourceBetween(adminHtml, '<section id="staff-time"', '<div id="toast"');
   assert.doesNotMatch(staffMarkup, /passphrase|password|PIN|token|secret/iu);
 });

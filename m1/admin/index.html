@@ -36,15 +36,15 @@
     button, input, select, textarea { font: inherit; }
     button { cursor: pointer; }
     button:disabled { cursor: wait; opacity: .55; }
-    .shell { width: min(1120px, calc(100% - 28px)); margin: 0 auto; padding: 26px 0 56px; }
+    .shell { width: min(1120px, calc(100% - 28px)); margin: 0 auto; padding: 16px 0 48px; }
     .topbar {
       display: flex;
-      align-items: flex-start;
+      align-items: center;
       justify-content: space-between;
-      gap: 18px;
-      margin-bottom: 22px;
+      gap: 12px;
+      margin-bottom: 10px;
     }
-    .topbar-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .topbar-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
     .eyebrow {
       color: var(--green);
       font-size: .78rem;
@@ -53,8 +53,8 @@
       text-transform: uppercase;
     }
     h1 {
-      margin: 5px 0;
-      font-size: clamp(1.65rem, 4vw, 2.45rem);
+      margin: 2px 0;
+      font-size: clamp(1.35rem, 3vw, 1.85rem);
       letter-spacing: -.035em;
       overflow-wrap: anywhere;
     }
@@ -96,6 +96,7 @@
       background: #172c46;
       color: var(--text);
       padding: 10px 14px;
+      min-height: 44px;
       font-weight: 800;
     }
     .btn:hover:not(:disabled) { background: #1d3859; }
@@ -107,7 +108,11 @@
     .btn.primary:hover:not(:disabled) { background: #1b9670; }
     .btn.ghost { background: transparent; }
     .btn.warn { border-color: #8a6730; background: #453515; color: #ffdc92; }
-    .btn.small { padding: 7px 10px; font-size: .82rem; }
+    .btn.small { padding: 7px 10px; min-height: 44px; font-size: .82rem; }
+    .btn:focus-visible, a:focus-visible, summary:focus-visible {
+      outline: 3px solid var(--blue);
+      outline-offset: 3px;
+    }
     .login-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
     .return-links { display: flex; flex-wrap: wrap; gap: 8px; }
     .test-entry {
@@ -139,17 +144,81 @@
       border-color: rgba(102, 167, 255, .5);
       color: #d8eaff;
     }
+    .mode-switch {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      max-width: 460px;
+      margin: 0 0 12px;
+      padding: 5px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: rgba(8, 21, 35, .72);
+    }
+    .mode-control {
+      display: grid;
+      place-items: center;
+      min-height: 44px;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      color: var(--muted);
+      font-weight: 850;
+      text-decoration: none;
+    }
+    .mode-control[aria-selected="true"] {
+      border-color: #40d7a0;
+      background: #16825f;
+      color: #fff;
+    }
+    .header-more { position: relative; }
+    .header-more > summary {
+      display: grid;
+      place-items: center;
+      min-height: 44px;
+      border: 1px solid #426180;
+      border-radius: 11px;
+      padding: 8px 12px;
+      color: var(--text);
+      font-weight: 800;
+      cursor: pointer;
+      list-style: none;
+    }
+    .header-more > summary::-webkit-details-marker { display: none; }
+    .header-more[open] > summary { background: #172c46; }
+    .header-more-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      z-index: 20;
+      width: min(520px, calc(100vw - 28px));
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #0d1a2c;
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+    .header-more-links { display: flex; flex-wrap: wrap; gap: 7px; }
+    .header-more-status { margin-top: 10px; color: var(--muted); font-size: .78rem; line-height: 1.4; }
+    .mode-panel { scroll-margin-top: 12px; }
+    .mode-panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
     .toolbar {
       display: grid;
       grid-template-columns: auto 1fr auto;
-      gap: 14px;
+      gap: 10px;
       align-items: center;
-      padding: 16px;
-      margin-bottom: 16px;
+      padding: 11px 13px;
+      margin-bottom: 12px;
     }
     .tablet-authorization {
-      margin-bottom: 16px;
+      margin-top: 12px;
       border-color: rgba(64, 215, 160, .55);
+      box-shadow: none;
     }
     .tablet-authorization p { margin-top: 7px; line-height: 1.45; }
     .tablet-pairing-entry {
@@ -182,11 +251,9 @@
     .calendar { width: auto; min-width: 145px; }
     .content-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.55fr) minmax(290px, .8fr);
-      gap: 16px;
-      align-items: start;
+      gap: 12px;
     }
-    .section { padding: 18px; }
+    .section { padding: 15px; }
     .section-head {
       display: flex;
       justify-content: space-between;
@@ -208,6 +275,38 @@
       font-variant-numeric: tabular-nums;
     }
     .class-list { display: grid; gap: 10px; }
+    .daily-counts {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 13px;
+    }
+    .daily-count {
+      border: 1px solid #2c4563;
+      border-radius: 11px;
+      background: rgba(7, 17, 31, .58);
+      padding: 10px 12px;
+    }
+    .daily-count strong { display: block; font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+    .daily-count span { color: var(--muted); font-size: .78rem; font-weight: 750; }
+    .daily-count.missing strong { color: var(--amber); }
+    .daily-subhead { margin: 0 0 9px; color: #ffe09d; }
+    .completed-classes, .daily-secondary {
+      margin-top: 12px;
+      border: 1px solid #344e6c;
+      border-radius: 12px;
+      background: rgba(8, 21, 35, .42);
+    }
+    .completed-classes > summary, .daily-secondary > summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 44px;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-weight: 800;
+    }
+    .completed-classes > .class-list, .daily-secondary > .secondary-body { padding: 0 12px 12px; }
     .class-row {
       border: 1px solid #2c4563;
       border-radius: 13px;
@@ -344,22 +443,11 @@
       font-size: .78rem;
       line-height: 1.45;
     }
-    .staff-time-panel { margin-top: 16px; overflow: hidden; }
-    .staff-time-panel > summary {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 17px 18px;
-      cursor: pointer;
-      font-weight: 800;
-      list-style-position: inside;
-    }
-    .staff-time-panel[open] > summary { border-bottom: 1px solid var(--line); }
-    .staff-time-body { display: grid; gap: 15px; padding: 18px; }
+    .staff-time-panel { overflow: visible; }
+    .staff-time-body { display: grid; gap: 12px; padding: 15px; }
     .staff-time-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: 1fr;
       gap: 10px;
     }
     .staff-time-block {
@@ -373,7 +461,7 @@
     .staff-time-list { display: grid; gap: 7px; }
     .staff-time-row {
       border-top: 1px solid rgba(56, 81, 112, .65);
-      padding-top: 7px;
+      padding: 10px 0;
       color: #dce8f5;
       font-size: .84rem;
       line-height: 1.4;
@@ -402,15 +490,32 @@
       padding: 12px;
     }
     .staff-time-details > summary { cursor: pointer; font-weight: 800; }
+    .staff-time-details > summary {
+      display: flex;
+      align-items: center;
+      min-height: 44px;
+    }
     .staff-time-details > .staff-time-list,
     .staff-time-details > .staff-period-grid { margin-top: 10px; }
-    #staffTimeRecords, #staffTimeAudit { max-height: 360px; overflow-y: auto; padding-right: 4px; }
+    .staff-time-details > .staff-fix-form,
+    .staff-time-details > h3 { margin-top: 10px; }
     .staff-period-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .staff-fix-form {
       border: 1px solid #376b5a;
       border-radius: 12px;
       background: rgba(15, 95, 72, .12);
       padding: 13px;
+    }
+    .staff-correction-panel[hidden] { display: none; }
+    .staff-correction-panel { margin-top: 10px; }
+    .staff-section-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .staff-attention-action { margin-top: 8px; }
+    .staff-recent-heading {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 9px;
     }
     .staff-fix-form h3 { margin-bottom: 4px; }
     .staff-fix-grid {
@@ -429,14 +534,14 @@
     }
     .staff-void-form .field { gap: 4px; }
     .staff-void-form input { padding: 8px 10px; }
-    .staff-history-controls {
+    .staff-lookup-controls {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
       gap: 9px;
       margin-top: 10px;
     }
-    .staff-history-controls .record-detail { margin: 0; }
+    .staff-lookup-controls .record-detail { margin: 0; }
     .staff-adjustment {
       margin-top: 8px;
       border: 1px solid #376b5a;
@@ -445,6 +550,7 @@
       padding: 8px 10px;
     }
     .staff-adjustment > summary { cursor: pointer; color: #c8fae8; font-weight: 800; }
+    .staff-adjustment > summary { display: flex; align-items: center; min-height: 44px; }
     .staff-adjustment-originals {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -494,21 +600,25 @@
     .toast.show { transform: translate(-50%, 0); }
     [hidden] { display: none !important; }
     @media (max-width: 820px) {
-      .topbar { align-items: center; }
+      .topbar { align-items: flex-start; }
       .toolbar { grid-template-columns: 1fr; }
       .date-summary { text-align: left; order: -1; }
       .calendar { width: 100%; }
-      .content-grid { grid-template-columns: 1fr; }
       .staff-time-grid { grid-template-columns: 1fr; }
       .staff-fix-grid { grid-template-columns: 1fr 1fr; }
     }
     @media (max-width: 560px) {
       .shell { width: min(100% - 18px, 1120px); padding-top: 16px; }
       h1 { font-size: 1.9rem; }
-      .topbar { align-items: flex-start; }
+      .topbar { display: grid; grid-template-columns: 1fr; }
       .topbar-actions { width: 100%; justify-content: flex-start; }
+      .header-more { position: static; }
+      .header-more-menu { left: 0; right: auto; }
+      .mode-switch { max-width: none; }
       .toolbar, .section { padding: 13px; border-radius: 14px; }
       .date-actions { display: grid; grid-template-columns: 1fr 1fr; }
+      .daily-counts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .daily-count { padding: 9px; }
       .class-main { grid-template-columns: 1fr; }
       .class-main .btn { width: 100%; }
       .mini-grid, .fixed { grid-template-columns: 1fr 1fr; }
@@ -557,196 +667,276 @@
       <header class="topbar">
         <div>
           <div id="appEyebrow" class="eyebrow">Gym in a Box · M1</div>
-          <h1 id="appHeading">Daily Sign-in Review</h1>
-          <p id="sessionLabel" class="muted"></p>
+          <h1 id="appHeading">M1 Admin</h1>
         </div>
         <div class="topbar-actions">
-          <a class="btn ghost" href="/m1/?view=admin" style="text-decoration:none">Local M1 Admin</a>
           <a class="btn ghost" href="/m1/" style="text-decoration:none">Instructor Sign-In</a>
-          <button id="installSyncSettingsButton" class="btn warn" type="button" hidden disabled aria-hidden="true">Legacy browser credential installer removed</button>
-          <button id="tabletDiagnosticButton" class="btn ghost" type="button" hidden>Open tablet diagnostic</button>
-          <span id="tabletDiagnosticOriginMessage" class="muted" hidden>Tablet diagnostic must be opened from https://gib-live.netlify.app.</span>
           <button id="logoutButton" class="btn ghost" type="button">Log Out</button>
+          <details id="adminMore" class="header-more">
+            <summary>More</summary>
+            <div class="header-more-menu">
+              <div class="header-more-links">
+                <a class="btn ghost" href="/m1/?view=admin" style="text-decoration:none">Local M1 Admin</a>
+                <button id="installSyncSettingsButton" class="btn warn" type="button" hidden disabled aria-hidden="true">Legacy browser credential installer removed</button>
+                <button id="tabletDiagnosticButton" class="btn ghost" type="button" hidden>Open tablet diagnostic</button>
+              </div>
+              <p id="sessionLabel" class="header-more-status"></p>
+              <p id="scheduleSource" class="header-more-status" role="status">Schedule status unavailable</p>
+              <p id="tabletDiagnosticOriginMessage" class="header-more-status" hidden>Tablet diagnostic must be opened from https://gib-live.netlify.app.</p>
+              <section id="tabletPairing" class="panel section tablet-authorization" aria-labelledby="tabletPairingHeading" hidden>
+                <h2 id="tabletPairingHeading">Authorize a Staff Clock tablet</h2>
+                <p class="muted">Enter the short code from the Staff Clock tablet, then review the exact request.</p>
+                <form id="tabletPairingForm" novalidate>
+                  <div class="tablet-pairing-entry">
+                    <div class="field">
+                      <label for="tabletPairingCode">Pairing code</label>
+                      <input id="tabletPairingCode" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="11" placeholder="ABCDE-FGHJK">
+                    </div>
+                    <button id="tabletPairingReviewButton" class="btn primary" type="submit">Review tablet</button>
+                  </div>
+                </form>
+                <div id="tabletPairingMessage" class="message" role="status" aria-live="polite"></div>
+                <div id="tabletPairingReview" class="tablet-pairing-review" hidden>
+                  <h3>Review before approving</h3>
+                  <dl class="tablet-pairing-details">
+                    <dt>Gym</dt><dd id="tabletPairingGym"></dd>
+                    <dt>Origin</dt><dd id="tabletPairingOrigin"></dd>
+                    <dt>Device</dt><dd id="tabletPairingDevice"></dd>
+                    <dt>Requested</dt><dd id="tabletPairingRequested"></dd>
+                    <dt>Expires</dt><dd id="tabletPairingExpires"></dd>
+                  </dl>
+                  <p class="record-detail">This reviewed confirmation remains valid for up to 15 minutes.</p>
+                  <button id="tabletPairingApproveButton" class="btn warn" type="button">Confirm tablet authorization</button>
+                  <button id="tabletPairingRejectButton" class="btn ghost" type="button">Reject pairing request</button>
+                  <button id="tabletPairingCancelButton" class="btn ghost" type="button">Close review</button>
+                  <div id="tabletPairingApprovalMessage" class="message" role="status" aria-live="polite"></div>
+                </div>
+              </section>
+            </div>
+          </details>
         </div>
       </header>
 
-      <section id="tabletPairing" class="panel section tablet-authorization" aria-labelledby="tabletPairingHeading" hidden>
-        <h2 id="tabletPairingHeading">Authorize a Staff Clock tablet</h2>
-        <p class="muted">Enter the short pairing code shown on the Staff Clock tablet. Review the exact tablet request before separately confirming authorization.</p>
-        <form id="tabletPairingForm" novalidate>
-          <div class="tablet-pairing-entry">
-            <div class="field">
-              <label for="tabletPairingCode">Pairing code</label>
-              <input id="tabletPairingCode" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="11" placeholder="ABCDE-FGHJK">
-            </div>
-            <button id="tabletPairingReviewButton" class="btn primary" type="submit">Review tablet</button>
-          </div>
-        </form>
-        <div id="tabletPairingMessage" class="message" role="status" aria-live="polite"></div>
-        <div id="tabletPairingReview" class="tablet-pairing-review" hidden>
-          <h3>Review before approving</h3>
-          <dl class="tablet-pairing-details">
-            <dt>Gym</dt><dd id="tabletPairingGym"></dd>
-            <dt>Origin</dt><dd id="tabletPairingOrigin"></dd>
-            <dt>Device</dt><dd id="tabletPairingDevice"></dd>
-            <dt>Requested</dt><dd id="tabletPairingRequested"></dd>
-            <dt>Expires</dt><dd id="tabletPairingExpires"></dd>
-          </dl>
-          <button id="tabletPairingApproveButton" class="btn warn" type="button">Confirm tablet authorization</button>
-          <button id="tabletPairingCancelButton" class="btn ghost" type="button">Cancel</button>
-          <div id="tabletPairingApprovalMessage" class="message" role="status" aria-live="polite"></div>
-        </div>
-      </section>
+      <nav id="managerModes" class="mode-switch" role="tablist" aria-label="Admin mode">
+        <a id="dailyModeControl" class="mode-control" href="#sign-ins" role="tab" aria-controls="sign-ins" aria-selected="true">Daily sign-ins</a>
+        <a id="staffModeControl" class="mode-control" href="#staff-time" role="tab" aria-controls="staff-time" aria-selected="false">Staff Clock</a>
+      </nav>
 
-      <section class="panel toolbar" aria-label="Date controls">
-        <div class="date-actions">
-          <button id="previousDay" class="btn small" type="button">Previous day</button>
-          <button id="yesterday" class="btn small" type="button">Yesterday</button>
-          <button id="today" class="btn small" type="button">Today</button>
-          <button id="nextDay" class="btn small" type="button">Next day</button>
-        </div>
-        <div class="date-summary">
-          <strong id="dateHeading">—</strong>
-          <span id="dateMeta">Loading…</span>
-        </div>
-        <input id="calendarDate" class="calendar" type="date" aria-label="Choose review date">
-      </section>
-
-      <div class="content-grid">
-        <section id="reviewSection" class="panel section">
-          <div class="section-head">
-            <div class="schedule-heading">
-              <h2 id="scheduledClassesHeading">Scheduled Rev classes</h2>
-              <p id="scheduleSource" class="schedule-source" role="status">Schedule status unavailable</p>
-            </div>
-            <span id="classCount" class="count"></span>
+      <section id="sign-ins" class="mode-panel" role="tabpanel" aria-labelledby="dailyModeControl" tabindex="-1">
+        <section class="panel toolbar" aria-label="Date controls">
+          <div class="date-actions">
+            <button id="previousDay" class="btn small" type="button">Previous day</button>
+            <button id="yesterday" class="btn small" type="button">Yesterday</button>
+            <button id="today" class="btn small" type="button">Today</button>
+            <button id="nextDay" class="btn small" type="button">Next day</button>
           </div>
-          <div id="reviewMessage" class="message" role="alert"></div>
-          <div id="classList" class="class-list"></div>
-          <div id="unmatchedSection" class="unmatched" hidden>
-            <h3>Recorded sign-ins not matched to this schedule</h3>
-            <p class="muted" style="font-size:.8rem;margin-top:4px">Shown separately so nothing recorded is hidden.</p>
-            <div id="unmatchedList" class="unmatched-list"></div>
+          <div class="date-summary">
+            <strong id="dateHeading">—</strong>
+            <span id="dateMeta">Loading…</span>
           </div>
-          <div id="warningSection" class="attention" hidden>
-            <h3>Sheet rows needing attention</h3>
-            <p class="muted" style="font-size:.8rem;margin-top:4px">Incomplete rows stay visible as warnings and are not silently treated as payroll sign-ins.</p>
-            <div id="warningList" class="warning-list"></div>
-          </div>
-          <details id="auditSection" class="audit-history">
-            <summary>Forgotten sign-in audit history</summary>
-            <div id="auditList" class="audit-list"></div>
-          </details>
+          <input id="calendarDate" class="calendar" type="date" aria-label="Choose review date">
         </section>
 
-        <aside class="panel section">
-          <div class="section-head">
-            <h2>Find an Instructor</h2>
-          </div>
-          <div class="search-form">
-            <div class="field">
-              <label for="searchInstructor">Choose or type instructor</label>
-              <input id="searchInstructor" list="instructorOptions" autocomplete="off" placeholder="Instructor name">
-              <datalist id="instructorOptions"></datalist>
+        <div class="content-grid">
+          <section id="reviewSection" class="panel section" aria-labelledby="scheduledClassesHeading">
+            <div class="section-head">
+              <div class="schedule-heading">
+                <h2 id="scheduledClassesHeading">Daily sign-ins</h2>
+                <p id="scheduleProblem" class="schedule-source fallback" role="alert" hidden></p>
+              </div>
+              <span id="classCount" class="count"></span>
             </div>
-            <div class="field">
-              <label for="searchDate">Selected date</label>
-              <input id="searchDate" type="date">
+            <div class="daily-counts" aria-label="Daily sign-in counts">
+              <div class="daily-count"><strong id="dailyScheduledCount">—</strong><span>Scheduled</span></div>
+              <div class="daily-count"><strong id="dailySignedCount">—</strong><span>Signed in</span></div>
+              <div class="daily-count missing"><strong id="dailyMissingCount">—</strong><span>Missing</span></div>
             </div>
-            <button id="searchButton" class="btn primary" type="button">Find sign-ins</button>
-          </div>
-          <div id="searchMessage" class="message" role="alert"></div>
-          <div id="searchResults" class="search-results" hidden>
-            <h3>Selected-date records</h3>
-            <div id="selectedDateResults" class="result-list"></div>
-            <h3>Five recent active sign-ins</h3>
-            <div id="recentResults" class="result-list"></div>
-          </div>
-          <div id="scheduleLimitation" class="limitation">
-            Daily Review uses the current canonical regular weekly schedule from the Revolution BJJ website. Recorded sign-ins with historical, local-override, or Series labels remain visible as unmatched rather than being hidden.
-          </div>
-        </aside>
-      </div>
+            <div id="reviewMessage" class="message" role="alert"></div>
+            <button id="dailyReviewRetry" class="btn ghost small" type="button" hidden>Retry Daily sign-ins</button>
+            <h3 class="daily-subhead">Missing scheduled classes</h3>
+            <div id="classList" class="class-list" aria-live="polite" aria-busy="false">
+              <div class="empty">Loading Daily sign-ins…</div>
+            </div>
+            <details id="completedClasses" class="completed-classes">
+              <summary><span>Show completed classes</span><span id="completedClassCount" class="count"></span></summary>
+              <div id="completedClassList" class="class-list"></div>
+            </details>
+            <div id="warningSection" class="attention" hidden>
+              <h3>Sheet rows needing attention</h3>
+              <div id="warningList" class="warning-list"></div>
+            </div>
+            <details id="instructorFinder" class="daily-secondary">
+              <summary>Find an instructor</summary>
+              <div class="secondary-body">
+                <div class="search-form">
+                  <div class="field">
+                    <label for="searchInstructor">Instructor</label>
+                    <input id="searchInstructor" list="instructorOptions" autocomplete="off" placeholder="Instructor name">
+                    <datalist id="instructorOptions"></datalist>
+                  </div>
+                  <div class="field">
+                    <label for="searchDate">Exact date</label>
+                    <input id="searchDate" type="date">
+                  </div>
+                  <div class="form-actions">
+                    <button id="searchButton" class="btn primary" type="button">Find sign-ins</button>
+                    <button id="searchRetry" class="btn ghost" type="button" hidden>Retry</button>
+                  </div>
+                </div>
+                <div id="searchMessage" class="message" role="alert"></div>
+                <div id="searchResults" class="search-results" hidden>
+                  <h3>Selected-date records</h3>
+                  <div id="selectedDateResults" class="result-list"></div>
+                  <h3>Five recent active sign-ins</h3>
+                  <div id="recentResults" class="result-list"></div>
+                </div>
+              </div>
+            </details>
+            <details id="dailyAdvanced" class="daily-secondary">
+              <summary>Advanced and history</summary>
+              <div class="secondary-body">
+                <div id="unmatchedSection" class="unmatched" hidden>
+                  <h3>Sign-ins not matched to this schedule</h3>
+                  <div id="unmatchedList" class="unmatched-list"></div>
+                </div>
+                <section id="auditSection" class="audit-history">
+                  <h3>Forgotten sign-in audit history</h3>
+                  <div id="auditList" class="audit-list"></div>
+                </section>
+                <div id="scheduleLimitation" class="limitation">
+                  Daily Review uses the current regular weekly schedule. Historical or special-event labels remain available here when they do not match.
+                </div>
+              </div>
+            </details>
+          </section>
+        </div>
+      </section>
 
-      <details id="staff-time" class="panel staff-time-panel" open tabindex="-1">
-        <summary>
-          <span>Staff time</span>
-          <span id="staffTimeSummary" class="count">Loading…</span>
-        </summary>
+      <section id="staff-time" class="panel staff-time-panel mode-panel" role="tabpanel" aria-labelledby="staffModeControl" tabindex="-1" hidden>
         <div class="staff-time-body">
-          <div id="staffTimeMessage" class="message" role="alert"></div>
-
-          <div class="staff-time-grid">
-            <section class="staff-time-block" aria-labelledby="staffClockedInHeading">
-              <h3 id="staffClockedInHeading">Clocked in now</h3>
-              <div id="staffClockedInNow" class="staff-time-list"></div>
-            </section>
-            <section class="staff-time-block" aria-labelledby="staffTodayHeading">
-              <h3 id="staffTodayHeading">Today’s punches</h3>
-              <div id="staffTodayPunches" class="staff-time-list"></div>
-            </section>
-            <section id="staffNeedsAttentionSection" class="staff-time-block staff-time-attention" aria-labelledby="staffAttentionHeading" hidden>
-              <h3 id="staffAttentionHeading">Needs attention</h3>
-              <div id="staffNeedsAttention" class="staff-time-list"></div>
-            </section>
+          <div class="mode-panel-head">
+            <div>
+              <h2>Staff Clock</h2>
+              <span id="staffTimeSummary" class="count">Loading…</span>
+            </div>
+            <button id="staffCorrectionOpen" class="btn primary" type="button" aria-controls="staffCorrectionPanel" aria-expanded="false">Add missed punch</button>
           </div>
+          <div id="staffTimeMessage" class="message" role="alert"></div>
+          <button id="staffTimeRetry" class="btn ghost small" type="button" hidden>Retry Staff Clock</button>
+
+          <section id="staffNeedsAttentionSection" class="staff-time-block staff-time-attention" aria-labelledby="staffAttentionHeading">
+            <h3 id="staffAttentionHeading">Needs attention</h3>
+            <div id="staffNeedsAttention" class="staff-time-list" aria-live="polite" aria-busy="false">
+              <div class="empty">Loading Staff Clock attention…</div>
+            </div>
+          </section>
+
+          <section id="staffCorrectionPanel" class="staff-correction-panel" aria-labelledby="staffCorrectionHeading" hidden>
+            <form id="staffCorrectionForm" class="staff-fix-form" novalidate>
+              <h3 id="staffCorrectionHeading">Add missed punch</h3>
+              <div class="staff-fix-grid">
+                <div class="field">
+                  <label for="staffCorrectionName">Staff member</label>
+                  <select id="staffCorrectionName" name="staffId" required>
+                    <option value="">Choose staff</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="staffCorrectionAction">Punch</label>
+                  <select id="staffCorrectionAction" name="punchAction" required>
+                    <option value="clockIn">Clock In</option>
+                    <option value="clockOut">Clock Out</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="staffCorrectionDate">Date</label>
+                  <input id="staffCorrectionDate" name="date" type="date" required>
+                </div>
+                <div class="field">
+                  <label for="staffCorrectionTime">Time</label>
+                  <input id="staffCorrectionTime" name="time" type="time" step="60" required>
+                </div>
+              </div>
+              <div class="field staff-fix-reason">
+                <label for="staffCorrectionReason">Required reason</label>
+                <input id="staffCorrectionReason" name="reason" maxlength="240" required placeholder="Why this punch is being added">
+              </div>
+              <div class="form-actions">
+                <button id="staffCorrectionSubmit" class="btn primary" type="submit">Confirm correction</button>
+                <button id="staffCorrectionCancel" class="btn ghost" type="button">Cancel</button>
+              </div>
+              <div id="staffCorrectionStatus" class="message" role="status"></div>
+            </form>
+          </section>
+
+          <section class="staff-time-block" aria-labelledby="staffClockedInHeading">
+            <h3 id="staffClockedInHeading">Clocked in now</h3>
+            <div id="staffClockedInNow" class="staff-time-list" aria-live="polite" aria-busy="false">
+              <div class="empty">Loading current Staff Clock status…</div>
+            </div>
+          </section>
+
+          <section class="staff-time-block" aria-labelledby="staffRecentShiftsHeading">
+            <div class="staff-recent-heading">
+              <h3 id="staffRecentShiftsHeading">Recent completed shifts</h3>
+              <span class="count">Latest 7 New York days</span>
+            </div>
+            <div id="staffRecentShifts" class="staff-time-list" aria-live="polite" aria-busy="false">
+              <div class="empty">Sign in to load recent completed shifts.</div>
+            </div>
+            <div class="staff-lookup-controls">
+              <button id="staffRecentShiftsRetry" class="btn ghost small" type="button" aria-controls="staffRecentShifts" hidden>Retry recent completed shifts</button>
+              <button id="staffRecentShowMore" class="btn ghost small" type="button" aria-controls="staffRecentShifts" hidden>Show more recent shifts</button>
+              <span id="staffRecentShiftsMessage" class="record-detail" role="status"></span>
+            </div>
+          </section>
+
+          <details id="staffOlderShiftFinder" class="staff-time-details">
+            <summary>Find an older shift</summary>
+            <form id="staffOlderShiftForm" class="staff-fix-form" novalidate>
+              <div class="staff-fix-grid">
+                <div class="field">
+                  <label for="staffOlderShiftStaff">Staff member</label>
+                  <select id="staffOlderShiftStaff" name="staffId" required><option value="">Choose staff</option></select>
+                </div>
+                <div class="field">
+                  <label for="staffOlderShiftDate">Exact date</label>
+                  <input id="staffOlderShiftDate" name="date" type="date" required>
+                </div>
+              </div>
+              <div class="form-actions">
+                <button id="staffOlderShiftSubmit" class="btn primary" type="submit">Find shift</button>
+                <button id="staffOlderShiftRetry" class="btn ghost" type="button" hidden>Retry</button>
+              </div>
+              <div id="staffOlderShiftMessage" class="message" role="status"></div>
+              <div id="staffOlderShiftResults" class="staff-time-list" aria-live="polite" aria-busy="false">
+                <div class="empty">Choose a staff member and exact older date.</div>
+              </div>
+            </form>
+          </details>
 
           <details id="staffPayPeriods" class="staff-time-details">
             <summary>Pay-period totals</summary>
             <div id="staffPeriodTotals" class="staff-period-grid"></div>
           </details>
 
-          <form id="staffCorrectionForm" class="staff-fix-form" novalidate>
-            <h3>Fix missed punch</h3>
-            <p class="muted" style="font-size:.8rem">Adds an Admin-labeled punch and keeps the original record history.</p>
-            <div class="staff-fix-grid">
-              <div class="field">
-                <label for="staffCorrectionName">Staff member</label>
-                <select id="staffCorrectionName" name="staffId" required>
-                  <option value="">Choose staff</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="staffCorrectionAction">Punch</label>
-                <select id="staffCorrectionAction" name="punchAction" required>
-                  <option value="clockIn">Clock In</option>
-                  <option value="clockOut">Clock Out</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="staffCorrectionDate">Date</label>
-                <input id="staffCorrectionDate" name="date" type="date" required>
-              </div>
-              <div class="field">
-                <label for="staffCorrectionTime">Time</label>
-                <input id="staffCorrectionTime" name="time" type="time" step="60" required>
-              </div>
+          <details id="staffTimeAdvanced" class="staff-time-details">
+            <summary>Advanced records and audit</summary>
+            <div class="staff-lookup-controls">
+              <button id="staffTimeAdvancedRetry" class="btn ghost small" type="button" hidden>Retry advanced records and audit</button>
+              <span id="staffTimeAdvancedMessage" class="record-detail" role="status">Open this section to load advanced records and audit.</span>
             </div>
-            <div class="field staff-fix-reason">
-              <label for="staffCorrectionReason">Required reason</label>
-              <input id="staffCorrectionReason" name="reason" maxlength="240" required placeholder="Why this punch is being added">
-            </div>
-            <div class="form-actions">
-              <button id="staffCorrectionSubmit" class="btn primary" type="submit">Confirm correction</button>
-            </div>
-            <div id="staffCorrectionStatus" class="message" role="status"></div>
-          </form>
-
-          <details class="staff-time-details">
-            <summary>Staff Time records</summary>
-            <div id="staffTimeRecords" class="staff-time-list"></div>
-            <div class="staff-history-controls">
-              <button id="staffTimeOlderHistory" class="btn ghost small" type="button"
-                aria-controls="staffTimeRecords" aria-expanded="false" hidden>Show older history</button>
-              <span id="staffTimeHistoryScope" class="record-detail"></span>
-            </div>
-          </details>
-          <details class="staff-time-details">
-            <summary>Staff time audit</summary>
-            <div id="staffTimeAudit" class="staff-time-list"></div>
+            <section class="staff-time-block" aria-labelledby="staffTodayHeading">
+              <h3 id="staffTodayHeading">Today’s punches</h3>
+              <div id="staffTodayPunches" class="staff-time-list" aria-live="polite"><div class="empty">Open this section to load individual punches.</div></div>
+            </section>
+            <h3>Staff Time records</h3>
+            <div id="staffTimeRecords" class="staff-time-list" aria-live="polite"><div class="empty">Open this section to load individual punch records.</div></div>
+            <h3>Staff time audit</h3>
+            <div id="staffTimeAudit" class="staff-time-list" aria-live="polite"><div class="empty">Open this section to load the correction audit.</div></div>
           </details>
         </div>
-      </details>
+      </section>
     </section>
   </main>
 
@@ -780,9 +970,10 @@
         && STAFF_CLOCK_PAIRING_CONFIG
         && Number.isInteger(STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds)
         && STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds >= 60
-        && STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds <= 300
+        && STAFF_CLOCK_PAIRING_CONFIG.expiresInSeconds <= 12 * 60 * 60
         && INSTALLATION.allowedOrigin === STAFF_CLOCK_PAIRING_CONFIG.origin
         && location.origin === STAFF_CLOCK_PAIRING_CONFIG.origin;
+      const TABLET_PAIRING_REVIEW_LIFETIME_MS = 15 * 60_000;
 
       function richmondProductionAdminCopy(mutationsEnabled) {
         return mutationsEnabled
@@ -869,9 +1060,23 @@
       const STAFF_TIME_VIEW_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
       const STAFF_TIME_PAGE_LIMIT = 500;
       const STAFF_TIME_PAGE_MAX_BYTES = 200_000;
+      const STAFF_TIME_SHIFT_LOOKUP_LIMIT = 20;
+      const STAFF_TIME_SHIFT_LOOKUP_MAX_BYTES = 80_000;
+      const STAFF_RECENT_INITIAL_LIMIT = 8;
+      const STAFF_RECENT_INCREMENT = 8;
+      const STAFF_RECENT_MAX_VISIBLE = 20;
+      const STAFF_ATTENTION_ACTIONS = Object.freeze({
+        missing_clock_out: Object.freeze({ punchAction: 'clockOut', linkedPunchAction: 'clockIn' }),
+        clock_out_without_clock_in: Object.freeze({ punchAction: 'clockIn', linkedPunchAction: 'clockOut' })
+      });
       const STAFF_TIME_RECORD_LIMIT = 500;
       const STAFF_TIME_ATTENTION_LIMIT = 600;
       const STAFF_TIME_AUDIT_LIMIT = 500;
+      const STAFF_TIME_READ_TIMEOUT_MS = 25_000;
+      const STAFF_TIME_READ_REQUEST_OPTIONS = Object.freeze({
+        timeoutMs: STAFF_TIME_READ_TIMEOUT_MS,
+        timeoutMessage: 'Staff Time took too long to load. Retry below.'
+      });
       const MIN_CLASSES_BY_DAY = Object.freeze(IS_RICHMOND
         ? Object.fromEntries(SCHEDULE_DAYS.map(day => [day, 1]))
         : {
@@ -902,7 +1107,20 @@
       let reviewedTabletPairingCode = '';
       let currentStaffTime = null;
       let staffTimeLoadGeneration = 0;
-      let staffOlderHistoryExpanded = false;
+      let currentStaffRecentLookup = null;
+      let currentStaffAttention = [];
+      let staffRecentVisibleLimit = STAFF_RECENT_INITIAL_LIMIT;
+      let staffRecentLoading = false;
+      let staffRecentLoadError = '';
+      let currentStaffOlderShiftLookup = null;
+      let currentStaffOlderShiftQuery = null;
+      let staffOlderShiftLoading = false;
+      let staffOlderShiftError = '';
+      let staffOlderShiftLoadGeneration = 0;
+      let staffAdvancedLoading = false;
+      let staffAdvancedLoaded = false;
+      let staffAdvancedError = '';
+      let staffAdvancedLoadGeneration = 0;
       let diagnosticWindow = null;
       let diagnosticRunId = '';
       let diagnosticPurpose = '';
@@ -1175,6 +1393,7 @@
       function renderScheduleSource() {
         const element = $('#scheduleSource');
         if (!element || !schedule) return;
+        const problem = $('#scheduleProblem');
         const source = schedule.source.type === 'checked-in-bootstrap'
           ? 'checked-in bootstrap'
           : `${INSTALLATION.gymName} website`;
@@ -1202,6 +1421,13 @@
           'fallback',
           !schedule.current || Boolean(schedule.status.reason) || Boolean(schedule.status.storageWarning)
         );
+        const hasProblem = !schedule.current
+          || Boolean(schedule.status.reason)
+          || Boolean(schedule.status.storageWarning);
+        problem.hidden = !hasProblem;
+        problem.textContent = hasProblem
+          ? 'The live class schedule is temporarily unavailable. A validated fallback is shown; review class labels before adding a sign-in.'
+          : '';
       }
 
       function reviewFormInProgress() {
@@ -1910,43 +2136,45 @@
       }
 
       function validStaffAdjustmentAuditHistory(value, recordById) {
-        const auditsByPair = new Map();
+        const auditsByPunch = new Map();
         const adjustmentRequestIds = new Set();
+        function remember(punchId, audit, originalAt, correctedAt) {
+          if (!auditsByPunch.has(punchId)) auditsByPunch.set(punchId, []);
+          auditsByPunch.get(punchId).push({ audit, originalAt, correctedAt });
+        }
         for (const audit of value.audit) {
           if (audit.operation !== 'adjust') continue;
-          const key = `${audit.clockInPunchId}\u0000${audit.clockOutPunchId}`;
-          if (!auditsByPair.has(key)) auditsByPair.set(key, []);
-          auditsByPair.get(key).push(audit);
+          remember(
+            audit.clockInPunchId,
+            audit,
+            audit.originalClockInAt,
+            audit.correctedClockInAt
+          );
+          remember(
+            audit.clockOutPunchId,
+            audit,
+            audit.originalClockOutAt,
+            audit.correctedClockOutAt
+          );
           adjustmentRequestIds.add(audit.requestId);
         }
-        for (const audits of auditsByPair.values()) {
-          const latest = audits[0];
-          const clockIn = recordById.get(latest.clockInPunchId);
-          const clockOut = recordById.get(latest.clockOutPunchId);
+        for (const [punchId, entries] of auditsByPunch) {
+          const latest = entries[0];
+          const record = recordById.get(punchId);
           if (
-            !clockIn
-            || !clockOut
-            || !Object.hasOwn(clockIn, 'adjustmentRequestId')
-            || !Object.hasOwn(clockOut, 'adjustmentRequestId')
-            || clockIn.adjustmentRequestId !== latest.requestId
-            || clockOut.adjustmentRequestId !== latest.requestId
-            || clockIn.timestamp !== latest.correctedClockInAt
-            || clockOut.timestamp !== latest.correctedClockOutAt
+            !record
+            || !Object.hasOwn(record, 'adjustmentRequestId')
+            || record.adjustmentRequestId !== latest.audit.requestId
+            || record.timestamp !== latest.correctedAt
           ) return false;
-          for (let index = 0; index < audits.length - 1; index += 1) {
-            const newer = audits[index];
-            const older = audits[index + 1];
-            if (
-              newer.originalClockInAt !== older.correctedClockInAt
-              || newer.originalClockOutAt !== older.correctedClockOutAt
-            ) return false;
+          for (let index = 0; index < entries.length - 1; index += 1) {
+            const newer = entries[index];
+            const older = entries[index + 1];
+            if (newer.originalAt !== older.correctedAt) return false;
           }
           if (!value.view.auditTruncated) {
-            const oldest = audits[audits.length - 1];
-            if (
-              oldest.originalClockInAt !== clockIn.originalTimestamp
-              || oldest.originalClockOutAt !== clockOut.originalTimestamp
-            ) return false;
+            const oldest = entries[entries.length - 1];
+            if (oldest.originalAt !== record.originalTimestamp) return false;
           }
         }
         if (!value.view.auditTruncated && value.records.some(record => (
@@ -2007,7 +2235,7 @@
 
       function validStaffTimeReviewStartResponse(value) {
         if (!exactObjectKeys(value, [
-          'ok', 'test', 'adminName', 'staff', 'clockedInNow', 'periods', 'view'
+          'ok', 'test', 'adminName', 'staff', 'shiftStaff', 'clockedInNow', 'periods', 'view'
         ])) return false;
         if (
           value.ok !== true
@@ -2016,6 +2244,8 @@
           || value.adminName !== currentAdminName
           || !Array.isArray(value.staff)
           || value.staff.length > 500
+          || !Array.isArray(value.shiftStaff)
+          || value.shiftStaff.length > 500
           || !Array.isArray(value.clockedInNow)
           || value.clockedInNow.length > 500
           || !exactObjectKeys(value.periods, ['current', 'previous'])
@@ -2029,6 +2259,22 @@
         ) return false;
         const staffIds = new Set();
         const staffNames = new Set();
+        const shiftStaffIds = new Set();
+        const shiftStaffNames = new Set();
+        const shiftStaffById = new Map();
+        for (const person of value.shiftStaff) {
+          const normalizedName = person && typeof person.staffName === 'string'
+            ? person.staffName.toLocaleLowerCase('en-US')
+            : '';
+          if (
+            !validStaffPerson(person)
+            || shiftStaffIds.has(person.staffId)
+            || shiftStaffNames.has(normalizedName)
+          ) return false;
+          shiftStaffIds.add(person.staffId);
+          shiftStaffNames.add(normalizedName);
+          shiftStaffById.set(person.staffId, person);
+        }
         for (const person of value.staff) {
           const normalizedName = person && typeof person.staffName === 'string'
             ? person.staffName.toLocaleLowerCase('en-US')
@@ -2037,6 +2283,7 @@
             !validStaffPerson(person)
             || staffIds.has(person.staffId)
             || staffNames.has(normalizedName)
+            || !shiftStaffIds.has(person.staffId)
           ) return false;
           staffIds.add(person.staffId);
           staffNames.add(normalizedName);
@@ -2044,10 +2291,13 @@
         const clockedPunchIds = new Set();
         const clockedStaffIds = new Set();
         for (const item of value.clockedInNow) {
+          const person = shiftStaffById.get(item.staffId);
           if (
             !validStaffClockedIn(item)
             || clockedPunchIds.has(item.punchId)
             || clockedStaffIds.has(item.staffId)
+            || !person
+            || person.staffName !== item.staffName
           ) return false;
           clockedPunchIds.add(item.punchId);
           clockedStaffIds.add(item.staffId);
@@ -2091,6 +2341,102 @@
         return value.items.every(validator);
       }
 
+      function validStaffCompletedShift(value) {
+        if (!exactObjectKeys(value, ['clockIn', 'clockOut', 'latestAdjustment'])) return false;
+        const { clockIn, clockOut, latestAdjustment } = value;
+        if (
+          !validStaffRecord(clockIn)
+          || !validStaffRecord(clockOut)
+          || clockIn.punchId === clockOut.punchId
+          || clockIn.staffId !== clockOut.staffId
+          || clockIn.staffName !== clockOut.staffName
+          || clockIn.punchAction !== 'clockIn'
+          || clockOut.punchAction !== 'clockOut'
+          || clockIn.status !== 'ACTIVE'
+          || clockOut.status !== 'ACTIVE'
+          || Date.parse(clockOut.timestamp) <= Date.parse(clockIn.timestamp)
+        ) return false;
+        const clockInRequestId = Object.hasOwn(clockIn, 'adjustmentRequestId')
+          ? clockIn.adjustmentRequestId
+          : '';
+        const clockOutRequestId = Object.hasOwn(clockOut, 'adjustmentRequestId')
+          ? clockOut.adjustmentRequestId
+          : '';
+        const sharedRequestId = clockInRequestId === clockOutRequestId
+          ? clockInRequestId
+          : '';
+        if (!sharedRequestId) return latestAdjustment === null;
+        if (latestAdjustment === null) return false;
+        return validStaffAudit(latestAdjustment)
+          && latestAdjustment.operation === 'adjust'
+          && latestAdjustment.requestId === sharedRequestId
+          && latestAdjustment.staffId === clockIn.staffId
+          && latestAdjustment.staffName === clockIn.staffName
+          && latestAdjustment.clockInPunchId === clockIn.punchId
+          && latestAdjustment.clockOutPunchId === clockOut.punchId
+          && latestAdjustment.correctedClockInAt === clockIn.timestamp
+          && latestAdjustment.correctedClockOutAt === clockOut.timestamp;
+      }
+
+      function validStaffTimeShiftLookupResponse(value, expected) {
+        if (!exactObjectKeys(value, [
+          'ok', 'test', 'adminName', 'viewToken', 'mode', 'dateFrom', 'dateThrough',
+          'staffId', 'date', 'total', 'items', 'truncated'
+        ])) return false;
+        if (
+          !expected
+          || !['recent', 'exactDate'].includes(expected.mode)
+          || value.ok !== true
+          || typeof value.test !== 'boolean'
+          || value.test !== testMode
+          || value.adminName !== currentAdminName
+          || value.viewToken !== expected.viewToken
+          || value.mode !== expected.mode
+          || !validReviewDate(value.dateFrom)
+          || !validReviewDate(value.dateThrough)
+          || !validStaffTimeCount(value.total)
+          || !Array.isArray(value.items)
+          || value.items.length > STAFF_TIME_SHIFT_LOOKUP_LIMIT
+          || value.total < value.items.length
+          || (value.total > 0 && value.items.length === 0)
+          || typeof value.truncated !== 'boolean'
+          || value.truncated !== (value.total > value.items.length)
+          || staffTimeJsonByteLength(value) > STAFF_TIME_SHIFT_LOOKUP_MAX_BYTES
+        ) return false;
+        if (value.mode === 'recent') {
+          if (
+            value.dateFrom !== shiftDate(expected.today, -6)
+            || value.dateThrough !== expected.today
+            || value.staffId !== ''
+            || value.date !== ''
+          ) return false;
+        } else if (
+          value.dateFrom !== expected.date
+          || value.dateThrough !== expected.date
+          || value.staffId !== expected.staffId
+          || value.date !== expected.date
+        ) return false;
+        const punchIds = new Set();
+        let previousClockInMs = Number.POSITIVE_INFINITY;
+        for (const shift of value.items) {
+          const clockInMs = Date.parse(shift.clockIn.timestamp);
+          if (
+            !validStaffCompletedShift(shift)
+            || shift.clockIn.date < value.dateFrom
+            || shift.clockIn.date > value.dateThrough
+            || (value.mode === 'exactDate' && shift.clockIn.staffId !== value.staffId)
+            || punchIds.has(shift.clockIn.punchId)
+            || punchIds.has(shift.clockOut.punchId)
+            || !Number.isFinite(clockInMs)
+            || clockInMs > previousClockInMs
+          ) return false;
+          punchIds.add(shift.clockIn.punchId);
+          punchIds.add(shift.clockOut.punchId);
+          previousClockInMs = clockInMs;
+        }
+        return true;
+      }
+
       function staffTimeStreamIdentity(stream, item) {
         if (stream === 'records') return item.punchId;
         if (stream === 'audit') return item.requestId;
@@ -2111,7 +2457,7 @@
 
       function validStaffTimeReviewResponse(value) {
         if (!exactObjectKeys(value, [
-          'ok', 'test', 'adminName', 'staff', 'records', 'clockedInNow',
+          'ok', 'test', 'adminName', 'staff', 'shiftStaff', 'records', 'clockedInNow',
           'todayPunches', 'needsAttention', 'periods', 'audit', 'view'
         ])) return false;
         if (
@@ -2120,6 +2466,7 @@
           || value.test !== testMode
           || value.adminName !== currentAdminName
           || !Array.isArray(value.staff)
+          || !Array.isArray(value.shiftStaff)
           || !Array.isArray(value.records)
           || !Array.isArray(value.clockedInNow)
           || !Array.isArray(value.todayPunches)
@@ -2133,6 +2480,7 @@
           || value.view.today < value.periods.current.startDate
           || value.view.today > value.periods.current.endDate
           || value.staff.length > 500
+          || value.shiftStaff.length > 500
           || value.clockedInNow.length > 500
           || value.records.length !== value.view.recordCount
           || value.todayPunches.length !== value.view.todayPunchCount
@@ -2141,9 +2489,23 @@
         ) return false;
         const staffIds = new Set();
         const staffNames = new Set();
+        const shiftStaffById = new Map();
+        const shiftStaffNames = new Set();
         const punchIds = new Set();
         const recordById = new Map();
         const requestIds = new Set();
+        for (const person of value.shiftStaff) {
+          const normalizedName = person && typeof person.staffName === 'string'
+            ? person.staffName.toLocaleLowerCase('en-US')
+            : '';
+          if (
+            !validStaffPerson(person)
+            || shiftStaffById.has(person.staffId)
+            || shiftStaffNames.has(normalizedName)
+          ) return false;
+          shiftStaffById.set(person.staffId, normalizedName);
+          shiftStaffNames.add(normalizedName);
+        }
         for (const person of value.staff) {
           const normalizedName = person && typeof person.staffName === 'string'
             ? person.staffName.toLocaleLowerCase('en-US')
@@ -2152,6 +2514,7 @@
             !validStaffPerson(person)
             || staffIds.has(person.staffId)
             || staffNames.has(normalizedName)
+            || shiftStaffById.get(person.staffId) !== normalizedName
           ) return false;
           staffIds.add(person.staffId);
           staffNames.add(normalizedName);
@@ -2260,7 +2623,7 @@
             viewToken: initial.view.token,
             stream,
             offset
-          });
+          }, STAFF_TIME_READ_REQUEST_OPTIONS);
           if (generation !== staffTimeLoadGeneration) return null;
           if (!validStaffTimeReviewPageResponse(page, {
             viewToken: initial.view.token,
@@ -2290,6 +2653,39 @@
         return items;
       }
 
+      async function fetchStaffTimeShiftLookup(initial, query, generation) {
+        const expected = {
+          viewToken: initial.view.token,
+          today: initial.view.today,
+          mode: query.mode,
+          staffId: query.mode === 'exactDate' ? query.staffId : '',
+          date: query.mode === 'exactDate' ? query.date : ''
+        };
+        const request = expected.mode === 'recent'
+          ? {
+              operation: 'shiftLookup',
+              viewToken: expected.viewToken,
+              mode: 'recent'
+            }
+          : {
+              operation: 'shiftLookup',
+              viewToken: expected.viewToken,
+              mode: 'exactDate',
+              staffId: expected.staffId,
+              date: expected.date
+            };
+        const lookup = await requestJson(
+          API.staffTime,
+          request,
+          STAFF_TIME_READ_REQUEST_OPTIONS
+        );
+        if (generation !== staffTimeLoadGeneration) return null;
+        if (!validStaffTimeShiftLookupResponse(lookup, expected)) {
+          throw new Error('Staff time returned an incomplete completed-shift lookup. Nothing was changed.');
+        }
+        return lookup;
+      }
+
       function assembleStaffTimeReview(initial, records, needsAttention, audit) {
         const todayPunches = records
           .filter(record => record.date === initial.view.today)
@@ -2302,6 +2698,7 @@
           test: initial.test,
           adminName: initial.adminName,
           staff: initial.staff,
+          shiftStaff: initial.shiftStaff,
           records,
           clockedInNow: initial.clockedInNow,
           todayPunches,
@@ -2316,12 +2713,57 @@
         return value;
       }
 
+      function staffTimeReviewShell(initial) {
+        return {
+          ...initial,
+          records: [],
+          todayPunches: [],
+          needsAttention: currentStaffAttention,
+          audit: []
+        };
+      }
+
       async function loadStaffTimeReviewOnce(generation) {
-        const initial = await requestJson(API.staffTime, { operation: 'review' });
+        const initial = await requestJson(
+          API.staffTime,
+          { operation: 'review' },
+          STAFF_TIME_READ_REQUEST_OPTIONS
+        );
         if (generation !== staffTimeLoadGeneration) return null;
         if (!validStaffTimeReviewStartResponse(initial)) {
           throw new Error('Staff time returned an incomplete response. Nothing was changed.');
         }
+        const needsAttention = await fetchStaffTimeReviewStream(
+          initial,
+          'attention',
+          initial.view.attentionCount,
+          generation
+        );
+        if (!needsAttention || generation !== staffTimeLoadGeneration) return null;
+        currentStaffAttention = needsAttention;
+        let recentLookup = null;
+        try {
+          recentLookup = await fetchStaffTimeShiftLookup(
+            initial,
+            { mode: 'recent' },
+            generation
+          );
+        } catch (error) {
+          if (generation !== staffTimeLoadGeneration) return null;
+          if (
+            error.status === 401
+            || error.status === 403
+            || validStaffTimeStaleError(error)
+          ) throw error;
+          staffRecentLoadError = `Recent completed shifts could not be loaded. ${clean(error.message)
+            || 'The request did not complete.'}`;
+        }
+        if (generation !== staffTimeLoadGeneration) return null;
+        currentStaffRecentLookup = recentLookup;
+        return initial;
+      }
+
+      async function loadStaffTimeAdvancedReview(initial, generation) {
         const records = await fetchStaffTimeReviewStream(
           initial,
           'records',
@@ -2329,13 +2771,6 @@
           generation
         );
         if (!records) return null;
-        const needsAttention = await fetchStaffTimeReviewStream(
-          initial,
-          'attention',
-          initial.view.attentionCount,
-          generation
-        );
-        if (!needsAttention) return null;
         const audit = await fetchStaffTimeReviewStream(
           initial,
           'audit',
@@ -2343,7 +2778,7 @@
           generation
         );
         if (!audit) return null;
-        return assembleStaffTimeReview(initial, records, needsAttention, audit);
+        return assembleStaffTimeReview(initial, records, currentStaffAttention, audit);
       }
 
       function validStaffTimeStaleError(error) {
@@ -2876,7 +3311,22 @@
         const approvedAt = Date.parse(value.approvedAt);
         return Number.isFinite(approvedAt)
           && approvedAt <= now + 5_000
-          && now - approvedAt <= 120_000;
+          && now - approvedAt <= TABLET_PAIRING_REVIEW_LIFETIME_MS;
+      }
+
+      function validTabletPairingRejectResponse(value) {
+        return exactObjectKeys(value, [
+          'ok',
+          'result',
+          'installationId',
+          'gymName',
+          'deviceLabel'
+        ])
+          && value.ok === true
+          && value.result === 'rejected'
+          && value.installationId === INSTALLATION.installationId
+          && value.gymName === INSTALLATION.gymName
+          && value.deviceLabel === INSTALLATION.deviceLabel;
       }
 
       function formatTabletPairingTime(value) {
@@ -2934,7 +3384,7 @@
           $('#tabletPairingRequested').textContent = formatTabletPairingTime(data.requestedAt);
           $('#tabletPairingExpires').textContent = formatTabletPairingTime(data.expiresAt);
           $('#tabletPairingReview').hidden = false;
-          showMessage(status, 'Review these details before confirming.', 'success');
+          showMessage(status, 'Review these details. Confirm or reject within 15 minutes.', 'success');
           $('#tabletPairingApproveButton').focus();
         } catch (error) {
           if (error.status === 401) {
@@ -3010,20 +3460,99 @@
         }
       }
 
-      async function requestJson(url, body) {
+      async function rejectTabletPairing() {
+        if (!TABLET_PAIRING_AVAILABLE || !adminRequestToken) return;
+        const code = normalizeTabletPairingCode($('#tabletPairingCode').value);
+        const button = $('#tabletPairingRejectButton');
+        const approveButton = $('#tabletPairingApproveButton');
+        const status = $('#tabletPairingApprovalMessage');
+        if (!reviewedTabletPairingCode || code !== reviewedTabletPairingCode) {
+          clearTabletPairingReview();
+          showMessage($('#tabletPairingMessage'), 'The pairing code changed. Review the tablet again.');
+          return;
+        }
+        button.disabled = true;
+        approveButton.disabled = true;
+        showMessage(status, 'Rejecting this pairing request…', 'working');
+        try {
+          const data = await requestJson(API.tabletPairing, {
+            operation: 'reject',
+            pairingCode: code
+          });
+          if (!validTabletPairingRejectResponse(data)) {
+            throw new Error('Tablet pairing rejection returned an incomplete response.');
+          }
+          clearTabletPairingReview({ clearCode: true });
+          showMessage(
+            $('#tabletPairingMessage'),
+            `${data.deviceLabel} pairing rejected. That code can no longer be approved.`,
+            'success'
+          );
+        } catch (error) {
+          if (error.status === 401) {
+            setLoggedOut('Admin login expired. Sign in again to review tablet pairing.');
+          } else if (error.status === 410) {
+            clearTabletPairingReview({ clearCode: true });
+            showMessage(
+              $('#tabletPairingMessage'),
+              error.message || 'The pairing code expired. Ask the tablet for a new code.'
+            );
+          } else if (error.status === 403 || error.status === 409) {
+            clearTabletPairingReview({ clearCode: true });
+            showMessage(
+              $('#tabletPairingMessage'),
+              'This pairing request was already handled. Check the tablet or use a fresh code.'
+            );
+          } else if (Number.isInteger(error.status) && error.status > 0) {
+            clearTabletPairingReview();
+            showMessage(
+              $('#tabletPairingMessage'),
+              'Rejection did not complete. Review this pairing code again.'
+            );
+          } else {
+            showMessage(status, error.message || 'Tablet pairing rejection did not complete.');
+          }
+        } finally {
+          button.disabled = false;
+          approveButton.disabled = false;
+        }
+      }
+
+      async function requestJson(url, body, options = {}) {
         const headers = { 'Content-Type': 'application/json' };
         if (adminRequestToken) headers[ADMIN_REQUEST_HEADER] = adminRequestToken;
-        const response = await fetch(url, {
-          method: 'POST',
-          headers,
-          credentials: 'same-origin',
-          mode: 'same-origin',
-          redirect: 'error',
-          cache: 'no-store',
-          body: JSON.stringify(body)
-        });
+        const timeoutMs = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0
+          ? options.timeoutMs
+          : 0;
+        const controller = timeoutMs ? new AbortController() : null;
+        const timeoutId = controller
+          ? window.setTimeout(() => controller.abort(), timeoutMs)
+          : 0;
+        let response;
         let data = null;
-        try { data = await response.json(); } catch {}
+        try {
+          response = await fetch(url, {
+            method: 'POST',
+            headers,
+            credentials: 'same-origin',
+            mode: 'same-origin',
+            redirect: 'error',
+            cache: 'no-store',
+            body: JSON.stringify(body),
+            ...(controller ? { signal: controller.signal } : {})
+          });
+          try { data = await response.json(); } catch {}
+        } catch (error) {
+          if (controller?.signal.aborted) {
+            const timeoutError = new Error(clean(options.timeoutMessage)
+              || 'The request took too long to complete.');
+            timeoutError.code = 'REQUEST_TIMEOUT';
+            throw timeoutError;
+          }
+          throw error;
+        } finally {
+          if (timeoutId) window.clearTimeout(timeoutId);
+        }
         if (!response.ok || !data || data.ok !== true) {
           const error = new Error(data && data.message ? data.message : 'The request did not complete.');
           error.status = response.status;
@@ -3031,6 +3560,32 @@
           throw error;
         }
         return data;
+      }
+
+      function requestedManagerMode() {
+        return STAFF_CLOCK_ENABLED && location.hash === '#staff-time'
+          ? 'staff-time'
+          : 'sign-ins';
+      }
+
+      function applyManagerMode({ focus = false } = {}) {
+        const mode = requestedManagerMode();
+        const staffActive = mode === 'staff-time';
+        const daily = $('#sign-ins');
+        const staff = $('#staff-time');
+        const dailyControl = $('#dailyModeControl');
+        const staffControl = $('#staffModeControl');
+        daily.hidden = staffActive;
+        staff.hidden = !staffActive || !STAFF_CLOCK_ENABLED;
+        dailyControl.setAttribute('aria-selected', staffActive ? 'false' : 'true');
+        staffControl.setAttribute('aria-selected', staffActive ? 'true' : 'false');
+        dailyControl.tabIndex = staffActive ? -1 : 0;
+        staffControl.tabIndex = staffActive ? 0 : -1;
+        if (focus && !$('#appPanel').hidden) {
+          const panel = staffActive ? staff : daily;
+          window.requestAnimationFrame(() => panel.focus({ preventScroll: true }));
+        }
+        return mode;
       }
 
       function setLoggedOut(message = '') {
@@ -3043,38 +3598,78 @@
         currentAuditHistory = [];
         persistentReviewOutcome = null;
         currentStaffTime = null;
-        staffOlderHistoryExpanded = false;
+        currentStaffRecentLookup = null;
+        currentStaffAttention = [];
+        staffRecentVisibleLimit = STAFF_RECENT_INITIAL_LIMIT;
+        staffRecentLoading = false;
+        staffRecentLoadError = '';
+        currentStaffOlderShiftLookup = null;
+        currentStaffOlderShiftQuery = null;
+        staffOlderShiftLoading = false;
+        staffOlderShiftError = '';
+        staffOlderShiftLoadGeneration += 1;
+        staffAdvancedLoading = false;
+        staffAdvancedLoaded = false;
+        staffAdvancedError = '';
+        staffAdvancedLoadGeneration += 1;
         currentAdminName = '';
         adminRequestToken = '';
         $('#appPanel').hidden = true;
         $('#loginPanel').hidden = false;
         $('#classList').replaceChildren();
+        $('#completedClassList').replaceChildren();
+        $('#completedClasses').open = false;
+        $('#instructorFinder').open = false;
+        $('#dailyAdvanced').open = false;
+        $('#dailyScheduledCount').textContent = '—';
+        $('#dailySignedCount').textContent = '—';
+        $('#dailyMissingCount').textContent = '—';
+        $('#dailyReviewRetry').hidden = true;
         $('#unmatchedList').replaceChildren();
         $('#unmatchedSection').hidden = true;
         $('#warningList').replaceChildren();
         $('#warningSection').hidden = true;
         $('#auditList').replaceChildren();
         $('#searchResults').hidden = true;
+        $('#searchRetry').hidden = true;
         $('#staffTimeSummary').textContent = 'Not loaded';
         $('#staffClockedInNow').replaceChildren();
-        $('#staffTodayPunches').replaceChildren();
+        $('#staffTodayPunches').replaceChildren(staffEmpty('Open this section to load individual punches.'));
         $('#staffNeedsAttention').replaceChildren();
-        $('#staffNeedsAttentionSection').hidden = true;
         $('#staffPeriodTotals').replaceChildren();
-        $('#staffTimeRecords').replaceChildren();
-        $('#staffTimeOlderHistory').hidden = true;
-        $('#staffTimeOlderHistory').setAttribute('aria-expanded', 'false');
-        $('#staffTimeOlderHistory').textContent = 'Show older history';
-        $('#staffTimeHistoryScope').textContent = '';
-        $('#staffTimeAudit').replaceChildren();
+        $('#staffTimeRecords').replaceChildren(staffEmpty('Open this section to load individual punch records.'));
+        $('#staffRecentShifts').replaceChildren(staffEmpty('Sign in to load recent completed shifts.'));
+        $('#staffRecentShifts').setAttribute('aria-busy', 'false');
+        $('#staffRecentShiftsRetry').hidden = true;
+        $('#staffRecentShowMore').hidden = true;
+        $('#staffRecentShiftsMessage').textContent = '';
+        $('#staffOlderShiftStaff').replaceChildren(makeElement('option', '', 'Choose staff'));
+        $('#staffOlderShiftDate').value = '';
+        $('#staffOlderShiftDate').max = '';
+        $('#staffOlderShiftResults').replaceChildren(staffEmpty('Choose a staff member and exact older date.'));
+        $('#staffOlderShiftResults').setAttribute('aria-busy', 'false');
+        $('#staffOlderShiftRetry').hidden = true;
+        $('#staffOlderShiftSubmit').disabled = false;
+        showMessage($('#staffOlderShiftMessage'), '');
+        $('#staffTimeAudit').replaceChildren(staffEmpty('Open this section to load the correction audit.'));
+        $('#staffTimeAdvancedRetry').hidden = true;
+        $('#staffTimeAdvancedMessage').textContent = 'Open this section to load advanced records and audit.';
         $('#staffCorrectionName').replaceChildren(makeElement('option', '', 'Choose staff'));
         clearStaffCorrectionIdentity($('#staffCorrectionForm'));
+        $('#staffCorrectionPanel').hidden = true;
+        $('#staffCorrectionOpen').setAttribute('aria-expanded', 'false');
+        $('#staffOlderShiftFinder').open = false;
+        $('#staffPayPeriods').open = false;
+        $('#staffTimeAdvanced').open = false;
+        $('#staffTimeRetry').hidden = true;
+        $('#adminMore').open = false;
         showMessage($('#staffTimeMessage'), '');
         showMessage($('#staffCorrectionStatus'), '');
         showMessage($('#loginMessage'), message);
       }
 
       function setLoggedIn(data) {
+        const firstEntry = $('#appPanel').hidden;
         currentAdminName = data.adminName;
         testMode = data.test === true;
         $('#loginPanel').hidden = true;
@@ -3086,6 +3681,12 @@
             ? `Richmond production Sheet · ${ADMIN_MUTATIONS_ENABLED ? 'active session' : 'read-only pending activation'}`
             : 'Richmond TEST Sheet'
           : testMode ? 'TEST copied Sheet' : 'Production-ready session'}`;
+        applyManagerMode();
+        if (firstEntry) {
+          window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => window.scrollTo(0, 0));
+          });
+        }
       }
 
       async function login(testShortcut) {
@@ -3112,10 +3713,16 @@
           adminRequestToken = data.requestToken;
           $('#loginPassphrase').value = '';
           setLoggedIn(data);
-          await loadReview(defaultYesterday());
-          if (STAFF_CLOCK_ENABLED) {
-            await loadStaffTime();
-            focusStaffTimeHash();
+          if (STAFF_CLOCK_ENABLED) beginStaffShiftLookupLoading();
+          if (requestedManagerMode() === 'staff-time') {
+            const staffLoad = loadStaffTime();
+            const dailyLoad = loadReview(defaultYesterday());
+            await staffLoad;
+            applyManagerMode({ focus: true });
+            await dailyLoad;
+          } else {
+            await loadReview(defaultYesterday());
+            if (STAFF_CLOCK_ENABLED) await loadStaffTime();
           }
         } catch (error) {
           showMessage($('#loginMessage'), error.message);
@@ -3379,33 +3986,33 @@
         return block;
       }
 
-      function populateStaffCorrectionNames(staff) {
-        const select = $('#staffCorrectionName');
-        const selected = select.value;
-        const options = [makeElement('option', '', 'Choose staff')];
-        options[0].value = '';
-        for (const person of staff) {
-          const option = makeElement('option', '', person.staffName);
-          option.value = person.staffId;
-          option.dataset.staffName = person.staffName;
-          options.push(option);
+      function populateStaffCorrectionNames(staff, shiftStaff) {
+        for (const { selector, people } of [
+          { selector: '#staffCorrectionName', people: staff },
+          { selector: '#staffOlderShiftStaff', people: shiftStaff }
+        ]) {
+          const select = $(selector);
+          const selected = select.value;
+          const options = [makeElement('option', '', 'Choose staff')];
+          options[0].value = '';
+          for (const person of people) {
+            const option = makeElement('option', '', person.staffName);
+            option.value = person.staffId;
+            option.dataset.staffName = person.staffName;
+            options.push(option);
+          }
+          select.replaceChildren(...options);
+          if (people.some(person => person.staffId === selected)) select.value = selected;
         }
-        select.replaceChildren(...options);
-        if (staff.some(person => person.staffId === selected)) select.value = selected;
       }
 
       function renderStaffTimeRecords(data) {
-        const cutoff = shiftDate(data.view.today, -6);
         const records = [...data.records].sort((left, right) => (
           Date.parse(right.timestamp) - Date.parse(left.timestamp)
           || right.punchId.localeCompare(left.punchId)
         ));
-        const olderCount = records.filter(record => record.date < cutoff).length;
-        const visibleRecords = staffOlderHistoryExpanded
-          ? records
-          : records.filter(record => record.date >= cutoff && record.date <= data.view.today);
         const completedShifts = staffCompletedShiftByClockIn(records);
-        const recordRows = visibleRecords.map(record => staffRecordElement(
+        const recordRows = records.map(record => staffRecordElement(
           record,
           true,
           completedShifts.get(record.punchId) || null
@@ -3417,30 +4024,299 @@
         recordList.replaceChildren(...recordRows);
         if (data.view.recordTotal === 0) {
           recordList.appendChild(staffEmpty('No Staff Time records yet.'));
-        } else if (!visibleRecords.length) {
-          recordList.appendChild(staffEmpty('No punches in the latest seven calendar days.'));
         }
-
-        const toggle = $('#staffTimeOlderHistory');
-        toggle.hidden = olderCount === 0;
-        toggle.setAttribute('aria-expanded', staffOlderHistoryExpanded ? 'true' : 'false');
-        toggle.textContent = staffOlderHistoryExpanded ? 'Hide older history' : 'Show older history';
-        $('#staffTimeHistoryScope').textContent = staffOlderHistoryExpanded
-          ? `Showing all ${records.length.toLocaleString('en-US')} returned punches, newest first.`
-          : `Showing ${cutoff} through ${data.view.today}, newest first. ${olderCount.toLocaleString('en-US')} older ${olderCount === 1 ? 'punch is' : 'punches are'} preserved. Items needing attention remain above.`;
       }
 
-      function renderStaffTime(data) {
+      function staffShiftDurationLabel(shift) {
+        const totalMinutes = Math.floor(
+          (Date.parse(shift.clockOut.timestamp) - Date.parse(shift.clockIn.timestamp)) / 60_000
+        );
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        return `${hours} hr ${minutes} min`;
+      }
+
+      function staffCompletedShiftElement(shift) {
+        const row = staffTimeRow(
+          shift.clockIn.staffName,
+          `Clock-in ${staffTimestampLabel(shift.clockIn.timestamp)} · Clock-out ${staffTimestampLabel(shift.clockOut.timestamp)} · Duration ${staffShiftDurationLabel(shift)}`
+        );
+        if (shift.clockIn.source === shift.clockOut.source) {
+          row.appendChild(staffBadge(
+            shift.clockIn.source,
+            shift.clockIn.source === 'Admin-added' ? 'admin' : ''
+          ));
+        } else {
+          row.appendChild(staffBadge(
+            `Clock-in · ${shift.clockIn.source}`,
+            shift.clockIn.source === 'Admin-added' ? 'admin' : ''
+          ));
+          row.appendChild(staffBadge(
+            `Clock-out · ${shift.clockOut.source}`,
+            shift.clockOut.source === 'Admin-added' ? 'admin' : ''
+          ));
+        }
+        if (shift.latestAdjustment) {
+          row.appendChild(staffBadge('Adjusted', 'admin'));
+          row.appendChild(makeElement(
+            'div',
+            'record-detail staff-adjustment-evidence',
+            [
+              `Original source time: ${staffTimestampLabel(shift.clockIn.originalTimestamp || shift.clockIn.timestamp)} to ${staffTimestampLabel(shift.clockOut.originalTimestamp || shift.clockOut.timestamp)}`,
+              `Corrected time: ${staffTimestampLabel(shift.clockIn.timestamp)} to ${staffTimestampLabel(shift.clockOut.timestamp)}`,
+              `Latest audit: ${shift.latestAdjustment.reason} · ${shift.latestAdjustment.result}`
+            ].join(' · ')
+          ));
+        } else {
+          const carriedCorrections = [
+            ['Clock-in', shift.clockIn],
+            ['Clock-out', shift.clockOut]
+          ].filter(([, punch]) => Object.hasOwn(punch, 'adjustmentRequestId'));
+          if (carriedCorrections.length) {
+            row.appendChild(staffBadge('Existing punch correction', 'admin'));
+            row.appendChild(makeElement(
+              'div',
+              'record-detail staff-adjustment-evidence',
+              carriedCorrections.map(([label, punch]) => (
+                `${label} retains an earlier correction: original ${staffTimestampLabel(punch.originalTimestamp)}; current ${staffTimestampLabel(punch.timestamp)}`
+              )).join(' · ')
+            ));
+          }
+        }
+        row.appendChild(staffAdjustmentForm(shift));
+        return row;
+      }
+
+      function beginStaffShiftLookupLoading() {
+        currentStaffTime = null;
+        currentStaffRecentLookup = null;
+        currentStaffAttention = [];
+        staffRecentVisibleLimit = STAFF_RECENT_INITIAL_LIMIT;
+        staffRecentLoading = true;
+        staffRecentLoadError = '';
+        currentStaffOlderShiftLookup = null;
+        currentStaffOlderShiftQuery = null;
+        staffOlderShiftLoading = false;
+        staffOlderShiftError = '';
+        staffOlderShiftLoadGeneration += 1;
+        staffAdvancedLoading = false;
+        staffAdvancedLoaded = false;
+        staffAdvancedError = '';
+        staffAdvancedLoadGeneration += 1;
+        $('#staffNeedsAttention').setAttribute('aria-busy', 'true');
+        $('#staffNeedsAttention').replaceChildren(staffEmpty('Loading Staff Clock attention…'));
+        $('#staffClockedInNow').setAttribute('aria-busy', 'true');
+        $('#staffClockedInNow').replaceChildren(staffEmpty('Loading current Staff Clock status…'));
+        $('#staffTimeRetry').hidden = true;
+        renderStaffTimeAdvancedState();
+        renderStaffRecentShifts();
+        renderStaffOlderShiftLookup();
+      }
+
+      function renderStaffRecentShifts() {
+        const lookup = currentStaffRecentLookup;
+        const history = $('#staffRecentShifts');
+        const retry = $('#staffRecentShiftsRetry');
+        const showMore = $('#staffRecentShowMore');
+        const message = $('#staffRecentShiftsMessage');
+        if (staffRecentLoading) {
+          history.setAttribute('aria-busy', 'true');
+          history.replaceChildren(staffEmpty('Loading recent completed shifts…'));
+          retry.hidden = true;
+          showMore.hidden = true;
+          message.textContent = 'Loading the last seven New York calendar days…';
+          return;
+        }
+        history.setAttribute('aria-busy', 'false');
+        if (!lookup) {
+          const error = staffRecentLoadError || 'Recent completed shifts could not be loaded.';
+          history.replaceChildren(staffEmpty(error));
+          retry.hidden = false;
+          showMore.hidden = true;
+          message.textContent = 'Recent completed shifts did not load. Retry below.';
+          return;
+        }
+        retry.hidden = true;
+        const visibleItems = lookup.items.slice(0, staffRecentVisibleLimit);
+        history.replaceChildren(...visibleItems.map(staffCompletedShiftElement));
+        showMore.hidden = visibleItems.length >= lookup.items.length
+          || staffRecentVisibleLimit >= STAFF_RECENT_MAX_VISIBLE;
+        if (lookup.total === 0) {
+          history.appendChild(staffEmpty('No completed shifts in the last seven days.'));
+          message.textContent = `${lookup.dateFrom} through ${lookup.dateThrough}.`;
+        } else {
+          message.textContent = `Showing newest ${visibleItems.length.toLocaleString('en-US')} of ${lookup.total.toLocaleString('en-US')} completed shifts from ${lookup.dateFrom} through ${lookup.dateThrough}.`;
+        }
+      }
+
+      function renderStaffOlderShiftLookup() {
+        const results = $('#staffOlderShiftResults');
+        const retry = $('#staffOlderShiftRetry');
+        const message = $('#staffOlderShiftMessage');
+        for (const control of [
+          $('#staffOlderShiftStaff'),
+          $('#staffOlderShiftDate'),
+          $('#staffOlderShiftSubmit')
+        ]) control.disabled = staffOlderShiftLoading;
+        retry.disabled = staffOlderShiftLoading;
+        if (staffOlderShiftLoading) {
+          results.setAttribute('aria-busy', 'true');
+          results.replaceChildren(staffEmpty('Loading the selected staff member and exact date…'));
+          retry.hidden = true;
+          showMessage(message, 'Finding the older completed shift…', 'working');
+          return;
+        }
+        results.setAttribute('aria-busy', 'false');
+        if (staffOlderShiftError) {
+          results.replaceChildren(staffEmpty(staffOlderShiftError));
+          retry.hidden = false;
+          showMessage(message, 'The older shift lookup failed. Retry uses the same staff member and exact date.');
+          return;
+        }
+        retry.hidden = true;
+        if (!currentStaffOlderShiftQuery || !currentStaffOlderShiftLookup) {
+          results.replaceChildren(staffEmpty('Choose a staff member and exact older date.'));
+          showMessage(message, '');
+          return;
+        }
+        const lookup = currentStaffOlderShiftLookup;
+        results.replaceChildren(...lookup.items.map(staffCompletedShiftElement));
+        const person = currentStaffTime?.shiftStaff.find(item => item.staffId === lookup.staffId);
+        const staffName = person?.staffName || 'Selected staff member';
+        if (lookup.total === 0) {
+          results.appendChild(staffEmpty(`No completed shifts found for ${staffName} on ${lookup.date}.`));
+          showMessage(message, `No completed shifts found for ${staffName} on ${lookup.date}.`);
+        } else {
+          showMessage(message, lookup.truncated
+            ? `Showing newest ${lookup.items.length.toLocaleString('en-US')} of ${lookup.total.toLocaleString('en-US')} completed shifts for ${staffName} on ${lookup.date}.`
+            : `Found ${lookup.total.toLocaleString('en-US')} completed ${lookup.total === 1 ? 'shift' : 'shifts'} for ${staffName} on ${lookup.date}.`);
+        }
+      }
+
+      function renderStaffTimePrimary(data) {
         currentStaffTime = data;
-        populateStaffCorrectionNames(data.staff);
-        $('#staffTimeSummary').textContent = `${data.clockedInNow.length} clocked in · ${data.view.todayPunchTotal.toLocaleString('en-US')} today`;
+        populateStaffCorrectionNames(data.staff, data.shiftStaff);
+        const olderDate = $('#staffOlderShiftDate');
+        olderDate.max = shiftDate(data.view.today, -7);
+        if (olderDate.value > olderDate.max) olderDate.value = '';
+        $('#staffTimeSummary').textContent = `${data.needsAttention.length} need attention · ${data.clockedInNow.length} clocked in`;
+
+        const attention = $('#staffNeedsAttention');
+        attention.setAttribute('aria-busy', 'false');
+        const attentionRows = data.needsAttention.map(item => {
+          const row = staffTimeRow(item.staffName, item.message);
+          const actionDefinition = STAFF_ATTENTION_ACTIONS[item.code];
+          const primaryAction = primaryValidatedStaffAttentionAction(item, data.clockedInNow);
+          const action = makeElement(
+            'button',
+            'btn ghost small staff-attention-action',
+            primaryAction ? `Add missed ${staffActionLabel(primaryAction)}` : 'Review records'
+          );
+          action.type = 'button';
+          if (primaryAction) {
+            action.dataset.staffCorrectionStaff = item.staffId;
+            action.dataset.staffCorrectionAction = primaryAction;
+          } else if (actionDefinition) {
+            action.dataset.staffAttentionResolve = 'true';
+            action.dataset.staffAttentionStaff = item.staffId;
+            action.dataset.staffAttentionCode = item.code;
+          } else {
+            action.dataset.staffAttentionAdvanced = 'true';
+          }
+          row.appendChild(action);
+          return row;
+        });
+        attention.replaceChildren(...attentionRows);
+        if (!attentionRows.length) attention.appendChild(staffEmpty('No Staff Clock issues need attention.'));
 
         const clockedIn = $('#staffClockedInNow');
+        clockedIn.setAttribute('aria-busy', 'false');
         clockedIn.replaceChildren(...data.clockedInNow.map(item => staffTimeRow(
           item.staffName,
           `Since ${staffTimestampLabel(item.clockInAt)}`
         )));
         if (!data.clockedInNow.length) clockedIn.appendChild(staffEmpty('No one is clocked in.'));
+
+        $('#staffPeriodTotals').replaceChildren(
+          staffPeriodElement('Current pay period', data.periods.current),
+          staffPeriodElement('Previous pay period', data.periods.previous)
+        );
+
+        renderStaffRecentShifts();
+        renderStaffOlderShiftLookup();
+      }
+
+      function primaryValidatedStaffAttentionAction(item, clockedInNow) {
+        if (
+          !item
+          || item.code !== 'missing_clock_out'
+          || item.occurrenceCount !== 1
+          || item.linkedPunchIds.length !== 1
+          || !Array.isArray(clockedInNow)
+        ) return '';
+        const clocked = clockedInNow.find(candidate => candidate.punchId === item.linkedPunchIds[0]);
+        return clocked
+          && clocked.staffId === item.staffId
+          && clocked.staffName === item.staffName
+          ? 'clockOut'
+          : '';
+      }
+
+      function validatedStaffAttentionAction(item, records) {
+        const definition = item && STAFF_ATTENTION_ACTIONS[item.code];
+        if (!definition || item.linkedPunchIds.length !== 1 || !Array.isArray(records)) return '';
+        const record = records.find(candidate => candidate.punchId === item.linkedPunchIds[0]);
+        return record
+          && record.staffId === item.staffId
+          && record.staffName === item.staffName
+          && record.punchAction === definition.linkedPunchAction
+          && record.status === 'ACTIVE'
+          ? definition.punchAction
+          : '';
+      }
+
+      function showStaffAdvancedTask() {
+        const advancedPanel = $('#staffTimeAdvanced');
+        const advancedSummary = advancedPanel.querySelector('summary');
+        advancedPanel.open = true;
+        advancedSummary.focus();
+        advancedPanel.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }
+
+      async function resolveStaffAttentionAction(action) {
+        const originalLabel = action.textContent;
+        action.disabled = true;
+        action.textContent = 'Checking linked punches…';
+        showMessage($('#staffTimeMessage'), 'Checking the linked punch records before opening a correction…', 'working');
+        try {
+          const loaded = staffAdvancedLoaded || await loadStaffTimeAdvanced();
+          if (!loaded || !currentStaffTime) {
+            showMessage($('#staffTimeMessage'), 'The linked punch records could not be confirmed. Review Advanced records and audit, then Retry.');
+            showStaffAdvancedTask();
+            return;
+          }
+          const item = currentStaffTime.needsAttention.find(candidate => (
+            candidate.staffId === action.dataset.staffAttentionStaff
+            && candidate.code === action.dataset.staffAttentionCode
+          ));
+          const punchAction = validatedStaffAttentionAction(item, currentStaffTime.records);
+          if (!punchAction) {
+            showMessage($('#staffTimeMessage'), 'This item could not be linked to one exact punch, so no correction was opened. Review the records below.');
+            showStaffAdvancedTask();
+            return;
+          }
+          showMessage($('#staffTimeMessage'), 'Linked punch confirmed.', 'success');
+          openStaffCorrectionPanel({ staffId: item.staffId, punchAction });
+        } finally {
+          if (action.isConnected) {
+            action.disabled = false;
+            action.textContent = originalLabel;
+          }
+        }
+      }
+
+      function renderStaffTimeAdvanced(data) {
+        currentStaffTime = data;
 
         const today = $('#staffTodayPunches');
         const todayRows = data.todayPunches.map(item => {
@@ -3460,16 +4336,6 @@
         }
         today.replaceChildren(...todayRows);
         if (data.view.todayPunchTotal === 0) today.appendChild(staffEmpty('No punches today.'));
-
-        const attentionSection = $('#staffNeedsAttentionSection');
-        const attention = $('#staffNeedsAttention');
-        attention.replaceChildren(...data.needsAttention.map(item => staffTimeRow(item.staffName, item.message)));
-        attentionSection.hidden = data.needsAttention.length === 0;
-
-        $('#staffPeriodTotals').replaceChildren(
-          staffPeriodElement('Current pay period', data.periods.current),
-          staffPeriodElement('Previous pay period', data.periods.previous)
-        );
 
         renderStaffTimeRecords(data);
 
@@ -3502,6 +4368,57 @@
         }
         audit.replaceChildren(...auditRows);
         if (data.view.auditTotal === 0) audit.appendChild(staffEmpty('No Staff time corrections yet.'));
+        for (const list of [today, $('#staffTimeRecords'), audit]) {
+          list.setAttribute('aria-busy', 'false');
+        }
+        staffAdvancedLoading = false;
+        staffAdvancedLoaded = true;
+        staffAdvancedError = '';
+        renderStaffTimeAdvancedState();
+      }
+
+      function renderStaffTimeAdvancedState() {
+        const retry = $('#staffTimeAdvancedRetry');
+        const message = $('#staffTimeAdvancedMessage');
+        const today = $('#staffTodayPunches');
+        const records = $('#staffTimeRecords');
+        const audit = $('#staffTimeAudit');
+        if (staffAdvancedLoading) {
+          for (const [list, label] of [
+            [today, 'Loading today’s individual punches…'],
+            [records, 'Loading individual punch records…'],
+            [audit, 'Loading the correction audit…']
+          ]) {
+            list.setAttribute('aria-busy', 'true');
+            list.replaceChildren(staffEmpty(label));
+          }
+          retry.hidden = true;
+          message.textContent = 'Loading advanced records and audit…';
+          return;
+        }
+        for (const list of [today, records, audit]) list.setAttribute('aria-busy', 'false');
+        if (staffAdvancedError) {
+          for (const list of [today, records, audit]) {
+            list.replaceChildren(staffEmpty(staffAdvancedError));
+          }
+          retry.hidden = false;
+          message.textContent = 'Advanced records and audit did not load. Retry below.';
+          return;
+        }
+        retry.hidden = true;
+        if (staffAdvancedLoaded) {
+          message.textContent = 'Advanced records and audit loaded.';
+          return;
+        }
+        today.replaceChildren(staffEmpty('Open this section to load individual punches.'));
+        records.replaceChildren(staffEmpty('Open this section to load individual punch records.'));
+        audit.replaceChildren(staffEmpty('Open this section to load the correction audit.'));
+        message.textContent = 'Open this section to load advanced records and audit.';
+      }
+
+      function renderStaffTime(data) {
+        renderStaffTimePrimary(data);
+        renderStaffTimeAdvanced(data);
       }
 
       function newStaffUuid() {
@@ -3890,16 +4807,44 @@
         scheduleRenderPending = false;
         const labels = schedule.days[dayName(currentDate)] || [];
         const matchedDisplayIds = new Set();
-        const rows = labels.map((label, index) => {
+        const scheduled = labels.map((label, index) => {
           const matches = currentRecords.filter(record =>
             normalize(record.classLabel) === normalize(label)
             && normalize(record.site) === normalize(SITE)
           );
           matches.forEach(record => matchedDisplayIds.add(record.displayId));
-          return classRow(label, index, matches);
+          return { label, matches, row: classRow(label, index, matches) };
         });
-        $('#classList').replaceChildren(...rows);
+        const missingRows = scheduled.filter(item => item.matches.length === 0).map(item => item.row);
+        const completedRows = scheduled.filter(item => item.matches.length > 0).map(item => item.row);
+        const missingList = $('#classList');
+        missingList.setAttribute('aria-busy', 'false');
+        missingList.replaceChildren(...missingRows);
+        if (!missingRows.length) {
+          missingList.appendChild(staffEmpty(labels.length
+            ? 'Every scheduled class has a recorded instructor sign-in.'
+            : 'No classes are scheduled for this date.'));
+        }
+        $('#completedClassList').replaceChildren(...completedRows);
+        if (!completedRows.length) {
+          $('#completedClassList').appendChild(staffEmpty('No completed scheduled classes yet.'));
+        }
+        if (
+          persistentReviewOutcome
+          && persistentReviewOutcome.date === currentDate
+          && scheduled.some(item => (
+            item.matches.length > 0
+            && normalize(item.label) === normalize(persistentReviewOutcome.classLabel)
+          ))
+        ) {
+          $('#completedClasses').open = true;
+        }
+        $('#dailyScheduledCount').textContent = labels.length.toLocaleString('en-US');
+        $('#dailySignedCount').textContent = completedRows.length.toLocaleString('en-US');
+        $('#dailyMissingCount').textContent = missingRows.length.toLocaleString('en-US');
+        $('#completedClassCount').textContent = completedRows.length.toLocaleString('en-US');
         $('#classCount').textContent = `${labels.length} scheduled class${labels.length === 1 ? '' : 'es'}`;
+        $('#dailyReviewRetry').hidden = true;
 
         const unmatched = currentRecords.filter(record => !matchedDisplayIds.has(record.displayId));
         $('#unmatchedSection').hidden = unmatched.length === 0;
@@ -3943,7 +4888,17 @@
           : (dateString === today ? 'Today · America/New_York' : 'America/New_York');
         $('#nextDay').disabled = dateString >= today;
         showMessage($('#reviewMessage'), '');
-        if (options.quiet !== true) $('#reviewSection').classList.add('loading');
+        if (options.quiet !== true) {
+          $('#reviewSection').classList.add('loading');
+          $('#classList').setAttribute('aria-busy', 'true');
+          $('#classList').replaceChildren(staffEmpty('Loading Daily sign-ins…'));
+          $('#completedClassList').replaceChildren();
+          $('#dailyScheduledCount').textContent = '…';
+          $('#dailySignedCount').textContent = '…';
+          $('#dailyMissingCount').textContent = '…';
+          $('#dailyReviewRetry').hidden = true;
+          showMessage($('#reviewMessage'), `Loading Daily sign-ins for ${formatDateHeading(dateString)}…`, 'working');
+        }
         try {
           const data = await requestJson(API.review, { date: dateString });
           if (generation !== reviewLoadGeneration) return false;
@@ -3964,6 +4919,7 @@
           currentRecords = data.records;
           currentWarnings = data.warnings;
           currentAuditHistory = data.auditHistory;
+          showMessage($('#reviewMessage'), '');
           renderReview();
           return true;
         } catch (error) {
@@ -3976,7 +4932,12 @@
             currentRecords = [];
             currentWarnings = [];
             currentAuditHistory = [];
-            $('#classList').replaceChildren();
+            $('#classList').setAttribute('aria-busy', 'false');
+            $('#classList').replaceChildren(staffEmpty('Daily sign-ins could not be loaded.'));
+            $('#completedClassList').replaceChildren(staffEmpty('Completed classes could not be loaded.'));
+            $('#dailyScheduledCount').textContent = '—';
+            $('#dailySignedCount').textContent = '—';
+            $('#dailyMissingCount').textContent = '—';
             $('#unmatchedList').replaceChildren();
             $('#unmatchedSection').hidden = true;
             $('#warningList').replaceChildren();
@@ -3988,7 +4949,10 @@
               auditElement
             );
           }
-          if (options.quiet !== true) showMessage($('#reviewMessage'), error.message);
+          if (options.quiet !== true) {
+            showMessage($('#reviewMessage'), `Daily sign-ins could not be loaded. ${clean(error.message)}`);
+            $('#dailyReviewRetry').hidden = false;
+          }
           return false;
         } finally {
           if (generation === reviewLoadGeneration) {
@@ -4014,6 +4978,36 @@
         dateInput.max = today;
         if (!dateInput.value) dateInput.value = today;
         if (!timeInput.value) timeInput.value = `${parts.hour}:${parts.minute}`;
+      }
+
+      function openStaffCorrectionPanel({ staffId = '', punchAction = '' } = {}) {
+        const panel = $('#staffCorrectionPanel');
+        const form = $('#staffCorrectionForm');
+        panel.hidden = false;
+        $('#staffCorrectionOpen').setAttribute('aria-expanded', 'true');
+        setStaffCorrectionDefaults();
+        if (staffId && currentStaffTime?.staff.some(item => item.staffId === staffId)) {
+          form.elements.staffId.value = staffId;
+        }
+        if (['clockIn', 'clockOut'].includes(punchAction)) {
+          form.elements.punchAction.value = punchAction;
+        }
+        showMessage($('#staffCorrectionStatus'), '');
+        window.requestAnimationFrame(() => {
+          form.elements.staffId.focus();
+          panel.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        });
+      }
+
+      function closeStaffCorrectionPanel() {
+        const form = $('#staffCorrectionForm');
+        clearStaffCorrectionIdentity(form);
+        form.reset();
+        setStaffCorrectionDefaults();
+        showMessage($('#staffCorrectionStatus'), '');
+        $('#staffCorrectionPanel').hidden = true;
+        $('#staffCorrectionOpen').setAttribute('aria-expanded', 'false');
+        $('#staffCorrectionOpen').focus({ preventScroll: true });
       }
 
       function clearStaffCorrectionIdentity(form) {
@@ -4055,9 +5049,16 @@
           || !STAFF_PUNCH_ID_PATTERN.test(clockOutPunchId)
           || clockInPunchId === clockOutPunchId
         ) return null;
-        const completedShift = currentStaffTime
+        const lookupShift = [
+          ...(currentStaffRecentLookup?.items || []),
+          ...(currentStaffOlderShiftLookup?.items || [])
+        ].find(shift => (
+          shift.clockIn.punchId === clockInPunchId
+          && shift.clockOut.punchId === clockOutPunchId
+        )) || null;
+        const completedShift = lookupShift || (currentStaffTime
           ? staffCompletedShiftByClockIn(currentStaffTime.records).get(clockInPunchId)
-          : null;
+          : null);
         if (!completedShift || completedShift.clockOut.punchId !== clockOutPunchId) return null;
         const readCorrectedTimestamp = (control, offsetControl) => {
           const [date, time] = String(control?.value || '').split('T');
@@ -4150,42 +5151,246 @@
         if (submit) submit.textContent = working ? 'Saving…' : label;
       }
 
-      function focusStaffTimeHash() {
-        if (!STAFF_CLOCK_ENABLED) return;
-        if (location.hash !== '#staff-time' || $('#appPanel').hidden) return;
-        const panel = $('#staff-time');
-        panel.open = true;
-        window.requestAnimationFrame(() => {
-          panel.focus({ preventScroll: true });
-          panel.scrollIntoView({ block: 'start', behavior: 'smooth' });
-        });
-      }
-
       async function loadStaffTime(options = {}) {
         const generation = ++staffTimeLoadGeneration;
+        beginStaffShiftLookupLoading();
         if (options.quiet !== true) {
           $('#staff-time').classList.add('loading');
           showMessage($('#staffTimeMessage'), 'Loading Staff time…', 'working');
         }
         try {
-          const data = await loadStaffTimeReviewView(generation);
+          const initial = await loadStaffTimeReviewView(generation);
           if (generation !== staffTimeLoadGeneration) return false;
-          if (!data) return false;
-          renderStaffTime(data);
+          if (!initial) return false;
+          const data = staffTimeReviewShell(initial);
+          staffRecentLoading = false;
+          renderStaffTimePrimary(data);
           showMessage($('#staffTimeMessage'), '');
+          $('#staffTimeRetry').hidden = true;
           setStaffCorrectionDefaults();
+          if ($('#staffTimeAdvanced').open && options.deferAdvanced !== true) {
+            void loadStaffTimeAdvanced();
+          }
           return true;
         } catch (error) {
           if (generation !== staffTimeLoadGeneration) return false;
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
           } else {
-            showMessage($('#staffTimeMessage'), error.message);
+            staffRecentLoading = false;
+            staffRecentLoadError = `Recent completed shifts could not be loaded. ${clean(error.message)
+              || 'The request did not complete.'}`;
+            $('#staffNeedsAttention').setAttribute('aria-busy', 'false');
+            $('#staffNeedsAttention').replaceChildren(staffEmpty('Staff Clock attention could not be loaded.'));
+            $('#staffClockedInNow').setAttribute('aria-busy', 'false');
+            $('#staffClockedInNow').replaceChildren(staffEmpty('Current Staff Clock status could not be loaded.'));
+            renderStaffRecentShifts();
+            showMessage($('#staffTimeMessage'), `Staff Clock could not be loaded. ${clean(error.message)}`);
+            $('#staffTimeRetry').hidden = false;
           }
           return false;
         } finally {
           if (generation === staffTimeLoadGeneration) $('#staff-time').classList.remove('loading');
         }
+      }
+
+      async function retryStaffTime() {
+        if ($('#staff-time').classList.contains('loading')) return;
+        await loadStaffTime();
+      }
+
+      async function loadStaffTimeAdvanced() {
+        if (!currentStaffTime || staffAdvancedLoading || staffAdvancedLoaded) return false;
+        const generation = staffTimeLoadGeneration;
+        const advancedGeneration = ++staffAdvancedLoadGeneration;
+        const initial = currentStaffTime;
+        staffAdvancedLoading = true;
+        staffAdvancedError = '';
+        renderStaffTimeAdvancedState();
+        try {
+          const data = await loadStaffTimeAdvancedReview(initial, generation);
+          if (
+            !data
+            || generation !== staffTimeLoadGeneration
+            || advancedGeneration !== staffAdvancedLoadGeneration
+          ) return false;
+          renderStaffTimeAdvanced(data);
+          return true;
+        } catch (error) {
+          if (
+            generation !== staffTimeLoadGeneration
+            || advancedGeneration !== staffAdvancedLoadGeneration
+          ) return false;
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Admin login required.');
+          } else {
+            staffAdvancedError = validStaffTimeStaleError(error)
+              ? 'Staff Time changed while advanced records were loading.'
+              : `Advanced records and audit could not be loaded. ${clean(error.message)
+                || 'The request did not complete.'}`;
+          }
+          return false;
+        } finally {
+          if (
+            generation === staffTimeLoadGeneration
+            && advancedGeneration === staffAdvancedLoadGeneration
+          ) {
+            staffAdvancedLoading = false;
+            renderStaffTimeAdvancedState();
+          }
+        }
+      }
+
+      async function retryStaffTimeAdvanced() {
+        if (staffAdvancedLoading) return;
+        const refreshed = await loadStaffTime({ quiet: true, deferAdvanced: true });
+        if (!refreshed) {
+          staffAdvancedLoading = false;
+          staffAdvancedLoaded = false;
+          staffAdvancedError = 'Staff Time could not be refreshed. Retry when the connection is available.';
+          renderStaffTimeAdvancedState();
+          return;
+        }
+        await loadStaffTimeAdvanced();
+      }
+
+      async function retryStaffRecentShifts() {
+        if (staffRecentLoading) return;
+        if (!currentStaffTime) {
+          await loadStaffTime();
+          return;
+        }
+        const generation = staffTimeLoadGeneration;
+        staffRecentLoading = true;
+        staffRecentLoadError = '';
+        renderStaffRecentShifts();
+        try {
+          const lookup = await fetchStaffTimeShiftLookup(
+            currentStaffTime,
+            { mode: 'recent' },
+            generation
+          );
+          if (!lookup || generation !== staffTimeLoadGeneration) return;
+          currentStaffRecentLookup = lookup;
+        } catch (error) {
+          if (generation !== staffTimeLoadGeneration) return;
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Admin login required.');
+          } else if (validStaffTimeStaleError(error)) {
+            await loadStaffTime({ quiet: true });
+          } else {
+            currentStaffRecentLookup = null;
+            staffRecentLoadError = `Recent completed shifts could not be loaded. ${clean(error.message)
+              || 'The request did not complete.'}`;
+          }
+        } finally {
+          if (generation === staffTimeLoadGeneration) {
+            staffRecentLoading = false;
+            renderStaffRecentShifts();
+          }
+        }
+      }
+
+      function showMoreRecentShifts() {
+        if (!currentStaffRecentLookup) return;
+        staffRecentVisibleLimit = Math.min(
+          STAFF_RECENT_MAX_VISIBLE,
+          staffRecentVisibleLimit + STAFF_RECENT_INCREMENT
+        );
+        renderStaffRecentShifts();
+      }
+
+      function readStaffOlderShiftQuery(form) {
+        const staffId = String(form.elements.staffId.value || '');
+        const date = String(form.elements.date.value || '');
+        const person = currentStaffTime?.shiftStaff.find(item => item.staffId === staffId);
+        if (
+          !person
+          || !validReviewDate(date)
+          || date > shiftDate(currentStaffTime.view.today, -7)
+        ) return null;
+        return Object.freeze({ mode: 'exactDate', staffId: person.staffId, date });
+      }
+
+      async function loadStaffOlderShiftLookup(query) {
+        if (!currentStaffTime || staffOlderShiftLoading || !query) return;
+        const staffGeneration = staffTimeLoadGeneration;
+        const lookupGeneration = ++staffOlderShiftLoadGeneration;
+        currentStaffOlderShiftQuery = query;
+        currentStaffOlderShiftLookup = null;
+        staffOlderShiftLoading = true;
+        staffOlderShiftError = '';
+        renderStaffOlderShiftLookup();
+        try {
+          const lookup = await fetchStaffTimeShiftLookup(
+            currentStaffTime,
+            query,
+            staffGeneration
+          );
+          if (
+            !lookup
+            || staffGeneration !== staffTimeLoadGeneration
+            || lookupGeneration !== staffOlderShiftLoadGeneration
+          ) return;
+          currentStaffOlderShiftLookup = lookup;
+        } catch (error) {
+          if (
+            staffGeneration !== staffTimeLoadGeneration
+            || lookupGeneration !== staffOlderShiftLoadGeneration
+          ) return;
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Admin login required.');
+          } else if (validStaffTimeStaleError(error)) {
+            const refreshed = await loadStaffTime({ quiet: true });
+            currentStaffOlderShiftQuery = query;
+            currentStaffOlderShiftLookup = null;
+            staffOlderShiftLoading = false;
+            staffOlderShiftError = refreshed
+              ? 'Staff time changed while searching. Retry the same staff member and date.'
+              : 'Staff time changed and could not be refreshed. Retry the same staff member and date.';
+            renderStaffOlderShiftLookup();
+          } else {
+            staffOlderShiftError = `The older shift could not be loaded. ${clean(error.message)
+              || 'The request did not complete.'}`;
+          }
+        } finally {
+          if (
+            staffGeneration === staffTimeLoadGeneration
+            && lookupGeneration === staffOlderShiftLoadGeneration
+          ) {
+            staffOlderShiftLoading = false;
+            renderStaffOlderShiftLookup();
+          }
+        }
+      }
+
+      async function submitStaffOlderShiftLookup(form) {
+        if (staffOlderShiftLoading) return;
+        const query = readStaffOlderShiftQuery(form);
+        if (!query) {
+          showMessage(
+            $('#staffOlderShiftMessage'),
+            'Choose a staff member and an exact date earlier than the last seven days.'
+          );
+          return;
+        }
+        await loadStaffOlderShiftLookup(query);
+      }
+
+      async function retryStaffOlderShiftLookup() {
+        if (!currentStaffOlderShiftQuery || staffOlderShiftLoading) return;
+        const query = currentStaffOlderShiftQuery;
+        if (!currentStaffTime) {
+          const refreshed = await loadStaffTime({ quiet: true });
+          currentStaffOlderShiftQuery = query;
+          currentStaffOlderShiftLookup = null;
+          if (!refreshed) {
+            staffOlderShiftError = 'Staff time could not be refreshed. Retry the same staff member and date.';
+            renderStaffOlderShiftLookup();
+            return;
+          }
+        }
+        await loadStaffOlderShiftLookup(query);
       }
 
       async function submitStaffCorrection(form) {
@@ -4226,6 +5431,14 @@
           showMessage(status, data.result === 'added' ? 'Missed punch added.' : 'This correction was already recorded.', 'success');
           toast(data.result === 'added' ? 'Staff punch added' : 'Correction already recorded');
           await loadStaffTime({ quiet: true });
+          closeStaffCorrectionPanel();
+          showMessage(
+            $('#staffTimeMessage'),
+            data.result === 'added'
+              ? `Missed punch added for ${request.staffName}.`
+              : `The same missed punch for ${request.staffName} was already recorded.`,
+            'success'
+          );
         } catch (error) {
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
@@ -4754,6 +5967,9 @@
           return;
         }
         $('#searchButton').disabled = true;
+        $('#searchRetry').hidden = true;
+        $('#searchResults').hidden = true;
+        showMessage($('#searchMessage'), 'Finding instructor sign-ins…', 'working');
         try {
           const data = await requestJson(API.search, { instructor, date });
           if (!validInstructorSearchResponse(data, instructor, date)) {
@@ -4770,11 +5986,14 @@
             'No recent active sign-ins found.'
           );
           $('#searchResults').hidden = false;
+          $('#searchRetry').hidden = true;
+          showMessage($('#searchMessage'), 'Instructor sign-ins loaded.', 'success');
         } catch (error) {
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
           } else {
             showMessage($('#searchMessage'), error.message);
+            $('#searchRetry').hidden = false;
           }
         } finally {
           $('#searchButton').disabled = false;
@@ -4843,9 +6062,9 @@
             ? RICHMOND_PRODUCTION_ADMIN_COPY.appEyebrow
             : 'Richmond BJJ · TEST';
           $('#appHeading').textContent = IS_RICHMOND_PRODUCTION
-            ? 'Richmond Production Daily Sign-in Review'
-            : 'Richmond TEST Daily Sign-in Review';
-          $('#scheduledClassesHeading').textContent = 'Scheduled Richmond classes';
+            ? 'Richmond M1 Admin'
+            : 'Richmond TEST Admin';
+          $('#scheduledClassesHeading').textContent = 'Daily sign-ins';
           $('#scheduleLimitation').textContent = 'Daily Review uses the current regular weekly schedule from the Richmond BJJ website. Recorded sign-ins with older or special-event labels remain visible as unmatched.';
           $('#testEntryHeading').textContent = IS_RICHMOND_PRODUCTION
             ? 'RICHMOND PRODUCTION'
@@ -4870,7 +6089,8 @@
         $('#installSyncSettingsButton').hidden = true;
         $('#tabletDiagnosticButton').hidden = !diagnosticOriginAllowed;
         $('#tabletDiagnosticOriginMessage').hidden = diagnosticOriginAllowed || IS_RICHMOND;
-        $('#staff-time').hidden = !STAFF_CLOCK_ENABLED;
+        $('#staffModeControl').hidden = !STAFF_CLOCK_ENABLED;
+        $('#staff-time').hidden = true;
         try {
           if (!await refreshCanonicalSchedule({ bootstrapWhenUnavailable: true })) {
             throw new Error('Canonical schedule unavailable.');
@@ -4886,6 +6106,8 @@
           schedule = null;
           $('#scheduleSource').textContent = 'Schedule status unavailable';
           $('#scheduleSource').classList.add('fallback');
+          $('#scheduleProblem').hidden = false;
+          $('#scheduleProblem').textContent = 'The class schedule could not be loaded.';
           setLoggedOut(`The ${INSTALLATION.gymName} schedule could not be loaded.`);
         }
       }
@@ -4905,12 +6127,28 @@
         showMessage($('#tabletPairingMessage'), '');
       });
       $('#tabletPairingApproveButton').addEventListener('click', approveTabletPairing);
+      $('#tabletPairingRejectButton').addEventListener('click', rejectTabletPairing);
       $('#tabletPairingCancelButton').addEventListener('click', () => {
         clearTabletPairingReview({ clearCode: true });
         showMessage($('#tabletPairingMessage'), '');
         $('#tabletPairingCode').focus();
       });
       $('#tabletDiagnosticButton').addEventListener('click', () => openTabletDiagnostic('diagnostic'));
+      $('#managerModes').addEventListener('keydown', event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        const controls = [$('#dailyModeControl'), $('#staffModeControl')]
+          .filter(control => !control.hidden);
+        const current = controls.indexOf(document.activeElement);
+        if (current < 0) return;
+        event.preventDefault();
+        const next = event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? controls.length - 1
+            : (current + (event.key === 'ArrowRight' ? 1 : -1) + controls.length) % controls.length;
+        controls[next].focus();
+        location.hash = controls[next].getAttribute('href');
+      });
       $('#previousDay').addEventListener('click', () => loadReview(shiftDate(currentDate, -1)));
       $('#yesterday').addEventListener('click', () => loadReview(defaultYesterday()));
       $('#today').addEventListener('click', () => loadReview(nyDate()));
@@ -4921,7 +6159,29 @@
       $('#calendarDate').addEventListener('change', event => {
         if (event.target.value && event.target.value <= nyDate()) loadReview(event.target.value);
       });
+      $('#dailyReviewRetry').addEventListener('click', () => loadReview(currentDate || defaultYesterday()));
       $('#searchButton').addEventListener('click', searchInstructor);
+      $('#searchRetry').addEventListener('click', searchInstructor);
+      $('#staffCorrectionOpen').addEventListener('click', () => openStaffCorrectionPanel());
+      $('#staffCorrectionCancel').addEventListener('click', closeStaffCorrectionPanel);
+      $('#staffNeedsAttention').addEventListener('click', event => {
+        const advanced = event.target.closest('[data-staff-attention-advanced]');
+        if (advanced) {
+          showStaffAdvancedTask();
+          return;
+        }
+        const directAction = event.target.closest('[data-staff-correction-staff]');
+        if (directAction) {
+          openStaffCorrectionPanel({
+            staffId: directAction.dataset.staffCorrectionStaff,
+            punchAction: directAction.dataset.staffCorrectionAction
+          });
+          return;
+        }
+        const action = event.target.closest('[data-staff-attention-resolve]');
+        if (!action) return;
+        void resolveStaffAttentionAction(action);
+      });
       $('#staffCorrectionForm').addEventListener('input', () => {
         showMessage($('#staffCorrectionStatus'), '');
       });
@@ -4929,38 +6189,55 @@
         event.preventDefault();
         submitStaffCorrection(event.currentTarget);
       });
-      $('#staffTimeOlderHistory').addEventListener('click', () => {
-        if (!currentStaffTime) return;
-        staffOlderHistoryExpanded = !staffOlderHistoryExpanded;
-        renderStaffTimeRecords(currentStaffTime);
+      $('#staffRecentShiftsRetry').addEventListener('click', retryStaffRecentShifts);
+      $('#staffRecentShowMore').addEventListener('click', showMoreRecentShifts);
+      $('#staffTimeRetry').addEventListener('click', retryStaffTime);
+      $('#staffOlderShiftForm').addEventListener('input', () => {
+        if (staffOlderShiftLoading) return;
+        staffOlderShiftLoadGeneration += 1;
+        currentStaffOlderShiftQuery = null;
+        currentStaffOlderShiftLookup = null;
+        staffOlderShiftError = '';
+        renderStaffOlderShiftLookup();
       });
-      $('#staffTimeRecords').addEventListener('click', event => {
-        const cancel = event.target.closest('[data-staff-adjust-cancel]');
-        if (!cancel) return;
-        const form = cancel.closest('[data-staff-adjust-form]');
-        if (!form || form.getAttribute('aria-busy') === 'true') return;
-        clearStaffAdjustmentReview(form);
-        showMessage(form.querySelector('.staff-adjust-status'), 'Review canceled. Edit the times or reason, then review again.');
-        form.elements.correctedClockIn.focus();
-      });
-      $('#staffTimeRecords').addEventListener('input', event => {
-        const form = event.target.closest('[data-staff-adjust-form]');
-        if (form && form.getAttribute('aria-busy') !== 'true') {
-          clearStaffAdjustmentReview(form);
-          showMessage(form.querySelector('.staff-adjust-status'), '');
-        }
-      });
-      $('#staffTimeRecords').addEventListener('submit', event => {
-        const adjustmentForm = event.target.closest('[data-staff-adjust-form]');
-        if (adjustmentForm) {
-          event.preventDefault();
-          submitStaffAdjustment(adjustmentForm);
-          return;
-        }
-        const voidForm = event.target.closest('[data-staff-void-form]');
-        if (!voidForm) return;
+      $('#staffOlderShiftForm').addEventListener('submit', event => {
         event.preventDefault();
-        submitStaffVoid(voidForm);
+        submitStaffOlderShiftLookup(event.currentTarget);
+      });
+      $('#staffOlderShiftRetry').addEventListener('click', retryStaffOlderShiftLookup);
+      $('#staffTimeAdvanced').addEventListener('toggle', event => {
+        if (event.currentTarget.open && !staffAdvancedError) void loadStaffTimeAdvanced();
+      });
+      $('#staffTimeAdvancedRetry').addEventListener('click', retryStaffTimeAdvanced);
+      ['#staffRecentShifts', '#staffOlderShiftResults', '#staffTimeRecords'].forEach(selector => {
+        $(selector).addEventListener('click', event => {
+          const cancel = event.target.closest('[data-staff-adjust-cancel]');
+          if (!cancel) return;
+          const form = cancel.closest('[data-staff-adjust-form]');
+          if (!form || form.getAttribute('aria-busy') === 'true') return;
+          clearStaffAdjustmentReview(form);
+          showMessage(form.querySelector('.staff-adjust-status'), 'Review canceled. Edit the times or reason, then review again.');
+          form.elements.correctedClockIn.focus();
+        });
+        $(selector).addEventListener('input', event => {
+          const form = event.target.closest('[data-staff-adjust-form]');
+          if (form && form.getAttribute('aria-busy') !== 'true') {
+            clearStaffAdjustmentReview(form);
+            showMessage(form.querySelector('.staff-adjust-status'), '');
+          }
+        });
+        $(selector).addEventListener('submit', event => {
+          const adjustmentForm = event.target.closest('[data-staff-adjust-form]');
+          if (adjustmentForm) {
+            event.preventDefault();
+            submitStaffAdjustment(adjustmentForm);
+            return;
+          }
+          const voidForm = event.target.closest('[data-staff-void-form]');
+          if (!voidForm) return;
+          event.preventDefault();
+          submitStaffVoid(voidForm);
+        });
       });
       $('#reviewSection').addEventListener('click', event => {
         const toggle = event.target.closest('.add-toggle');
@@ -5009,7 +6286,10 @@
           if (STAFF_CLOCK_ENABLED) loadStaffTime();
         }
       });
-      window.addEventListener('hashchange', focusStaffTimeHash);
+      window.addEventListener('hashchange', () => {
+        const modeControlHasFocus = $('#managerModes').contains(document.activeElement);
+        applyManagerMode({ focus: !modeControlHasFocus });
+      });
       window.addEventListener('message', receiveSyncInstallationReady);
       window.addEventListener('message', receiveTabletDiagnosticProofs);
       window.addEventListener('message', receiveSyncInstallationResult);

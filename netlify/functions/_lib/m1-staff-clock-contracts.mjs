@@ -5,6 +5,8 @@ export const STAFF_RECORD_STATUSES = Object.freeze(['ACTIVE', 'VOID']);
 export const STAFF_RECORD_SOURCES = Object.freeze(['Tablet', 'Admin-added']);
 export const MAX_STAFF_CLOCK_PUNCHES = 50;
 export const MAX_STAFF_CLOCK_PAGE_ITEMS = 500;
+export const MAX_STAFF_CLOCK_HISTORY_SHIFTS = 50;
+export const MAX_STAFF_SHIFT_LOOKUP_RESULTS = 20;
 export const MAX_STAFF_CLOCK_STAFF = 100;
 export const MAX_STAFF_CLOCK_RECORDS = 500;
 export const MAX_STAFF_CLOCK_AUDIT = 500;
@@ -32,6 +34,7 @@ const NEW_YORK_TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2})T((?:[01]\d|2[0-3]):[0-5
 const MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 const MAX_SAFE_TOTAL_SECONDS = 15 * 24 * 60 * 60;
 const MAX_STAFF_SHIFT_MS = 18 * 60 * 60 * 1_000;
+const MAX_STAFF_PAGE_BYTES = 80_000;
 const STAFF_VIEW_TOKEN_PATTERN = /^[0-9a-f]{64}$/u;
 const KIOSK_PAGE_STREAMS = new Set(['records', 'attention']);
 const ADMIN_PAGE_STREAMS = new Set(['records', 'attention', 'audit']);
@@ -810,7 +813,9 @@ function sanitizeStaffViewMetadata(input, includeAdmin) {
 
 function sanitizeStaffViewSummary(input, expectedTarget, options, includeAdmin) {
   if (
-    !exactObjectKeys(input, ['ok', 'target', 'staff', 'clockedInNow', 'periods', 'view'])
+    !exactObjectKeys(input, includeAdmin
+      ? ['ok', 'target', 'staff', 'shiftStaff', 'clockedInNow', 'periods', 'view']
+      : ['ok', 'target', 'staff', 'clockedInNow', 'periods', 'view'])
     || input.ok !== true
     || input.target !== expectedTarget
     || !exactObjectKeys(input.periods, ['current', 'previous'])
@@ -818,6 +823,9 @@ function sanitizeStaffViewSummary(input, expectedTarget, options, includeAdmin) 
   const requireTestName = expectedTarget === 'test';
   const now = options.now || new Date();
   const staff = sanitizeStaffList(input.staff, requireTestName);
+  const shiftStaff = includeAdmin
+    ? sanitizeStaffList(input.shiftStaff, requireTestName)
+    : null;
   const clockedInNow = sanitizeUniqueArray(
     input.clockedInNow,
     MAX_STAFF_CLOCK_STAFF,
@@ -829,6 +837,7 @@ function sanitizeStaffViewSummary(input, expectedTarget, options, includeAdmin) 
   const view = sanitizeStaffViewMetadata(input.view, includeAdmin);
   if (
     !staff
+    || (includeAdmin && !shiftStaff)
     || !clockedInNow
     || new Set(clockedInNow.map(item => item.punchId)).size !== clockedInNow.length
     || !current
@@ -838,9 +847,13 @@ function sanitizeStaffViewSummary(input, expectedTarget, options, includeAdmin) 
     || shiftDate(previous.endDate, 1) !== current.startDate
     || view.today < current.startDate
     || view.today > current.endDate
+    || (includeAdmin && staff.some(person => !shiftStaff.some(candidate => (
+      candidate.staffId === person.staffId && candidate.staffName === person.staffName
+    ))))
   ) return null;
   return Object.freeze({
     staff: Object.freeze(staff),
+    ...(includeAdmin ? { shiftStaff: Object.freeze(shiftStaff) } : {}),
     clockedInNow: Object.freeze(clockedInNow),
     periods: Object.freeze({ current, previous }),
     view
@@ -927,6 +940,252 @@ export function sanitizeStaffViewPage(input, expectedTarget, expectedRequest, op
     offset: input.offset,
     items: Object.freeze(items),
     nextOffset: input.nextOffset
+  });
+}
+
+export function sanitizeStaffTimeHistoryPageRequest(input, expectedOperation = 'historyPage') {
+  if (
+    !exactObjectKeys(input, ['operation', 'viewToken', 'offset'])
+    || input.operation !== expectedOperation
+    || typeof input.viewToken !== 'string'
+    || !STAFF_VIEW_TOKEN_PATTERN.test(input.viewToken)
+    || !Number.isSafeInteger(input.offset)
+    || input.offset < 0
+  ) return null;
+  return Object.freeze({
+    operation: expectedOperation,
+    viewToken: input.viewToken,
+    offset: input.offset
+  });
+}
+
+export function sanitizeStaffShiftLookupRequest(
+  input,
+  expectedOperation = 'shiftLookup',
+  options = {}
+) {
+  if (
+    !input
+    || typeof input !== 'object'
+    || Array.isArray(input)
+    || input.operation !== expectedOperation
+    || typeof input.viewToken !== 'string'
+    || !STAFF_VIEW_TOKEN_PATTERN.test(input.viewToken)
+    || (input.mode !== 'recent' && input.mode !== 'exactDate')
+  ) return null;
+  if (input.mode === 'recent') {
+    if (!exactObjectKeys(input, ['operation', 'viewToken', 'mode'])) return null;
+    return Object.freeze({
+      operation: expectedOperation,
+      viewToken: input.viewToken,
+      mode: input.mode,
+      staffId: '',
+      date: ''
+    });
+  }
+  if (
+    !exactObjectKeys(input, ['operation', 'viewToken', 'mode', 'staffId', 'date'])
+    || !sanitizeStaffId(input.staffId)
+    || !validDate(input.date)
+  ) return null;
+  const now = options.now instanceof Date ? options.now : new Date();
+  const recentDateFrom = shiftDate(newYorkWallTime(now).slice(0, 10), -6);
+  if (input.date >= recentDateFrom) return null;
+  return Object.freeze({
+    operation: expectedOperation,
+    viewToken: input.viewToken,
+    mode: input.mode,
+    staffId: input.staffId,
+    date: input.date
+  });
+}
+
+function sanitizeStaffCompletedShift(input, validationOptions) {
+  if (!exactObjectKeys(input, ['clockIn', 'clockOut', 'latestAdjustment'])) return null;
+  const clockIn = sanitizeRecord(input.clockIn, validationOptions);
+  const clockOut = sanitizeRecord(input.clockOut, validationOptions);
+  if (
+    !clockIn
+    || !clockOut
+    || clockIn.punchId === clockOut.punchId
+    || clockIn.staffId !== clockOut.staffId
+    || clockIn.staffName !== clockOut.staffName
+    || clockIn.punchAction !== 'clockIn'
+    || clockOut.punchAction !== 'clockOut'
+    || clockIn.status !== 'ACTIVE'
+    || clockOut.status !== 'ACTIVE'
+    || Date.parse(clockOut.timestamp) <= Date.parse(clockIn.timestamp)
+  ) return null;
+  const clockInRequestId = Object.hasOwn(clockIn, 'adjustmentRequestId')
+    ? clockIn.adjustmentRequestId
+    : '';
+  const clockOutRequestId = Object.hasOwn(clockOut, 'adjustmentRequestId')
+    ? clockOut.adjustmentRequestId
+    : '';
+  const sharedRequestId = clockInRequestId === clockOutRequestId
+    ? clockInRequestId
+    : '';
+  const latestAdjustment = input.latestAdjustment === null
+    ? null
+    : sanitizeAuditRecord(input.latestAdjustment, validationOptions);
+  if (
+    (sharedRequestId && !latestAdjustment)
+    || (!sharedRequestId && latestAdjustment !== null)
+    || (latestAdjustment && (
+      latestAdjustment.operation !== 'adjust'
+      || latestAdjustment.requestId !== sharedRequestId
+      || latestAdjustment.staffId !== clockIn.staffId
+      || latestAdjustment.staffName !== clockIn.staffName
+      || latestAdjustment.clockInPunchId !== clockIn.punchId
+      || latestAdjustment.clockOutPunchId !== clockOut.punchId
+      || latestAdjustment.correctedClockInAt !== clockIn.timestamp
+      || latestAdjustment.correctedClockOutAt !== clockOut.timestamp
+    ))
+  ) return null;
+  return Object.freeze({ clockIn, clockOut, latestAdjustment });
+}
+
+function staffContractJsonByteLength(value) {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+export function sanitizeStaffTimeHistoryPage(
+  input,
+  expectedTarget,
+  expectedRequest,
+  options = {}
+) {
+  if (
+    !expectedRequest
+    || !exactObjectKeys(input, [
+      'ok', 'target', 'viewToken', 'offset', 'total', 'items', 'nextOffset'
+    ])
+    || input.ok !== true
+    || input.target !== expectedTarget
+    || input.viewToken !== expectedRequest.viewToken
+    || input.offset !== expectedRequest.offset
+    || !Number.isSafeInteger(input.total)
+    || input.total < 0
+    || input.offset > input.total
+    || !Array.isArray(input.items)
+    || input.items.length > MAX_STAFF_CLOCK_HISTORY_SHIFTS
+    || staffContractJsonByteLength(input) > MAX_STAFF_PAGE_BYTES
+  ) return null;
+  const validationOptions = {
+    requireTestName: expectedTarget === 'test',
+    now: options.now || new Date()
+  };
+  const items = [];
+  const punchIds = new Set();
+  for (const item of input.items) {
+    const shift = sanitizeStaffCompletedShift(item, validationOptions);
+    if (
+      !shift
+      || punchIds.has(shift.clockIn.punchId)
+      || punchIds.has(shift.clockOut.punchId)
+    ) return null;
+    punchIds.add(shift.clockIn.punchId);
+    punchIds.add(shift.clockOut.punchId);
+    items.push(shift);
+  }
+  const endOffset = input.offset + items.length;
+  if (
+    endOffset > input.total
+    || (items.length === 0 && input.offset < input.total)
+    || input.nextOffset !== (endOffset < input.total ? endOffset : null)
+  ) return null;
+  return Object.freeze({
+    viewToken: input.viewToken,
+    offset: input.offset,
+    total: input.total,
+    items: Object.freeze(items),
+    nextOffset: input.nextOffset
+  });
+}
+
+export function sanitizeStaffShiftLookup(
+  input,
+  expectedTarget,
+  expectedRequest,
+  options = {}
+) {
+  if (
+    !expectedRequest
+    || !exactObjectKeys(input, [
+      'ok', 'target', 'viewToken', 'mode', 'dateFrom', 'dateThrough',
+      'staffId', 'date', 'total', 'items', 'truncated'
+    ])
+    || input.ok !== true
+    || input.target !== expectedTarget
+    || input.viewToken !== expectedRequest.viewToken
+    || input.mode !== expectedRequest.mode
+    || !validDate(input.dateFrom)
+    || !validDate(input.dateThrough)
+    || input.dateFrom > input.dateThrough
+    || input.staffId !== expectedRequest.staffId
+    || input.date !== expectedRequest.date
+    || !Number.isSafeInteger(input.total)
+    || input.total < 0
+    || !Array.isArray(input.items)
+    || input.items.length > MAX_STAFF_SHIFT_LOOKUP_RESULTS
+    || input.items.length > input.total
+    || (input.total > 0 && input.items.length === 0)
+    || typeof input.truncated !== 'boolean'
+    || input.truncated !== (input.total > input.items.length)
+    || staffContractJsonByteLength(input) > MAX_STAFF_PAGE_BYTES
+  ) return null;
+  if (input.mode === 'recent') {
+    const now = options.now instanceof Date ? options.now : new Date();
+    const today = newYorkWallTime(now).slice(0, 10);
+    if (
+      input.staffId !== ''
+      || input.date !== ''
+      || input.dateThrough !== today
+      || input.dateFrom !== shiftDate(today, -6)
+    ) return null;
+  } else if (
+    input.dateFrom !== expectedRequest.date
+    || input.dateThrough !== expectedRequest.date
+  ) return null;
+  const validationOptions = {
+    requireTestName: expectedTarget === 'test',
+    now: options.now || new Date()
+  };
+  const items = [];
+  const punchIds = new Set();
+  let previousTimestamp = Number.POSITIVE_INFINITY;
+  for (const item of input.items) {
+    const shift = sanitizeStaffCompletedShift(item, validationOptions);
+    const timestamp = shift ? Date.parse(shift.clockIn.timestamp) : NaN;
+    if (
+      !shift
+      || shift.clockIn.date < input.dateFrom
+      || shift.clockIn.date > input.dateThrough
+      || (input.mode === 'exactDate' && shift.clockIn.staffId !== input.staffId)
+      || punchIds.has(shift.clockIn.punchId)
+      || punchIds.has(shift.clockOut.punchId)
+      || !Number.isFinite(timestamp)
+      || timestamp > previousTimestamp
+    ) return null;
+    previousTimestamp = timestamp;
+    punchIds.add(shift.clockIn.punchId);
+    punchIds.add(shift.clockOut.punchId);
+    items.push(shift);
+  }
+  return Object.freeze({
+    viewToken: input.viewToken,
+    mode: input.mode,
+    dateFrom: input.dateFrom,
+    dateThrough: input.dateThrough,
+    staffId: input.staffId,
+    date: input.date,
+    total: input.total,
+    items: Object.freeze(items),
+    truncated: input.truncated
   });
 }
 

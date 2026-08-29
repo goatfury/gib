@@ -14,7 +14,7 @@ const PROFILES = Object.freeze({
     featureFlags: Object.freeze({ staffClock: true, staffClockPairing: true }),
     staffClockPairing: Object.freeze({
       origin: 'https://gib-live.netlify.app',
-      expiresInSeconds: 300
+      expiresInSeconds: 12 * 60 * 60
     }),
     backend: Object.freeze({ enabled: true, transportTarget: 'rev' })
   }),

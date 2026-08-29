@@ -38,7 +38,7 @@ export function staffClockPairingProfile(installationId, environment, activation
     || pairing.origin !== profile.allowedOrigin
     || !Number.isInteger(pairing.expiresInSeconds)
     || pairing.expiresInSeconds < 60
-    || pairing.expiresInSeconds > 300
+    || pairing.expiresInSeconds > 12 * 60 * 60
   ) return null;
   return Object.freeze({
     installationId: profile.installationId,

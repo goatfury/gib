@@ -43,7 +43,19 @@ const PRODUCTION_ENV = Object.freeze({
   GIB_M1_WEBHOOK_TOKEN: 'legacy-test-token'
 });
 const NOW = Date.parse('2026-08-10T16:00:00Z');
+const RECEIVER_NOW = Date.parse('2026-08-10T16:30:45Z');
 const REQUEST_TOKEN = Buffer.alloc(32, 0x19).toString('base64url');
+
+class FixedReceiverDate extends Date {
+  constructor(...args) {
+    if (args.length) super(...args);
+    else super(RECEIVER_NOW);
+  }
+
+  static now() {
+    return RECEIVER_NOW;
+  }
+}
 
 function makeSheet(rows) {
   const values = rows.map(row => [...row]);
@@ -106,6 +118,7 @@ function receiverHarness({
     module: { exports: {} },
     exports: {},
     console,
+    Date: FixedReceiverDate,
     GIB_M1_ALLOWED_TARGET: 'test',
     GIB_M1_REQUIRE_EXACT_SIGNINS_SCHEMA: true,
     TEST_SPREADSHEET_ID: 'synthetic-test-sheet',
@@ -460,7 +473,7 @@ test('forgotten-instructor add allows a second instructor, blocks a blank-RowID 
   const auditRow = harness.audit.values.at(-1);
   assert.deepEqual(auditRow.slice(1, 11), [
     'Andrew Smith',
-    '2026-08-10 12:30:45',
+    '2026-08-10T16:30:45.000Z',
     'QA Test Charlie',
     FIXTURE.reviewDate,
     '6:00 AM BJJ (Level 2)',

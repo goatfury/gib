@@ -57,6 +57,7 @@ function namedFunctionSource(source, name) {
 
 const migrationSource = namedFunctionSource(kioskHtml, 'applyRichmondActivationMigration');
 const applyMigration = Function(`"use strict"; return (${migrationSource});`)();
+const resetDeviceSource = namedFunctionSource(kioskHtml, 'resetDevice');
 
 function signInState() {
   const shared = {
@@ -364,6 +365,86 @@ test('versioned marker preserves a later manual auto-sync OFF choice', async () 
   assert.deepEqual(harness.snapshot(), initial);
   assert.deepEqual(harness.writes, []);
   assert.deepEqual(harness.removals, []);
+});
+
+test('ordinary Richmond Reset preserves auto-sync and activation state without creating a pending marker', () => {
+  for (const [name, marker] of [
+    ['active marker', MARKER_VALUE],
+    ['pending without marker', null]
+  ]) {
+    const initial = initialStorage();
+    const localStateBytes = initial.gib_m1_richmond_production_local_state_v2;
+    const queueBytes = initial.gib_m1_richmond_production_sync_queue_v1;
+    const signinsBytes = initial.gib_m1_richmond_production_signins_v1;
+    const localStorage = {};
+    Object.defineProperties(localStorage, {
+      getItem: { value(key) { return Object.hasOwn(this, key) ? this[key] : null; } },
+      setItem: { value(key, value) { this[key] = String(value); } },
+      removeItem: { value(key) { delete this[key]; } }
+    });
+    Object.assign(localStorage, {
+      gib_m1_local_state_v2: '{"rev":"preserved"}',
+      gib_m1_richmond_production_local_state_v2: localStateBytes,
+      gib_m1_richmond_production_signins_v1: signinsBytes,
+      gib_m1_richmond_production_sync_queue_v1: queueBytes,
+      [AUTO_SYNC_KEY]: 'false',
+      gib_m1_richmond_production_device_v1: '{"location":"Richmond"}',
+      gib_m1_richmond_production_sync_error: 'temporary failure'
+    });
+    if (marker) localStorage[MARKER_KEY] = marker;
+
+    const resetDevice = Function(
+      'IS_RICHMOND',
+      'DEVICE_KEY',
+      'SCHEDULE_KEY',
+      'DURATION_RULES_KEY',
+      'SERIES_KEY',
+      'SIGNINS_KEY',
+      'SYNC_QUEUE_KEY',
+      'LOCAL_STATE_KEY',
+      'SYNC_AUTO_KEY',
+      'RICHMOND_ACTIVATION_MIGRATION_KEY',
+      'OLD_SIGNINS_KEYS',
+      'ownsInstallationStorageKey',
+      'localStorage',
+      'document',
+      'applyDeviceToUI',
+      'loadScheduleIntoAdmin',
+      'renderDurationRules',
+      'populateClassesForToday',
+      'showToast',
+      `"use strict"; return (${resetDeviceSource});`
+    )(
+      true,
+      'gib_m1_richmond_production_device_v1',
+      'gib_m1_richmond_production_schedule_v1',
+      'gib_m1_richmond_production_duration_rules_v1',
+      'gib_m1_richmond_production_series_v1',
+      'gib_m1_richmond_production_signins_v1',
+      'gib_m1_richmond_production_sync_queue_v1',
+      'gib_m1_richmond_production_local_state_v2',
+      AUTO_SYNC_KEY,
+      MARKER_KEY,
+      [],
+      key => String(key).startsWith('gib_m1_richmond_production_'),
+      localStorage,
+      { getElementById() { return { value: 'configured' }; } },
+      () => {},
+      () => {},
+      () => {},
+      () => {},
+      () => {}
+    );
+
+    resetDevice();
+    assert.equal(localStorage.getItem(AUTO_SYNC_KEY), 'false', `${name}: auto-sync changed`);
+    assert.equal(localStorage.getItem(MARKER_KEY), marker, `${name}: marker changed`);
+    assert.equal(localStorage.getItem('gib_m1_richmond_production_local_state_v2'), localStateBytes);
+    assert.equal(localStorage.getItem('gib_m1_richmond_production_signins_v1'), signinsBytes);
+    assert.equal(localStorage.getItem('gib_m1_richmond_production_sync_queue_v1'), queueBytes);
+    assert.equal(localStorage.getItem('gib_m1_local_state_v2'), '{"rev":"preserved"}');
+    assert.equal(localStorage.getItem('gib_m1_richmond_production_device_v1'), null);
+  }
 });
 
 test('migration fails closed for other origins, profiles, and tablet-status results', async t => {

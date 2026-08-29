@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" href="data:," />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-08-18 M1B TEST staff-clock-operational-candidate)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-08-29 M1B TEST sign-in-sync-recovery-candidate)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -933,7 +933,7 @@ body.admin-mode .container { max-width: 1120px; }
 }
 
 </style>
-<script src="./installation-profile.generated.js?v=2026-08-27-tablet-pairing-r1"></script>
+<script src="./installation-profile.generated.js?v=2026-08-29-signin-sync-r2"></script>
 </head>
 <body>
 <div class="container">
@@ -942,7 +942,7 @@ body.admin-mode .container { max-width: 1120px; }
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-08-18 M1B TEST staff-clock-operational-candidate</span>
+        Build <span class="kbd" id="buildId">2026-08-29 M1B TEST sign-in-sync-recovery-candidate</span>
       </div>
     </div>
 
@@ -954,7 +954,7 @@ body.admin-mode .container { max-width: 1120px; }
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-08-18 M1B TEST staff-clock-operational-candidate
+      Build 2026-08-29 M1B TEST sign-in-sync-recovery-candidate
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -1014,6 +1014,7 @@ body.admin-mode .container { max-width: 1120px; }
       </div>
       <div class="staff-clock-availability-actions">
         <button id="retryStaffClock" class="btn" type="button" hidden>Get a new code</button>
+        <button id="cancelStaffClockPairing" class="btn" type="button" hidden>Cancel pairing request</button>
       </div>
     </div>
     <div id="staffClockControls" class="staff-clock-controls" hidden>
@@ -1429,10 +1430,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-27-tablet-pairing-r1';
+} from './sync-core.mjs?v=2026-08-29-signin-sync-r2';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-08-27-tablet-pairing-r1';
+const OFFLINE_SHELL_REVISION = '2026-08-29-signin-sync-r2';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -1470,14 +1471,14 @@ if ('serviceWorker' in navigator) {
   function richmondProductionKioskCopy(writesEnabled) {
     return writesEnabled
       ? {
-          build: '2026-08-22 RICHMOND M1 PRODUCTION',
+          build: '2026-08-29 RICHMOND M1 PRODUCTION sign-in-sync-recovery',
           title: 'Richmond BJJ · Instructor Sign-In',
           heading: 'PRODUCTION',
           sync: 'Authorized production sign-ins sync only to the Richmond production ledger.',
           activation: ''
         }
       : {
-          build: '2026-08-22 RICHMOND M1 PRODUCTION CANDIDATE — WRITES DISABLED',
+          build: '2026-08-29 RICHMOND M1 PRODUCTION CANDIDATE — WRITES DISABLED',
           title: 'Richmond BJJ · Instructor Sign-In · Activation Pending',
           heading: 'PRODUCTION · ACTIVATION PENDING',
           sync: 'Production writes are disabled pending activation. No sign-in will be created locally or sent.',
@@ -1500,15 +1501,15 @@ if ('serviceWorker' in navigator) {
   const IS_PRODUCTION_SYNC_ORIGIN = IS_REVOLUTION_PRODUCTION_ORIGIN
     || IS_RICHMOND_PRODUCTION_ORIGIN;
   const TEST_BUILD = IS_RICHMOND
-    ? '2026-08-21 RICHMOND M1 RUN 2 TEST'
-    : '2026-08-18 M1B TEST staff-clock-operational-candidate';
+    ? '2026-08-29 RICHMOND M1 TEST sign-in-sync-recovery-candidate'
+    : '2026-08-29 M1B TEST sign-in-sync-recovery-candidate';
   const RICHMOND_PRODUCTION_BUILD = RICHMOND_PRODUCTION_COPY.build;
-  const PRODUCTION_BUILD = '2026-08-19 M1B PRODUCTION staff-clock';
+  const PRODUCTION_BUILD = '2026-08-29 M1B PRODUCTION sign-in-sync-recovery';
   const BUILD = IS_RICHMOND
     ? (IS_RICHMOND_PRODUCTION ? RICHMOND_PRODUCTION_BUILD : TEST_BUILD)
     : (IS_PRODUCTION_ORIGIN ? PRODUCTION_BUILD : TEST_BUILD);
   if (IS_PRODUCTION_ORIGIN && !IS_RICHMOND) {
-    document.title = 'GiB · Module 1 · Instructor Sign-In → Payroll (2026-08-19 M1B PRODUCTION staff-clock)';
+    document.title = 'GiB · Module 1 · Instructor Sign-In → Payroll (2026-08-29 M1B PRODUCTION sign-in-sync-recovery)';
     document.getElementById('buildId').textContent = PRODUCTION_BUILD;
     document.getElementById('buildStampLarge').textContent = `Build ${PRODUCTION_BUILD}`;
   }
@@ -1644,6 +1645,8 @@ function refreshNameDatalist() {
   const DEVICE_LABEL_KEY = installationStorageKey('gib_m1_device_label_v1');
   const SYNC_LAST_KEY    = installationStorageKey('gib_m1_sync_last');
   const SYNC_ERROR_KEY   = installationStorageKey('gib_m1_sync_error');
+  const INSTRUCTOR_SYNC_BATCH_SIZE = 50;
+  const INSTRUCTOR_SYNC_RETRY_INTERVAL_MS = 30_000;
 
 
   // Back-compat keys (older builds we created)
@@ -1931,6 +1934,8 @@ function refreshNameDatalist() {
             && k !== SIGNINS_KEY
             && k !== SYNC_QUEUE_KEY
             && k !== LOCAL_STATE_KEY
+            && k !== SYNC_AUTO_KEY
+            && k !== RICHMOND_ACTIVATION_MIGRATION_KEY
           ) localStorage.removeItem(k);
           return;
         }
@@ -1941,6 +1946,7 @@ function refreshNameDatalist() {
           && !OLD_SIGNINS_KEYS.includes(k)
           && k !== SYNC_QUEUE_KEY
           && k !== LOCAL_STATE_KEY
+          && k !== SYNC_AUTO_KEY
           && !k.startsWith('gib_m1b_')
         ) {
           localStorage.removeItem(k);
@@ -3983,6 +3989,7 @@ function refreshNameDatalist() {
       localStorage.removeItem(SYNC_AUTO_KEY);
     }
     updateSyncStatus();
+    if (localStorage.getItem(SYNC_AUTO_KEY) === 'true') resumeInstructorSync();
   }
   function updateSyncStatus() {
     const q = readAdminLocalStateSnapshot().queue;
@@ -4130,7 +4137,19 @@ function refreshNameDatalist() {
     );
     return attempt;
   }
-  async function syncNow() {
+  async function syncNow(trigger = '') {
+    // A button click is an explicit operator request and may drain the durable
+    // queue even while Auto-sync is OFF. Calls from lifecycle wake-ups, timers,
+    // and activation recovery remain automatic.
+    const manualDrain = trigger === 'manual-continuation'
+      || (trigger && trigger.type === 'click');
+    // Close the scheduling-to-callback race too: a continuation queued while
+    // Auto-sync was ON must become a no-op if the operator turns it OFF before
+    // the zero-delay callback actually starts.
+    if (!manualDrain && localStorage.getItem(SYNC_AUTO_KEY) !== 'true') return;
+    // Lifecycle wake-ups are intentionally ignored while a request is active.
+    // A confirmed partial batch schedules its own immediate continuation below;
+    // a failed request waits for the next bounded retry instead of spinning.
     if (syncInFlight) return;
     if (!BACKEND_ENABLED) {
       localStorage.setItem(SYNC_ERROR_KEY, 'Local-only preview; rows remain on this device.');
@@ -4142,7 +4161,7 @@ function refreshNameDatalist() {
       showToast('Sync waits until the undo window closes');
       return;
     }
-    const submittedRows = loadSyncQueue();
+    const submittedRows = loadSyncQueue().slice(0, INSTRUCTOR_SYNC_BATCH_SIZE);
     if (!submittedRows.length) {
       showToast('No rows to sync');
       updateSyncStatus();
@@ -4158,6 +4177,7 @@ function refreshNameDatalist() {
     syncInFlight = true;
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 30_000);
+    let continueDrain = false;
     try {
       const payload = await requestAcknowledgements(submittedRows, {
         online: navigator.onLine !== false,
@@ -4190,6 +4210,7 @@ function refreshNameDatalist() {
       localStorage.removeItem(SYNC_ERROR_KEY);
       updateSyncStatus();
       const waiting = loadSyncQueue().length;
+      continueDrain = latestApplied.confirmedRowIds.length > 0 && waiting > 0;
       showToast(waiting
         ? `${latestApplied.confirmedRowIds.length} confirmed; ${waiting} waiting`
         : `${latestApplied.confirmedRowIds.length} confirmed`);
@@ -4200,7 +4221,32 @@ function refreshNameDatalist() {
     } finally {
       window.clearTimeout(timeout);
       syncInFlight = false;
+      // Re-read the preference after the in-flight request finishes. An
+      // operator may have switched Auto-sync OFF while awaiting its response;
+      // that completed batch stays confirmed, but no automatic continuation is
+      // scheduled and every remaining RowID stays in the durable queue.
+      if (
+        continueDrain
+        && (manualDrain || localStorage.getItem(SYNC_AUTO_KEY) === 'true')
+      ) {
+        window.setTimeout(
+          manualDrain ? () => syncNow('manual-continuation') : syncNow,
+          0
+        );
+      }
     }
+  }
+
+  function resumeInstructorSync() {
+    if (
+      !BACKEND_ENABLED
+      || (IS_RICHMOND_PRODUCTION && !RICHMOND_WRITES_ENABLED)
+      || navigator.onLine === false
+      || localStorage.getItem(SYNC_AUTO_KEY) !== 'true'
+      || !loadSyncQueue().length
+    ) return false;
+    window.setTimeout(syncNow, 0);
+    return true;
   }
 
   function debugSnapshot() {
@@ -4369,7 +4415,7 @@ function refreshNameDatalist() {
   });
 
   $('#btnResetDevice').addEventListener('click', () => {
-    if (!confirm('Reset this device? This clears the device label/location/site/setup, Admin PIN, instructor roster, auto-sync and sync status, schedule, temporary classes, website schedule cache/local overrides, and duration rules. Sign-ins and rows waiting to sync are NOT deleted. Staff Clock punches and its waiting list are also NOT deleted.')) return;
+    if (!confirm('Reset this device? This clears the device label/location/site/setup, Admin PIN, instructor roster, sync status, schedule, temporary classes, website schedule cache/local overrides, and duration rules. The auto-sync choice, sign-ins, and rows waiting to sync are NOT deleted. Staff Clock punches and its waiting list are also NOT deleted.')) return;
     resetDevice();
     $('#deviceStatus').innerHTML = 'Device reset. Configure again above.';
     loadSyncSettings();
@@ -4378,7 +4424,12 @@ function refreshNameDatalist() {
 
   $('#btnFactoryReset').addEventListener('click', () => {
     // Use a prompt to ask the user to type RESET as a safeguard against accidental clicks.
-    const answer = prompt('Factory reset will DELETE Instructor Sign-In device info, schedule data, and instructor sign-ins on this device. Staff Clock punches and its waiting list are kept separate and are not deleted.\n\nType “RESET” (all caps) to proceed.');
+    const waiting = loadSyncQueue().length;
+    if (waiting > 0) {
+      alert(`Factory reset is blocked while ${waiting} unsynced waiting row${waiting === 1 ? '' : 's'} remain${waiting === 1 ? 's' : ''}. Those rows would be permanently lost and cannot be recovered. Let auto-sync finish or void each row before factory reset.`);
+      return;
+    }
+    const answer = prompt(`Factory reset will DELETE Instructor Sign-In device info, schedule data, and instructor sign-ins on this device. Current unsynced waiting rows: ${waiting}. Factory reset permanently deletes any waiting rows; they cannot be recovered. Staff Clock punches and its waiting list are kept separate and are not deleted.\n\nType “RESET” (all caps) to proceed.`);
     if (!answer || answer.trim().toUpperCase() !== 'RESET') {
       alert('Factory reset cancelled');
       return;
@@ -4661,7 +4712,7 @@ function refreshNameDatalist() {
   }
   loadSyncSettings();
   updateSyncStatus();
-  if (IS_RICHMOND && (!IS_RICHMOND_PRODUCTION || RICHMOND_WRITES_ENABLED)) {
+  if (BACKEND_ENABLED && (!IS_RICHMOND_PRODUCTION || RICHMOND_WRITES_ENABLED)) {
     window.addEventListener('online', () => {
       if (
         IS_RICHMOND_PRODUCTION
@@ -4670,21 +4721,22 @@ function refreshNameDatalist() {
         runRichmondActivationMigration();
         return;
       }
-      if (localStorage.getItem(SYNC_AUTO_KEY) === 'true' && loadSyncQueue().length) {
-        syncNow();
-      }
+      resumeInstructorSync();
+    });
+    window.setInterval(resumeInstructorSync, INSTRUCTOR_SYNC_RETRY_INTERVAL_MS);
+    ['focus', 'pageshow'].forEach(eventName => {
+      window.addEventListener(eventName, resumeInstructorSync);
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') resumeInstructorSync();
     });
     if (
       IS_RICHMOND_PRODUCTION
       && localStorage.getItem(RICHMOND_ACTIVATION_MIGRATION_KEY) === null
     ) {
       runRichmondActivationMigration();
-    } else if (
-      navigator.onLine !== false
-      && localStorage.getItem(SYNC_AUTO_KEY) === 'true'
-      && loadSyncQueue().length
-    ) {
-      window.setTimeout(syncNow, 0);
+    } else {
+      resumeInstructorSync();
     }
   }
   refreshNameDatalist();
@@ -4694,6 +4746,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-08-27-tablet-pairing-r1"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-08-29-signin-sync-r2"></script>
 </body>
 </html>

@@ -5,7 +5,10 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 import * as syncCore from '../m1/sync-core.mjs';
-import { installationProfile } from '../m1/installation-profile-core.mjs';
+import {
+  installationProfile,
+  scopedStorageKey
+} from '../m1/installation-profile-core.mjs';
 
 const kioskHtml = readFileSync(new URL('../m1/index.html', import.meta.url), 'utf8');
 const sharedSchedule = JSON.parse(readFileSync(
@@ -15,6 +18,7 @@ const sharedSchedule = JSON.parse(readFileSync(
 
 const LIVE_BUILD = '2026-08-09 M1 PRODUCTION timestamp-rollover';
 const PRODUCTION_ORIGIN = 'https://gib-live.netlify.app';
+const RICHMOND_PRODUCTION_ORIGIN = 'https://gib-richmond-live.netlify.app';
 const CANONICAL_SCHEDULE_CACHE_KEY = 'gib_m1_canonical_schedule_cache_v1';
 const DEVICE_COOKIE = '__Host-gib_m1_production_device';
 const DEVICE_COOKIE_VALUE = 'opaque-http-only-current-tablet-authorization';
@@ -239,9 +243,9 @@ class FakeElement extends FakeEventTarget {
   }
 
   querySelector(selector) {
-    if (selector.startsWith('.')) {
+    if (selector.startsWith('.') || selector === 'h3') {
       if (!this._namedChildren.has(selector)) {
-        this._namedChildren.set(selector, new FakeElement('span'));
+        this._namedChildren.set(selector, new FakeElement(selector === 'h3' ? 'h3' : 'span'));
       }
       return this._namedChildren.get(selector);
     }
@@ -582,11 +586,19 @@ function canonicalScheduleResponse() {
   };
 }
 
-function runCandidateBootstrap({ storageState, cookieState, schedulePayload }) {
+function runCandidateBootstrap({
+  storageState,
+  cookieState,
+  schedulePayload,
+  online = true,
+  syncPayload = null,
+  confirmResponse = false,
+  profile = installationProfile('rev')
+}) {
   const document = createDocument(cookieState);
   const location = {
-    origin: PRODUCTION_ORIGIN,
-    href: `${PRODUCTION_ORIGIN}/m1/`,
+    origin: profile.allowedOrigin,
+    href: `${profile.allowedOrigin}/m1/`,
     pathname: '/m1/',
     search: '',
     hash: ''
@@ -618,7 +630,7 @@ function runCandidateBootstrap({ storageState, cookieState, schedulePayload }) {
     document,
     location,
     navigator: {
-      onLine: true,
+      onLine: online,
       clipboard: { async writeText() {} }
     },
     addEventListener: windowTarget.addEventListener.bind(windowTarget),
@@ -631,7 +643,17 @@ function runCandidateBootstrap({ storageState, cookieState, schedulePayload }) {
   };
 
   const fetchImpl = async (url, init = {}) => {
-    requests.push({ url: String(url), init });
+    const requestUrl = String(url);
+    requests.push({ url: requestUrl, init });
+    if (requestUrl === '/api/m1-kiosk-sync') {
+      const value = typeof syncPayload === 'function'
+        ? syncPayload({ url: requestUrl, init })
+        : syncPayload;
+      return new Response(JSON.stringify(value || { ok: false }), {
+        status: value ? 200 : 503,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
     return new Response(rawSchedule, {
       status: 200,
       headers: {
@@ -643,10 +665,14 @@ function runCandidateBootstrap({ storageState, cookieState, schedulePayload }) {
 
   const context = vm.createContext({
     ...syncCore,
+    requestAcknowledgements: (rows, options = {}) => syncCore.requestAcknowledgements(rows, {
+      ...options,
+      fetchImpl
+    }),
     AbortController,
     Blob,
     Date: FixedDate,
-    M1_INSTALLATION_PROFILE: installationProfile('rev'),
+    M1_INSTALLATION_PROFILE: profile,
     M1_INSTALLATION_PROFILE_VALID: true,
     Intl,
     Response,
@@ -659,7 +685,7 @@ function runCandidateBootstrap({ storageState, cookieState, schedulePayload }) {
     clearTimeout: id => clearedTimers.push(id),
     confirm: message => {
       confirms.push(String(message));
-      return false;
+      return confirmResponse;
     },
     console: {
       error: (...values) => warnings.push(values.map(String).join(' ')),
@@ -701,8 +727,71 @@ function runCandidateBootstrap({ storageState, cookieState, schedulePayload }) {
     prompts,
     requests,
     timers,
+    window,
     warnings
   };
+}
+
+function pendingQueueStorage(count, {
+  autoSync = true,
+  profile = installationProfile('rev')
+} = {}) {
+  const initial = currentLiveStorage({ waiting: false, scheduleMode: 'manual' });
+  const ledger = [];
+  const queue = [];
+  for (let index = 0; index < count; index += 1) {
+    const rowId = `gib-m1-00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
+    const value = completeLedgerRow(rowId, {
+      Instructor: `Queued Instructor ${index + 1}`,
+      Notes: 'Pending across deployment reload',
+      __batchId: `gib-m1-99999999-9999-4999-8999-${String(index + 1).padStart(12, '0')}`
+    });
+    delete value.__syncResult;
+    delete value.__syncedAt;
+    ledger.push(value);
+    queue.push(queuedCopy(value));
+  }
+  initial.gib_m1_local_state_v2 = JSON.stringify({ version: 2, ledger, queue });
+  initial.gib_m1_signins_v1 = JSON.stringify(ledger);
+  initial.gib_m1_sync_queue_v1 = JSON.stringify(queue);
+  initial.gib_m1_sync_auto_v1 = autoSync ? 'true' : 'false';
+  if (profile.installationId === 'rev') return initial;
+
+  const scoped = Object.fromEntries(Object.entries(initial).map(([key, value]) => [
+    key.startsWith('gib_m1_') ? scopedStorageKey(profile, key) : key,
+    value
+  ]));
+  if (profile.environment === 'production') {
+    scoped[scopedStorageKey(profile, 'gib_m1_activation_auto_sync_migration_v1')]
+      = 'richmond-production-auto-sync-v1';
+  }
+  return scoped;
+}
+
+function productionSyncAck({ init }, linkedRecordId = '') {
+  const submitted = JSON.parse(init.body).rows;
+  return {
+    ok: true,
+    production: true,
+    results: submitted.map(row => ({
+      rowId: row.RowID,
+      result: linkedRecordId ? 'already exists' : 'added',
+      linkedRecordId: linkedRecordId || row.RowID
+    }))
+  };
+}
+
+async function runZeroDelayTimers(run, limit = 20) {
+  let completed = 0;
+  while (completed < limit) {
+    const timer = run.timers.find(item => item.delay === 0 && item.completed !== true);
+    if (!timer) return completed;
+    timer.completed = true;
+    await timer.callback();
+    await new Promise(resolve => setImmediate(resolve));
+    completed += 1;
+  }
+  assert.fail(`Candidate bootstrap exceeded ${limit} immediate timers.`);
 }
 
 async function settleBootstrap(run, expectScheduleRequest) {
@@ -816,4 +905,406 @@ test('current f712 tablet state survives the candidate bootstrap and same-origin
       });
     }
   }
+});
+
+test('Revolution deployment reload resumes one durable row once and clears an Admin-linked duplicate', async () => {
+  const storageState = createStorage(pendingQueueStorage(1));
+  const cookieState = {
+    jar: new Map([[DEVICE_COOKIE, DEVICE_COOKIE_VALUE]]),
+    reads: 0,
+    writes: []
+  };
+  const linkedAdminRowId = 'gib-admin-not-synced-correction';
+  const firstRun = runCandidateBootstrap({
+    storageState,
+    cookieState,
+    schedulePayload: canonicalScheduleResponse(),
+    syncPayload: request => productionSyncAck(request, linkedAdminRowId)
+  });
+  await settleBootstrap(firstRun, false);
+  assert.equal(await runZeroDelayTimers(firstRun), 1);
+
+  const firstSyncRequests = firstRun.requests.filter(request => request.url === '/api/m1-kiosk-sync');
+  assert.equal(firstSyncRequests.length, 1);
+  const submitted = JSON.parse(firstSyncRequests[0].init.body).rows;
+  assert.equal(submitted.length, 1);
+  assert.equal(submitted[0].RowID, 'gib-m1-00000000-0000-4000-8000-000000000001');
+  const afterFirst = JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2'));
+  assert.equal(afterFirst.queue.length, 0);
+  assert.equal(afterFirst.ledger.length, 1);
+  assert.equal(afterFirst.ledger[0].__syncResult, 'already exists');
+  assert.equal(
+    JSON.parse(storageState.storage.getItem('gib_m1_sync_queue_v1')).length,
+    0
+  );
+
+  const secondRun = runCandidateBootstrap({
+    storageState,
+    cookieState,
+    schedulePayload: canonicalScheduleResponse(),
+    syncPayload: request => productionSyncAck(request, linkedAdminRowId)
+  });
+  await settleBootstrap(secondRun, false);
+  secondRun.window.dispatchEvent({ type: 'online' });
+  const retryInterval = secondRun.intervals.find(item => item.delay === 30_000);
+  assert.ok(retryInterval);
+  retryInterval.callback();
+  assert.equal(await runZeroDelayTimers(secondRun), 0);
+  assert.equal(
+    secondRun.requests.filter(request => request.url === '/api/m1-kiosk-sync').length,
+    0
+  );
+  assert.equal(JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2')).ledger.length, 1);
+});
+
+test('ordinary Reset preserves a pending row and auto-sync so reload confirms it exactly once', async () => {
+  const storageState = createStorage(pendingQueueStorage(1));
+  const cookieState = {
+    jar: new Map([[DEVICE_COOKIE, DEVICE_COOKIE_VALUE]]),
+    reads: 0,
+    writes: []
+  };
+  const beforeReset = runCandidateBootstrap({
+    storageState,
+    cookieState,
+    schedulePayload: canonicalScheduleResponse(),
+    syncPayload: productionSyncAck,
+    confirmResponse: true
+  });
+  beforeReset.document.__elements.get('btnResetDevice').click();
+  assert.equal(beforeReset.requests.filter(request => request.url === '/api/m1-kiosk-sync').length, 0);
+  assert.equal(storageState.storage.getItem('gib_m1_sync_auto_v1'), 'true');
+  assert.equal(JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2')).queue.length, 1);
+  assert.match(beforeReset.confirms.at(-1), /auto-sync choice, sign-ins, and rows waiting to sync are NOT deleted/u);
+
+  const afterReload = runCandidateBootstrap({
+    storageState,
+    cookieState,
+    schedulePayload: canonicalScheduleResponse(),
+    syncPayload: productionSyncAck
+  });
+  assert.equal(await runZeroDelayTimers(afterReload), 1);
+  assert.equal(afterReload.requests.filter(request => request.url === '/api/m1-kiosk-sync').length, 1);
+  const finalState = JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2'));
+  assert.equal(finalState.queue.length, 0);
+  assert.equal(finalState.ledger.length, 1);
+  assert.equal(finalState.ledger[0].__syncResult, 'added');
+
+  afterReload.window.dispatchEvent({ type: 'online' });
+  afterReload.intervals.find(item => item.delay === 30_000)?.callback();
+  assert.equal(await runZeroDelayTimers(afterReload), 0);
+  assert.equal(afterReload.requests.filter(request => request.url === '/api/m1-kiosk-sync').length, 1);
+});
+
+test('shared instructor queue worker respects offline and auto-sync OFF', async () => {
+  const offlineStorage = createStorage(pendingQueueStorage(1));
+  const offlineRun = runCandidateBootstrap({
+    storageState: offlineStorage,
+    cookieState: { jar: new Map(), reads: 0, writes: [] },
+    schedulePayload: canonicalScheduleResponse(),
+    online: false,
+    syncPayload: productionSyncAck
+  });
+  await settleBootstrap(offlineRun, false);
+  assert.equal(await runZeroDelayTimers(offlineRun), 0);
+  assert.equal(JSON.parse(offlineStorage.storage.getItem('gib_m1_local_state_v2')).queue.length, 1);
+
+  offlineRun.window.navigator.onLine = true;
+  offlineRun.window.dispatchEvent({ type: 'online' });
+  assert.equal(await runZeroDelayTimers(offlineRun), 1);
+  assert.equal(JSON.parse(offlineStorage.storage.getItem('gib_m1_local_state_v2')).queue.length, 0);
+  assert.equal(
+    offlineRun.requests.filter(request => request.url === '/api/m1-kiosk-sync').length,
+    1
+  );
+
+  const disabledStorage = createStorage(pendingQueueStorage(1, { autoSync: false }));
+  const disabledRun = runCandidateBootstrap({
+    storageState: disabledStorage,
+    cookieState: { jar: new Map(), reads: 0, writes: [] },
+    schedulePayload: canonicalScheduleResponse(),
+    syncPayload: productionSyncAck
+  });
+  await settleBootstrap(disabledRun, false);
+  disabledRun.window.dispatchEvent({ type: 'online' });
+  disabledRun.intervals.find(item => item.delay === 30_000)?.callback();
+  assert.equal(await runZeroDelayTimers(disabledRun), 0);
+  assert.equal(JSON.parse(disabledStorage.storage.getItem('gib_m1_local_state_v2')).queue.length, 1);
+  assert.equal(
+    disabledRun.requests.filter(request => request.url === '/api/m1-kiosk-sync').length,
+    0
+  );
+});
+
+test('transient unreadable response retains the durable row until bounded retry confirms it once', async () => {
+  const storageState = createStorage(pendingQueueStorage(1));
+  let attempts = 0;
+  const run = runCandidateBootstrap({
+    storageState,
+    cookieState: { jar: new Map(), reads: 0, writes: [] },
+    schedulePayload: canonicalScheduleResponse(),
+    syncPayload: request => {
+      attempts += 1;
+      return attempts === 1 ? { ok: false } : productionSyncAck(request);
+    }
+  });
+  await settleBootstrap(run, false);
+  assert.equal(await runZeroDelayTimers(run), 1);
+  assert.equal(attempts, 1);
+  assert.equal(JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2')).queue.length, 1);
+  assert.match(
+    storageState.storage.getItem('gib_m1_sync_error'),
+    /rows are still waiting/u
+  );
+
+  const retryInterval = run.intervals.find(item => item.delay === 30_000);
+  assert.ok(retryInterval);
+  retryInterval.callback();
+  assert.equal(await runZeroDelayTimers(run), 1);
+  assert.equal(attempts, 2);
+  const finalState = JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2'));
+  assert.equal(finalState.queue.length, 0);
+  assert.equal(finalState.ledger.length, 1);
+  assert.equal(finalState.ledger[0].__syncResult, 'added');
+
+  retryInterval.callback();
+  assert.equal(await runZeroDelayTimers(run), 0);
+  assert.equal(attempts, 2);
+});
+
+test('shared instructor queue worker drains 51 rows in bounded 50 plus 1 batches', async () => {
+  const storageState = createStorage(pendingQueueStorage(51));
+  const run = runCandidateBootstrap({
+    storageState,
+    cookieState: { jar: new Map(), reads: 0, writes: [] },
+    schedulePayload: canonicalScheduleResponse(),
+    syncPayload: productionSyncAck
+  });
+  await settleBootstrap(run, false);
+  assert.equal(await runZeroDelayTimers(run), 2);
+
+  const syncRequests = run.requests.filter(request => request.url === '/api/m1-kiosk-sync');
+  assert.equal(syncRequests.length, 2);
+  assert.deepEqual(
+    syncRequests.map(request => JSON.parse(request.init.body).rows.length),
+    [50, 1]
+  );
+  const submittedIds = syncRequests.flatMap(request => (
+    JSON.parse(request.init.body).rows.map(row => row.RowID)
+  ));
+  assert.equal(new Set(submittedIds).size, 51);
+  const finalState = JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2'));
+  assert.equal(finalState.queue.length, 0);
+  assert.equal(finalState.ledger.length, 51);
+  assert.ok(finalState.ledger.every(row => row.__syncResult === 'added'));
+});
+
+test('Auto-sync OFF during a 101-row in-flight batch stops after 50 and manual Sync now drains the retained 50 plus 1 exactly once after reload', async () => {
+  const storageState = createStorage(pendingQueueStorage(101));
+  let firstRun;
+  let switchedOff = false;
+  firstRun = runCandidateBootstrap({
+    storageState,
+    cookieState: { jar: new Map(), reads: 0, writes: [] },
+    schedulePayload: canonicalScheduleResponse(),
+    syncPayload: request => {
+      if (!switchedOff) {
+        switchedOff = true;
+        const checkbox = firstRun.document.__elements.get('cfgAutoSync');
+        checkbox.checked = false;
+        checkbox.dispatchEvent({ type: 'change', target: checkbox });
+      }
+      return productionSyncAck(request);
+    }
+  });
+  await settleBootstrap(firstRun, false);
+  assert.equal(await runZeroDelayTimers(firstRun), 1);
+
+  const firstRequests = firstRun.requests.filter(request => request.url === '/api/m1-kiosk-sync');
+  assert.equal(firstRequests.length, 1);
+  assert.equal(JSON.parse(firstRequests[0].init.body).rows.length, 50);
+  assert.equal(storageState.storage.getItem('gib_m1_sync_auto_v1'), 'false');
+  const stoppedState = JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2'));
+  assert.equal(stoppedState.queue.length, 51);
+  assert.equal(stoppedState.ledger.filter(row => row.__syncResult === 'added').length, 50);
+  const expectedRemainingIds = Array.from({ length: 51 }, (_value, index) => (
+    `gib-m1-00000000-0000-4000-8000-${String(index + 51).padStart(12, '0')}`
+  ));
+  assert.deepEqual(stoppedState.queue.map(row => row.RowID), expectedRemainingIds);
+  assert.deepEqual(
+    JSON.parse(storageState.storage.getItem('gib_m1_sync_queue_v1')),
+    stoppedState.queue
+  );
+  for (const row of stoppedState.ledger.filter(value => expectedRemainingIds.includes(value.RowID))) {
+    assert.equal(Object.hasOwn(row, '__syncResult'), false);
+    assert.equal(Object.hasOwn(row, '__syncedAt'), false);
+  }
+  const stoppedQueueBytes = JSON.stringify(stoppedState.queue);
+
+  const reload = runCandidateBootstrap({
+    storageState,
+    cookieState: { jar: new Map(), reads: 0, writes: [] },
+    schedulePayload: canonicalScheduleResponse(),
+    syncPayload: productionSyncAck
+  });
+  await settleBootstrap(reload, false);
+  reload.window.dispatchEvent({ type: 'online' });
+  reload.intervals.find(item => item.delay === 30_000)?.callback();
+  assert.equal(await runZeroDelayTimers(reload), 0);
+  assert.equal(reload.requests.filter(request => request.url === '/api/m1-kiosk-sync').length, 0);
+  assert.equal(
+    JSON.stringify(JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2')).queue),
+    stoppedQueueBytes
+  );
+
+  reload.document.__elements.get('btnSyncNow').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(await runZeroDelayTimers(reload), 1);
+  const manualRequests = reload.requests.filter(request => request.url === '/api/m1-kiosk-sync');
+  assert.deepEqual(
+    manualRequests.map(request => JSON.parse(request.init.body).rows.length),
+    [50, 1]
+  );
+  assert.equal(storageState.storage.getItem('gib_m1_sync_auto_v1'), 'false');
+
+  const submittedIds = [...firstRequests, ...manualRequests].flatMap(request => (
+    JSON.parse(request.init.body).rows.map(row => row.RowID)
+  ));
+  assert.equal(submittedIds.length, 101);
+  assert.equal(new Set(submittedIds).size, 101);
+  const finalState = JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2'));
+  assert.equal(finalState.queue.length, 0);
+  assert.equal(finalState.ledger.length, 101);
+  assert.equal(new Set(finalState.ledger.map(row => row.RowID)).size, 101);
+  assert.ok(finalState.ledger.every(row => row.__syncResult === 'added'));
+  reload.window.dispatchEvent({ type: 'online' });
+  reload.intervals.find(item => item.delay === 30_000)?.callback();
+  assert.equal(await runZeroDelayTimers(reload), 0);
+  assert.equal(reload.requests.filter(request => request.url === '/api/m1-kiosk-sync').length, 2);
+});
+
+test('turning Auto-sync back ON resumes a stopped 101-row queue in bounded exact-once batches', async () => {
+  const storageState = createStorage(pendingQueueStorage(101));
+  let run;
+  let switchedOff = false;
+  run = runCandidateBootstrap({
+    storageState,
+    cookieState: { jar: new Map(), reads: 0, writes: [] },
+    schedulePayload: canonicalScheduleResponse(),
+    syncPayload: request => {
+      if (!switchedOff) {
+        switchedOff = true;
+        const checkbox = run.document.__elements.get('cfgAutoSync');
+        checkbox.checked = false;
+        checkbox.dispatchEvent({ type: 'change', target: checkbox });
+      }
+      return productionSyncAck(request);
+    }
+  });
+  await settleBootstrap(run, false);
+  assert.equal(await runZeroDelayTimers(run), 1);
+  assert.equal(JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2')).queue.length, 51);
+
+  const checkbox = run.document.__elements.get('cfgAutoSync');
+  checkbox.checked = true;
+  checkbox.dispatchEvent({ type: 'change', target: checkbox });
+  assert.equal(await runZeroDelayTimers(run), 2);
+  assert.equal(storageState.storage.getItem('gib_m1_sync_auto_v1'), 'true');
+
+  const syncRequests = run.requests.filter(request => request.url === '/api/m1-kiosk-sync');
+  assert.deepEqual(
+    syncRequests.map(request => JSON.parse(request.init.body).rows.length),
+    [50, 50, 1]
+  );
+  const submittedIds = syncRequests.flatMap(request => (
+    JSON.parse(request.init.body).rows.map(row => row.RowID)
+  ));
+  assert.equal(submittedIds.length, 101);
+  assert.equal(new Set(submittedIds).size, 101);
+  const finalState = JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2'));
+  assert.equal(finalState.queue.length, 0);
+  assert.equal(finalState.ledger.length, 101);
+  assert.ok(finalState.ledger.every(row => row.__syncResult === 'added'));
+  run.window.dispatchEvent({ type: 'online' });
+  run.intervals.find(item => item.delay === 30_000)?.callback();
+  assert.equal(await runZeroDelayTimers(run), 0);
+  assert.equal(run.requests.filter(request => request.url === '/api/m1-kiosk-sync').length, 3);
+});
+
+test('an automatic continuation scheduled while ON re-checks Auto-sync before its callback starts', async () => {
+  const storageState = createStorage(pendingQueueStorage(101));
+  const run = runCandidateBootstrap({
+    storageState,
+    cookieState: { jar: new Map(), reads: 0, writes: [] },
+    schedulePayload: canonicalScheduleResponse(),
+    syncPayload: productionSyncAck
+  });
+  await settleBootstrap(run, false);
+  const firstTimer = run.timers.find(item => item.delay === 0 && item.completed !== true);
+  assert.ok(firstTimer);
+  firstTimer.completed = true;
+  await firstTimer.callback();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(run.requests.filter(request => request.url === '/api/m1-kiosk-sync').length, 1);
+  assert.equal(JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2')).queue.length, 51);
+
+  const checkbox = run.document.__elements.get('cfgAutoSync');
+  checkbox.checked = false;
+  checkbox.dispatchEvent({ type: 'change', target: checkbox });
+  assert.equal(await runZeroDelayTimers(run), 1);
+  assert.equal(run.requests.filter(request => request.url === '/api/m1-kiosk-sync').length, 1);
+  assert.equal(JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2')).queue.length, 51);
+});
+
+test('Richmond active profile uses the same Auto-sync OFF queue stop without enabling Staff Clock or touching external data', async () => {
+  const profile = installationProfile('richmond', 'production', 'active');
+  assert.equal(profile.allowedOrigin, RICHMOND_PRODUCTION_ORIGIN);
+  assert.equal(profile.featureFlags.staffClock, false);
+  assert.equal(profile.featureFlags.staffClockPairing, false);
+  const localStateKey = scopedStorageKey(profile, 'gib_m1_local_state_v2');
+  const autoSyncKey = scopedStorageKey(profile, 'gib_m1_sync_auto_v1');
+  const storageState = createStorage(pendingQueueStorage(101, { profile }));
+  storageState.storage.setItem('gib_m1_local_state_v2', 'rev-state-sentinel');
+  storageState.storage.setItem('gib_m1_sync_queue_v1', 'rev-queue-sentinel');
+  let run;
+  let switchedOff = false;
+  run = runCandidateBootstrap({
+    storageState,
+    cookieState: { jar: new Map(), reads: 0, writes: [] },
+    schedulePayload: canonicalScheduleResponse(),
+    profile,
+    syncPayload: request => {
+      if (!switchedOff) {
+        switchedOff = true;
+        const checkbox = run.document.__elements.get('cfgAutoSync');
+        checkbox.checked = false;
+        checkbox.dispatchEvent({ type: 'change', target: checkbox });
+      }
+      return productionSyncAck(request);
+    }
+  });
+  await settleBootstrap(run, false);
+  assert.equal(await runZeroDelayTimers(run), 1);
+  assert.equal(run.requests.filter(request => request.url === '/api/m1-kiosk-sync').length, 1);
+  assert.equal(storageState.storage.getItem(autoSyncKey), 'false');
+  assert.equal(JSON.parse(storageState.storage.getItem(localStateKey)).queue.length, 51);
+
+  run.document.__elements.get('btnSyncNow').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(await runZeroDelayTimers(run), 1);
+  const syncRequests = run.requests.filter(request => request.url === '/api/m1-kiosk-sync');
+  assert.deepEqual(
+    syncRequests.map(request => JSON.parse(request.init.body).rows.length),
+    [50, 50, 1]
+  );
+  const submittedIds = syncRequests.flatMap(request => (
+    JSON.parse(request.init.body).rows.map(row => row.RowID)
+  ));
+  assert.equal(new Set(submittedIds).size, 101);
+  const finalState = JSON.parse(storageState.storage.getItem(localStateKey));
+  assert.equal(finalState.queue.length, 0);
+  assert.equal(finalState.ledger.length, 101);
+  assert.ok(finalState.ledger.every(row => row.__syncResult === 'added'));
+  assert.equal(storageState.storage.getItem('gib_m1_local_state_v2'), 'rev-state-sentinel');
+  assert.equal(storageState.storage.getItem('gib_m1_sync_queue_v1'), 'rev-queue-sentinel');
 });

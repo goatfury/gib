@@ -14,7 +14,9 @@ import {
   PRODUCTION_ORIGIN
 } from '../netlify/functions/_lib/m1-production-runtime.mjs';
 import {
+  MAX_STAFF_CLOCK_HISTORY_SHIFTS,
   MAX_STAFF_CLOCK_PAGE_ITEMS,
+  MAX_STAFF_SHIFT_LOOKUP_RESULTS,
   STAFF_PUNCH_ID_PATTERN,
   STAFF_REQUEST_ID_PATTERN,
   sanitizeStaffClockPunch,
@@ -22,7 +24,11 @@ import {
   sanitizeStaffTimeAdjustmentRequest,
   sanitizeStaffTimeAdjustmentResult,
   sanitizeStaffTimeCorrectionRequest,
+  sanitizeStaffTimeHistoryPage,
+  sanitizeStaffTimeHistoryPageRequest,
   sanitizeStaffTimeReview,
+  sanitizeStaffShiftLookup,
+  sanitizeStaffShiftLookupRequest,
   sanitizeStaffViewPage,
   sanitizeStaffViewPageRequest,
   validNewYorkTimestamp
@@ -312,6 +318,7 @@ function period(startDate, endDate, overrides = {}) {
 function reviewPayload(target = 'test', overrides = {}) {
   return {
     ...snapshot(target),
+    shiftStaff: snapshot(target).staff,
     view: {
       ...snapshot(target).view,
       auditCount: 1,
@@ -324,6 +331,7 @@ function reviewPayload(target = 'test', overrides = {}) {
 function productionReviewPayload(overrides = {}) {
   return {
     ...productionSnapshot(),
+    shiftStaff: productionSnapshot().staff,
     view: {
       ...productionSnapshot().view,
       auditCount: 1,
@@ -421,6 +429,91 @@ function viewPage(target = 'test', stream = 'records', overrides = {}) {
     offset: 0,
     items,
     nextOffset: null,
+    ...overrides
+  };
+}
+
+function historyShift(overrides = {}) {
+  return {
+    clockIn: publicRecord({
+      timestamp: '2026-08-17T09:00:00-04:00',
+      date: '2026-08-17'
+    }),
+    clockOut: publicRecord({
+      punchId: SECOND_PUNCH_ID,
+      timestamp: '2026-08-17T17:00:00-04:00',
+      date: '2026-08-17',
+      punchAction: 'clockOut'
+    }),
+    latestAdjustment: null,
+    ...overrides
+  };
+}
+
+function historyPage(overrides = {}) {
+  return {
+    ok: true,
+    target: 'test',
+    viewToken: VIEW_TOKEN,
+    offset: 0,
+    total: 1,
+    items: [historyShift()],
+    nextOffset: null,
+    ...overrides
+  };
+}
+
+function generatedContractPunchId(index) {
+  return `gib-m1-staff-${(0x50000000 + index).toString(16)}-2222-4222-8222-${index.toString(16).padStart(12, '0')}`;
+}
+
+function lookupShift({
+  index = 0,
+  date = '2026-08-28',
+  clockInAt = `${date}T09:00:00-04:00`,
+  clockOutAt = `${date}T17:00:00-04:00`,
+  staffId = 'front-desk-test-three',
+  staffName = 'Front Desk Test Three',
+  latestAdjustment = null,
+  clockIn = {},
+  clockOut = {}
+} = {}) {
+  return {
+    clockIn: publicRecord({
+      punchId: generatedContractPunchId(index * 2),
+      timestamp: clockInAt,
+      date,
+      staffId,
+      staffName,
+      punchAction: 'clockIn',
+      ...clockIn
+    }),
+    clockOut: publicRecord({
+      punchId: generatedContractPunchId(index * 2 + 1),
+      timestamp: clockOutAt,
+      date,
+      staffId,
+      staffName,
+      punchAction: 'clockOut',
+      ...clockOut
+    }),
+    latestAdjustment
+  };
+}
+
+function shiftLookup(overrides = {}) {
+  return {
+    ok: true,
+    target: 'test',
+    viewToken: VIEW_TOKEN,
+    mode: 'recent',
+    dateFrom: '2026-08-23',
+    dateThrough: '2026-08-29',
+    staffId: '',
+    date: '',
+    total: 1,
+    items: [lookupShift()],
+    truncated: false,
     ...overrides
   };
 }
@@ -570,6 +663,227 @@ test('initial Staff Clock summary and paginated view contracts require exact fie
     adminAuditRequest,
     { now: NOW }
   ), null);
+});
+
+test('completed-shift history contracts require bounded complete pairs and exact paging', () => {
+  const request = sanitizeStaffTimeHistoryPageRequest({
+    operation: 'historyPage',
+    viewToken: VIEW_TOKEN,
+    offset: 0
+  });
+  assert.deepEqual(request, {
+    operation: 'historyPage',
+    viewToken: VIEW_TOKEN,
+    offset: 0
+  });
+  assert.ok(sanitizeStaffTimeHistoryPage(historyPage(), 'test', request, { now: NOW }));
+
+  const baseShift = historyShift();
+  const mixedShift = historyShift({
+    clockIn: {
+      ...baseShift.clockIn,
+      timestamp: '2026-08-17T08:55:00-04:00',
+      originalTimestamp: baseShift.clockIn.timestamp,
+      originalDate: baseShift.clockIn.date,
+      adjustmentRequestId: REQUEST_ID
+    }
+  });
+  assert.ok(sanitizeStaffTimeHistoryPage(historyPage({
+    items: [mixedShift]
+  }), 'test', request, { now: NOW }), 'a mixed legitimate re-pair is readable without a mislinked audit');
+
+  const sharedWithoutAudit = structuredClone(mixedShift);
+  sharedWithoutAudit.clockOut.originalTimestamp = sharedWithoutAudit.clockOut.timestamp;
+  sharedWithoutAudit.clockOut.originalDate = sharedWithoutAudit.clockOut.date;
+  sharedWithoutAudit.clockOut.adjustmentRequestId = REQUEST_ID;
+  assert.equal(sanitizeStaffTimeHistoryPage(historyPage({
+    items: [sharedWithoutAudit]
+  }), 'test', request, { now: NOW }), null, 'a shared adjustment ID requires its exact linked audit');
+
+  const exactAdjustmentAudit = {
+    requestId: REQUEST_ID,
+    actionTime: '2026-08-18T16:45:00-04:00',
+    adminName: 'Andrew Smith',
+    operation: 'adjust',
+    staffId: sharedWithoutAudit.clockIn.staffId,
+    staffName: sharedWithoutAudit.clockIn.staffName,
+    clockInPunchId: sharedWithoutAudit.clockIn.punchId,
+    clockOutPunchId: sharedWithoutAudit.clockOut.punchId,
+    originalClockInAt: sharedWithoutAudit.clockIn.originalTimestamp,
+    originalClockOutAt: sharedWithoutAudit.clockOut.originalTimestamp,
+    correctedClockInAt: sharedWithoutAudit.clockIn.timestamp,
+    correctedClockOutAt: sharedWithoutAudit.clockOut.timestamp,
+    changed: 'clockIn',
+    reason: 'Correct retained TEST shift start',
+    result: 'adjusted'
+  };
+  assert.ok(sanitizeStaffTimeHistoryPage(historyPage({
+    items: [{ ...sharedWithoutAudit, latestAdjustment: exactAdjustmentAudit }]
+  }), 'test', request, { now: NOW }), 'a complete latest adjustment pair keeps one exact audit');
+  assert.equal(sanitizeStaffTimeHistoryPage(historyPage({
+    items: [{
+      ...sharedWithoutAudit,
+      latestAdjustment: {
+        ...exactAdjustmentAudit,
+        correctedClockOutAt: '2026-08-17T16:59:00-04:00'
+      }
+    }]
+  }), 'test', request, { now: NOW }), null, 'drifted latest audit evidence is rejected');
+
+  assert.equal(sanitizeStaffTimeHistoryPageRequest({ ...request, extra: true }), null);
+  assert.equal(sanitizeStaffTimeHistoryPageRequest({ ...request, offset: -1 }), null);
+  assert.equal(sanitizeStaffTimeHistoryPageRequest({
+    ...request,
+    viewToken: 'A'.repeat(64)
+  }), null);
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    extra: true
+  }, 'test', request, { now: NOW }), null);
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    items: [{ ...historyShift(), clockOut: null }]
+  }, 'test', request, { now: NOW }), null);
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    items: [historyShift(), historyShift()],
+    total: 2,
+    nextOffset: null
+  }, 'test', request, { now: NOW }), null);
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    total: 2,
+    nextOffset: null
+  }, 'test', request, { now: NOW }), null);
+  assert.ok(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    total: 2,
+    nextOffset: 1
+  }, 'test', request, { now: NOW }));
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    items: [historyShift({ latestAdjustment: audit() })]
+  }, 'test', request, { now: NOW }), null);
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    total: MAX_STAFF_CLOCK_HISTORY_SHIFTS + 1,
+    items: Array(MAX_STAFF_CLOCK_HISTORY_SHIFTS + 1).fill(historyShift()),
+    nextOffset: null
+  }, 'test', request, { now: NOW }), null);
+  const hugeShift = historyShift({
+    clockIn: { ...historyShift().clockIn, note: '😀'.repeat(120) },
+    clockOut: { ...historyShift().clockOut, note: '😀'.repeat(120) }
+  });
+  assert.equal(sanitizeStaffTimeHistoryPage({
+    ...historyPage(),
+    total: MAX_STAFF_CLOCK_HISTORY_SHIFTS,
+    items: Array(MAX_STAFF_CLOCK_HISTORY_SHIFTS).fill(hugeShift),
+    nextOffset: null
+  }, 'test', request, { now: NOW }), null);
+});
+
+test('completed-shift lookup contracts pin seven recent days and one bounded older staff/date search', () => {
+  const lookupNow = new Date('2026-08-29T16:00:00.000Z');
+  const recentRequest = sanitizeStaffShiftLookupRequest({
+    operation: 'shiftLookup', viewToken: VIEW_TOKEN, mode: 'recent'
+  }, 'shiftLookup', { now: lookupNow });
+  assert.deepEqual(recentRequest, {
+    operation: 'shiftLookup', viewToken: VIEW_TOKEN, mode: 'recent', staffId: '', date: ''
+  });
+  assert.ok(sanitizeStaffShiftLookup(shiftLookup(), 'test', recentRequest, { now: lookupNow }));
+  assert.equal(sanitizeStaffShiftLookup(shiftLookup({
+    dateFrom: '2026-08-22'
+  }), 'test', recentRequest, { now: lookupNow }), null, 'recent lookup is exactly seven New York days');
+  assert.equal(sanitizeStaffShiftLookupRequest({
+    operation: 'shiftLookup', viewToken: VIEW_TOKEN, mode: 'recent', staffId: ''
+  }, 'shiftLookup', { now: lookupNow }), null, 'recent mode rejects hidden targeting fields');
+
+  const exactRequest = sanitizeStaffShiftLookupRequest({
+    operation: 'shiftLookup',
+    viewToken: VIEW_TOKEN,
+    mode: 'exactDate',
+    staffId: 'front-desk-test-three',
+    date: '2026-08-18'
+  }, 'shiftLookup', { now: lookupNow });
+  assert.ok(exactRequest, 'Front Desk Test Three can be looked up directly on 2026-08-18');
+  const exactResponse = shiftLookup({
+    mode: 'exactDate',
+    dateFrom: '2026-08-18',
+    dateThrough: '2026-08-18',
+    staffId: 'front-desk-test-three',
+    date: '2026-08-18',
+    items: [lookupShift({ date: '2026-08-18' })]
+  });
+  assert.ok(sanitizeStaffShiftLookup(exactResponse, 'test', exactRequest, { now: lookupNow }));
+  assert.equal(sanitizeStaffShiftLookupRequest({
+    operation: 'shiftLookup',
+    viewToken: VIEW_TOKEN,
+    mode: 'exactDate',
+    staffId: 'front-desk-test-three',
+    date: '2026-08-23'
+  }, 'shiftLookup', { now: lookupNow }), null, 'recent dates cannot bypass the seven-day view');
+
+  const cappedItems = Array.from({ length: MAX_STAFF_SHIFT_LOOKUP_RESULTS }, (_, index) => (
+    lookupShift({ index: index + 10 })
+  ));
+  assert.ok(sanitizeStaffShiftLookup(shiftLookup({
+    total: MAX_STAFF_SHIFT_LOOKUP_RESULTS + 1,
+    items: cappedItems,
+    truncated: true
+  }), 'test', recentRequest, { now: lookupNow }), 'larger results declare bounded truncation');
+  assert.equal(sanitizeStaffShiftLookup(shiftLookup({
+    total: 1,
+    items: [],
+    truncated: true
+  }), 'test', recentRequest, { now: lookupNow }), null, 'a nonempty result cannot silently render as blank');
+  assert.equal(sanitizeStaffShiftLookup(shiftLookup({
+    total: MAX_STAFF_SHIFT_LOOKUP_RESULTS + 1,
+    items: [...cappedItems, lookupShift({ index: 100 })],
+    truncated: false
+  }), 'test', recentRequest, { now: lookupNow }), null, 'the result cap cannot be exceeded');
+
+  const originalClockInAt = '2026-08-18T09:00:00-04:00';
+  const originalClockOutAt = '2026-08-18T17:00:00-04:00';
+  const correctedClockInAt = '2026-08-18T08:55:00-04:00';
+  const correctedClockOutAt = '2026-08-18T17:05:00-04:00';
+  const adjusted = lookupShift({
+    index: 200,
+    date: '2026-08-18',
+    clockInAt: correctedClockInAt,
+    clockOutAt: correctedClockOutAt,
+    clockIn: { originalTimestamp: originalClockInAt, originalDate: '2026-08-18', adjustmentRequestId: REQUEST_ID },
+    clockOut: { originalTimestamp: originalClockOutAt, originalDate: '2026-08-18', adjustmentRequestId: REQUEST_ID }
+  });
+  adjusted.latestAdjustment = {
+    requestId: REQUEST_ID,
+    actionTime: '2026-08-19T12:00:00-04:00',
+    adminName: 'Andrew Smith',
+    operation: 'adjust',
+    staffId: 'front-desk-test-three',
+    staffName: 'Front Desk Test Three',
+    clockInPunchId: adjusted.clockIn.punchId,
+    clockOutPunchId: adjusted.clockOut.punchId,
+    originalClockInAt,
+    originalClockOutAt,
+    correctedClockInAt,
+    correctedClockOutAt,
+    changed: 'both',
+    reason: 'Correct retained TEST shift times',
+    result: 'adjusted'
+  };
+  const adjustedResponse = { ...exactResponse, items: [adjusted] };
+  assert.ok(sanitizeStaffShiftLookup(adjustedResponse, 'test', exactRequest, {
+    now: lookupNow
+  }), 'an adjusted pair and its exact linked audit are returned atomically');
+  assert.equal(sanitizeStaffShiftLookup({
+    ...adjustedResponse, items: [{ ...adjusted, clockOut: null }]
+  }, 'test', exactRequest, { now: lookupNow }), null, 'a lookup never exposes half a pair');
+  assert.equal(sanitizeStaffShiftLookup({
+    ...adjustedResponse, items: [{ ...adjusted, latestAdjustment: null }]
+  }, 'test', exactRequest, { now: lookupNow }), null, 'an adjusted pair never loses its linked audit');
+  assert.equal(sanitizeStaffShiftLookup({
+    ...adjustedResponse, extra: true
+  }, 'test', exactRequest, { now: lookupNow }), null, 'malformed envelopes fail closed');
 });
 
 test('tablet route is exact, rate-limited, same-origin, and pins TEST transport', async () => {
@@ -1029,6 +1343,7 @@ test('Admin review requires the existing cookie plus request token and returns a
     test: true,
     adminName: 'Andrew Smith',
     staff: reviewPayload().staff,
+    shiftStaff: reviewPayload().shiftStaff,
     clockedInNow: reviewPayload().clockedInNow,
     periods: reviewPayload().periods,
     view: reviewPayload().view
@@ -1037,6 +1352,21 @@ test('Admin review requires the existing cookie plus request token and returns a
 
 test('Admin review contract fails closed on semantic drift in computed arrays and periods', () => {
   assert.ok(sanitizeStaffTimeReview(reviewPayload(), 'test', { now: NOW }));
+  const formerStaffReview = sanitizeStaffTimeReview(reviewPayload('test', {
+    shiftStaff: [
+      ...reviewPayload().staff,
+      { staffId: 'former-front-desk-test', staffName: 'Former Front Desk Test' }
+    ]
+  }), 'test', { now: NOW });
+  assert.ok(formerStaffReview, 'Admin shiftStaff may include an inactive retained staff member');
+  assert.ok(!formerStaffReview.staff.some(person => person.staffId === 'former-front-desk-test'));
+  assert.ok(formerStaffReview.shiftStaff.some(person => (
+    person.staffId === 'former-front-desk-test'
+    && person.staffName === 'Former Front Desk Test'
+  )));
+  assert.equal(sanitizeStaffTimeReview(reviewPayload('test', {
+    shiftStaff: []
+  }), 'test', { now: NOW }), null, 'every active staff member remains represented in shiftStaff');
   assert.equal(sanitizeStaffTimeReview(reviewPayload('test', {
     clockedInNow: [{
       punchId: PUNCH_ID,
@@ -1123,6 +1453,196 @@ test('Admin reviewPage adds exact records, attention, and audit streams and maps
     result: 'stale',
     code: 'STAFF_TIME_VIEW_STALE'
   });
+});
+
+test('Admin historyPage pins a bounded completed-shift page and maps stale or malformed views safely', async () => {
+  const body = {
+    operation: 'historyPage',
+    viewToken: VIEW_TOKEN,
+    offset: 0
+  };
+  let upstream;
+  const response = await handleAdminStaffTime(adminRequest({ body }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async (url, options) => {
+      upstream = { url, body: JSON.parse(options.body) };
+      return googleResponse(historyPage());
+    }
+  });
+  assert.equal(response.status, 200);
+  assert.equal(upstream.url, TEST_WEBHOOK_URL);
+  assert.deepEqual(upstream.body, {
+    viewToken: VIEW_TOKEN,
+    offset: 0,
+    token: TEST_WEBHOOK_TOKEN,
+    action: 'staffTimeHistoryPageV2',
+    target: 'test',
+    adminActionToken: TEST_ADMIN_TOKEN
+  });
+  assert.deepEqual(await responseBody(response), {
+    ok: true,
+    test: true,
+    adminName: 'Andrew Smith',
+    viewToken: VIEW_TOKEN,
+    offset: 0,
+    total: 1,
+    items: [historyShift()],
+    nextOffset: null
+  });
+
+  const stale = await handleAdminStaffTime(adminRequest({ body }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async () => googleResponse({ ok: false, target: 'test', result: 'stale' })
+  });
+  assert.equal(stale.status, 409);
+  assert.deepEqual(await responseBody(stale), {
+    ok: false,
+    result: 'stale',
+    code: 'STAFF_TIME_VIEW_STALE'
+  });
+
+  const malformed = await handleAdminStaffTime(adminRequest({ body }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async () => googleResponse(historyPage({
+      items: [{ ...historyShift(), clockOut: null }]
+    }))
+  });
+  assert.equal(malformed.status, 502);
+
+  let called = false;
+  const rejected = await handleAdminStaffTime(adminRequest({
+    body: { ...body, extra: true }
+  }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async () => {
+      called = true;
+      return googleResponse(historyPage());
+    }
+  });
+  assert.equal(rejected.status, 400);
+  assert.equal(called, false);
+});
+
+test('Admin shiftLookup pins the receiver contract and maps stale, too-large, and malformed results safely', async () => {
+  const lookupNow = new Date('2026-08-29T16:00:00.000Z');
+  const body = { operation: 'shiftLookup', viewToken: VIEW_TOKEN, mode: 'recent' };
+  let upstream;
+  const response = await handleAdminStaffTime(adminRequest({ body }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: lookupNow,
+    fetch: async (url, options) => {
+      upstream = { url, body: JSON.parse(options.body) };
+      return googleResponse(shiftLookup());
+    }
+  });
+  assert.equal(response.status, 200);
+  assert.equal(upstream.url, TEST_WEBHOOK_URL);
+  assert.deepEqual(upstream.body, {
+    viewToken: VIEW_TOKEN,
+    mode: 'recent',
+    staffId: '',
+    date: '',
+    token: TEST_WEBHOOK_TOKEN,
+    action: 'staffTimeShiftLookupV3',
+    target: 'test',
+    adminActionToken: TEST_ADMIN_TOKEN
+  });
+  assert.deepEqual(await responseBody(response), {
+    ok: true,
+    test: true,
+    adminName: 'Andrew Smith',
+    viewToken: VIEW_TOKEN,
+    mode: 'recent',
+    dateFrom: '2026-08-23',
+    dateThrough: '2026-08-29',
+    staffId: '',
+    date: '',
+    total: 1,
+    items: [lookupShift()],
+    truncated: false
+  });
+
+  const exactBody = {
+    operation: 'shiftLookup',
+    viewToken: VIEW_TOKEN,
+    mode: 'exactDate',
+    staffId: 'front-desk-test-three',
+    date: '2026-08-18'
+  };
+  let exactUpstream;
+  const exact = await handleAdminStaffTime(adminRequest({ body: exactBody }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: lookupNow,
+    fetch: async (_url, options) => {
+      exactUpstream = JSON.parse(options.body);
+      return googleResponse(shiftLookup({
+        mode: 'exactDate',
+        dateFrom: '2026-08-18',
+        dateThrough: '2026-08-18',
+        staffId: exactBody.staffId,
+        date: exactBody.date,
+        items: [lookupShift({ date: '2026-08-18' })]
+      }));
+    }
+  });
+  assert.equal(exact.status, 200);
+  assert.equal(exactUpstream.action, 'staffTimeShiftLookupV3');
+  assert.equal(exactUpstream.staffId, 'front-desk-test-three');
+  assert.equal(exactUpstream.date, '2026-08-18');
+
+  for (const [result, expectedCode] of [
+    ['stale', 'STAFF_TIME_VIEW_STALE'],
+    ['too_large', 'STAFF_TIME_SHIFT_LOOKUP_TOO_LARGE']
+  ]) {
+    const failed = await handleAdminStaffTime(adminRequest({ body: exactBody }), {
+      env: ENV,
+      now: NOW_MS,
+      dateNow: lookupNow,
+      fetch: async () => googleResponse({ ok: false, target: 'test', result })
+    });
+    assert.equal(failed.status, 409);
+    assert.equal((await responseBody(failed)).code, expectedCode);
+  }
+
+  const malformed = await handleAdminStaffTime(adminRequest({ body: exactBody }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: lookupNow,
+    fetch: async () => googleResponse(shiftLookup({
+      mode: 'exactDate',
+      dateFrom: '2026-08-18',
+      dateThrough: '2026-08-18',
+      staffId: exactBody.staffId,
+      date: exactBody.date,
+      items: [{ ...lookupShift({ date: '2026-08-18' }), clockOut: null }]
+    }))
+  });
+  assert.equal(malformed.status, 502);
+
+  let called = false;
+  const rejected = await handleAdminStaffTime(adminRequest({
+    body: { ...exactBody, date: '2026-08-23' }
+  }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: lookupNow,
+    fetch: async () => {
+      called = true;
+      return googleResponse(shiftLookup());
+    }
+  });
+  assert.equal(rejected.status, 400);
+  assert.equal(called, false);
 });
 
 test('Admin correction pins attribution and replay identity, then validates the full confirmation', async () => {
@@ -1653,6 +2173,7 @@ test('authenticated production Admin review pins private production transport an
     test: false,
     adminName: 'Andrew Smith',
     staff: productionReviewPayload().staff,
+    shiftStaff: productionReviewPayload().shiftStaff,
     clockedInNow: productionReviewPayload().clockedInNow,
     periods: productionReviewPayload().periods,
     view: productionReviewPayload().view

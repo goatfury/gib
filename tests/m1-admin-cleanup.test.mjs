@@ -17,6 +17,7 @@ const BASELINE_BUTTON_IDS = Object.freeze([
   'toggleClasses',
   'btnSignIn',
   'retryStaffClock',
+  'cancelStaffClockPairing',
   'btnStaffClockAction',
   'btnStaffClockDone',
   'btnKiosk',
@@ -247,7 +248,11 @@ test('every inherited control remains unique and connected after organization', 
   }
 
   assert.match(kiosk, /Waiting rows must be confirmed or individually voided before clearing local sign-ins\./u);
-  assert.match(kiosk, /Reset this device\? This clears the device label\/location\/site\/setup,[\s\S]*Sign-ins and rows waiting to sync are NOT deleted\./u);
+  assert.match(kiosk, /Reset this device\? This clears the device label\/location\/site\/setup,[\s\S]*The auto-sync choice, sign-ins, and rows waiting to sync are NOT deleted\./u);
+  assert.match(kiosk, /Factory reset is blocked while \$\{waiting\} unsynced waiting row/u);
+  assert.match(kiosk, /Those rows would be permanently lost and cannot be recovered\./u);
+  assert.match(kiosk, /Current unsynced waiting rows: \$\{waiting\}\./u);
+  assert.match(kiosk, /permanently deletes any waiting rows; they cannot be recovered\./u);
   assert.match(kiosk, /Type “RESET” \(all caps\) to proceed\./u);
   assert.match(kiosk, /Disable the schedule\? All days will have no classes/u);
 });
@@ -732,9 +737,11 @@ test('Reset and Factory reset retain their existing confirmation protections', (
   const elements = new Map();
   let confirmResult = false;
   let promptResult = '';
+  let factoryPrompt = '';
+  let waitingRows = [{ RowID: 'gib-m1-waiting-test-row' }];
   let resets = 0;
   let factoryResets = 0;
-  let cancelledAlerts = 0;
+  const alertMessages = [];
   let syncSettingsLoads = 0;
   let syncStatusRenders = 0;
   let networkCalls = 0;
@@ -750,13 +757,11 @@ test('Reset and Factory reset retain their existing confirmation protections', (
       return elements.get(selector);
     },
     confirm: () => confirmResult,
-    prompt: () => promptResult,
-    alert(message) {
-      assert.equal(message, 'Factory reset cancelled');
-      cancelledAlerts += 1;
-    },
+    prompt(message) { factoryPrompt = message; return promptResult; },
+    alert(message) { alertMessages.push(String(message)); },
     resetDevice() { resets += 1; },
     factoryReset() { factoryResets += 1; },
+    loadSyncQueue: () => waitingRows,
     loadSyncSettings() { syncSettingsLoads += 1; },
     updateSyncStatus() { syncStatusRenders += 1; },
     saveDevice() {},
@@ -776,7 +781,16 @@ test('Reset and Factory reset retain their existing confirmation protections', (
 
   handlers.get('#btnFactoryReset:click')();
   assert.equal(factoryResets, 0);
-  assert.equal(cancelledAlerts, 1);
+  assert.equal(factoryPrompt, '');
+  assert.match(alertMessages[0], /blocked while 1 unsynced waiting row remains/u);
+  assert.match(alertMessages[0], /permanently lost and cannot be recovered/u);
+
+  waitingRows = [];
+  handlers.get('#btnFactoryReset:click')();
+  assert.equal(factoryResets, 0);
+  assert.equal(alertMessages.at(-1), 'Factory reset cancelled');
+  assert.match(factoryPrompt, /Current unsynced waiting rows: 0\./u);
+  assert.match(factoryPrompt, /permanently deletes any waiting rows; they cannot be recovered\./u);
   promptResult = 'RESET';
   handlers.get('#btnFactoryReset:click')();
   assert.equal(factoryResets, 1);
@@ -851,6 +865,7 @@ test('Reset discloses its full scope, cancel mutates nothing, and confirm preser
     SIGNINS_KEY: 'gib_m1_signins_v1',
     SYNC_QUEUE_KEY: 'gib_m1_sync_queue_v1',
     LOCAL_STATE_KEY: 'gib_m1_local_state_v2',
+    SYNC_AUTO_KEY: 'gib_m1_sync_auto_v1',
     OLD_SIGNINS_KEYS: ['rbjj_signins_v2', 'rbjj_signins_roster_mode_v1'],
     localStorage,
     document: {
@@ -892,10 +907,10 @@ test('Reset discloses its full scope, cancel mutates nothing, and confirm preser
     /device label\/location\/site\/setup/u,
     /Admin PIN/u,
     /instructor roster/u,
-    /auto-sync and sync status/u,
+    /sync status/u,
     /schedule, temporary classes, website schedule cache\/local overrides/u,
     /duration rules/u,
-    /Sign-ins and rows waiting to sync are NOT deleted\. Staff Clock punches and its waiting list are also NOT deleted\./u
+    /The auto-sync choice, sign-ins, and rows waiting to sync are NOT deleted\. Staff Clock punches and its waiting list are also NOT deleted\./u
   ]) assert.match(confirmation, expected);
 
   confirmResult = true;
@@ -909,6 +924,7 @@ test('Reset discloses its full scope, cancel mutates nothing, and confirm preser
       key !== 'gib_m1_local_state_v2'
       && key !== 'gib_m1_signins_v1'
       && key !== 'gib_m1_sync_queue_v1'
+      && key !== 'gib_m1_sync_auto_v1'
       && key !== 'unrelated_application_key'
     ) assert.equal(localStorage.getItem(key), null, key);
   }
@@ -1005,6 +1021,7 @@ test('legacy-only ledgers remain visible and survive Reset before verified reloa
         SIGNINS_KEY: 'gib_m1_signins_v1',
         SYNC_QUEUE_KEY: 'gib_m1_sync_queue_v1',
         LOCAL_STATE_KEY: 'gib_m1_local_state_v2',
+        SYNC_AUTO_KEY: 'gib_m1_sync_auto_v1',
         OLD_SIGNINS_KEYS: legacyKeys,
         DEVICE_KEY: 'gib_m1_device_v1',
         SCHEDULE_KEY: 'gib_m1_schedule_v1',
@@ -1063,8 +1080,10 @@ test('legacy-only ledgers remain visible and survive Reset before verified reloa
       resetHandler();
       assert.equal(localStorage.getItem(legacyKey), legacyBytes);
       assert.equal(localStorage.getItem('gib_m1_sync_queue_v1'), queueBytes);
+      assert.equal(localStorage.getItem('gib_m1_sync_auto_v1'), 'true');
       assert.equal(localStorage.getItem('unrelated_application_key'), 'preserve me');
       for (const key of Object.keys(intendedSettings)) {
+        if (key === 'gib_m1_sync_auto_v1') continue;
         assert.equal(localStorage.getItem(key), null, `${key} should be cleared`);
       }
       const visibleAfterReset = vm.runInContext('readAdminLocalStateSnapshot()', context);

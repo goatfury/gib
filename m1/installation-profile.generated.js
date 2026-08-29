@@ -18,7 +18,7 @@
   },
   "staffClockPairing": {
     "origin": "https://gib-live.netlify.app",
-    "expiresInSeconds": 300
+    "expiresInSeconds": 43200
   },
   "backend": {
     "enabled": true,

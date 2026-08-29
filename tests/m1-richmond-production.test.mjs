@@ -33,6 +33,7 @@ import { handleAdminLogin } from '../netlify/functions/m1-admin-login.mjs';
 import { handleAdminTabletPairing } from '../netlify/functions/m1-admin-tablet-pairing.mjs';
 import { handleKioskSync } from '../netlify/functions/m1-kiosk-sync.mjs';
 import { handleProductionStatus } from '../netlify/functions/m1-production-status.mjs';
+import { handleTabletPairingCancel } from '../netlify/functions/m1-tablet-pairing-cancel.mjs';
 import { handleTabletPairingPoll } from '../netlify/functions/m1-tablet-pairing-poll.mjs';
 import { handleTabletPairingStart } from '../netlify/functions/m1-tablet-pairing-start.mjs';
 import { handleTabletStatus } from '../netlify/functions/m1-tablet-status.mjs';
@@ -532,6 +533,10 @@ test('Richmond production cannot expose or consume Revolution tablet recovery', 
       '/api/m1-tablet-pairing-poll',
       { body: { operation: 'poll' } }
     ), dependencies),
+    handleTabletPairingCancel(request(
+      '/api/m1-tablet-pairing-cancel',
+      { body: { operation: 'cancel' } }
+    ), dependencies),
     handleAdminTabletPairing(request(
       '/api/m1-admin-tablet-pairing',
       { body: { operation: 'review', pairingCode: '01234-56789' } }
@@ -539,10 +544,14 @@ test('Richmond production cannot expose or consume Revolution tablet recovery', 
     handleAdminTabletPairing(request(
       '/api/m1-admin-tablet-pairing',
       { body: { operation: 'approve', pairingCode: '01234-56789' } }
+    ), dependencies),
+    handleAdminTabletPairing(request(
+      '/api/m1-admin-tablet-pairing',
+      { body: { operation: 'reject', pairingCode: '01234-56789' } }
     ), dependencies)
   ]);
 
-  assert.deepEqual(responses.map(response => response.status), [404, 404, 404, 404]);
+  assert.deepEqual(responses.map(response => response.status), [404, 404, 404, 404, 404, 404]);
   responses.forEach(response => assert.equal(response.headers.has('set-cookie'), false));
   assert.match(adminHtml, /STAFF_CLOCK_PAIRING_ENABLED = INSTALLATION\.featureFlags\.staffClockPairing === true/u);
   assert.match(adminHtml, /TABLET_PAIRING_AVAILABLE = STAFF_CLOCK_ENABLED\s*&& STAFF_CLOCK_PAIRING_ENABLED/u);
