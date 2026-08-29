@@ -369,7 +369,6 @@ test('Richmond shares the Not Synced late-event replacement without adding a pay
   assert.equal(added.result, 'added');
   assert.equal(added.linkedRecordId, 'gib-admin-richmond-not-synced');
 
-  const signinsAfterAdmin = structuredClone(harness.signins.values);
   const auditAfterAdmin = structuredClone(harness.audit.values);
   const lateRequest = productionRequest('kioskSignIn', {
     rows: [kioskRow({
@@ -378,6 +377,7 @@ test('Richmond shares the Not Synced late-event replacement without adding a pay
     })]
   });
   const first = harness.post(lateRequest);
+  const signinsAfterFirst = structuredClone(harness.signins.values);
   const retry = harness.post(lateRequest);
 
   assert.deepEqual(first.results, [{
@@ -386,8 +386,13 @@ test('Richmond shares the Not Synced late-event replacement without adding a pay
     linkedRecordId: added.linkedRecordId
   }]);
   assert.deepEqual(retry.results, first.results);
-  assert.deepEqual(harness.signins.values, signinsAfterAdmin);
+  assert.deepEqual(harness.signins.values, signinsAfterFirst);
   assert.deepEqual(harness.audit.values, auditAfterAdmin);
+  assert.equal(harness.signins.values.length, 3);
+  assert.equal(harness.signins.values[2][0], lateRequest.rows[0].RowID);
+  assert.equal(harness.signins.values[2][7], 'Admin sync replacement receipt');
+  assert.equal(harness.signins.values[2][8], added.linkedRecordId);
+  assert.equal(harness.signins.values[2][10], 'VOID');
 
   const review = harness.post(productionRequest('dailyReview', { date: addition.date }));
   assert.equal(review.records.length, 1);

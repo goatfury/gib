@@ -347,33 +347,26 @@ function lateNotSyncedKioskRequest(overrides = {}) {
   };
 }
 
-function assertInvalidNotSyncedAuditFallsBackToReview(mutateAudit) {
+function assertInvalidNotSyncedAuditLeavesEventPending(mutateAudit) {
   const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
   const added = harness.post(adminAddition({ reason: 'Not Synced' }));
   assert.equal(added.result, 'added');
   mutateAudit(harness.audit);
   const auditAfterMutation = structuredClone(harness.audit.values);
+  const signinsAfterMutation = structuredClone(harness.signins.values);
   const request = lateNotSyncedKioskRequest();
 
   const first = harness.post(request);
   assert.deepEqual(first.results, [{
     rowId: request.rows[0].RowID,
-    result: 'review required',
-    linkedRecordId: added.linkedRecordId
+    result: 'rejected',
+    linkedRecordId: ''
   }]);
+  assert.deepEqual(harness.signins.values, signinsAfterMutation);
   assert.deepEqual(harness.audit.values, auditAfterMutation);
-  assert.equal(harness.signins.values.length, 3);
-  assert.equal(harness.signins.values[2][7], 'Kiosk collision review');
-  assert.equal(harness.signins.values[2][10], 'REVIEW');
-
-  const signinsAfterReview = structuredClone(harness.signins.values);
   const retry = harness.post(request);
-  assert.deepEqual(retry.results, [{
-    rowId: request.rows[0].RowID,
-    result: 'already exists',
-    linkedRecordId: request.rows[0].RowID
-  }]);
-  assert.deepEqual(harness.signins.values, signinsAfterReview);
+  assert.deepEqual(retry.results, first.results);
+  assert.deepEqual(harness.signins.values, signinsAfterMutation);
   assert.deepEqual(harness.audit.values, auditAfterMutation);
 }
 
@@ -500,6 +493,18 @@ test('legitimate repeated coarse business events remain distinct', () => {
   assert.equal(exact.results[0].result, 'added');
   assert.equal(distinct.results[0].result, 'added');
   assert.equal(harness.signins.values.length, 3);
+});
+
+test('same-batch exact event identities append once even when RowIDs differ', () => {
+  const harness = receiverHarness({ testSpreadsheet: true, productionSpreadsheet: false });
+  const first = kioskRow({ RowID: 'same-batch-exact-one' });
+  const second = kioskRow({ RowID: 'same-batch-exact-two' });
+  const response = harness.post({ token: 'legacy-kiosk-token', rows: [first, second] });
+  assert.deepEqual(response.results, [
+    { rowId: first.RowID, result: 'added', linkedRecordId: first.RowID },
+    { rowId: second.RowID, result: 'already exists', linkedRecordId: first.RowID }
+  ]);
+  assert.equal(harness.signins.values.length, 2);
 });
 
 test('recovery writes and rollback stay disabled until the incident gate is explicitly open', () => {
@@ -1092,11 +1097,11 @@ test('a Not Synced Admin correction consumes the matching late kiosk event witho
   assert.equal(harness.signins.values.length, 2);
   assert.equal(harness.audit.values.length, 2);
 
-  const signinsAfterAdmin = structuredClone(harness.signins.values);
   const auditAfterAdmin = structuredClone(harness.audit.values);
   const delayedRequest = lateNotSyncedKioskRequest();
 
   const first = harness.post(delayedRequest);
+  const signinsAfterFirst = structuredClone(harness.signins.values);
   const retry = harness.post(delayedRequest);
   for (const response of [first, retry]) {
     assert.equal(response.ok, true);
@@ -1106,8 +1111,30 @@ test('a Not Synced Admin correction consumes the matching late kiosk event witho
       linkedRecordId: added.linkedRecordId
     }]);
   }
-  assert.deepEqual(harness.signins.values, signinsAfterAdmin);
+  assert.deepEqual(harness.signins.values, signinsAfterFirst);
   assert.deepEqual(harness.audit.values, auditAfterAdmin);
+  assert.equal(harness.signins.values.length, 3);
+  assert.deepEqual(harness.signins.values[2], [
+    delayedRequest.rows[0].RowID,
+    delayedRequest.rows[0].Timestamp,
+    delayedRequest.rows[0].Date,
+    delayedRequest.rows[0]['Class Label'],
+    delayedRequest.rows[0]['Duration (hr)'],
+    delayedRequest.rows[0].Instructor,
+    delayedRequest.rows[0].Site,
+    'Admin sync replacement receipt',
+    added.linkedRecordId,
+    delayedRequest.rows[0].Notes,
+    'VOID'
+  ]);
+  const changedIdentity = structuredClone(delayedRequest);
+  changedIdentity.rows[0].Timestamp = '2026-07-25 09:42:18';
+  assert.deepEqual(harness.post(changedIdentity).results, [{
+    rowId: delayedRequest.rows[0].RowID,
+    result: 'rejected',
+    linkedRecordId: ''
+  }]);
+  assert.deepEqual(harness.signins.values, signinsAfterFirst);
 
   const review = harness.post({
     token: 'receiver-token',
@@ -1128,24 +1155,316 @@ test('a Not Synced Admin correction consumes the matching late kiosk event witho
   assert.equal(harness.signins.values.slice(1).filter(row => row[10] !== 'VOID').length, 1);
 });
 
+test('a Not Synced Admin correction consumes exactly one delayed identity and preserves a repeated same-tuple class as payable', () => {
+  const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
+  const added = harness.post(adminAddition({ reason: 'Not Synced' }));
+  const delayedRequest = lateNotSyncedKioskRequest();
+  const delayed = harness.post(delayedRequest);
+  assert.equal(delayed.results[0].result, 'already exists');
+  assert.equal(delayed.results[0].linkedRecordId, added.linkedRecordId);
+
+  const repeatedRequest = lateNotSyncedKioskRequest({
+    RowID: 'gib-m1-dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    Timestamp: '2026-07-25 09:58:42'
+  });
+  const repeated = harness.post(repeatedRequest);
+  assert.deepEqual(repeated.results, [{
+    rowId: repeatedRequest.rows[0].RowID,
+    result: 'added',
+    linkedRecordId: repeatedRequest.rows[0].RowID
+  }]);
+  assert.equal(harness.signins.values.length, 4);
+  assert.equal(harness.signins.values[2][7], 'Admin sync replacement receipt');
+  assert.equal(harness.signins.values[2][10], 'VOID');
+  assert.equal(harness.signins.values[3][0], repeatedRequest.rows[0].RowID);
+  assert.equal(harness.signins.values[3][7], repeatedRequest.rows[0].Device);
+  assert.equal(harness.signins.values[3][10], 'OK');
+  assert.equal(harness.audit.values.length, 2);
+  assert.equal(harness.signins.values.slice(1).filter(row => row[10] === 'OK').length, 2);
+
+  const delayedRetry = harness.post(delayedRequest);
+  const repeatedRetry = harness.post(repeatedRequest);
+  assert.deepEqual(delayedRetry.results, delayed.results);
+  assert.deepEqual(repeatedRetry.results, [{
+    rowId: repeatedRequest.rows[0].RowID,
+    result: 'already exists',
+    linkedRecordId: repeatedRequest.rows[0].RowID
+  }]);
+  assert.equal(harness.signins.values.length, 4);
+  assert.equal(harness.signins.values.slice(1).filter(row => row[7] === 'Admin sync replacement receipt').length, 1);
+});
+
+test('one matching and one distinct same-tuple event in one batch reconcile without losing payroll', () => {
+  const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
+  const added = harness.post(adminAddition({
+    reason: 'Not Synced',
+    notes: 'Exact delayed class'
+  }));
+  const matching = kioskRow({
+    RowID: 'gib-m1-90909090-9090-4909-8909-909090909090',
+    Timestamp: '2026-07-25 09:42:17',
+    Notes: 'Exact delayed class'
+  });
+  const distinct = kioskRow({
+    RowID: 'gib-m1-a0a0a0a0-a0a0-4a0a-8a0a-a0a0a0a0a0a0',
+    Timestamp: '2026-07-25 09:58:42',
+    Notes: 'Second distinct class'
+  });
+  const request = {
+    token: 'receiver-token',
+    action: 'kioskSignIn',
+    target: 'production',
+    rows: [matching, distinct]
+  };
+
+  const first = harness.post(request);
+  assert.deepEqual(first.results, [
+    { rowId: matching.RowID, result: 'already exists', linkedRecordId: added.linkedRecordId },
+    { rowId: distinct.RowID, result: 'added', linkedRecordId: distinct.RowID }
+  ]);
+  const afterFirst = structuredClone(harness.signins.values);
+  assert.deepEqual(harness.post(request).results, [
+    first.results[0],
+    { rowId: distinct.RowID, result: 'already exists', linkedRecordId: distinct.RowID }
+  ]);
+  assert.deepEqual(harness.signins.values, afterFirst);
+  assert.equal(harness.signins.values.slice(1).filter(row => row[7] === 'Admin sync replacement receipt').length, 1);
+  assert.equal(harness.signins.values.slice(1).filter(row => row[10] === 'OK').length, 2);
+  assert.equal(harness.audit.values.length, 2);
+});
+
+test('a different RowID with the exact consumed payload remains pending as ambiguous', () => {
+  const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
+  harness.post(adminAddition({ reason: 'Not Synced' }));
+  const delayedRequest = lateNotSyncedKioskRequest();
+  const consumed = harness.post(delayedRequest);
+  assert.equal(consumed.results[0].result, 'already exists');
+  const afterConsumed = structuredClone(harness.signins.values);
+
+  const ambiguousRetry = lateNotSyncedKioskRequest({
+    RowID: 'gib-m1-78787878-7878-4787-8787-787878787878'
+  });
+  assert.deepEqual(harness.post(ambiguousRetry).results, [{
+    rowId: ambiguousRetry.rows[0].RowID,
+    result: 'rejected',
+    linkedRecordId: ''
+  }]);
+  assert.deepEqual(harness.signins.values, afterConsumed);
+  assert.deepEqual(harness.post(delayedRequest).results, consumed.results);
+  assert.deepEqual(harness.signins.values, afterConsumed);
+});
+
+test('two ambiguous delayed events never compete by request order for one Not Synced correction', () => {
+  const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
+  harness.post(adminAddition({ reason: 'Not Synced' }));
+  const firstRow = lateNotSyncedKioskRequest().rows[0];
+  const secondRow = kioskRow({
+    RowID: 'gib-m1-34343434-3434-4434-8434-343434343434',
+    Timestamp: '2026-07-25 09:58:42'
+  });
+  const ambiguous = {
+    token: 'receiver-token',
+    action: 'kioskSignIn',
+    target: 'production',
+    rows: [firstRow, secondRow]
+  };
+  const before = structuredClone(harness.signins.values);
+  const first = harness.post(ambiguous);
+  assert.deepEqual(first.results, ambiguous.rows.map(row => ({
+    rowId: row.RowID,
+    result: 'rejected',
+    linkedRecordId: ''
+  })));
+  assert.deepEqual(harness.signins.values, before);
+  assert.deepEqual(harness.post(ambiguous).results, first.results);
+  assert.deepEqual(harness.signins.values, before);
+  assert.equal(harness.audit.values.length, 2);
+});
+
+test('multiple audited corrections and delayed events reconcile one-to-one with permanent exact receipts', () => {
+  const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
+  const firstAdmin = harness.post(adminAddition({
+    requestId: 'qa-admin-one',
+    reason: 'Not Synced',
+    notes: 'First event identity'
+  }));
+  const secondAdmin = harness.post(adminAddition({
+    requestId: 'qa-admin-two',
+    reason: 'Not Synced',
+    classLabel: '11:00 AM Kids BJJ',
+    notes: 'Second event identity'
+  }));
+  assert.equal(firstAdmin.result, 'added');
+  assert.equal(secondAdmin.result, 'added');
+
+  const rows = [
+    kioskRow({
+      RowID: 'gib-m1-45454545-4545-4454-8454-454545454545',
+      Timestamp: '2026-07-25 09:42:17',
+      Notes: 'First event identity'
+    }),
+    kioskRow({
+      RowID: 'gib-m1-56565656-5656-4565-8565-565656565656',
+      Timestamp: '2026-07-25 10:42:17',
+      'Class Label': '11:00 AM Kids BJJ',
+      Notes: 'Second event identity'
+    })
+  ];
+  const request = {
+    token: 'receiver-token',
+    action: 'kioskSignIn',
+    target: 'production',
+    rows
+  };
+  const first = harness.post(request);
+  assert.deepEqual(first.results, [
+    { rowId: rows[0].RowID, result: 'already exists', linkedRecordId: firstAdmin.linkedRecordId },
+    { rowId: rows[1].RowID, result: 'already exists', linkedRecordId: secondAdmin.linkedRecordId }
+  ]);
+  const afterFirst = structuredClone(harness.signins.values);
+  assert.deepEqual(harness.post(request).results, first.results);
+  assert.deepEqual(harness.signins.values, afterFirst);
+  assert.equal(harness.signins.values.slice(1).filter(row => row[10] === 'OK').length, 2);
+  assert.equal(harness.signins.values.slice(1).filter(row => row[7] === 'Admin sync replacement receipt').length, 2);
+  assert.deepEqual(
+    harness.signins.values.slice(1).filter(row => row[7] === 'Admin sync replacement receipt').map(row => row[8]),
+    [firstAdmin.linkedRecordId, secondAdmin.linkedRecordId]
+  );
+  assert.equal(harness.audit.values.length, 3);
+});
+
+test('duplicate or post-audit replacement receipts fail closed on exact retry', () => {
+  const duplicate = receiverHarness({ adminActionToken: 'production-admin-token' });
+  duplicate.post(adminAddition({ reason: 'Not Synced' }));
+  const delayedRequest = lateNotSyncedKioskRequest();
+  assert.equal(duplicate.post(delayedRequest).results[0].result, 'already exists');
+  const duplicateReceipt = structuredClone(duplicate.signins.values[2]);
+  duplicateReceipt[0] = 'gib-m1-12121212-1212-4212-8212-121212121212';
+  duplicateReceipt[1] = '2026-07-25 09:50:00';
+  duplicate.signins.appendRow(duplicateReceipt);
+  const duplicateState = structuredClone(duplicate.signins.values);
+  assert.deepEqual(duplicate.post(delayedRequest).results, [{
+    rowId: delayedRequest.rows[0].RowID,
+    result: 'rejected',
+    linkedRecordId: ''
+  }]);
+  assert.deepEqual(duplicate.signins.values, duplicateState);
+
+  const postAudit = receiverHarness({ adminActionToken: 'production-admin-token' });
+  postAudit.post(adminAddition({ reason: 'Not Synced' }));
+  assert.equal(postAudit.post(delayedRequest).results[0].result, 'already exists');
+  postAudit.signins.values[2][1] = '2026-07-26 11:00:00';
+  const postAuditRequest = lateNotSyncedKioskRequest({ Timestamp: '2026-07-26 11:00:00' });
+  const postAuditState = structuredClone(postAudit.signins.values);
+  assert.deepEqual(postAudit.post(postAuditRequest).results, [{
+    rowId: postAuditRequest.rows[0].RowID,
+    result: 'rejected',
+    linkedRecordId: ''
+  }]);
+  assert.deepEqual(postAudit.signins.values, postAuditState);
+});
+
+test('one malformed consumed binding cannot release the Admin correction for another payable match', () => {
+  const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
+  harness.post(adminAddition({ reason: 'Not Synced' }));
+  const delayedRequest = lateNotSyncedKioskRequest();
+  assert.equal(harness.post(delayedRequest).results[0].result, 'already exists');
+  harness.signins.values[2][10] = 'OK';
+  const malformedState = structuredClone(harness.signins.values);
+  const nextRequest = lateNotSyncedKioskRequest({
+    RowID: 'gib-m1-67676767-6767-4676-8676-676767676767',
+    Timestamp: '2026-07-25 09:58:42'
+  });
+  assert.deepEqual(harness.post(nextRequest).results, [{
+    rowId: nextRequest.rows[0].RowID,
+    result: 'rejected',
+    linkedRecordId: ''
+  }]);
+  assert.deepEqual(harness.signins.values, malformedState);
+});
+
+for (const invalidReceiptRowId of ['', 'not-a-production-kiosk-id', 'x'.repeat(241)]) {
+  test(`an invalid consumed receipt RowID fails closed: ${invalidReceiptRowId || 'empty'}`, () => {
+    const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
+    harness.post(adminAddition({ reason: 'Not Synced' }));
+    const delayedRequest = lateNotSyncedKioskRequest();
+    assert.equal(harness.post(delayedRequest).results[0].result, 'already exists');
+    harness.signins.values[2][0] = invalidReceiptRowId;
+    const malformedState = structuredClone(harness.signins.values);
+    const nextRequest = lateNotSyncedKioskRequest({
+      RowID: 'gib-m1-89898989-8989-4898-8989-898989898989',
+      Timestamp: '2026-07-25 09:58:42'
+    });
+    assert.deepEqual(harness.post(nextRequest).results, [{
+      rowId: nextRequest.rows[0].RowID,
+      result: 'rejected',
+      linkedRecordId: ''
+    }]);
+    assert.deepEqual(harness.signins.values, malformedState);
+  });
+}
+
+for (const [label, timestamp, rowId] of [
+  ['at', '2026-07-26 11:00:00', 'gib-m1-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'],
+  ['after', '2026-07-26 11:00:01', 'gib-m1-ffffffff-ffff-4fff-8fff-ffffffffffff']
+]) {
+  test(`a same-tuple event recorded ${label} the Admin correction is never consumed as its delayed identity`, () => {
+    const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
+    const added = harness.post(adminAddition({ reason: 'Not Synced' }));
+    const laterRequest = lateNotSyncedKioskRequest({ RowID: rowId, Timestamp: timestamp });
+    const later = harness.post(laterRequest);
+    assert.deepEqual(later.results, [{
+      rowId: laterRequest.rows[0].RowID,
+      result: 'added',
+      linkedRecordId: laterRequest.rows[0].RowID
+    }]);
+    assert.equal(harness.signins.values.length, 3);
+    assert.equal(harness.signins.values[2][7], laterRequest.rows[0].Device);
+    assert.equal(harness.signins.values[2][10], 'OK');
+    assert.equal(harness.signins.values.slice(1).filter(row => row[7] === 'Admin sync replacement receipt').length, 0);
+    assert.equal(harness.audit.values.length, 2);
+  });
+}
+
+test('a different-duration same-tuple event cannot claim an unbound Not Synced correction', () => {
+  const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
+  const added = harness.post(adminAddition({ reason: 'Not Synced' }));
+  const differentDuration = lateNotSyncedKioskRequest({
+    RowID: 'gib-m1-12345678-1234-4234-8234-123456789abc',
+    'Duration (hr)': 1
+  });
+  const response = harness.post(differentDuration);
+  assert.deepEqual(response.results, [{
+    rowId: differentDuration.rows[0].RowID,
+    result: 'added',
+    linkedRecordId: differentDuration.rows[0].RowID
+  }]);
+  assert.equal(harness.signins.values.length, 3);
+  assert.equal(harness.signins.values[2][4], 1);
+  assert.equal(harness.signins.values[2][7], differentDuration.rows[0].Device);
+  assert.equal(harness.signins.values[2][10], 'OK');
+  assert.equal(harness.signins.values.slice(1).filter(row => row[7] === 'Admin sync replacement receipt').length, 0);
+  assert.equal(harness.audit.values.length, 2);
+});
+
 test('an orphaned Not Synced Admin row does not consume a late kiosk event', () => {
-  assertInvalidNotSyncedAuditFallsBackToReview(audit => audit.deleteRow(2));
+  assertInvalidNotSyncedAuditLeavesEventPending(audit => audit.deleteRow(2));
 });
 
 test('duplicate linked Admin audits do not consume a late kiosk event', () => {
-  assertInvalidNotSyncedAuditFallsBackToReview(audit => {
+  assertInvalidNotSyncedAuditLeavesEventPending(audit => {
     audit.appendRow([...audit.values[1]]);
   });
 });
 
 test('a malformed linked Admin audit does not consume a late kiosk event', () => {
-  assertInvalidNotSyncedAuditFallsBackToReview(audit => {
+  assertInvalidNotSyncedAuditLeavesEventPending(audit => {
     audit.values[1][2] = 'not a timestamp';
   });
 });
 
 test('a mismatched linked Admin audit does not consume a late kiosk event', () => {
-  assertInvalidNotSyncedAuditFallsBackToReview(audit => {
+  assertInvalidNotSyncedAuditLeavesEventPending(audit => {
     audit.values[1][3] = 'Different Instructor';
   });
 });
