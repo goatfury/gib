@@ -6,40 +6,21 @@
   </foreignObject>
   <script type="application/ecmascript"><![CDATA[
     const frame=document.getElementById('app');
-    function wireWorldDefault(){
+    function wireAtlasPreview(){
       let doc,win;
-      try{doc=frame.contentDocument;win=frame.contentWindow}catch(e){}
-      const follow=doc&&doc.getElementById('followBtn');
-      const reset=doc&&doc.getElementById('zoomReset');
-      const mode=doc&&doc.getElementById('modeSelect');
-      const start=doc&&doc.getElementById('startBtn');
-      const answer=doc&&doc.getElementById('answerInput');
-      if(!doc||!follow||!reset||!mode||!start||!answer){setTimeout(wireWorldDefault,60);return}
-      if(win.__atlasWorldDefaultWired)return;
-      win.__atlasWorldDefaultWired=true;
-      let migrated=false;
-      try{migrated=win.localStorage.getItem('atlasWorldDefaultV1')==='done'}catch(e){}
-      if(!migrated){
-        if(follow.getAttribute('aria-pressed')==='true')follow.click();
-        try{win.localStorage.setItem('atlasWorldDefaultV1','done')}catch(e){}
+      try{doc=frame.contentDocument;win=frame.contentWindow}catch(error){}
+      if(!doc||!win||!doc.getElementById('freePanel')||!doc.getElementById('answerInput')){
+        setTimeout(wireAtlasPreview,60);
+        return;
       }
-      const refreshFollowCopy=()=>{
-        const copy=follow.querySelector('.follow-copy');
-        if(copy)copy.textContent='Auto zoom';
-        const on=follow.getAttribute('aria-pressed')==='true';
-        follow.title=on?'Auto zoom is on — click to keep the whole world visible':'Whole-world view is on — click for optional auto zoom';
-        follow.setAttribute('aria-label',on?'Turn off automatic map zoom':'Turn on automatic map zoom');
-      };
-      refreshFollowCopy();
-      follow.addEventListener('click',()=>setTimeout(refreshFollowCopy,0));
-      const keepWorld=()=>{if(mode.value!=='region')reset.click()};
-      keepWorld();
-      start.addEventListener('click',()=>setTimeout(keepWorld,120));
-      answer.addEventListener('input',()=>{if(start.textContent.trim()!=='Restart')keepWorld()},{capture:true});
-      const rules=[...doc.querySelectorAll('#rulesDialog li')].find(li=>li.textContent.trim().startsWith('Follow'));
-      if(rules)rules.innerHTML='<strong>Whole-world view</strong> stays fixed by default so fast answers never leave you looking at the wrong hemisphere. Turn on <strong>Auto zoom</strong> only when you want the camera to follow nearby answers.';
+      if(win.__atlasTwoFieldLoaderAttached)return;
+      win.__atlasTwoFieldLoaderAttached=true;
+      const injected=doc.createElement('script');
+      injected.src='two-field-capitals.js?v=2a0789c5';
+      injected.onerror=()=>{doc.body.dataset.twoFieldError='Two-field capital controls failed to load.'};
+      doc.body.appendChild(injected);
     }
-    frame.addEventListener('load',()=>setTimeout(wireWorldDefault,20));
-    setTimeout(wireWorldDefault,20);
+    frame.addEventListener('load',()=>setTimeout(wireAtlasPreview,20));
+    setTimeout(wireAtlasPreview,20);
   ]]></script>
 </svg>
