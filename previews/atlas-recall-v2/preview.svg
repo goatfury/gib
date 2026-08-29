@@ -1,46 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xhtml="http://www.w3.org/1999/xhtml" width="100%" height="100%" style="width:100vw;height:100vh;background:#07101c">
   <foreignObject x="0" y="0" width="100%" height="100%">
     <xhtml:body style="margin:0;width:100%;height:100%;overflow:hidden;background:#07101c">
-      <xhtml:iframe id="app" title="Atlas Recall" src="index.html" style="border:0;width:100%;height:100%;display:block"></xhtml:iframe>
+      <xhtml:iframe title="Atlas Recall" src="play.html" style="border:0;width:100%;height:100%;display:block"></xhtml:iframe>
     </xhtml:body>
   </foreignObject>
-  <script type="application/ecmascript"><![CDATA[
-    const frame=document.getElementById('app');
-    function wireAtlasPreview(){
-      let doc,win;
-      try{doc=frame.contentDocument;win=frame.contentWindow}catch(error){}
-      if(!doc||!win||doc.readyState!=='complete'||!doc.getElementById('freePanel')||!doc.getElementById('answerInput')){
-        setTimeout(wireAtlasPreview,60);
-        return;
-      }
-      const probe=doc.createElement('script');
-      probe.textContent="window.__atlasRuntimeReady=(typeof state==='object'&&typeof CAPITALS==='object'&&typeof capitalMatch==='function'&&typeof beginCapitalPrompt==='function');";
-      doc.body.appendChild(probe);
-      probe.remove();
-      if(!win.__atlasRuntimeReady){
-        setTimeout(wireAtlasPreview,60);
-        return;
-      }
-      if(win.__atlasOneFieldLoaderAttached)return;
-      win.__atlasOneFieldLoaderAttached=true;
-      const injected=doc.createElement('script');
-      injected.src='one-field-learning.js?v=cf73d511';
-      injected.onerror=()=>{doc.body.dataset.oneFieldLearningError='One-field capital learning controls failed to load.'};
-      injected.onload=()=>{
-        const answerKey=doc.createElement('script');
-        answerKey.src='end-answer-key.js?v=10dc0782';
-        answerKey.onerror=()=>{doc.body.dataset.endAnswerKeyError='End-of-round answer key failed to load.'};
-        answerKey.onload=()=>{
-          const hints=doc.createElement('script');
-          hints.src='letter-hints.js?v=cecbe7b2';
-          hints.onerror=()=>{doc.body.dataset.letterHintError='Letter hints failed to load.'};
-          doc.body.appendChild(hints);
-        };
-        doc.body.appendChild(answerKey);
-      };
-      doc.body.appendChild(injected);
-    }
-    frame.addEventListener('load',()=>setTimeout(wireAtlasPreview,20));
-    setTimeout(wireAtlasPreview,20);
-  ]]></script>
 </svg>
