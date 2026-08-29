@@ -26,6 +26,12 @@
       const injected=doc.createElement('script');
       injected.src='two-field-capitals.js?v=2a0789c5';
       injected.onerror=()=>{doc.body.dataset.twoFieldError='Two-field capital controls failed to load.'};
+      injected.onload=()=>{
+        const spelling=doc.createElement('script');
+        spelling.src='capital-spelling-feedback.js?v=036ce9e2';
+        spelling.onerror=()=>{doc.body.dataset.spellingFeedbackError='Capital spelling feedback failed to load.'};
+        doc.body.appendChild(spelling);
+      };
       doc.body.appendChild(injected);
     }
     frame.addEventListener('load',()=>setTimeout(wireAtlasPreview,20));
