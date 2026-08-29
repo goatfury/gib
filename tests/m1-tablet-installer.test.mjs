@@ -285,7 +285,7 @@ test('production diagnostic returns only the six safe fields and never mutates s
     harness.elements.get('historyCountResult').textContent,
     harness.elements.get('waitingCountResult').textContent,
     harness.elements.get('buildResult').textContent
-  ], ['YES', 'YES', 'OFF', '3', '2', '2026-08-19 M1B PRODUCTION staff-clock']);
+  ], ['YES', 'YES', 'OFF', '3', '2', '2026-08-29 M1B PRODUCTION sign-in-sync-recovery']);
   assert.equal(harness.calls.some(call => call.operation !== 'get'), false);
   assert.equal(harness.data.get('gib_m1_local_state_v2'), canonicalState);
   assert.equal(harness.data.get('unrelated'), 'unchanged');

@@ -361,6 +361,35 @@ test('exact retry uses the same RowID and already exists removes it once', () =>
   assert.equal(replay.state.ledger[0].RowID, IDS[0]);
 });
 
+test('Admin-linked already-exists acknowledgement clears one delayed row and is replay-safe', () => {
+  const value = row(IDS[0]);
+  const batch = localBatch([value]);
+  const state = appendBatchToState(blankLocalState(), batch.ledger, batch.queue);
+  const payload = ack([result(IDS[0], 'already exists', 'gib-admin-not-synced-correction')]);
+
+  const first = applyAcknowledgements(
+    state,
+    state.queue,
+    payload,
+    '2026-08-29T12:00:00.000Z'
+  );
+  assert.equal(first.readable, true);
+  assert.deepEqual(first.confirmedRowIds, [IDS[0]]);
+  assert.equal(first.state.queue.length, 0);
+  assert.equal(first.state.ledger.length, 1);
+  assert.equal(first.state.ledger[0].RowID, IDS[0]);
+  assert.equal(first.state.ledger[0].__syncResult, 'already exists');
+
+  const replay = applyAcknowledgements(
+    first.state,
+    state.queue,
+    payload,
+    '2026-08-29T12:00:00.000Z'
+  );
+  assert.deepEqual(replay.state, first.state);
+  assert.deepEqual(replay.confirmedRowIds, [IDS[0]]);
+});
+
 test('legacy confirmation clears only the exact two waiting RowIDs and leaves input state untouched', () => {
   const values = [
     row(IDS[0], { Timestamp: '2026-08-09 15:57:3', Date: '2026-08-09' }),
@@ -890,7 +919,7 @@ test('kiosk selects production transport only from the exact canonical origins',
     [...kioskHtml.matchAll(/productionOrigin: IS_PRODUCTION_SYNC_ORIGIN/gu)].length,
     3
   );
-  assert.match(kioskHtml, /2026-08-18 M1B TEST staff-clock-operational-candidate/u);
+  assert.match(kioskHtml, /2026-08-29 M1B TEST sign-in-sync-recovery-candidate/u);
   assert.match(kioskHtml, /secure host-only cookie/u);
 
   const transportSource = kioskHtml.match(

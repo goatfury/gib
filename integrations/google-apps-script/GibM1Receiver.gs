@@ -738,6 +738,98 @@ function adminAddedRecord_(record) {
     || /admin-added/i.test(exactText_(record && record.notes));
 }
 
+function adminAttribution_(record) {
+  var notes = exactText_(record && record.notes);
+  var match = notes.match(
+    /^Admin-added \| Admin: ([^|]+) \| Reason: ([^|]+)(?: \| Notes: [\s\S]*)?$/
+  );
+  if (!match || GIB_M1_ADMIN_NAMES_.indexOf(cleanText_(match[1])) === -1) return null;
+  return {
+    adminName: cleanText_(match[1]),
+    reason: cleanText_(match[2])
+  };
+}
+
+function adminSyncReplacementRecord_(record, candidate) {
+  var attribution = adminAttribution_(record);
+  return Boolean(attribution)
+    && activeRecord_(record)
+    && /^gib-admin-.+$/.test(exactText_(record && record.rowId))
+    && cleanText_(record && record.device) === 'Admin Daily Review'
+    && normalizeEventText_(attribution.reason) === 'not synced'
+    && sameEvent_(record, candidate);
+}
+
+function adminSyncAuditRows_(spreadsheet) {
+  var sheet = spreadsheet.getSheetByName(GIB_M1_AUDIT_SHEET_);
+  if (!sheet) return [];
+  try {
+    return adminAuditValues_(sheet).slice(1);
+  } catch (error) {
+    return [];
+  }
+}
+
+function authoritativeAdminSyncAudit_(row, record) {
+  var attribution = adminAttribution_(record);
+  var actionNumber = Number(row && row[0]);
+  var duration = Number(row && row[7]);
+  var instructor = exactText_(row && row[3]);
+  var classDate = displayDate_(row && row[4]);
+  var classLabel = exactText_(row && row[5]);
+  var site = exactText_(row && row[6]);
+  var reason = exactText_(row && row[8]);
+  var linkedRecordId = exactText_(row && row[10]);
+  return Boolean(attribution)
+    && isFinite(actionNumber)
+    && actionNumber >= 1
+    && Math.floor(actionNumber) === actionNumber
+    && actionNumber <= GIB_M1_MAX_SAFE_INTEGER_
+    && exactText_(row && row[1]) === attribution.adminName
+    && Boolean(canonicalTimestamp_(row && row[2]))
+    && Boolean(instructor)
+    && instructor.length <= GIB_M1_INSTRUCTOR_MAX_
+    && instructor === exactText_(record && record.instructor)
+    && validCalendarDate_(classDate)
+    && classDate === displayDate_(record && record.date)
+    && Boolean(classLabel)
+    && classLabel.length <= GIB_M1_CLASS_LABEL_MAX_
+    && classLabel === exactText_(record && record.classLabel)
+    && Boolean(site)
+    && site.length <= GIB_M1_SITE_MAX_
+    && site === exactText_(record && record.site)
+    && isFinite(duration)
+    && duration > 0
+    && duration <= 8
+    && canonicalDuration_(duration) === canonicalDuration_(record && record.duration)
+    && Boolean(reason)
+    && reason.length <= GIB_M1_AUDIT_REASON_MAX_
+    && reason === attribution.reason
+    && normalizeEventText_(reason) === 'not synced'
+    && cleanText_(row && row[9]).toLowerCase() === 'added'
+    && Boolean(linkedRecordId)
+    && linkedRecordId.length <= GIB_M1_RECORD_ID_MAX_
+    && linkedRecordId === exactText_(record && record.rowId);
+}
+
+function authoritativeAdminSyncReplacement_(record, auditRows) {
+  var linkedAuditRows = auditRows.filter(function(row) {
+    return exactText_(row && row[10]) === exactText_(record && record.rowId);
+  });
+  return linkedAuditRows.length === 1
+    && authoritativeAdminSyncAudit_(linkedAuditRows[0], record);
+}
+
+function findAdminSyncReplacement_(records, candidate, auditRows) {
+  var matches = records.filter(function(record) {
+    return adminSyncReplacementRecord_(record, candidate);
+  });
+  if (matches.length > 1) return { conflict: true };
+  return matches.length === 1 && authoritativeAdminSyncReplacement_(matches[0], auditRows)
+    ? matches[0]
+    : null;
+}
+
 function collisionReviewRecord_(record) {
   return cleanText_(record && record.device) === GIB_M1_COLLISION_DEVICE_
     || cleanText_(record && record.status).toUpperCase() === GIB_M1_COLLISION_STATUS_;
@@ -880,6 +972,7 @@ function kioskSignInAction_(body) {
     var spreadsheet = openExpectedSpreadsheet_(body);
     var sheet = signinsSheet_(spreadsheet);
     var state = readSignins_(sheet);
+    var adminAuditRows = adminSyncAuditRows_(spreadsheet);
     var results = body.rows.map(function(row) {
       var requestedId = requestedKioskRowId_(row);
       var candidate = validateKioskRow_(row);
@@ -905,6 +998,17 @@ function kioskSignInAction_(body) {
           rowId: candidate.rowId,
           result: 'already exists',
           linkedRecordId: existing.rowId
+        };
+      }
+      var adminSyncReplacement = findAdminSyncReplacement_(state.records, candidate, adminAuditRows);
+      if (adminSyncReplacement && adminSyncReplacement.conflict) {
+        return { rowId: candidate.rowId, result: 'rejected', linkedRecordId: '' };
+      }
+      if (adminSyncReplacement) {
+        return {
+          rowId: candidate.rowId,
+          result: 'already exists',
+          linkedRecordId: adminSyncReplacement.rowId
         };
       }
       var adminCollision = findAdminCollision_(state.records, candidate);

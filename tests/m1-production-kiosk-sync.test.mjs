@@ -225,6 +225,30 @@ test('authorized production accepts real names and pins URL, token, action, targ
   assert.equal(JSON.stringify(await body(new Response(JSON.stringify(forwarded.rows)))).includes(PRODUCTION_DEVICE_TOKEN), false);
 });
 
+test('production accepts an already-exists acknowledgment linked to an Admin correction RowID', async () => {
+  const input = row();
+  const linkedRecordId = 'gib-admin-not-synced-correction';
+  const response = await handleKioskSync(request({ body: { rows: [input] } }), {
+    env: PRODUCTION_ENV,
+    now: NOW_MS,
+    dateNow: NOW,
+    fetch: async () => googleResponse([
+      result(input, 'already exists', linkedRecordId)
+    ])
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await body(response), {
+    ok: true,
+    production: true,
+    results: [{
+      rowId: input.RowID,
+      result: 'already exists',
+      linkedRecordId
+    }]
+  });
+});
+
 test('production simulation cannot reach TEST and browser overrides fail before Google', async () => {
   const input = row();
   let calls = 0;

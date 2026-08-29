@@ -299,13 +299,18 @@ test('Richmond client is fixed to its site, official schedule, remote Daily Revi
   assert.doesNotMatch(kioskHtml, /phase: 'disabled'/u);
   assert.match(kioskHtml, /if \(BACKEND_ENABLED && localStorage\.getItem\(SYNC_AUTO_KEY\) === 'true'\)/u);
   assert.match(kioskHtml, /if \(IS_RICHMOND && !IS_RICHMOND_PRODUCTION && localStorage\.getItem\(SYNC_AUTO_KEY\) === null\)[\s\S]*localStorage\.setItem\(SYNC_AUTO_KEY, 'true'\)/u);
-  assert.match(kioskHtml, /window\.addEventListener\('online',[\s\S]*loadSyncQueue\(\)\.length[\s\S]*syncNow\(\)/u);
-  assert.match(kioskHtml, /navigator\.onLine !== false[\s\S]*window\.setTimeout\(syncNow, 0\)/u);
+  assert.match(kioskHtml, /function resumeInstructorSync\(\)[\s\S]*navigator\.onLine === false[\s\S]*loadSyncQueue\(\)\.length[\s\S]*window\.setTimeout\(syncNow, 0\)/u);
+  assert.match(kioskHtml, /if \(BACKEND_ENABLED && \(!IS_RICHMOND_PRODUCTION \|\| RICHMOND_WRITES_ENABLED\)\)[\s\S]*window\.addEventListener\('online',[\s\S]*resumeInstructorSync\(\)/u);
+  assert.match(kioskHtml, /window\.setInterval\(resumeInstructorSync, INSTRUCTOR_SYNC_RETRY_INTERVAL_MS\)/u);
   assert.match(kioskHtml, /\$\('#dailyReviewLink'\)\.href = '\/m1\/admin\/'/u);
   assert.match(kioskHtml, /Rows sync only to the dedicated Richmond TEST Sheet/u);
   assert.match(staffClient, /typeof installationProfile\.installationId === 'string'[\s\S]*featureFlags\?\.staffClock === true[\s\S]*initializeStaffClockClient\(\)/u);
   assert.doesNotMatch(staffClient, /installationProfile\.installationId === 'rev'/u);
   assert.match(kioskHtml, /html:not\(\[data-m1-staff-clock="true"\]\) #staffClock/u);
+  assert.match(kioskHtml, /const TEST_BUILD = IS_RICHMOND\s*\? '2026-08-29 RICHMOND M1 TEST sign-in-sync-recovery-candidate'\s*: '2026-08-29 M1B TEST sign-in-sync-recovery-candidate';/u);
+  assert.match(kioskHtml, /build: '2026-08-29 RICHMOND M1 PRODUCTION sign-in-sync-recovery'/u);
+  assert.match(kioskHtml, /build: '2026-08-29 RICHMOND M1 PRODUCTION CANDIDATE — WRITES DISABLED'/u);
+  assert.match(kioskHtml, /const PRODUCTION_BUILD = '2026-08-29 M1B PRODUCTION sign-in-sync-recovery';/u);
 });
 
 test('Richmond runtime accepts only its dedicated TEST origin and credentials', () => {

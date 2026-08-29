@@ -334,6 +334,49 @@ function adminAddition(overrides = {}) {
   };
 }
 
+function lateNotSyncedKioskRequest(overrides = {}) {
+  return {
+    token: 'receiver-token',
+    action: 'kioskSignIn',
+    target: 'production',
+    rows: [kioskRow({
+      RowID: 'gib-m1-cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      Timestamp: '2026-07-25 09:42:17',
+      ...overrides
+    })]
+  };
+}
+
+function assertInvalidNotSyncedAuditFallsBackToReview(mutateAudit) {
+  const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
+  const added = harness.post(adminAddition({ reason: 'Not Synced' }));
+  assert.equal(added.result, 'added');
+  mutateAudit(harness.audit);
+  const auditAfterMutation = structuredClone(harness.audit.values);
+  const request = lateNotSyncedKioskRequest();
+
+  const first = harness.post(request);
+  assert.deepEqual(first.results, [{
+    rowId: request.rows[0].RowID,
+    result: 'review required',
+    linkedRecordId: added.linkedRecordId
+  }]);
+  assert.deepEqual(harness.audit.values, auditAfterMutation);
+  assert.equal(harness.signins.values.length, 3);
+  assert.equal(harness.signins.values[2][7], 'Kiosk collision review');
+  assert.equal(harness.signins.values[2][10], 'REVIEW');
+
+  const signinsAfterReview = structuredClone(harness.signins.values);
+  const retry = harness.post(request);
+  assert.deepEqual(retry.results, [{
+    rowId: request.rows[0].RowID,
+    result: 'already exists',
+    linkedRecordId: request.rows[0].RowID
+  }]);
+  assert.deepEqual(harness.signins.values, signinsAfterReview);
+  assert.deepEqual(harness.audit.values, auditAfterMutation);
+}
+
 function recoveryRow(id, overrides = {}) {
   return {
     RecoveryID: id,
@@ -998,7 +1041,7 @@ test('Deploy Preview rejects real instructor input before Google', async () => {
   assert.equal(calls, 0);
 });
 
-test('Admin-first delayed kiosk collisions are retained for audit and visibly held for review', () => {
+test('Admin-first delayed kiosk collisions for other reasons remain visibly held for review', () => {
   const adminFirst = receiverHarness({ adminActionToken: 'production-admin-token' });
   assert.equal(adminFirst.post(adminAddition()).result, 'added');
   const delayedRequest = {
@@ -1038,6 +1081,73 @@ test('Admin-first delayed kiosk collisions are retained for audit and visibly he
   assert.equal(kioskFirst.post(adminAddition()).result, 'already exists');
   assert.equal(kioskFirst.signins.values.length, 2);
   assert.equal(kioskFirst.audit.values.length, 2);
+});
+
+test('a Not Synced Admin correction consumes the matching late kiosk event without a second payable row', () => {
+  const harness = receiverHarness({ adminActionToken: 'production-admin-token' });
+  const addition = adminAddition({ reason: 'nOt   SyNcEd' });
+  const added = harness.post(addition);
+  assert.equal(added.result, 'added');
+  assert.equal(added.linkedRecordId, 'gib-admin-qa-admin-one');
+  assert.equal(harness.signins.values.length, 2);
+  assert.equal(harness.audit.values.length, 2);
+
+  const signinsAfterAdmin = structuredClone(harness.signins.values);
+  const auditAfterAdmin = structuredClone(harness.audit.values);
+  const delayedRequest = lateNotSyncedKioskRequest();
+
+  const first = harness.post(delayedRequest);
+  const retry = harness.post(delayedRequest);
+  for (const response of [first, retry]) {
+    assert.equal(response.ok, true);
+    assert.deepEqual(response.results, [{
+      rowId: delayedRequest.rows[0].RowID,
+      result: 'already exists',
+      linkedRecordId: added.linkedRecordId
+    }]);
+  }
+  assert.deepEqual(harness.signins.values, signinsAfterAdmin);
+  assert.deepEqual(harness.audit.values, auditAfterAdmin);
+
+  const review = harness.post({
+    token: 'receiver-token',
+    adminActionToken: 'production-admin-token',
+    action: 'dailyReview',
+    target: 'production',
+    date: addition.date
+  });
+  assert.equal(review.ok, true);
+  assert.equal(review.records.length, 1);
+  assert.equal(review.records[0].recordId, added.linkedRecordId);
+  assert.equal(review.records[0].source, 'Admin-added');
+  assert.equal(review.records[0].reviewRequired, false);
+  assert.equal(review.auditHistory.length, 1);
+  assert.equal(review.auditHistory[0].linkedRecordId, added.linkedRecordId);
+  assert.equal(review.auditHistory[0].result, 'added');
+  assert.equal(review.records.filter(record => record.reviewRequired).length, 0);
+  assert.equal(harness.signins.values.slice(1).filter(row => row[10] !== 'VOID').length, 1);
+});
+
+test('an orphaned Not Synced Admin row does not consume a late kiosk event', () => {
+  assertInvalidNotSyncedAuditFallsBackToReview(audit => audit.deleteRow(2));
+});
+
+test('duplicate linked Admin audits do not consume a late kiosk event', () => {
+  assertInvalidNotSyncedAuditFallsBackToReview(audit => {
+    audit.appendRow([...audit.values[1]]);
+  });
+});
+
+test('a malformed linked Admin audit does not consume a late kiosk event', () => {
+  assertInvalidNotSyncedAuditFallsBackToReview(audit => {
+    audit.values[1][2] = 'not a timestamp';
+  });
+});
+
+test('a mismatched linked Admin audit does not consume a late kiosk event', () => {
+  assertInvalidNotSyncedAuditFallsBackToReview(audit => {
+    audit.values[1][3] = 'Different Instructor';
+  });
 });
 
 test('Daily Review browser visibly labels possible Admin and kiosk duplicates', () => {

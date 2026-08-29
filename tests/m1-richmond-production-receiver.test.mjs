@@ -40,6 +40,7 @@ function makeSheet(name, initialRows) {
   return {
     name,
     values,
+    appendRow(row) { values.push([...row]); },
     getName: () => name,
     getDataRange: () => ({ getValues: () => values.map(row => [...row]) }),
     getLastRow: () => values.length,
@@ -348,6 +349,52 @@ test('the Apps Script write gate must be explicitly enabled after provisioning',
   assert.equal(enabled.target, 'production');
   assert.equal(enabled.results[0].result, 'added');
   assert.equal(harness.signins.values.length, 2);
+});
+
+test('Richmond shares the Not Synced late-event replacement without adding a payable duplicate', () => {
+  const harness = createHarness();
+  harness.properties.set('GIB_M1_RICHMOND_PRODUCTION_WRITES_ENABLED', 'true');
+  const addition = productionRequest('addMissedInstructor', {
+    requestId: 'richmond-not-synced',
+    adminName: 'Andrew Smith',
+    date: '2026-08-21',
+    classLabel: kioskRow()['Class Label'],
+    duration: 1,
+    instructor: kioskRow().Instructor,
+    site: 'Richmond',
+    notes: '',
+    reason: 'Not Synced'
+  });
+  const added = harness.post(addition);
+  assert.equal(added.result, 'added');
+  assert.equal(added.linkedRecordId, 'gib-admin-richmond-not-synced');
+
+  const signinsAfterAdmin = structuredClone(harness.signins.values);
+  const auditAfterAdmin = structuredClone(harness.audit.values);
+  const lateRequest = productionRequest('kioskSignIn', {
+    rows: [kioskRow({
+      RowID: 'gib-m1-22222222-2222-4222-8222-222222222222',
+      Timestamp: '2026-08-21 05:58:12'
+    })]
+  });
+  const first = harness.post(lateRequest);
+  const retry = harness.post(lateRequest);
+
+  assert.deepEqual(first.results, [{
+    rowId: lateRequest.rows[0].RowID,
+    result: 'already exists',
+    linkedRecordId: added.linkedRecordId
+  }]);
+  assert.deepEqual(retry.results, first.results);
+  assert.deepEqual(harness.signins.values, signinsAfterAdmin);
+  assert.deepEqual(harness.audit.values, auditAfterAdmin);
+
+  const review = harness.post(productionRequest('dailyReview', { date: addition.date }));
+  assert.equal(review.records.length, 1);
+  assert.equal(review.records[0].recordId, added.linkedRecordId);
+  assert.equal(review.records[0].reviewRequired, false);
+  assert.equal(review.auditHistory.length, 1);
+  assert.equal(review.auditHistory[0].linkedRecordId, added.linkedRecordId);
 });
 
 test('one-time provisioning binds only the exact empty production Sheet and fixes writes OFF', () => {

@@ -738,8 +738,12 @@
             <summary>Staff Time records</summary>
             <div id="staffTimeRecords" class="staff-time-list"></div>
             <h3>Completed shift history</h3>
-            <div id="staffCompletedShiftHistory" class="staff-time-list"></div>
+            <div id="staffCompletedShiftHistory" class="staff-time-list" aria-live="polite" aria-busy="false">
+              <div class="empty">Sign in to load completed shift history.</div>
+            </div>
             <div class="staff-history-controls">
+              <button id="staffTimeHistoryRetry" class="btn ghost small" type="button"
+                aria-controls="staffCompletedShiftHistory" hidden>Retry completed shift history</button>
               <button id="staffTimeOlderHistory" class="btn ghost small" type="button"
                 aria-controls="staffCompletedShiftHistory" hidden>Load older completed shifts</button>
               <span id="staffTimeHistoryScope" class="record-detail"></span>
@@ -879,6 +883,11 @@
       const STAFF_TIME_RECORD_LIMIT = 500;
       const STAFF_TIME_ATTENTION_LIMIT = 600;
       const STAFF_TIME_AUDIT_LIMIT = 500;
+      const STAFF_TIME_READ_TIMEOUT_MS = 25_000;
+      const STAFF_TIME_READ_REQUEST_OPTIONS = Object.freeze({
+        timeoutMs: STAFF_TIME_READ_TIMEOUT_MS,
+        timeoutMessage: 'Staff Time took too long to load. Retry completed shift history below.'
+      });
       const MIN_CLASSES_BY_DAY = Object.freeze(IS_RICHMOND
         ? Object.fromEntries(SCHEDULE_DAYS.map(day => [day, 1]))
         : {
@@ -911,7 +920,10 @@
       let staffTimeLoadGeneration = 0;
       let currentStaffHistoryPage = null;
       let staffHistoryReceiverUnavailable = false;
+      let staffHistoryInitialLoading = false;
+      let staffHistoryLoadError = '';
       let staffHistoryPageLoading = false;
+      let staffHistoryPageError = '';
       let diagnosticWindow = null;
       let diagnosticRunId = '';
       let diagnosticPurpose = '';
@@ -2343,7 +2355,7 @@
             viewToken: initial.view.token,
             stream,
             offset
-          });
+          }, STAFF_TIME_READ_REQUEST_OPTIONS);
           if (generation !== staffTimeLoadGeneration) return null;
           if (!validStaffTimeReviewPageResponse(page, {
             viewToken: initial.view.token,
@@ -2382,7 +2394,7 @@
           operation: 'historyPage',
           viewToken: expected.viewToken,
           offset: expected.offset
-        });
+        }, STAFF_TIME_READ_REQUEST_OPTIONS);
         if (generation !== staffTimeLoadGeneration) return null;
         if (!validStaffTimeHistoryPageResponse(page, expected)) {
           throw new Error('Staff time returned an incomplete completed-shift history page. Nothing was changed.');
@@ -2417,7 +2429,11 @@
       }
 
       async function loadStaffTimeReviewOnce(generation) {
-        const initial = await requestJson(API.staffTime, { operation: 'review' });
+        const initial = await requestJson(
+          API.staffTime,
+          { operation: 'review' },
+          STAFF_TIME_READ_REQUEST_OPTIONS
+        );
         if (generation !== staffTimeLoadGeneration) return null;
         if (!validStaffTimeReviewStartResponse(initial)) {
           throw new Error('Staff time returned an incomplete response. Nothing was changed.');
@@ -2447,10 +2463,20 @@
         try {
           historyPage = await fetchStaffTimeHistoryPage(initial, 0, generation);
         } catch (error) {
-          if (!validStaffTimeHistoryUnavailableError(error)) throw error;
-          staffHistoryReceiverUnavailable = true;
+          if (generation !== staffTimeLoadGeneration) return null;
+          if (
+            error.status === 401
+            || error.status === 403
+            || validStaffTimeStaleError(error)
+          ) throw error;
+          if (validStaffTimeHistoryUnavailableError(error)) {
+            staffHistoryReceiverUnavailable = true;
+          } else {
+            staffHistoryLoadError = `Completed shift history could not be loaded. ${clean(error.message)
+              || 'The request did not complete.'}`;
+          }
         }
-        if (!historyPage && !staffHistoryReceiverUnavailable) return null;
+        if (generation !== staffTimeLoadGeneration) return null;
         const review = assembleStaffTimeReview(initial, records, needsAttention, audit);
         currentStaffHistoryPage = historyPage;
         return review;
@@ -3202,20 +3228,41 @@
         }
       }
 
-      async function requestJson(url, body) {
+      async function requestJson(url, body, options = {}) {
         const headers = { 'Content-Type': 'application/json' };
         if (adminRequestToken) headers[ADMIN_REQUEST_HEADER] = adminRequestToken;
-        const response = await fetch(url, {
-          method: 'POST',
-          headers,
-          credentials: 'same-origin',
-          mode: 'same-origin',
-          redirect: 'error',
-          cache: 'no-store',
-          body: JSON.stringify(body)
-        });
+        const timeoutMs = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0
+          ? options.timeoutMs
+          : 0;
+        const controller = timeoutMs ? new AbortController() : null;
+        const timeoutId = controller
+          ? window.setTimeout(() => controller.abort(), timeoutMs)
+          : 0;
+        let response;
         let data = null;
-        try { data = await response.json(); } catch {}
+        try {
+          response = await fetch(url, {
+            method: 'POST',
+            headers,
+            credentials: 'same-origin',
+            mode: 'same-origin',
+            redirect: 'error',
+            cache: 'no-store',
+            body: JSON.stringify(body),
+            ...(controller ? { signal: controller.signal } : {})
+          });
+          try { data = await response.json(); } catch {}
+        } catch (error) {
+          if (controller?.signal.aborted) {
+            const timeoutError = new Error(clean(options.timeoutMessage)
+              || 'The request took too long to complete.');
+            timeoutError.code = 'REQUEST_TIMEOUT';
+            throw timeoutError;
+          }
+          throw error;
+        } finally {
+          if (timeoutId) window.clearTimeout(timeoutId);
+        }
         if (!response.ok || !data || data.ok !== true) {
           const error = new Error(data && data.message ? data.message : 'The request did not complete.');
           error.status = response.status;
@@ -3237,7 +3284,10 @@
         currentStaffTime = null;
         currentStaffHistoryPage = null;
         staffHistoryReceiverUnavailable = false;
+        staffHistoryInitialLoading = false;
+        staffHistoryLoadError = '';
         staffHistoryPageLoading = false;
+        staffHistoryPageError = '';
         currentAdminName = '';
         adminRequestToken = '';
         $('#appPanel').hidden = true;
@@ -3256,7 +3306,9 @@
         $('#staffNeedsAttentionSection').hidden = true;
         $('#staffPeriodTotals').replaceChildren();
         $('#staffTimeRecords').replaceChildren();
-        $('#staffCompletedShiftHistory').replaceChildren();
+        $('#staffCompletedShiftHistory').replaceChildren(staffEmpty('Sign in to load completed shift history.'));
+        $('#staffCompletedShiftHistory').setAttribute('aria-busy', 'false');
+        $('#staffTimeHistoryRetry').hidden = true;
         $('#staffTimeOlderHistory').hidden = true;
         $('#staffTimeOlderHistory').disabled = false;
         $('#staffTimeOlderHistory').textContent = 'Load older completed shifts';
@@ -3307,6 +3359,7 @@
           adminRequestToken = data.requestToken;
           $('#loginPassphrase').value = '';
           setLoggedIn(data);
+          if (STAFF_CLOCK_ENABLED) beginStaffTimeHistoryLoading();
           await loadReview(defaultYesterday());
           if (STAFF_CLOCK_ENABLED) {
             await loadStaffTime();
@@ -3638,20 +3691,46 @@
         return row;
       }
 
+      function beginStaffTimeHistoryLoading() {
+        currentStaffTime = null;
+        currentStaffHistoryPage = null;
+        staffHistoryReceiverUnavailable = false;
+        staffHistoryInitialLoading = true;
+        staffHistoryLoadError = '';
+        staffHistoryPageLoading = false;
+        staffHistoryPageError = '';
+        renderStaffTimeHistory();
+      }
+
       function renderStaffTimeHistory() {
         const page = currentStaffHistoryPage;
         const history = $('#staffCompletedShiftHistory');
+        const retry = $('#staffTimeHistoryRetry');
         const toggle = $('#staffTimeOlderHistory');
-        if (!page) {
-          history.replaceChildren(staffEmpty(staffHistoryReceiverUnavailable
-            ? 'Completed shift history is temporarily unavailable until the matching Staff Clock receiver is active. Current Staff time remains visible; nothing changed.'
-            : 'Completed shift history is unavailable.'));
+        if (staffHistoryInitialLoading) {
+          history.setAttribute('aria-busy', 'true');
+          history.replaceChildren(staffEmpty('Loading completed shift history…'));
+          retry.hidden = true;
           toggle.hidden = true;
-          $('#staffTimeHistoryScope').textContent = staffHistoryReceiverUnavailable
-            ? 'History requires the matching receiver release.'
-            : '';
+          toggle.disabled = false;
+          toggle.textContent = 'Load older completed shifts';
+          $('#staffTimeHistoryScope').textContent = 'Loading the first completed-shift page…';
           return;
         }
+        history.setAttribute('aria-busy', 'false');
+        if (!page) {
+          const message = staffHistoryLoadError || (staffHistoryReceiverUnavailable
+            ? 'Completed shift history is temporarily unavailable until the matching Staff Clock receiver is active. Current Staff time remains visible; nothing changed.'
+            : 'Completed shift history could not be loaded.');
+          history.replaceChildren(staffEmpty(message));
+          retry.hidden = false;
+          toggle.hidden = true;
+          $('#staffTimeHistoryScope').textContent = staffHistoryReceiverUnavailable
+            ? 'History requires the matching receiver release. Retry after it is active.'
+            : 'Completed shift history did not load. Retry below.';
+          return;
+        }
+        retry.hidden = true;
         history.replaceChildren(...page.items.map(staffCompletedShiftElement));
         if (page.total === 0) {
           history.appendChild(staffEmpty('No completed shifts yet.'));
@@ -3661,9 +3740,12 @@
           const last = page.offset + page.items.length;
           $('#staffTimeHistoryScope').textContent = `Showing completed shifts ${first.toLocaleString('en-US')}–${last.toLocaleString('en-US')} of ${page.total.toLocaleString('en-US')}, newest first.`;
         }
+        if (staffHistoryPageError) history.appendChild(staffEmpty(staffHistoryPageError));
         toggle.hidden = page.nextOffset === null;
         toggle.disabled = staffHistoryPageLoading;
-        toggle.textContent = staffHistoryPageLoading ? 'Loading…' : 'Load older completed shifts';
+        toggle.textContent = staffHistoryPageLoading
+          ? 'Loading…'
+          : staffHistoryPageError ? 'Retry older completed shifts' : 'Load older completed shifts';
       }
 
       function renderStaffTime(data) {
@@ -4404,9 +4486,7 @@
 
       async function loadStaffTime(options = {}) {
         const generation = ++staffTimeLoadGeneration;
-        currentStaffHistoryPage = null;
-        staffHistoryReceiverUnavailable = false;
-        staffHistoryPageLoading = false;
+        beginStaffTimeHistoryLoading();
         if (options.quiet !== true) {
           $('#staff-time').classList.add('loading');
           showMessage($('#staffTimeMessage'), 'Loading Staff time…', 'working');
@@ -4415,6 +4495,7 @@
           const data = await loadStaffTimeReviewView(generation);
           if (generation !== staffTimeLoadGeneration) return false;
           if (!data) return false;
+          staffHistoryInitialLoading = false;
           renderStaffTime(data);
           showMessage($('#staffTimeMessage'), '');
           setStaffCorrectionDefaults();
@@ -4424,11 +4505,53 @@
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
           } else {
+            staffHistoryInitialLoading = false;
+            staffHistoryLoadError = `Completed shift history could not be loaded. ${clean(error.message)
+              || 'The request did not complete.'}`;
+            renderStaffTimeHistory();
             showMessage($('#staffTimeMessage'), error.message);
           }
           return false;
         } finally {
           if (generation === staffTimeLoadGeneration) $('#staff-time').classList.remove('loading');
+        }
+      }
+
+      async function retryStaffTimeHistory() {
+        if (staffHistoryPageLoading || staffHistoryInitialLoading) return;
+        if (!currentStaffTime) {
+          await loadStaffTime();
+          return;
+        }
+        const generation = staffTimeLoadGeneration;
+        staffHistoryInitialLoading = true;
+        staffHistoryLoadError = '';
+        staffHistoryReceiverUnavailable = false;
+        staffHistoryPageLoading = true;
+        staffHistoryPageError = '';
+        renderStaffTimeHistory();
+        try {
+          const page = await fetchStaffTimeHistoryPage(currentStaffTime, 0, generation);
+          if (!page || generation !== staffTimeLoadGeneration) return;
+          currentStaffHistoryPage = page;
+        } catch (error) {
+          if (generation !== staffTimeLoadGeneration) return;
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Admin login required.');
+          } else if (validStaffTimeStaleError(error)) {
+            await loadStaffTime({ quiet: true });
+          } else if (validStaffTimeHistoryUnavailableError(error)) {
+            staffHistoryReceiverUnavailable = true;
+          } else {
+            staffHistoryLoadError = `Completed shift history could not be loaded. ${clean(error.message)
+              || 'The request did not complete.'}`;
+          }
+        } finally {
+          if (generation === staffTimeLoadGeneration) {
+            staffHistoryInitialLoading = false;
+            staffHistoryPageLoading = false;
+            renderStaffTimeHistory();
+          }
         }
       }
 
@@ -4441,6 +4564,7 @@
         ) return;
         const generation = staffTimeLoadGeneration;
         staffHistoryPageLoading = true;
+        staffHistoryPageError = '';
         renderStaffTimeHistory();
         try {
           const page = await fetchStaffTimeHistoryPage(
@@ -4450,6 +4574,7 @@
           );
           if (!page || generation !== staffTimeLoadGeneration) return;
           currentStaffHistoryPage = page;
+          showMessage($('#staffTimeMessage'), '');
         } catch (error) {
           if (generation !== staffTimeLoadGeneration) return;
           if (error.status === 401 || error.status === 403) {
@@ -4457,6 +4582,8 @@
           } else if (validStaffTimeStaleError(error)) {
             await loadStaffTime({ quiet: true });
           } else {
+            staffHistoryPageError = `Older completed shifts could not be loaded. ${clean(error.message)
+              || 'The request did not complete.'}`;
             showMessage($('#staffTimeMessage'), error.message);
           }
         } finally {
@@ -5209,6 +5336,7 @@
         event.preventDefault();
         submitStaffCorrection(event.currentTarget);
       });
+      $('#staffTimeHistoryRetry').addEventListener('click', retryStaffTimeHistory);
       $('#staffTimeOlderHistory').addEventListener('click', loadOlderStaffTimeHistory);
       ['#staffTimeRecords', '#staffCompletedShiftHistory'].forEach(selector => {
         $(selector).addEventListener('click', event => {

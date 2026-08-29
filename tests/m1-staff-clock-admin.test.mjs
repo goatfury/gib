@@ -387,7 +387,10 @@ function renderStaffTimeRuntime(data, {
     let currentStaffTime = null;
     let currentStaffHistoryPage = historyPage;
     let staffHistoryReceiverUnavailable = historyReceiverUnavailable;
+    let staffHistoryInitialLoading = false;
+    let staffHistoryLoadError = '';
     let staffHistoryPageLoading = false;
+    let staffHistoryPageError = '';
     const document = { createElement };
     function $(selector) {
       if (!nodes[selector]) nodes[selector] = createElement('div');
@@ -466,6 +469,11 @@ async function runPagination(initial, streams, {
     const STAFF_TIME_RECORD_LIMIT = 500;
     const STAFF_TIME_ATTENTION_LIMIT = 600;
     const STAFF_TIME_AUDIT_LIMIT = 500;
+    const STAFF_TIME_READ_TIMEOUT_MS = 25_000;
+    const STAFF_TIME_READ_REQUEST_OPTIONS = Object.freeze({
+      timeoutMs: STAFF_TIME_READ_TIMEOUT_MS,
+      timeoutMessage: 'Staff Time took too long to load. Retry completed shift history below.'
+    });
     const SITE = 'Rev';
     const API = { staffTime: '/staff-time' };
     let testMode = true;
@@ -775,7 +783,10 @@ test('Staff time reuses the existing secured Admin request path and loads only a
   assert.match(pagingSource, /requestJson\(API\.staffTime, \{\s*operation: 'historyPage'/u);
   assert.match(pagingSource, /validStaffTimeHistoryPageResponse\(page, expected\)/u);
   assert.match(pagingSource, /fetchStaffTimeHistoryPage\(initial, 0, generation\)/u);
-  assert.match(pagingSource, /requestJson\(API\.staffTime, \{ operation: 'review' \}\)/u);
+  assert.match(
+    pagingSource,
+    /requestJson\(\s*API\.staffTime,\s*\{ operation: 'review' \},\s*STAFF_TIME_READ_REQUEST_OPTIONS/u
+  );
   assert.match(pagingSource, /validStaffTimeReviewStartResponse\(initial\)/u);
   const loadSource = sourceBetween(adminHtml, 'async function loadStaffTime(', 'async function submitStaffCorrection(');
   assert.match(loadSource, /loadStaffTimeReviewView\(generation\)/u);
@@ -1149,6 +1160,7 @@ test('TEST Admin entry preserves the direct Staff Time hash and focuses it after
       return { requestToken: 'a'.repeat(32), adminName: body.adminName, test: true };
     }
     function setLoggedIn() { nodes['#appPanel'].hidden = false; events.push('logged-in'); }
+    function beginStaffTimeHistoryLoading() { events.push('history-loading'); }
     function defaultYesterday() { return '2026-08-26'; }
     async function loadReview() { events.push('review-loaded'); }
     async function loadStaffTime() { events.push('staff-loaded'); }
@@ -1164,7 +1176,10 @@ test('TEST Admin entry preserves the direct Staff Time hash and focuses it after
     passphrase: '',
     testShortcut: true
   });
-  assert.deepEqual(Array.from(context.events), ['logged-in', 'review-loaded', 'staff-loaded']);
+  assert.deepEqual(
+    Array.from(context.events),
+    ['logged-in', 'history-loading', 'review-loaded', 'staff-loaded']
+  );
   assert.equal(nodes['#staff-time'].open, true);
   assert.equal(nodes['#staff-time'].focused, true);
   assert.equal(nodes['#staff-time'].scrolled, true);
@@ -1494,6 +1509,288 @@ test('a stale Staff time page restarts the whole view once', async () => {
   );
 });
 
+test('completed-shift history never stays silently blank across login loading, timeout, retry, and stale response', async () => {
+  const beginSource = sourceBetween(
+    adminHtml,
+    'function beginStaffTimeHistoryLoading()',
+    'function renderStaffTimeHistory()'
+  );
+  const renderSource = sourceBetween(
+    adminHtml,
+    'function renderStaffTimeHistory()',
+    'function renderStaffTime(data)'
+  );
+  const loadSource = sourceBetween(
+    adminHtml,
+    'async function loadStaffTime(options = {})',
+    'async function loadOlderStaffTimeHistory()'
+  );
+  const olderSource = sourceBetween(
+    adminHtml,
+    'async function loadOlderStaffTimeHistory()',
+    'async function submitStaffCorrection('
+  );
+  const retryBinding = sourceBetween(
+    adminHtml,
+    "$('#staffTimeHistoryRetry').addEventListener",
+    "$('#staffTimeOlderHistory').addEventListener"
+  );
+
+  class FakeElement {
+    constructor() {
+      this.attributes = {};
+      this.children = [];
+      this.classList = {
+        values: new Set(),
+        add: value => this.classList.values.add(value),
+        remove: value => this.classList.values.delete(value)
+      };
+      this.disabled = false;
+      this.hidden = false;
+      this.listeners = {};
+      this.textContent = '';
+    }
+
+    addEventListener(type, listener) {
+      this.listeners[type] = listener;
+    }
+
+    appendChild(child) {
+      this.children.push(child);
+      return child;
+    }
+
+    replaceChildren(...children) {
+      this.children = [...children];
+    }
+
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    }
+  }
+
+  let resolveInitial;
+  const initialPromise = new Promise(resolve => { resolveInitial = resolve; });
+  const loadViewResponses = [initialPromise];
+  const historyResponses = [];
+  const nodes = Object.fromEntries([
+    '#staff-time',
+    '#staffCompletedShiftHistory',
+    '#staffTimeHistoryRetry',
+    '#staffTimeOlderHistory',
+    '#staffTimeHistoryScope',
+    '#staffTimeMessage'
+  ].map(selector => [selector, new FakeElement()]));
+  nodes['#staffTimeHistoryRetry'].hidden = true;
+  nodes['#staffTimeOlderHistory'].hidden = true;
+  const context = vm.createContext({
+    loadViewResponses,
+    historyResponses,
+    nodes,
+    retryCalls: [],
+    loadViewCalls: 0,
+    createElement: () => new FakeElement()
+  });
+  new vm.Script(`
+    let currentStaffTime = null;
+    let staffTimeLoadGeneration = 0;
+    let currentStaffHistoryPage = null;
+    let staffHistoryReceiverUnavailable = false;
+    let staffHistoryInitialLoading = false;
+    let staffHistoryLoadError = '';
+    let staffHistoryPageLoading = false;
+    let staffHistoryPageError = '';
+    function $(selector) { return nodes[selector]; }
+    function clean(value) {
+      return String(value == null ? '' : value).normalize('NFKC').trim().replace(/\\s+/g, ' ');
+    }
+    function staffEmpty(message) {
+      const element = createElement();
+      element.textContent = message;
+      return element;
+    }
+    function staffCompletedShiftElement(shift) {
+      const element = createElement();
+      element.textContent = shift.clockIn.staffName + ' · Completed shift';
+      return element;
+    }
+    function showMessage(element, message) { element.textContent = message || ''; }
+    function setLoggedOut(message) { nodes['#staffTimeMessage'].textContent = message; }
+    function setStaffCorrectionDefaults() {}
+    function validStaffTimeStaleError() { return false; }
+    function validStaffTimeHistoryUnavailableError() { return false; }
+    async function loadStaffTimeReviewView() {
+      loadViewCalls += 1;
+      const outcome = await loadViewResponses.shift();
+      currentStaffHistoryPage = outcome.page;
+      staffHistoryReceiverUnavailable = outcome.receiverUnavailable === true;
+      staffHistoryLoadError = outcome.errorMessage || '';
+      return outcome.data;
+    }
+    async function fetchStaffTimeHistoryPage(initial, offset, generation) {
+      retryCalls.push({ viewToken: initial.view.token, offset, generation });
+      return await historyResponses.shift();
+    }
+    function renderStaffTime(data) {
+      currentStaffTime = data;
+      renderStaffTimeHistory();
+    }
+    ${beginSource}
+    ${renderSource}
+    ${loadSource}
+    ${olderSource}
+    ${retryBinding}
+    globalThis.hooks = {
+      beginStaffTimeHistoryLoading,
+      loadStaffTime,
+      loadOlderStaffTimeHistory,
+      retryStaffTimeHistory,
+      forceRetry(message) {
+        currentStaffHistoryPage = null;
+        staffHistoryLoadError = message;
+        renderStaffTimeHistory();
+      },
+      installNewerSession(data, page) {
+        staffTimeLoadGeneration += 1;
+        currentStaffTime = data;
+        currentStaffHistoryPage = page;
+        staffHistoryInitialLoading = false;
+        staffHistoryLoadError = '';
+        staffHistoryPageLoading = false;
+        staffHistoryPageError = '';
+        renderStaffTimeHistory();
+      }
+    };
+  `, { filename: 'staff-time-history-lifecycle.js' }).runInContext(context);
+
+  assert.equal(nodes['#staffCompletedShiftHistory'].children.length, 0);
+  assert.equal(nodes['#staffTimeHistoryScope'].textContent, '');
+  assert.equal(nodes['#staffTimeHistoryRetry'].hidden, true);
+  context.hooks.beginStaffTimeHistoryLoading();
+  assert.match(elementText(nodes['#staffCompletedShiftHistory']), /Loading completed shift history/u);
+  assert.match(nodes['#staffTimeHistoryScope'].textContent, /Loading the first/u);
+  assert.equal(nodes['#staffCompletedShiftHistory'].attributes['aria-busy'], 'true');
+
+  const data = { view: { token: VIEW_TOKEN } };
+  const pendingLoad = context.hooks.loadStaffTime();
+  assert.match(elementText(nodes['#staffCompletedShiftHistory']), /Loading completed shift history/u);
+  resolveInitial({
+    data,
+    page: null,
+    errorMessage: 'Completed shift history could not be loaded. Staff Time took too long to load.'
+  });
+  assert.equal(await pendingLoad, true);
+  assert.match(elementText(nodes['#staffCompletedShiftHistory']), /took too long/u);
+  assert.equal(nodes['#staffTimeHistoryRetry'].hidden, false);
+  assert.match(nodes['#staffTimeHistoryScope'].textContent, /did not load.*Retry below/u);
+  assert.equal(nodes['#staffCompletedShiftHistory'].attributes['aria-busy'], 'false');
+
+  const frontDeskShift = completedHistoryShift(980);
+  frontDeskShift.clockIn.staffName = 'Front Desk Test Three';
+  frontDeskShift.clockOut.staffName = 'Front Desk Test Three';
+  historyResponses.push(Promise.resolve(completedHistoryPage({
+    total: 2,
+    items: [frontDeskShift],
+    nextOffset: 1
+  })));
+  await nodes['#staffTimeHistoryRetry'].listeners.click();
+  assert.equal(context.loadViewCalls, 1, 'Retry reuses the retained view instead of reloading Staff Time');
+  assert.deepEqual(JSON.parse(JSON.stringify(context.retryCalls)), [{
+    viewToken: VIEW_TOKEN,
+    offset: 0,
+    generation: 1
+  }]);
+  assert.match(elementText(nodes['#staffCompletedShiftHistory']), /Front Desk Test Three/u);
+  assert.match(nodes['#staffTimeHistoryScope'].textContent, /Showing completed shifts 1–1 of 2/u);
+  assert.equal(nodes['#staffTimeOlderHistory'].hidden, false);
+  assert.equal(nodes['#staffTimeOlderHistory'].textContent, 'Load older completed shifts');
+  assert.equal(nodes['#staffTimeHistoryRetry'].hidden, true);
+
+  historyResponses.push(Promise.reject(new Error('Older page timed out.')));
+  await context.hooks.loadOlderStaffTimeHistory();
+  assert.match(elementText(nodes['#staffCompletedShiftHistory']), /Older page timed out/u);
+  assert.match(elementText(nodes['#staffCompletedShiftHistory']), /Front Desk Test Three/u);
+  assert.equal(nodes['#staffTimeOlderHistory'].hidden, false);
+  assert.equal(nodes['#staffTimeOlderHistory'].textContent, 'Retry older completed shifts');
+
+  const olderShift = completedHistoryShift(985);
+  olderShift.clockIn.staffName = 'Older Retained Shift';
+  olderShift.clockOut.staffName = 'Older Retained Shift';
+  historyResponses.push(Promise.resolve(completedHistoryPage({
+    offset: 1,
+    total: 2,
+    items: [olderShift],
+    nextOffset: null
+  })));
+  await context.hooks.loadOlderStaffTimeHistory();
+  assert.match(elementText(nodes['#staffCompletedShiftHistory']), /Older Retained Shift/u);
+  assert.doesNotMatch(elementText(nodes['#staffCompletedShiftHistory']), /Older page timed out/u);
+  assert.match(nodes['#staffTimeHistoryScope'].textContent, /Showing completed shifts 2–2 of 2/u);
+  assert.equal(nodes['#staffTimeOlderHistory'].hidden, true);
+  assert.equal(nodes['#staffTimeMessage'].textContent, '');
+
+  let resolveStale;
+  historyResponses.push(new Promise(resolve => { resolveStale = resolve; }));
+  context.hooks.forceRetry('Completed shift history could not be loaded. Retry.');
+  const staleRetry = nodes['#staffTimeHistoryRetry'].listeners.click();
+  const newerShift = completedHistoryShift(990);
+  newerShift.clockIn.staffName = 'Newer Session Shift';
+  newerShift.clockOut.staffName = 'Newer Session Shift';
+  const newerPage = completedHistoryPage({ items: [newerShift], total: 1 });
+  context.hooks.installNewerSession({ view: { token: 'b'.repeat(64) } }, newerPage);
+  const staleShift = completedHistoryShift(995);
+  staleShift.clockIn.staffName = 'Stale Retry Shift';
+  staleShift.clockOut.staffName = 'Stale Retry Shift';
+  resolveStale(completedHistoryPage({ items: [staleShift], total: 1 }));
+  await staleRetry;
+  assert.match(elementText(nodes['#staffCompletedShiftHistory']), /Newer Session Shift/u);
+  assert.doesNotMatch(elementText(nodes['#staffCompletedShiftHistory']), /Stale Retry Shift/u);
+
+  const retryCallsBeforeFullFailure = context.retryCalls.length;
+  loadViewResponses.push(Promise.reject(new Error('Full Staff Time timed out.')));
+  assert.equal(await context.hooks.loadStaffTime(), false);
+  assert.match(elementText(nodes['#staffCompletedShiftHistory']), /Full Staff Time timed out/u);
+  assert.equal(nodes['#staffTimeHistoryRetry'].hidden, false);
+  const fullReloadShift = completedHistoryShift(997);
+  fullReloadShift.clockIn.staffName = 'Full Reload Shift';
+  fullReloadShift.clockOut.staffName = 'Full Reload Shift';
+  loadViewResponses.push(Promise.resolve({
+    data: { view: { token: 'c'.repeat(64) } },
+    page: completedHistoryPage({
+      viewToken: 'c'.repeat(64),
+      items: [fullReloadShift],
+      total: 1
+    }),
+    errorMessage: ''
+  }));
+  await nodes['#staffTimeHistoryRetry'].listeners.click();
+  assert.equal(context.loadViewCalls, 3, 'A failed full refresh retries the full view');
+  assert.equal(
+    context.retryCalls.length,
+    retryCallsBeforeFullFailure,
+    'A failed full refresh never retries history against an older token'
+  );
+  assert.match(elementText(nodes['#staffCompletedShiftHistory']), /Full Reload Shift/u);
+  assert.equal(nodes['#staffTimeMessage'].textContent, '');
+
+  const requestSource = sourceBetween(adminHtml, 'async function requestJson(', 'function setLoggedOut(');
+  assert.match(requestSource, /new AbortController\(\)/u);
+  assert.match(requestSource, /controller\.abort\(\)/u);
+  assert.match(requestSource, /window\.clearTimeout\(timeoutId\)/u);
+  const readSource = sourceBetween(
+    adminHtml,
+    'async function fetchStaffTimeReviewStream(',
+    'function validStaffMutationResponse('
+  );
+  assert.equal((readSource.match(/STAFF_TIME_READ_REQUEST_OPTIONS/gu) || []).length, 3);
+  const mutationSource = sourceBetween(
+    adminHtml,
+    'async function submitStaffCorrection(',
+    'function readSigninVoidRequest('
+  );
+  assert.doesNotMatch(mutationSource, /requestJson\(API\.staffTime, request,\s*STAFF_TIME_READ_REQUEST_OPTIONS/u);
+});
+
 test('a legacy receiver rejection preserves the validated Admin summary while history stays unavailable', async () => {
   const review = reviewResponse();
   const initial = reviewStartResponse();
@@ -1523,7 +1820,11 @@ test('a legacy receiver rejection preserves the validated Admin summary while hi
     /temporarily unavailable until the matching Staff Clock receiver is active/u
   );
   assert.equal(nodes['#staffTimeOlderHistory'].hidden, true);
-  assert.equal(nodes['#staffTimeHistoryScope'].textContent, 'History requires the matching receiver release.');
+  assert.equal(
+    nodes['#staffTimeHistoryScope'].textContent,
+    'History requires the matching receiver release. Retry after it is active.'
+  );
+  assert.equal(nodes['#staffTimeHistoryRetry'].hidden, false);
 
   const canonical = {
     status: 502,
