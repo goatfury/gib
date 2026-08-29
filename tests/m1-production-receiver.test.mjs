@@ -26,6 +26,11 @@ const SIGNIN_HEADERS = Object.freeze([
   'Notes',
   'Status'
 ]);
+const ADMIN_AUDIT_HEADERS = Object.freeze([
+  'Action Number', 'Admin Name', 'Action Time', 'Instructor', 'Class Date',
+  'Class', 'Site', 'Duration', 'Required Reason', 'Final Result',
+  'Linked Sign-in Record ID'
+]);
 const STAFF_HEADERS = Object.freeze(['Staff ID', 'Staff Name', 'Active']);
 const STAFF_ROWS = Object.freeze([Object.freeze(['mandy', 'Mandy', true])]);
 const STAFF_TIME_HEADERS = Object.freeze([
@@ -70,6 +75,10 @@ function makeSheet(initialRows = [], onWrite = () => {}) {
   return {
     values,
     numberFormats,
+    appendRow(row) {
+      onWrite('appendRow');
+      values.push([...row]);
+    },
     get frozenRows() { return frozenRows; },
     deleteRow(rowNumber) {
       onWrite('deleteRow');
@@ -327,11 +336,18 @@ function createHarness({
       return sheets.get(name) || null;
     },
     insertSheet(name) {
-      assert.equal(name, 'Signins');
       recordSheetWrite('insertSheet');
-      signins = makeSheet([], recordSheetWrite);
-      sheets.set(name, signins);
-      return signins;
+      if (name === 'Signins') {
+        signins = makeSheet([], recordSheetWrite);
+        sheets.set(name, signins);
+        return signins;
+      }
+      if (name === 'Admin Audit') {
+        const adminAudit = makeSheet([], recordSheetWrite);
+        sheets.set(name, adminAudit);
+        return adminAudit;
+      }
+      assert.fail(`Unexpected sheet insertion: ${name}`);
     }
   };
   let files = Array.from({ length: driveMatchCount }, (_unused, index) => (
@@ -552,6 +568,52 @@ test('production accepts a real instructor and permanently replays one UUID only
   assert.equal(replay.results[0].result, 'already exists');
   assert.equal(harness.signins.values.length, 2);
   assert.equal(harness.signins.values[1][5], 'Real Instructor');
+});
+
+test('Revolution production preserves a first-fold Admin instant and fails ambiguous delayed work closed', () => {
+  const harness = createHarness({ nowIso: '2026-11-01T05:30:00.000Z' });
+  const event = kioskRow({
+    RowID: 'gib-m1-60606060-6060-4060-8060-606060606060',
+    Timestamp: '2026-11-01 01:15:00',
+    Date: '2026-11-01'
+  });
+  const added = harness.post({
+    token: harness.derivedToken,
+    adminActionToken: 'production-admin-token',
+    action: 'addMissedInstructor',
+    target: 'production',
+    requestId: 'rev-dst-not-synced',
+    adminName: 'Andrew Smith',
+    date: event.Date,
+    classLabel: event['Class Label'],
+    duration: event['Duration (hr)'],
+    instructor: event.Instructor,
+    site: event.Site,
+    notes: event.Notes,
+    reason: 'Not Synced'
+  });
+  assert.equal(added.result, 'added');
+  const audit = harness.sheets.get('Admin Audit');
+  assert.deepEqual(audit.values[0], [...ADMIN_AUDIT_HEADERS]);
+  assert.equal(audit.values[1][2], '2026-11-01T05:30:00.000Z');
+  assert.equal(audit.numberFormats.get('2:3'), '@');
+
+  const signinsBefore = structuredClone(harness.signins.values);
+  const auditBefore = structuredClone(audit.values);
+  const request = {
+    token: harness.derivedToken,
+    action: 'kioskSignIn',
+    target: 'production',
+    rows: [event]
+  };
+  assert.deepEqual(harness.post(request).results, [{
+    rowId: event.RowID,
+    result: 'rejected',
+    linkedRecordId: ''
+  }]);
+  assert.equal(harness.post(request).results[0].result, 'rejected');
+  assert.deepEqual(harness.signins.values, signinsBefore);
+  assert.deepEqual(audit.values, auditBefore);
 });
 
 test('production rejects changed, VOID, or duplicate stored permanent RowIDs without append', () => {

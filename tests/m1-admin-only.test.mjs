@@ -35,6 +35,59 @@ const fixedDateNow = new Date('2026-07-26T15:00:00Z');
 const fixedRequestToken = Buffer.alloc(32, 9).toString('base64url');
 const RECOVERY_INCIDENT_ID = 'M1-2026-08-03_04';
 
+function offsetFor(date, timeZone) {
+  const parts = {};
+  new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  }).formatToParts(date).forEach(part => {
+    if (part.type !== 'literal') parts[part.type] = part.value;
+  });
+  const localAsUtc = Date.UTC(
+    Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+    Number(parts.hour), Number(parts.minute), Number(parts.second)
+  );
+  return Math.round((localAsUtc - date.getTime()) / 60000);
+}
+
+function formatReceiverDate(dateValue, timeZone, pattern) {
+  const date = new Date(dateValue);
+  const parts = {};
+  new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  }).formatToParts(date).forEach(part => {
+    if (part.type !== 'literal') parts[part.type] = part.value;
+  });
+  const day = `${parts.year}-${parts.month}-${parts.day}`;
+  const time = `${parts.hour}:${parts.minute}:${parts.second}`;
+  if (pattern === 'yyyy-MM-dd') return day;
+  if (pattern === 'yyyy-MM-dd HH:mm:ss') return `${day} ${time}`;
+  if (pattern === "yyyy-MM-dd'T'HH:mm:ss") return `${day}T${time}`;
+  if (pattern === 'Z') {
+    const offset = offsetFor(date, timeZone);
+    const sign = offset < 0 ? '-' : '+';
+    const absolute = Math.abs(offset);
+    return `${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}${String(absolute % 60).padStart(2, '0')}`;
+  }
+  throw new Error(`Unsupported receiver test format: ${pattern}`);
+}
+
+function fixedReceiverDateClass(now) {
+  return class FixedReceiverDate extends Date {
+    constructor(...args) {
+      if (args.length) super(...args);
+      else super(now);
+    }
+
+    static now() {
+      return now;
+    }
+  };
+}
+
 const previewUrl = 'https://deploy-preview-99--gib-live.netlify.app';
 const immutablePreviewUrl = 'https://1234567890abcdef12345678--gib-live.netlify.app';
 const productionUrl = 'https://gib-live.netlify.app';
@@ -181,7 +234,8 @@ function receiverHarness({
   recoveryToken = 'recovery-token',
   recoveryWriteIncident = '',
   failAfterAppends = null,
-  rows = []
+  rows = [],
+  now = fixedNow
 } = {}) {
   let appendFailureAfter = failAfterAppends;
   let appendAttempts = 0;
@@ -214,6 +268,7 @@ function receiverHarness({
     module: { exports: {} },
     exports: {},
     console,
+    Date: fixedReceiverDateClass(now),
     EXPECTED_SPREADSHEET_NAME: 'Expected Signins',
     SHEET_NAME: 'Signins',
     GIB_M1_ALLOWED_TARGET: allowedTarget,
@@ -257,11 +312,7 @@ function receiverHarness({
         assert.equal(charset, 'UTF_8');
         return [...createHmac('sha256', String(secret)).update(String(value)).digest()];
       },
-      formatDate(_value, _zone, pattern) {
-        return pattern === 'yyyy-MM-dd HH:mm:ss'
-          ? '2026-07-26 11:00:00'
-          : '2026-07-26';
-      }
+      formatDate: formatReceiverDate
     }
   };
   if (testSpreadsheet) context.TEST_SPREADSHEET_ID = 'test-spreadsheet';
@@ -345,6 +396,28 @@ function lateNotSyncedKioskRequest(overrides = {}) {
       ...overrides
     })]
   };
+}
+
+function dstNotSyncedHarness(auditTimestamp, now = Date.parse('2026-11-02T17:00:00Z')) {
+  const harness = receiverHarness({
+    adminActionToken: 'production-admin-token',
+    now
+  });
+  const added = harness.post(adminAddition({
+    date: '2026-11-01',
+    reason: 'Not Synced'
+  }));
+  assert.equal(added.result, 'added');
+  if (auditTimestamp !== undefined) harness.audit.values[1][2] = auditTimestamp;
+  return { harness, added };
+}
+
+function dstLateNotSyncedRequest(overrides = {}) {
+  return lateNotSyncedKioskRequest({
+    Date: '2026-11-01',
+    Timestamp: '2026-11-01 01:15:00',
+    ...overrides
+  });
 }
 
 function assertInvalidNotSyncedAuditLeavesEventPending(mutateAudit) {
@@ -1086,6 +1159,155 @@ test('Admin-first delayed kiosk collisions for other reasons remain visibly held
   assert.equal(kioskFirst.post(adminAddition()).result, 'already exists');
   assert.equal(kioskFirst.signins.values.length, 2);
   assert.equal(kioskFirst.audit.values.length, 2);
+});
+
+test('New York chronology distinguishes exact instants, fall-back folds, gaps, and malformed input', () => {
+  const { apps } = receiverHarness({ now: Date.parse('2026-11-02T17:00:00Z') });
+  const raw = new Date('2026-11-01T06:15:00.123Z');
+  const rawResult = apps.possibleNewYorkInstants_(raw);
+  assert.equal(rawResult.status, 'ONE_VALID_INSTANT');
+  assert.deepEqual(Array.from(rawResult.instants), [raw.getTime()]);
+
+  const explicit = apps.possibleNewYorkInstants_('2026-11-01T01:15:00-05:00');
+  assert.equal(explicit.status, 'ONE_VALID_INSTANT');
+  assert.deepEqual(Array.from(explicit.instants), [Date.parse('2026-11-01T06:15:00Z')]);
+  assert.equal(apps.canonicalTimestamp_('2026-11-01 01:15:00-05:00'), '');
+  assert.equal(apps.canonicalTimestamp_('2026-11-01 01:15:00.123'), '');
+
+  const fold = apps.possibleNewYorkInstants_('2026-11-01 01:15:00');
+  assert.equal(fold.status, 'TWO_VALID_INSTANTS');
+  assert.deepEqual(Array.from(fold.instants), [
+    Date.parse('2026-11-01T05:15:00Z'),
+    Date.parse('2026-11-01T06:15:00Z')
+  ]);
+  const ordinary = apps.possibleNewYorkInstants_('2026-11-01 02:30:00');
+  assert.equal(ordinary.status, 'ONE_VALID_INSTANT');
+  assert.deepEqual(Array.from(ordinary.instants), [Date.parse('2026-11-01T07:30:00Z')]);
+  assert.equal(
+    apps.possibleNewYorkInstants_('2026-03-08 02:30:00').status,
+    'NONEXISTENT_LOCAL_TIME'
+  );
+  assert.equal(apps.possibleNewYorkInstants_('2026-02-30 12:00:00').status, 'MALFORMED');
+  assert.equal(apps.possibleNewYorkInstants_('2026-11-01T01:15:00+14:01').status, 'MALFORMED');
+
+  assert.equal(
+    apps.compareNewYorkChronology_('2026-11-01 01:15:00', '2026-11-01 02:30:00'),
+    'PROVABLY_BEFORE'
+  );
+  assert.equal(
+    apps.compareNewYorkChronology_('2026-11-01 01:15:00', '2026-11-01 00:30:00'),
+    'PROVABLY_NOT_BEFORE'
+  );
+  assert.equal(
+    apps.compareNewYorkChronology_('2026-11-01 01:15:00', '2026-11-01 01:30:00'),
+    'INDETERMINATE'
+  );
+  assert.equal(
+    apps.compareNewYorkChronology_('2026-11-01T01:15:00-05:00', '2026-11-01T01:30:00-04:00'),
+    'PROVABLY_NOT_BEFORE'
+  );
+  assert.equal(
+    apps.compareNewYorkChronology_('2026-11-01T01:30:00-04:00', '2026-11-01T01:30:00-04:00'),
+    'PROVABLY_NOT_BEFORE'
+  );
+  assert.equal(
+    apps.compareNewYorkChronology_('2026-03-08 02:30:00', '2026-03-08 03:30:00'),
+    'INVALID'
+  );
+  const legacyFallbackAudit = apps.adminAuditChronologyTimestamp_(
+    new Date('2026-11-01T01:30:00-04:00')
+  );
+  assert.equal(legacyFallbackAudit, '2026-11-01 01:30:00');
+  assert.equal(
+    apps.compareNewYorkChronology_('2026-11-01 01:15:00', legacyFallbackAudit),
+    'INDETERMINATE'
+  );
+  assert.equal(
+    apps.canonicalAdminAuditTimestamp_('2026-11-01T01:30:00-04:00'),
+    '2026-11-01 01:30:00'
+  );
+});
+
+test('a first-fold audit and fold-ambiguous earlier wall time stay pending without consuming the correction', () => {
+  const auditInstant = new Date('2026-11-01T01:30:00-04:00');
+  const { harness } = dstNotSyncedHarness(undefined, auditInstant.getTime());
+  assert.equal(harness.audit.values[1][2], '2026-11-01T05:30:00.000Z');
+  const request = dstLateNotSyncedRequest();
+  const signinsBefore = structuredClone(harness.signins.values);
+  const auditBefore = structuredClone(harness.audit.values);
+  const first = harness.post(request);
+  assert.deepEqual(first.results, [{
+    rowId: request.rows[0].RowID,
+    result: 'rejected',
+    linkedRecordId: ''
+  }]);
+  assert.deepEqual(harness.post(request).results, first.results);
+  assert.deepEqual(harness.signins.values, signinsBefore);
+  assert.deepEqual(harness.audit.values, auditBefore);
+  assert.equal(harness.audit.values[1][2], '2026-11-01T05:30:00.000Z');
+  assert.equal(harness.signins.values.some(row => row[7] === 'Admin sync replacement receipt'), false);
+});
+
+test('both fall-back event folds safely before the audit reconcile once while distinct later work stays payable', () => {
+  const { harness, added } = dstNotSyncedHarness('2026-11-01 02:30:00');
+  const matching = dstLateNotSyncedRequest().rows[0];
+  const distinct = dstLateNotSyncedRequest({
+    RowID: 'gib-m1-60606060-6060-4060-8060-606060606060',
+    Timestamp: '2026-11-01 03:00:00'
+  }).rows[0];
+  const request = {
+    token: 'receiver-token',
+    action: 'kioskSignIn',
+    target: 'production',
+    rows: [matching, distinct]
+  };
+  const first = harness.post(request);
+  assert.deepEqual(first.results, [
+    { rowId: matching.RowID, result: 'already exists', linkedRecordId: added.linkedRecordId },
+    { rowId: distinct.RowID, result: 'added', linkedRecordId: distinct.RowID }
+  ]);
+  const afterFirst = structuredClone(harness.signins.values);
+  assert.deepEqual(harness.post(request).results, [
+    first.results[0],
+    { rowId: distinct.RowID, result: 'already exists', linkedRecordId: distinct.RowID }
+  ]);
+  assert.deepEqual(harness.signins.values, afterFirst);
+  assert.equal(harness.signins.values.filter(row => row[7] === 'Admin sync replacement receipt').length, 1);
+  assert.equal(harness.signins.values.slice(1).filter(row => row[10] === 'OK').length, 2);
+});
+
+test('both fall-back event folds after the audit leave the correction unused and add distinct work normally', () => {
+  const { harness } = dstNotSyncedHarness('2026-11-01 00:30:00');
+  const request = dstLateNotSyncedRequest();
+  const first = harness.post(request);
+  assert.deepEqual(first.results, [{
+    rowId: request.rows[0].RowID,
+    result: 'added',
+    linkedRecordId: request.rows[0].RowID
+  }]);
+  assert.equal(harness.signins.values.filter(row => row[7] === 'Admin sync replacement receipt').length, 0);
+  assert.equal(harness.signins.values.slice(1).filter(row => row[10] === 'OK').length, 2);
+  assert.equal(harness.post(request).results[0].result, 'already exists');
+  assert.equal(harness.signins.values.length, 3);
+});
+
+test('a spring-forward gap is invalid and leaves the delayed event pending without writes', () => {
+  const harness = receiverHarness({
+    adminActionToken: 'production-admin-token',
+    now: Date.parse('2026-03-09T16:00:00Z')
+  });
+  harness.post(adminAddition({ date: '2026-03-08', reason: 'Not Synced' }));
+  harness.audit.values[1][2] = '2026-03-08 03:30:00';
+  const request = lateNotSyncedKioskRequest({
+    Date: '2026-03-08',
+    Timestamp: '2026-03-08 02:30:00'
+  });
+  const before = structuredClone(harness.signins.values);
+  const response = harness.post(request);
+  assert.equal(response.results[0].result, 'rejected');
+  assert.deepEqual(harness.signins.values, before);
+  assert.equal(harness.post(request).results[0].result, 'rejected');
+  assert.deepEqual(harness.signins.values, before);
 });
 
 test('a Not Synced Admin correction consumes the matching late kiosk event without a second payable row', () => {

@@ -50,6 +50,12 @@ var GIB_M1_COLLISION_DEVICE_ = 'Kiosk collision review';
 var GIB_M1_COLLISION_STATUS_ = 'REVIEW';
 var GIB_M1_ADMIN_SYNC_RECEIPT_DEVICE_ = 'Admin sync replacement receipt';
 var GIB_M1_ADMIN_SYNC_RECEIPT_STATUS_ = 'VOID';
+var GIB_M1_CHRONOLOGY_TIME_ZONE_ = 'America/New_York';
+var GIB_M1_CHRONOLOGY_PROVABLY_BEFORE_ = 'PROVABLY_BEFORE';
+var GIB_M1_CHRONOLOGY_PROVABLY_NOT_BEFORE_ = 'PROVABLY_NOT_BEFORE';
+var GIB_M1_CHRONOLOGY_INDETERMINATE_ = 'INDETERMINATE';
+var GIB_M1_CHRONOLOGY_INVALID_ = 'INVALID';
+var GIB_M1_CHRONOLOGY_OFFSET_CACHE_ = {};
 var GIB_M1_TARGET_LOCK_PROPERTY_ = 'GIB_M1_DEPLOYMENT_TARGET_LOCK';
 var GIB_M1_PRODUCTION_ROW_ID_PATTERN_ = /^gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 var GIB_M1_SIGNINS_HEADERS_ = [
@@ -517,8 +523,153 @@ function displayDate_(value) {
   return match ? match[1] + '-' + match[2] + '-' + match[3] : text.slice(0, 10);
 }
 
+function chronologyDateValue_(value) {
+  return Object.prototype.toString.call(value) === '[object Date]';
+}
+
+function chronologyTimestampParts_(value) {
+  if (typeof value !== 'string') return null;
+  var text = exactText_(value);
+  var match = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})?$/
+  );
+  if (!match) return null;
+  var date = match[1] + '-' + match[2] + '-' + match[3];
+  var hour = Number(match[4]);
+  var minute = Number(match[5]);
+  var second = Number(match[6]);
+  var millisecondText = match[7] || '';
+  var millisecond = millisecondText ? Number((millisecondText + '00').slice(0, 3)) : 0;
+  var offset = match[8] || '';
+  if (
+    !validCalendarDate_(date)
+    || hour > 23
+    || minute > 59
+    || second > 59
+    || millisecond > 999
+  ) return null;
+  if (offset && offset !== 'Z') {
+    var offsetHour = Number(offset.slice(1, 3));
+    var offsetMinute = Number(offset.slice(4, 6));
+    if (offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) {
+      return null;
+    }
+  }
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+    date: date,
+    hour: hour,
+    minute: minute,
+    second: second,
+    millisecond: millisecond,
+    millisecondText: millisecondText,
+    offset: offset
+  };
+}
+
+function chronologyWallMilliseconds_(parts) {
+  var value = new Date(0);
+  value.setUTCFullYear(parts.year, parts.month - 1, parts.day);
+  value.setUTCHours(parts.hour, parts.minute, parts.second, parts.millisecond);
+  return value.getTime();
+}
+
+function chronologyOffsetMinutes_(value) {
+  if (value === 'Z' || value === '+0000' || value === '-0000') return 0;
+  var compact = exactText_(value).replace(':', '');
+  var match = compact.match(/^([+-])(\d{2})(\d{2})$/);
+  if (!match) return null;
+  var hours = Number(match[2]);
+  var minutes = Number(match[3]);
+  if (hours > 14 || minutes > 59 || (hours === 14 && minutes !== 0)) return null;
+  return (match[1] === '-' ? -1 : 1) * ((hours * 60) + minutes);
+}
+
+function chronologyLocalText_(parts) {
+  return parts.date + ' '
+    + ('0' + parts.hour).slice(-2) + ':'
+    + ('0' + parts.minute).slice(-2) + ':'
+    + ('0' + parts.second).slice(-2);
+}
+
+function chronologyOffsetsForDate_(parts) {
+  var cacheKey = parts.date;
+  if (Object.prototype.hasOwnProperty.call(GIB_M1_CHRONOLOGY_OFFSET_CACHE_, cacheKey)) {
+    return GIB_M1_CHRONOLOGY_OFFSET_CACHE_[cacheKey].slice();
+  }
+  var wallMilliseconds = chronologyWallMilliseconds_(parts);
+  var offsets = [];
+  for (var sampleHours = -48; sampleHours <= 48; sampleHours += 12) {
+    var sample = new Date(wallMilliseconds + (sampleHours * 60 * 60 * 1000));
+    var offset = chronologyOffsetMinutes_(Utilities.formatDate(
+      sample,
+      GIB_M1_CHRONOLOGY_TIME_ZONE_,
+      'Z'
+    ));
+    if (offset !== null && offsets.indexOf(offset) < 0) offsets.push(offset);
+  }
+  GIB_M1_CHRONOLOGY_OFFSET_CACHE_[cacheKey] = offsets.slice();
+  return offsets;
+}
+
+function possibleNewYorkInstants_(value) {
+  if (chronologyDateValue_(value)) {
+    var dateMilliseconds = value.getTime();
+    return isFinite(dateMilliseconds)
+      ? { status: 'ONE_VALID_INSTANT', instants: [dateMilliseconds] }
+      : { status: 'MALFORMED', instants: [] };
+  }
+  var parts = chronologyTimestampParts_(value);
+  if (!parts) return { status: 'MALFORMED', instants: [] };
+  var wallMilliseconds = chronologyWallMilliseconds_(parts);
+  if (!isFinite(wallMilliseconds)) return { status: 'MALFORMED', instants: [] };
+  if (parts.offset) {
+    var explicitOffset = chronologyOffsetMinutes_(parts.offset);
+    if (explicitOffset === null) return { status: 'MALFORMED', instants: [] };
+    return {
+      status: 'ONE_VALID_INSTANT',
+      instants: [wallMilliseconds - (explicitOffset * 60 * 1000)]
+    };
+  }
+  var expectedLocal = chronologyLocalText_(parts);
+  var instants = [];
+  chronologyOffsetsForDate_(parts).forEach(function(offset) {
+    var instant = wallMilliseconds - (offset * 60 * 1000);
+    var roundTrip = Utilities.formatDate(
+      new Date(instant),
+      GIB_M1_CHRONOLOGY_TIME_ZONE_,
+      'yyyy-MM-dd HH:mm:ss'
+    );
+    if (roundTrip === expectedLocal && instants.indexOf(instant) < 0) instants.push(instant);
+  });
+  instants.sort(function(left, right) { return left - right; });
+  if (!instants.length) return { status: 'NONEXISTENT_LOCAL_TIME', instants: [] };
+  if (instants.length === 1) return { status: 'ONE_VALID_INSTANT', instants: instants };
+  if (instants.length === 2) return { status: 'TWO_VALID_INSTANTS', instants: instants };
+  return { status: 'MALFORMED', instants: [] };
+}
+
+function compareNewYorkChronology_(eventValue, auditValue) {
+  var eventPossibilities = possibleNewYorkInstants_(eventValue);
+  var auditPossibilities = possibleNewYorkInstants_(auditValue);
+  var validStatuses = ['ONE_VALID_INSTANT', 'TWO_VALID_INSTANTS'];
+  if (
+    validStatuses.indexOf(eventPossibilities.status) < 0
+    || validStatuses.indexOf(auditPossibilities.status) < 0
+  ) return GIB_M1_CHRONOLOGY_INVALID_;
+  var eventFirst = eventPossibilities.instants[0];
+  var eventLast = eventPossibilities.instants[eventPossibilities.instants.length - 1];
+  var auditFirst = auditPossibilities.instants[0];
+  var auditLast = auditPossibilities.instants[auditPossibilities.instants.length - 1];
+  if (eventLast < auditFirst) return GIB_M1_CHRONOLOGY_PROVABLY_BEFORE_;
+  if (eventFirst >= auditLast) return GIB_M1_CHRONOLOGY_PROVABLY_NOT_BEFORE_;
+  return GIB_M1_CHRONOLOGY_INDETERMINATE_;
+}
+
 function canonicalTimestamp_(value) {
-  if (value instanceof Date && !isNaN(value.getTime())) {
+  if (chronologyDateValue_(value) && !isNaN(value.getTime())) {
     return Utilities.formatDate(value, 'America/New_York', 'yyyy-MM-dd HH:mm:ss');
   }
   var text = exactText_(value);
@@ -533,6 +684,29 @@ function canonicalTimestamp_(value) {
     + ('0' + hour).slice(-2) + ':'
     + ('0' + minute).slice(-2) + ':'
     + ('0' + second).slice(-2);
+}
+
+function canonicalAdminAuditTimestamp_(value) {
+  var canonical = canonicalTimestamp_(value);
+  if (canonical) return canonical;
+  var possibilities = possibleNewYorkInstants_(value);
+  if (possibilities.status !== 'ONE_VALID_INSTANT') return '';
+  return Utilities.formatDate(
+    new Date(possibilities.instants[0]),
+    GIB_M1_CHRONOLOGY_TIME_ZONE_,
+    'yyyy-MM-dd HH:mm:ss'
+  );
+}
+
+function adminAuditChronologyTimestamp_(value) {
+  if (!chronologyDateValue_(value)) return value;
+  var wallTimestamp = canonicalTimestamp_(value);
+  var wallPossibilities = possibleNewYorkInstants_(wallTimestamp);
+  // Historical Audit cells were written as offset-less text and Sheets could
+  // coerce them to Date values. A fall-back Date therefore has no proven fold.
+  return wallPossibilities.status === 'TWO_VALID_INSTANTS'
+    ? wallTimestamp
+    : value;
 }
 
 function canonicalDuration_(value) {
@@ -598,6 +772,12 @@ function todayNewYork_() {
 
 function timestampNewYork_() {
   return Utilities.formatDate(new Date(), 'America/New_York', 'yyyy-MM-dd HH:mm:ss');
+}
+
+function timestampExact_() {
+  var instant = new Date();
+  if (isNaN(instant.getTime())) throw new Error('Current time is invalid.');
+  return instant.toISOString();
 }
 
 function headerMap_(headers) {
@@ -670,6 +850,7 @@ function readSignins_(sheet, options) {
       sheetRow: offset + 2,
       rowId: exactText_(row[indexes.rowId]),
       timestamp: canonicalTimestamp_(row[indexes.timestamp]),
+      timestampValue: row[indexes.timestamp],
       date: displayDate_(row[indexes.date]),
       classLabel: exactText_(row[indexes.classLabel]),
       duration: Number(row[indexes.duration]),
@@ -800,7 +981,7 @@ function authoritativeAdminSyncAudit_(row, record) {
     && Math.floor(actionNumber) === actionNumber
     && actionNumber <= GIB_M1_MAX_SAFE_INTEGER_
     && exactText_(row && row[1]) === attribution.adminName
-    && Boolean(canonicalTimestamp_(row && row[2]))
+    && Boolean(canonicalAdminAuditTimestamp_(row && row[2]))
     && Boolean(instructor)
     && instructor.length <= GIB_M1_INSTRUCTOR_MAX_
     && instructor === exactText_(record && record.instructor)
@@ -863,14 +1044,24 @@ function adminSyncReceiptRecord_(record, target) {
     && Boolean(canonicalSigninKey_(record));
 }
 
+function recordChronologyTimestamp_(record) {
+  return record && Object.prototype.hasOwnProperty.call(record, 'timestampValue')
+    ? record.timestampValue
+    : record && record.timestamp;
+}
+
 function authoritativeAdminSyncReceipt_(receipt, adminRecord, auditRow, target) {
   var receiptTimestamp = canonicalTimestamp_(receipt && receipt.timestamp);
+  var chronology = compareNewYorkChronology_(
+    recordChronologyTimestamp_(receipt),
+    adminAuditChronologyTimestamp_(auditRow && auditRow[2])
+  );
   return adminSyncReceiptRecord_(receipt, target)
     && exactText_(receipt && receipt.build) === exactText_(adminRecord && adminRecord.rowId)
     && adminSyncReplacementRecord_(adminRecord, receipt)
     && Boolean(auditRow)
     && receiptTimestamp.slice(0, 10) === displayDate_(receipt && receipt.date)
-    && receiptTimestamp < canonicalTimestamp_(auditRow && auditRow[2]);
+    && chronology === GIB_M1_CHRONOLOGY_PROVABLY_BEFORE_;
 }
 
 function adminSyncReceiptBindings_(records, adminRecord) {
@@ -920,9 +1111,16 @@ function findAdminSyncReceipt_(records, candidate, auditRows, target) {
     !linkedAdmin
     || !adminSyncReplacementRecord_(linkedAdmin, candidate)
     || !auditRow
-    || canonicalTimestamp_(candidate && candidate.timestamp) >= canonicalTimestamp_(auditRow[2])
     || bindings.length !== 1
     || bindings[0] !== receiptMatches[0]
+  ) return { conflict: true };
+  var chronology = compareNewYorkChronology_(
+    recordChronologyTimestamp_(candidate),
+    adminAuditChronologyTimestamp_(auditRow[2])
+  );
+  if (chronology === GIB_M1_CHRONOLOGY_PROVABLY_NOT_BEFORE_) return null;
+  if (
+    chronology !== GIB_M1_CHRONOLOGY_PROVABLY_BEFORE_
     || !authoritativeAdminSyncReceipt_(receiptMatches[0], linkedAdmin, auditRow, target)
   ) return { conflict: true };
   return linkedAdmin;
@@ -937,12 +1135,13 @@ function findAdminSyncReplacement_(records, candidate, auditRows, target) {
   var auditRow = authoritativeAdminSyncAuditRow_(matches[0], auditRows);
   if (!auditRow) return { conflict: true };
   var candidateTimestamp = canonicalTimestamp_(candidate && candidate.timestamp);
-  if (
-    candidateTimestamp.slice(0, 10) !== displayDate_(candidate && candidate.date)
-    || candidateTimestamp >= canonicalTimestamp_(auditRow[2])
-  ) {
-    return null;
-  }
+  if (candidateTimestamp.slice(0, 10) !== displayDate_(candidate && candidate.date)) return null;
+  var chronology = compareNewYorkChronology_(
+    recordChronologyTimestamp_(candidate),
+    adminAuditChronologyTimestamp_(auditRow[2])
+  );
+  if (chronology === GIB_M1_CHRONOLOGY_PROVABLY_NOT_BEFORE_) return null;
+  if (chronology !== GIB_M1_CHRONOLOGY_PROVABLY_BEFORE_) return { conflict: true };
   var bindings = adminSyncReceiptBindings_(records, matches[0]);
   if (bindings.length > 1) return { conflict: true };
   if (bindings.length === 1) {
@@ -1026,6 +1225,7 @@ function validateKioskRow_(row) {
   var value = {
     rowId: safeExactText_(row.RowID || row.rowId, 240, false),
     timestamp: canonicalTimestamp_(row.Timestamp || row.timestamp),
+    timestampValue: row.Timestamp != null ? row.Timestamp : row.timestamp,
     date: displayDate_(row.Date || row.date),
     classLabel: safeExactText_(row['Class Label'] || row.classLabel, 200, false),
     duration: Number(row['Duration (hr)'] != null ? row['Duration (hr)'] : row.duration),
@@ -1678,7 +1878,7 @@ function readAdminAuditHistory_(spreadsheet, date) {
       var classDate = displayDate_(row[4]);
       if (classDate !== date) return;
       var actionNumber = Number(row[0]);
-      var actionTime = canonicalTimestamp_(row[2]);
+      var actionTime = canonicalAdminAuditTimestamp_(row[2]);
       var duration = Number(row[7]);
       var result = cleanText_(row[9]).toLowerCase();
       var auditId = 'audit-row-' + (offset + 2);
@@ -1789,10 +1989,10 @@ function appendAdminAudit_(sheet, value, result, linkedRecordId) {
     throw new Error('Admin Audit result is invalid.');
   }
   var actionNumber = nextAuditActionNumber_(sheet);
-  sheet.appendRow([
+  var row = [
     actionNumber,
     value.adminName,
-    timestampNewYork_(),
+    timestampExact_(),
     value.instructor,
     value.date,
     value.classLabel,
@@ -1801,7 +2001,22 @@ function appendAdminAudit_(sheet, value, result, linkedRecordId) {
     value.reason,
     result,
     linkedId
-  ]);
+  ];
+  var nextRow = sheet.getLastRow() + 1;
+  if (
+    typeof sheet.getMaxRows === 'function'
+    && typeof sheet.insertRowsAfter === 'function'
+    && nextRow > sheet.getMaxRows()
+  ) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), nextRow - sheet.getMaxRows());
+  }
+  // Preserve the offset-bearing instant instead of allowing Sheets to coerce
+  // the two fall-back folds into the same wall-clock serial value.
+  var actionTimeRange = sheet.getRange(nextRow, 3, 1, 1);
+  if (actionTimeRange && typeof actionTimeRange.setNumberFormat === 'function') {
+    actionTimeRange.setNumberFormat('@');
+  }
+  sheet.appendRow(row);
   return actionNumber;
 }
 
@@ -1810,7 +2025,7 @@ function boundedAdminLinkedRecordId_(value) {
 }
 
 function sameExactAdminAudit_(row, value, result, linkedRecordId) {
-  return Boolean(canonicalTimestamp_(row[2]))
+  return Boolean(canonicalAdminAuditTimestamp_(row[2]))
     && exactText_(row[1]) === value.adminName
     && exactText_(row[3]) === value.instructor
     && displayDate_(row[4]) === value.date
@@ -6336,6 +6551,10 @@ if (typeof module !== 'undefined' && module.exports) {
     exactText_: exactText_,
     normalizeEventText_: normalizeEventText_,
     canonicalTimestamp_: canonicalTimestamp_,
+    canonicalAdminAuditTimestamp_: canonicalAdminAuditTimestamp_,
+    possibleNewYorkInstants_: possibleNewYorkInstants_,
+    compareNewYorkChronology_: compareNewYorkChronology_,
+    adminAuditChronologyTimestamp_: adminAuditChronologyTimestamp_,
     canonicalSigninKey_: canonicalSigninKey_,
     sameExactSignin_: sameExactSignin_,
     findExactSignin_: findExactSignin_,
@@ -6344,6 +6563,9 @@ if (typeof module !== 'undefined' && module.exports) {
     sameEvent_: sameEvent_,
     findExistingEvent_: findExistingEvent_,
     findPermanentAdminRequest_: findPermanentAdminRequest_,
+    authoritativeAdminSyncReceipt_: authoritativeAdminSyncReceipt_,
+    findAdminSyncReceipt_: findAdminSyncReceipt_,
+    findAdminSyncReplacement_: findAdminSyncReplacement_,
     findAdminCollision_: findAdminCollision_,
     collisionReviewRecord_: collisionReviewRecord_,
     requestTarget_: requestTarget_,

@@ -28,6 +28,58 @@ const AUDIT_HEADERS = Object.freeze([
   'Class', 'Site', 'Duration', 'Required Reason', 'Final Result',
   'Linked Sign-in Record ID'
 ]);
+const FIXED_RICHMOND_NOW = Date.parse('2026-08-21T16:00:00Z');
+
+function offsetFor(date, timeZone) {
+  const parts = {};
+  new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  }).formatToParts(date).forEach(part => {
+    if (part.type !== 'literal') parts[part.type] = part.value;
+  });
+  const localAsUtc = Date.UTC(
+    Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+    Number(parts.hour), Number(parts.minute), Number(parts.second)
+  );
+  return Math.round((localAsUtc - date.getTime()) / 60000);
+}
+
+function formatReceiverDate(dateValue, timeZone, pattern) {
+  const date = new Date(dateValue);
+  const parts = {};
+  new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  }).formatToParts(date).forEach(part => {
+    if (part.type !== 'literal') parts[part.type] = part.value;
+  });
+  const day = `${parts.year}-${parts.month}-${parts.day}`;
+  const time = `${parts.hour}:${parts.minute}:${parts.second}`;
+  if (pattern === 'yyyy-MM-dd') return day;
+  if (pattern === 'yyyy-MM-dd HH:mm:ss') return `${day} ${time}`;
+  if (pattern === "yyyy-MM-dd'T'HH:mm:ss") return `${day}T${time}`;
+  if (pattern === 'Z') {
+    const offset = offsetFor(date, timeZone);
+    const sign = offset < 0 ? '-' : '+';
+    const absolute = Math.abs(offset);
+    return `${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}${String(absolute % 60).padStart(2, '0')}`;
+  }
+  throw new Error(`Unsupported Richmond receiver test format: ${pattern}`);
+}
+
+class FixedReceiverDate extends Date {
+  constructor(...args) {
+    if (args.length) super(...args);
+    else super(FIXED_RICHMOND_NOW);
+  }
+
+  static now() {
+    return FIXED_RICHMOND_NOW;
+  }
+}
 
 function derivedSecret(prefix, scriptId = 'richmond-production-unit-script-id') {
   return createHash('sha256').update(`${prefix}:${scriptId}`, 'utf8').digest('base64url');
@@ -101,6 +153,7 @@ function createHarness({ provisioned = true, duplicateSheets = false } = {}) {
   let spreadsheetOpens = 0;
   const context = vm.createContext({
     console,
+    Date: FixedReceiverDate,
     ContentService: {
       MimeType: { JSON: 'application/json' },
       createTextOutput(text) { return { text, setMimeType() { return this; } }; }
@@ -156,11 +209,7 @@ function createHarness({ provisioned = true, duplicateSheets = false } = {}) {
         return [...createHash('sha256').update(String(value), 'utf8').digest()];
       },
       computeHmacSha256Signature: () => [],
-      formatDate(_value, _timeZone, pattern) {
-        return pattern === 'yyyy-MM-dd HH:mm:ss'
-          ? '2026-08-21 12:00:00'
-          : '2026-08-21';
-      }
+      formatDate: formatReceiverDate
     }
   });
   vm.runInContext(wrapperSource, context, { filename: 'RichmondProductionCode.gs' });
@@ -400,6 +449,40 @@ test('Richmond shares the Not Synced late-event replacement without adding a pay
   assert.equal(review.records[0].reviewRequired, false);
   assert.equal(review.auditHistory.length, 1);
   assert.equal(review.auditHistory[0].linkedRecordId, added.linkedRecordId);
+});
+
+test('Richmond shares fail-closed fall-back chronology and still exposes no Staff Clock', () => {
+  const harness = createHarness();
+  harness.properties.set('GIB_M1_RICHMOND_PRODUCTION_WRITES_ENABLED', 'true');
+  const sourceRow = kioskRow({
+    Date: '2025-11-02',
+    Timestamp: '2025-11-02 01:15:00'
+  });
+  const added = harness.post(productionRequest('addMissedInstructor', {
+    requestId: 'richmond-dst-not-synced',
+    adminName: 'Andrew Smith',
+    date: sourceRow.Date,
+    classLabel: sourceRow['Class Label'],
+    duration: sourceRow['Duration (hr)'],
+    instructor: sourceRow.Instructor,
+    site: sourceRow.Site,
+    notes: sourceRow.Notes,
+    reason: 'Not Synced'
+  }));
+  assert.equal(added.result, 'added');
+  harness.audit.values[1][2] = '2025-11-02 01:30:00';
+  const before = structuredClone(harness.signins.values);
+  const request = productionRequest('kioskSignIn', { rows: [sourceRow] });
+  const first = harness.post(request);
+  assert.deepEqual(first.results, [{
+    rowId: sourceRow.RowID,
+    result: 'rejected',
+    linkedRecordId: ''
+  }]);
+  assert.deepEqual(harness.post(request).results, first.results);
+  assert.deepEqual(harness.signins.values, before);
+  assert.equal(harness.signins.values.some(row => row[7] === 'Admin sync replacement receipt'), false);
+  assert.equal(harness.context.GIB_M1_STAFF_CLOCK_ENABLED, false);
 });
 
 test('one-time provisioning binds only the exact empty production Sheet and fixes writes OFF', () => {
