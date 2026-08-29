@@ -933,7 +933,7 @@ body.admin-mode .container { max-width: 1120px; }
 }
 
 </style>
-<script src="./installation-profile.generated.js?v=2026-08-29-signin-sync-r1"></script>
+<script src="./installation-profile.generated.js?v=2026-08-29-signin-sync-r2"></script>
 </head>
 <body>
 <div class="container">
@@ -1430,10 +1430,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-29-signin-sync-r1';
+} from './sync-core.mjs?v=2026-08-29-signin-sync-r2';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-08-29-signin-sync-r1';
+const OFFLINE_SHELL_REVISION = '2026-08-29-signin-sync-r2';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -4137,7 +4137,16 @@ function refreshNameDatalist() {
     );
     return attempt;
   }
-  async function syncNow() {
+  async function syncNow(trigger = '') {
+    // A button click is an explicit operator request and may drain the durable
+    // queue even while Auto-sync is OFF. Calls from lifecycle wake-ups, timers,
+    // and activation recovery remain automatic.
+    const manualDrain = trigger === 'manual-continuation'
+      || (trigger && trigger.type === 'click');
+    // Close the scheduling-to-callback race too: a continuation queued while
+    // Auto-sync was ON must become a no-op if the operator turns it OFF before
+    // the zero-delay callback actually starts.
+    if (!manualDrain && localStorage.getItem(SYNC_AUTO_KEY) !== 'true') return;
     // Lifecycle wake-ups are intentionally ignored while a request is active.
     // A confirmed partial batch schedules its own immediate continuation below;
     // a failed request waits for the next bounded retry instead of spinning.
@@ -4212,7 +4221,19 @@ function refreshNameDatalist() {
     } finally {
       window.clearTimeout(timeout);
       syncInFlight = false;
-      if (continueDrain) window.setTimeout(syncNow, 0);
+      // Re-read the preference after the in-flight request finishes. An
+      // operator may have switched Auto-sync OFF while awaiting its response;
+      // that completed batch stays confirmed, but no automatic continuation is
+      // scheduled and every remaining RowID stays in the durable queue.
+      if (
+        continueDrain
+        && (manualDrain || localStorage.getItem(SYNC_AUTO_KEY) === 'true')
+      ) {
+        window.setTimeout(
+          manualDrain ? () => syncNow('manual-continuation') : syncNow,
+          0
+        );
+      }
     }
   }
 
@@ -4725,6 +4746,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-08-29-signin-sync-r1"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-08-29-signin-sync-r2"></script>
 </body>
 </html>
