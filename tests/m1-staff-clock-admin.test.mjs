@@ -420,6 +420,10 @@ function renderStaffTimeRuntime(data, {
     const STAFF_RECENT_INITIAL_LIMIT = 8;
     const STAFF_RECENT_INCREMENT = 8;
     const STAFF_RECENT_MAX_VISIBLE = 20;
+    const STAFF_ATTENTION_ACTIONS = Object.freeze({
+      missing_clock_out: Object.freeze({ punchAction: 'clockOut', linkedPunchAction: 'clockIn' }),
+      clock_out_without_clock_in: Object.freeze({ punchAction: 'clockIn', linkedPunchAction: 'clockOut' })
+    });
     let currentStaffTime = null;
     let currentStaffRecentLookup = recentLookup;
     let currentStaffAttention = data.needsAttention;
@@ -1375,6 +1379,15 @@ test('#staff-time starts Staff Clock loading without waiting for Daily sign-ins'
   assert.ok(context.events.indexOf('staff-start') > context.events.indexOf('staff-loading-state'));
 });
 
+test('a fresh Admin entry resets stale page scroll before review begins', () => {
+  const sessionSource = sourceBetween(adminHtml, 'function setLoggedIn(', 'async function login(');
+  assert.match(sessionSource, /const firstEntry = \$\('#appPanel'\)\.hidden/u);
+  assert.match(
+    sessionSource,
+    /if \(firstEntry\) \{[\s\S]*window\.requestAnimationFrame\([\s\S]*window\.scrollTo\(0, 0\)/u
+  );
+});
+
 test('review validation requires every canonical Staff time field and rejects drift', () => {
   const {
     validStaffTimeReviewStartResponse,
@@ -1874,8 +1887,18 @@ test('recent completed shifts have explicit loading, success, failure, and retry
   assert.doesNotMatch(adminHtml, /operation: 'historyPage'|Load older completed shifts/u);
 });
 
-test('Needs attention uses explicit safe correction mappings and an ambiguous fallback', () => {
+test('Needs attention opens corrections only after Advanced validates exact linked punches', async () => {
   const data = reviewResponse();
+  const frontDeskClockOut = {
+    ...staffRecord(818),
+    punchId: PUNCH_TWO,
+    staffId: 'front-desk-test-three',
+    staffName: 'Front Desk Test Three',
+    punchAction: 'clockOut',
+    timestamp: '2026-08-18T17:00:00-04:00',
+    date: '2026-08-18'
+  };
+  data.records = [data.records[0], frontDeskClockOut];
   data.needsAttention = [
     {
       staffId: 'mandy-test',
@@ -1902,23 +1925,172 @@ test('Needs attention uses explicit safe correction mappings and an ambiguous fa
       occurrenceCount: 1
     }
   ];
-  const nodes = renderStaffTimeRuntime(data);
-  assert.equal(nodes['#staffNeedsAttentionSection'].hidden, false);
-  assert.equal(nodes['#staffNeedsAttention'].children.length, 3);
-  const actions = nodes['#staffNeedsAttention'].children.map(row => row.children.find(
+  const attentionActions = nodes => nodes['#staffNeedsAttention'].children.map(row => row.children.find(
     child => child.className === 'btn ghost small staff-attention-action'
   ));
-  assert.ok(actions.every(Boolean));
-  assert.equal(actions[0].textContent, 'Add missed Clock Out');
-  assert.equal(actions[0].dataset.staffCorrectionStaff, 'mandy-test');
-  assert.equal(actions[0].dataset.staffCorrectionAction, 'clockOut');
-  assert.equal(actions[1].textContent, 'Add missed Clock In');
-  assert.equal(actions[1].dataset.staffCorrectionStaff, 'front-desk-test-three');
-  assert.equal(actions[1].dataset.staffCorrectionAction, 'clockIn');
-  assert.equal(actions[2].textContent, 'Review records');
-  assert.equal(actions[2].dataset.staffAttentionAdvanced, 'true');
-  assert.equal(Object.hasOwn(actions[2].dataset, 'staffCorrectionStaff'), false);
-  assert.equal(Object.hasOwn(actions[2].dataset, 'staffCorrectionAction'), false);
+  const assertReviewOnly = action => {
+    assert.ok(action);
+    assert.equal(action.textContent, 'Review records');
+    assert.equal(action.dataset.staffAttentionAdvanced, 'true');
+    assert.equal(Object.hasOwn(action.dataset, 'staffCorrectionStaff'), false);
+    assert.equal(Object.hasOwn(action.dataset, 'staffCorrectionAction'), false);
+  };
+  const assertResolveOnly = (action, label, staffId, code) => {
+    assert.ok(action);
+    assert.equal(action.textContent, label);
+    assert.equal(action.dataset.staffAttentionResolve, 'true');
+    assert.equal(action.dataset.staffAttentionStaff, staffId);
+    assert.equal(action.dataset.staffAttentionCode, code);
+    assert.equal(Object.hasOwn(action.dataset, 'staffCorrectionStaff'), false);
+    assert.equal(Object.hasOwn(action.dataset, 'staffCorrectionAction'), false);
+  };
+
+  const primaryShell = {
+    ...data,
+    records: [],
+    todayPunches: [],
+    audit: []
+  };
+  const primaryNodes = renderStaffTimeRuntime(primaryShell, {
+    advancedLoaded: false,
+    renderAdvancedStateOnly: true
+  });
+  assert.equal(primaryNodes['#staffNeedsAttentionSection'].hidden, false);
+  assert.equal(primaryNodes['#staffNeedsAttention'].children.length, 3);
+  const primaryActions = attentionActions(primaryNodes);
+  assertResolveOnly(primaryActions[0], 'Review records', 'mandy-test', 'missing_clock_out');
+  assertResolveOnly(
+    primaryActions[1],
+    'Review records',
+    'front-desk-test-three',
+    'clock_out_without_clock_in'
+  );
+  assertReviewOnly(primaryActions[2]);
+
+  const validatedNodes = renderStaffTimeRuntime(data, { advancedLoaded: true });
+  const validatedActions = attentionActions(validatedNodes);
+  assert.ok(validatedActions.every(Boolean));
+  assertResolveOnly(validatedActions[0], 'Review records', 'mandy-test', 'missing_clock_out');
+  assertResolveOnly(
+    validatedActions[1],
+    'Review records',
+    'front-desk-test-three',
+    'clock_out_without_clock_in'
+  );
+  assertReviewOnly(validatedActions[2]);
+
+  const invalidData = {
+    ...data,
+    needsAttention: [
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test',
+        code: 'missing_clock_out',
+        message: 'Linked punch is missing.',
+        linkedPunchIds: [],
+        occurrenceCount: 1
+      },
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test',
+        code: 'missing_clock_out',
+        message: 'Linked punch is unknown.',
+        linkedPunchIds: [staffRecord(819).punchId],
+        occurrenceCount: 1
+      },
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test',
+        code: 'missing_clock_out',
+        message: 'Linked punch belongs to another staff member.',
+        linkedPunchIds: [PUNCH_TWO],
+        occurrenceCount: 1
+      }
+    ]
+  };
+  const invalidNodes = renderStaffTimeRuntime(invalidData, { advancedLoaded: true });
+  attentionActions(invalidNodes).forEach(action => {
+    assertResolveOnly(action, 'Review records', 'mandy-test', 'missing_clock_out');
+  });
+
+  const resolutionSource = sourceBetween(
+    adminHtml,
+    'function validatedStaffAttentionAction(',
+    'function renderStaffTimeAdvanced('
+  );
+  const resolveFixture = async (item, records, advancedResult = true) => {
+    const calls = { loads: 0, opened: [], advancedOpened: 0 };
+    const nodes = {
+      '#staffTimeMessage': {},
+      '#staffTimeAdvanced': {
+        open: false,
+        querySelector() { return { focus() {} }; },
+        scrollIntoView() { calls.advancedOpened += 1; }
+      }
+    };
+    const action = {
+      textContent: 'Review linked punch',
+      disabled: false,
+      isConnected: true,
+      dataset: {
+        staffAttentionStaff: item.staffId,
+        staffAttentionCode: item.code
+      }
+    };
+    const context = vm.createContext({
+      action,
+      advancedResult,
+      calls,
+      item: structuredClone(item),
+      nodes,
+      records: structuredClone(records)
+    });
+    new vm.Script(`
+      const STAFF_ATTENTION_ACTIONS = Object.freeze({
+        missing_clock_out: Object.freeze({ punchAction: 'clockOut', linkedPunchAction: 'clockIn' }),
+        clock_out_without_clock_in: Object.freeze({ punchAction: 'clockIn', linkedPunchAction: 'clockOut' })
+      });
+      let staffAdvancedLoaded = false;
+      let currentStaffTime = { needsAttention: [item], records };
+      function $(selector) { return nodes[selector]; }
+      function showMessage() {}
+      async function loadStaffTimeAdvanced() {
+        calls.loads += 1;
+        if (advancedResult) staffAdvancedLoaded = true;
+        return advancedResult;
+      }
+      function openStaffCorrectionPanel(value) { calls.opened.push(value); }
+      ${resolutionSource}
+      globalThis.hooks = { resolveStaffAttentionAction };
+    `, { filename: 'staff-attention-exact-link.js' }).runInContext(context);
+    await context.hooks.resolveStaffAttentionAction(action);
+    return calls;
+  };
+
+  const validMissing = data.needsAttention[0];
+  const blockedBeforeAdvanced = await resolveFixture(validMissing, data.records, false);
+  assert.equal(blockedBeforeAdvanced.loads, 1);
+  assert.deepEqual(blockedBeforeAdvanced.opened, []);
+
+  const validResolution = await resolveFixture(validMissing, data.records);
+  assert.equal(validResolution.loads, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(validResolution.opened)), [{
+    staffId: 'mandy-test',
+    punchAction: 'clockOut'
+  }]);
+
+  const validOrphanOut = await resolveFixture(data.needsAttention[1], data.records);
+  assert.deepEqual(JSON.parse(JSON.stringify(validOrphanOut.opened)), [{
+    staffId: 'front-desk-test-three',
+    punchAction: 'clockIn'
+  }]);
+
+  for (const invalidItem of invalidData.needsAttention) {
+    const invalidResolution = await resolveFixture(invalidItem, invalidData.records);
+    assert.equal(invalidResolution.loads, 1);
+    assert.deepEqual(invalidResolution.opened, []);
+    assert.equal(invalidResolution.advancedOpened, 1);
+  }
 
   const formMarkup = sourceBetween(
     adminHtml,
@@ -1932,8 +2104,9 @@ test('Needs attention uses explicit safe correction mappings and an ambiguous fa
     "$('#staffNeedsAttention').addEventListener('click'",
     "$('#staffCorrectionForm').addEventListener('input'"
   );
-  assert.match(actionSource, /data-staff-correction-staff/u);
-  assert.match(actionSource, /openStaffCorrectionPanel\([\s\S]*staffId:[\s\S]*punchAction:/u);
+  assert.match(actionSource, /data-staff-attention-resolve/u);
+  assert.match(actionSource, /resolveStaffAttentionAction/u);
+  assert.doesNotMatch(actionSource, /data-staff-correction-staff/u);
 });
 
 test('attention correction and Advanced actions scroll their opened target into view', () => {
@@ -1952,10 +2125,13 @@ test('attention correction and Advanced actions scroll their opened target into 
     "$('#staffNeedsAttention').addEventListener('click'",
     "$('#staffCorrectionForm').addEventListener('input'"
   );
-  assert.match(
-    attentionSource,
-    /staffTimeAdvanced[\s\S]*\.open = true[\s\S]*\.scrollIntoView\(/u
+  assert.match(attentionSource, /showStaffAdvancedTask\(\)/u);
+  const advancedTaskSource = sourceBetween(
+    adminHtml,
+    'function showStaffAdvancedTask(',
+    'async function resolveStaffAttentionAction('
   );
+  assert.match(advancedTaskSource, /\.open = true[\s\S]*\.focus\([\s\S]*\.scrollIntoView\(/u);
 });
 
 test('older shift finder is collapsed and handles exact staff-date success, no-results, error, and retry', () => {

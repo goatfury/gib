@@ -1065,6 +1065,10 @@
       const STAFF_RECENT_INITIAL_LIMIT = 8;
       const STAFF_RECENT_INCREMENT = 8;
       const STAFF_RECENT_MAX_VISIBLE = 20;
+      const STAFF_ATTENTION_ACTIONS = Object.freeze({
+        missing_clock_out: Object.freeze({ punchAction: 'clockOut', linkedPunchAction: 'clockIn' }),
+        clock_out_without_clock_in: Object.freeze({ punchAction: 'clockIn', linkedPunchAction: 'clockOut' })
+      });
       const STAFF_TIME_RECORD_LIMIT = 500;
       const STAFF_TIME_ATTENTION_LIMIT = 600;
       const STAFF_TIME_AUDIT_LIMIT = 500;
@@ -3658,6 +3662,7 @@
       }
 
       function setLoggedIn(data) {
+        const firstEntry = $('#appPanel').hidden;
         currentAdminName = data.adminName;
         testMode = data.test === true;
         $('#loginPanel').hidden = true;
@@ -3670,6 +3675,11 @@
             : 'Richmond TEST Sheet'
           : testMode ? 'TEST copied Sheet' : 'Production-ready session'}`;
         applyManagerMode();
+        if (firstEntry) {
+          window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => window.scrollTo(0, 0));
+          });
+        }
       }
 
       async function login(testShortcut) {
@@ -4188,20 +4198,17 @@
         attention.setAttribute('aria-busy', 'false');
         const attentionRows = data.needsAttention.map(item => {
           const row = staffTimeRow(item.staffName, item.message);
-          const safeActionByCode = {
-            missing_clock_out: 'clockOut',
-            clock_out_without_clock_in: 'clockIn'
-          };
-          const likelyAction = safeActionByCode[item.code] || '';
+          const actionDefinition = STAFF_ATTENTION_ACTIONS[item.code];
           const action = makeElement(
             'button',
             'btn ghost small staff-attention-action',
-            likelyAction ? `Add missed ${staffActionLabel(likelyAction)}` : 'Review records'
+            'Review records'
           );
           action.type = 'button';
-          if (likelyAction) {
-            action.dataset.staffCorrectionStaff = item.staffId;
-            action.dataset.staffCorrectionAction = likelyAction;
+          if (actionDefinition) {
+            action.dataset.staffAttentionResolve = 'true';
+            action.dataset.staffAttentionStaff = item.staffId;
+            action.dataset.staffAttentionCode = item.code;
           } else {
             action.dataset.staffAttentionAdvanced = 'true';
           }
@@ -4226,6 +4233,59 @@
 
         renderStaffRecentShifts();
         renderStaffOlderShiftLookup();
+      }
+
+      function validatedStaffAttentionAction(item, records) {
+        const definition = item && STAFF_ATTENTION_ACTIONS[item.code];
+        if (!definition || item.linkedPunchIds.length !== 1 || !Array.isArray(records)) return '';
+        const record = records.find(candidate => candidate.punchId === item.linkedPunchIds[0]);
+        return record
+          && record.staffId === item.staffId
+          && record.staffName === item.staffName
+          && record.punchAction === definition.linkedPunchAction
+          && record.status === 'ACTIVE'
+          ? definition.punchAction
+          : '';
+      }
+
+      function showStaffAdvancedTask() {
+        const advancedPanel = $('#staffTimeAdvanced');
+        const advancedSummary = advancedPanel.querySelector('summary');
+        advancedPanel.open = true;
+        advancedSummary.focus();
+        advancedPanel.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }
+
+      async function resolveStaffAttentionAction(action) {
+        const originalLabel = action.textContent;
+        action.disabled = true;
+        action.textContent = 'Checking linked punches…';
+        showMessage($('#staffTimeMessage'), 'Checking the linked punch records before opening a correction…', 'working');
+        try {
+          const loaded = staffAdvancedLoaded || await loadStaffTimeAdvanced();
+          if (!loaded || !currentStaffTime) {
+            showMessage($('#staffTimeMessage'), 'The linked punch records could not be confirmed. Review Advanced records and audit, then Retry.');
+            showStaffAdvancedTask();
+            return;
+          }
+          const item = currentStaffTime.needsAttention.find(candidate => (
+            candidate.staffId === action.dataset.staffAttentionStaff
+            && candidate.code === action.dataset.staffAttentionCode
+          ));
+          const punchAction = validatedStaffAttentionAction(item, currentStaffTime.records);
+          if (!punchAction) {
+            showMessage($('#staffTimeMessage'), 'This item could not be linked to one exact punch, so no correction was opened. Review the records below.');
+            showStaffAdvancedTask();
+            return;
+          }
+          showMessage($('#staffTimeMessage'), 'Linked punch confirmed.', 'success');
+          openStaffCorrectionPanel({ staffId: item.staffId, punchAction });
+        } finally {
+          if (action.isConnected) {
+            action.disabled = false;
+            action.textContent = originalLabel;
+          }
+        }
       }
 
       function renderStaffTimeAdvanced(data) {
@@ -6080,19 +6140,12 @@
       $('#staffNeedsAttention').addEventListener('click', event => {
         const advanced = event.target.closest('[data-staff-attention-advanced]');
         if (advanced) {
-          const advancedPanel = $('#staffTimeAdvanced');
-          const advancedSummary = advancedPanel.querySelector('summary');
-          advancedPanel.open = true;
-          advancedSummary.focus();
-          advancedPanel.scrollIntoView({ block: 'start', behavior: 'smooth' });
+          showStaffAdvancedTask();
           return;
         }
-        const action = event.target.closest('[data-staff-correction-staff]');
+        const action = event.target.closest('[data-staff-attention-resolve]');
         if (!action) return;
-        openStaffCorrectionPanel({
-          staffId: action.dataset.staffCorrectionStaff,
-          punchAction: action.dataset.staffCorrectionAction
-        });
+        void resolveStaffAttentionAction(action);
       });
       $('#staffCorrectionForm').addEventListener('input', () => {
         showMessage($('#staffCorrectionStatus'), '');
@@ -6118,7 +6171,7 @@
       });
       $('#staffOlderShiftRetry').addEventListener('click', retryStaffOlderShiftLookup);
       $('#staffTimeAdvanced').addEventListener('toggle', event => {
-        if (event.currentTarget.open) void loadStaffTimeAdvanced();
+        if (event.currentTarget.open && !staffAdvancedError) void loadStaffTimeAdvanced();
       });
       $('#staffTimeAdvancedRetry').addEventListener('click', retryStaffTimeAdvanced);
       ['#staffRecentShifts', '#staffOlderShiftResults', '#staffTimeRecords'].forEach(selector => {
