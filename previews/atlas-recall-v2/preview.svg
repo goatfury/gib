@@ -9,7 +9,15 @@
     function wireAtlasPreview(){
       let doc,win;
       try{doc=frame.contentDocument;win=frame.contentWindow}catch(error){}
-      if(!doc||!win||!doc.getElementById('freePanel')||!doc.getElementById('answerInput')){
+      if(!doc||!win||doc.readyState!=='complete'||!doc.getElementById('freePanel')||!doc.getElementById('answerInput')){
+        setTimeout(wireAtlasPreview,60);
+        return;
+      }
+      const probe=doc.createElement('script');
+      probe.textContent="window.__atlasRuntimeReady=(typeof state==='object'&&typeof CAPITALS==='object'&&typeof capitalMatch==='function'&&typeof beginCapitalPrompt==='function');";
+      doc.body.appendChild(probe);
+      probe.remove();
+      if(!win.__atlasRuntimeReady){
         setTimeout(wireAtlasPreview,60);
         return;
       }
