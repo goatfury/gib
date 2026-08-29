@@ -2261,6 +2261,7 @@
         const staffNames = new Set();
         const shiftStaffIds = new Set();
         const shiftStaffNames = new Set();
+        const shiftStaffById = new Map();
         for (const person of value.shiftStaff) {
           const normalizedName = person && typeof person.staffName === 'string'
             ? person.staffName.toLocaleLowerCase('en-US')
@@ -2272,6 +2273,7 @@
           ) return false;
           shiftStaffIds.add(person.staffId);
           shiftStaffNames.add(normalizedName);
+          shiftStaffById.set(person.staffId, person);
         }
         for (const person of value.staff) {
           const normalizedName = person && typeof person.staffName === 'string'
@@ -2289,10 +2291,13 @@
         const clockedPunchIds = new Set();
         const clockedStaffIds = new Set();
         for (const item of value.clockedInNow) {
+          const person = shiftStaffById.get(item.staffId);
           if (
             !validStaffClockedIn(item)
             || clockedPunchIds.has(item.punchId)
             || clockedStaffIds.has(item.staffId)
+            || !person
+            || person.staffName !== item.staffName
           ) return false;
           clockedPunchIds.add(item.punchId);
           clockedStaffIds.add(item.staffId);
@@ -4199,13 +4204,17 @@
         const attentionRows = data.needsAttention.map(item => {
           const row = staffTimeRow(item.staffName, item.message);
           const actionDefinition = STAFF_ATTENTION_ACTIONS[item.code];
+          const primaryAction = primaryValidatedStaffAttentionAction(item, data.clockedInNow);
           const action = makeElement(
             'button',
             'btn ghost small staff-attention-action',
-            'Review records'
+            primaryAction ? `Add missed ${staffActionLabel(primaryAction)}` : 'Review records'
           );
           action.type = 'button';
-          if (actionDefinition) {
+          if (primaryAction) {
+            action.dataset.staffCorrectionStaff = item.staffId;
+            action.dataset.staffCorrectionAction = primaryAction;
+          } else if (actionDefinition) {
             action.dataset.staffAttentionResolve = 'true';
             action.dataset.staffAttentionStaff = item.staffId;
             action.dataset.staffAttentionCode = item.code;
@@ -4233,6 +4242,22 @@
 
         renderStaffRecentShifts();
         renderStaffOlderShiftLookup();
+      }
+
+      function primaryValidatedStaffAttentionAction(item, clockedInNow) {
+        if (
+          !item
+          || item.code !== 'missing_clock_out'
+          || item.occurrenceCount !== 1
+          || item.linkedPunchIds.length !== 1
+          || !Array.isArray(clockedInNow)
+        ) return '';
+        const clocked = clockedInNow.find(candidate => candidate.punchId === item.linkedPunchIds[0]);
+        return clocked
+          && clocked.staffId === item.staffId
+          && clocked.staffName === item.staffName
+          ? 'clockOut'
+          : '';
       }
 
       function validatedStaffAttentionAction(item, records) {
@@ -6141,6 +6166,14 @@
         const advanced = event.target.closest('[data-staff-attention-advanced]');
         if (advanced) {
           showStaffAdvancedTask();
+          return;
+        }
+        const directAction = event.target.closest('[data-staff-correction-staff]');
+        if (directAction) {
+          openStaffCorrectionPanel({
+            staffId: directAction.dataset.staffCorrectionStaff,
+            punchAction: directAction.dataset.staffCorrectionAction
+          });
           return;
         }
         const action = event.target.closest('[data-staff-attention-resolve]');

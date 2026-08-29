@@ -1397,6 +1397,21 @@ test('review validation requires every canonical Staff time field and rejects dr
   } = validatorRuntime();
   const start = reviewStartResponse();
   assert.equal(validStaffTimeReviewStartResponse(start), true);
+  const alternateClockedIn = structuredClone(start);
+  alternateClockedIn.clockedInNow = [{
+    punchId: PUNCH_TWO,
+    staffId: 'front-desk-test-three',
+    staffName: 'Front Desk Test Three',
+    clockInAt: '2026-08-18T09:00:00-04:00'
+  }];
+  assert.equal(validStaffTimeReviewStartResponse(alternateClockedIn), true);
+  const unknownClockedInStaff = structuredClone(start);
+  unknownClockedInStaff.clockedInNow[0].staffId = 'unknown-test-staff';
+  unknownClockedInStaff.clockedInNow[0].staffName = 'Unknown Test Staff';
+  assert.equal(validStaffTimeReviewStartResponse(unknownClockedInStaff), false);
+  const mismatchedClockedInName = structuredClone(start);
+  mismatchedClockedInName.clockedInNow[0].staffName = 'Front Desk Test Three';
+  assert.equal(validStaffTimeReviewStartResponse(mismatchedClockedInName), false);
   assert.equal(validStaffTimeReviewStartResponse({ ...start, records: [] }), false);
   assert.equal(validStaffTimeReviewStartResponse({
     ...start,
@@ -1887,7 +1902,7 @@ test('recent completed shifts have explicit loading, success, failure, and retry
   assert.doesNotMatch(adminHtml, /operation: 'historyPage'|Load older completed shifts/u);
 });
 
-test('Needs attention opens corrections only after Advanced validates exact linked punches', async () => {
+test('Needs attention allows only one exact clocked-in match before Advanced validation', async () => {
   const data = reviewResponse();
   const frontDeskClockOut = {
     ...staffRecord(818),
@@ -1944,6 +1959,14 @@ test('Needs attention opens corrections only after Advanced validates exact link
     assert.equal(Object.hasOwn(action.dataset, 'staffCorrectionStaff'), false);
     assert.equal(Object.hasOwn(action.dataset, 'staffCorrectionAction'), false);
   };
+  const assertDirectCorrection = (action, staffId, punchAction) => {
+    assert.ok(action);
+    assert.equal(action.textContent, `Add missed ${punchAction === 'clockOut' ? 'Clock Out' : 'Clock In'}`);
+    assert.equal(action.dataset.staffCorrectionStaff, staffId);
+    assert.equal(action.dataset.staffCorrectionAction, punchAction);
+    assert.equal(Object.hasOwn(action.dataset, 'staffAttentionResolve'), false);
+    assert.equal(Object.hasOwn(action.dataset, 'staffAttentionAdvanced'), false);
+  };
 
   const primaryShell = {
     ...data,
@@ -1958,7 +1981,7 @@ test('Needs attention opens corrections only after Advanced validates exact link
   assert.equal(primaryNodes['#staffNeedsAttentionSection'].hidden, false);
   assert.equal(primaryNodes['#staffNeedsAttention'].children.length, 3);
   const primaryActions = attentionActions(primaryNodes);
-  assertResolveOnly(primaryActions[0], 'Review records', 'mandy-test', 'missing_clock_out');
+  assertDirectCorrection(primaryActions[0], 'mandy-test', 'clockOut');
   assertResolveOnly(
     primaryActions[1],
     'Review records',
@@ -1970,7 +1993,7 @@ test('Needs attention opens corrections only after Advanced validates exact link
   const validatedNodes = renderStaffTimeRuntime(data, { advancedLoaded: true });
   const validatedActions = attentionActions(validatedNodes);
   assert.ok(validatedActions.every(Boolean));
-  assertResolveOnly(validatedActions[0], 'Review records', 'mandy-test', 'missing_clock_out');
+  assertDirectCorrection(validatedActions[0], 'mandy-test', 'clockOut');
   assertResolveOnly(
     validatedActions[1],
     'Review records',
@@ -2002,6 +2025,46 @@ test('Needs attention opens corrections only after Advanced validates exact link
         staffId: 'mandy-test',
         staffName: 'Mandy Test',
         code: 'missing_clock_out',
+        message: 'More than one punch is linked.',
+        linkedPunchIds: [PUNCH_ONE, PUNCH_TWO],
+        occurrenceCount: 1
+      },
+      {
+        staffId: 'front-desk-test-three',
+        staffName: 'Front Desk Test Three',
+        code: 'missing_clock_out',
+        message: 'The linked clock-in belongs to another staff member.',
+        linkedPunchIds: [PUNCH_ONE],
+        occurrenceCount: 1
+      },
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test Mismatch',
+        code: 'missing_clock_out',
+        message: 'The linked clock-in has a mismatched staff name.',
+        linkedPunchIds: [PUNCH_ONE],
+        occurrenceCount: 1
+      },
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test',
+        code: 'missing_clock_out',
+        message: 'More than one attention occurrence is grouped here.',
+        linkedPunchIds: [PUNCH_ONE],
+        occurrenceCount: 2
+      },
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test',
+        code: 'shift_too_long',
+        message: 'Another attention code is not directly correctable.',
+        linkedPunchIds: [PUNCH_ONE],
+        occurrenceCount: 1
+      },
+      {
+        staffId: 'mandy-test',
+        staffName: 'Mandy Test',
+        code: 'missing_clock_out',
         message: 'Linked punch belongs to another staff member.',
         linkedPunchIds: [PUNCH_TWO],
         occurrenceCount: 1
@@ -2009,9 +2072,13 @@ test('Needs attention opens corrections only after Advanced validates exact link
     ]
   };
   const invalidNodes = renderStaffTimeRuntime(invalidData, { advancedLoaded: true });
-  attentionActions(invalidNodes).forEach(action => {
-    assertResolveOnly(action, 'Review records', 'mandy-test', 'missing_clock_out');
+  const invalidActions = attentionActions(invalidNodes);
+  invalidActions.slice(0, 6).forEach((action, index) => {
+    const item = invalidData.needsAttention[index];
+    assertResolveOnly(action, 'Review records', item.staffId, item.code);
   });
+  assertReviewOnly(invalidActions[6]);
+  assertResolveOnly(invalidActions[7], 'Review records', 'mandy-test', 'missing_clock_out');
 
   const resolutionSource = sourceBetween(
     adminHtml,
@@ -2067,25 +2134,20 @@ test('Needs attention opens corrections only after Advanced validates exact link
     return calls;
   };
 
-  const validMissing = data.needsAttention[0];
-  const blockedBeforeAdvanced = await resolveFixture(validMissing, data.records, false);
-  assert.equal(blockedBeforeAdvanced.loads, 1);
-  assert.deepEqual(blockedBeforeAdvanced.opened, []);
-
-  const validResolution = await resolveFixture(validMissing, data.records);
-  assert.equal(validResolution.loads, 1);
-  assert.deepEqual(JSON.parse(JSON.stringify(validResolution.opened)), [{
-    staffId: 'mandy-test',
-    punchAction: 'clockOut'
-  }]);
-
   const validOrphanOut = await resolveFixture(data.needsAttention[1], data.records);
   assert.deepEqual(JSON.parse(JSON.stringify(validOrphanOut.opened)), [{
     staffId: 'front-desk-test-three',
     punchAction: 'clockIn'
   }]);
 
-  for (const invalidItem of invalidData.needsAttention) {
+  for (const invalidItem of [
+    invalidData.needsAttention[0],
+    invalidData.needsAttention[1],
+    invalidData.needsAttention[2],
+    invalidData.needsAttention[3],
+    invalidData.needsAttention[4],
+    invalidData.needsAttention[7]
+  ]) {
     const invalidResolution = await resolveFixture(invalidItem, invalidData.records);
     assert.equal(invalidResolution.loads, 1);
     assert.deepEqual(invalidResolution.opened, []);
@@ -2106,7 +2168,44 @@ test('Needs attention opens corrections only after Advanced validates exact link
   );
   assert.match(actionSource, /data-staff-attention-resolve/u);
   assert.match(actionSource, /resolveStaffAttentionAction/u);
-  assert.doesNotMatch(actionSource, /data-staff-correction-staff/u);
+  assert.match(actionSource, /data-staff-correction-staff/u);
+
+  const directCalls = { advanced: 0, opened: [], resolved: 0 };
+  let attentionClick = null;
+  const directAction = {
+    dataset: {
+      staffCorrectionStaff: 'mandy-test',
+      staffCorrectionAction: 'clockOut'
+    }
+  };
+  const directContext = vm.createContext({ directAction, directCalls });
+  new vm.Script(`
+    const list = {
+      addEventListener(type, handler) {
+        if (type === 'click') globalThis.attentionClick = handler;
+      }
+    };
+    function $(selector) { return selector === '#staffNeedsAttention' ? list : null; }
+    function showStaffAdvancedTask() { directCalls.advanced += 1; }
+    function openStaffCorrectionPanel(value) { directCalls.opened.push(value); }
+    async function resolveStaffAttentionAction() { directCalls.resolved += 1; }
+    ${actionSource}
+  `, { filename: 'staff-attention-direct-clock-out.js' }).runInContext(directContext);
+  attentionClick = directContext.attentionClick;
+  assert.ok(attentionClick);
+  attentionClick({
+    target: {
+      closest(selector) {
+        return selector === '[data-staff-correction-staff]' ? directAction : null;
+      }
+    }
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(directCalls.opened)), [{
+    staffId: 'mandy-test',
+    punchAction: 'clockOut'
+  }]);
+  assert.equal(directCalls.advanced, 0);
+  assert.equal(directCalls.resolved, 0);
 });
 
 test('attention correction and Advanced actions scroll their opened target into view', () => {
