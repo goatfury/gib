@@ -1624,13 +1624,19 @@ test('Daily Review workflow is yesterday-first, date-selectable, complete, and e
   assert.match(adminHtml, /Today/);
   assert.match(adminHtml, /Next day/);
   assert.match(adminHtml, /No sign-in recorded/);
-  assert.match(adminHtml, /Recorded sign-ins not matched to this schedule/);
-  assert.match(adminHtml, /Find an Instructor/);
+  assert.match(adminHtml, /Missing scheduled classes/);
+  assert.match(adminHtml, /Sign-ins not matched to this schedule/);
+  assert.match(adminHtml, /Find an instructor/);
   assert.match(adminHtml, /Five recent active sign-ins/);
   assert.match(
     adminHtml,
-    /Daily Review uses the current canonical regular weekly schedule from the Revolution BJJ website\. Recorded sign-ins with historical, local-override, or Series labels remain visible as unmatched rather than being hidden\./
+    /Daily Review uses the current regular weekly schedule\. Historical or special-event labels remain available here when they do not match\./
   );
+  assert.match(adminHtml, /id="dailyScheduledCount"[\s\S]*Scheduled/);
+  assert.match(adminHtml, /id="dailySignedCount"[\s\S]*Signed in/);
+  assert.match(adminHtml, /id="dailyMissingCount"[\s\S]*Missing/);
+  assert.match(adminHtml, /<details id="completedClasses"[^>]*>[\s\S]*Show completed classes/u);
+  assert.doesNotMatch(adminHtml.match(/<details id="completedClasses"[^>]*>/u)?.[0] || '', /\bopen\b/u);
   assert.match(adminHtml, /schedule:\s*'\/api\/m1-schedule'/);
   assert.match(adminHtml, /function validateScheduleResponse\(value\)/);
   assert.match(adminHtml, /id="scheduleSource"[^>]*role="status"/);
@@ -1750,6 +1756,7 @@ test('Daily Review rejects duplicate audit action numbers before any success sta
     disabled: false,
     hidden: false,
     classList: { add() {}, remove() {} },
+    setAttribute() {},
     replaceChildren() {}
   });
   const elements = new Map();
@@ -1768,6 +1775,8 @@ test('Daily Review rejects duplicate audit action numbers before any success sta
     nyDate: () => '2026-07-26',
     defaultYesterday: () => '2026-07-25',
     formatDateHeading: value => value,
+    clean: value => String(value == null ? '' : value).trim(),
+    staffEmpty: message => ({ textContent: message }),
     showMessage: (_target, message) => messages.push(message),
     requestJson: async () => mutatedResponse,
     setLoggedIn: () => { successStateCalls += 1; },
@@ -1779,7 +1788,10 @@ test('Daily Review rejects duplicate audit action numbers before any success sta
   new vm.Script(`${loadReviewSource}\nthis.loadReview = loadReview;`).runInContext(context);
   assert.equal(await context.loadReview(mutatedResponse.date), false);
   assert.equal(successStateCalls, 0);
-  assert.equal(messages.at(-1), 'Daily Review returned an incomplete response. Nothing on the Sheet was changed.');
+  assert.equal(
+    messages.at(-1),
+    'Daily sign-ins could not be loaded. Daily Review returned an incomplete response. Nothing on the Sheet was changed.'
+  );
 });
 
 test('browser correction identity is schedule-reorder safe, opaque, and stable across indeterminate retries', () => {
