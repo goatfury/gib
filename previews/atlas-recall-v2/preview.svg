@@ -26,6 +26,12 @@
       const injected=doc.createElement('script');
       injected.src='one-field-learning.js?v=cf73d511';
       injected.onerror=()=>{doc.body.dataset.oneFieldLearningError='One-field capital learning controls failed to load.'};
+      injected.onload=()=>{
+        const answerKey=doc.createElement('script');
+        answerKey.src='end-answer-key.js?v=10dc0782';
+        answerKey.onerror=()=>{doc.body.dataset.endAnswerKeyError='End-of-round answer key failed to load.'};
+        doc.body.appendChild(answerKey);
+      };
       doc.body.appendChild(injected);
     }
     frame.addEventListener('load',()=>setTimeout(wireAtlasPreview,20));
