@@ -12,6 +12,7 @@ import {
   sanitizeStaffTimeCorrectionResult,
   sanitizeStaffTimeHistoryPage,
   sanitizeStaffTimeReview,
+  sanitizeStaffShiftLookup,
   sanitizeStaffTimeVoidResult
 } from '../netlify/functions/_lib/m1-staff-clock-contracts.mjs';
 
@@ -544,8 +545,7 @@ function adminBody(action, fields = {}) {
   });
 }
 
-function readPagedStaffView(harness, { admin = false } = {}) {
-  const now = new Date(NOW_ISO);
+function readPagedStaffView(harness, { admin = false, now = new Date(NOW_ISO) } = {}) {
   const initialAction = admin ? 'staffTimeReviewV2' : 'staffClockSnapshotV2';
   const pageAction = admin ? 'staffTimeReviewPageV2' : 'staffClockSnapshotPageV2';
   const initialRaw = harness.post(admin
@@ -599,6 +599,19 @@ function readStaffHistoryPage(harness, viewToken, offset) {
   return { raw, page };
 }
 
+function readStaffShiftLookup(harness, viewToken, {
+  mode = 'recent',
+  staffId = '',
+  date = '',
+  now = new Date(NOW_ISO)
+} = {}) {
+  const expected = { viewToken, mode, staffId, date };
+  const raw = harness.post(adminBody('staffTimeShiftLookupV3', expected));
+  const lookup = sanitizeStaffShiftLookup(raw, 'test', expected, { now });
+  assert.ok(lookup, `staffTimeShiftLookupV3 returns a strict ${mode} result`);
+  return { raw, lookup };
+}
+
 function assembledAdminStaffTimeReview(paged) {
   const records = paged.streams.records;
   return {
@@ -606,6 +619,7 @@ function assembledAdminStaffTimeReview(paged) {
     test: true,
     adminName: 'Andrew Smith',
     staff: paged.initial.staff,
+    shiftStaff: paged.initial.shiftStaff,
     records,
     clockedInNow: paged.initial.clockedInNow,
     todayPunches: records
@@ -820,6 +834,26 @@ test('completed pay-period hours remain after the staff member becomes inactive'
 
   const adminSnapshot = readPagedStaffView(harness, { admin: true });
   assert.ok(!adminSnapshot.initial.staff.some(item => item.staffId === 'mandy-test'));
+  assert.ok(adminSnapshot.initial.shiftStaff.some(item => (
+    item.staffId === 'mandy-test' && item.staffName === 'Mandy Test'
+  )), 'inactive retained staff remain available to the Admin shift finder');
+  assert.ok(adminSnapshot.initial.shiftStaff.some(item => (
+    item.staffId === 'inactive-without-history-test'
+    && item.staffName === 'Inactive Without History Test'
+  )), 'inactive roster members are represented without being reactivated');
+  const formerShiftLookup = readStaffShiftLookup(
+    harness,
+    adminSnapshot.initial.view.token,
+    {
+      mode: 'exactDate',
+      staffId: 'mandy-test',
+      date: '2026-08-03'
+    }
+  );
+  assert.equal(formerShiftLookup.lookup.total, 1);
+  assert.equal(formerShiftLookup.lookup.items.length, 1);
+  assert.equal(formerShiftLookup.lookup.items[0].clockIn.staffId, 'mandy-test');
+  assert.equal(formerShiftLookup.lookup.items[0].clockIn.date, '2026-08-03');
   assert.deepEqual(
     adminSnapshot.initial.periods.current.totals.find(item => item.staffId === 'mandy-test'),
     snapshot.initial.periods.current.totals.find(item => item.staffId === 'mandy-test')
@@ -1803,6 +1837,166 @@ test('maximum-length Unicode records stay under the receiver byte ceiling across
   );
   assert.deepEqual(harness.sheets.get('Staff Time').values, before);
   assert.deepEqual(harness.sheets.get('Staff Time').operations, []);
+});
+
+test('Staff Time shift lookup pins seven recent days and one bounded exact staff/date result', () => {
+  const lookupNow = new Date('2026-08-29T16:00:00.000Z');
+  const exactClockIn = timeRow({
+    punchId: generatedPunchId(130_000),
+    timestamp: '2026-08-18T09:00:00-04:00',
+    staffId: 'front-desk-test-three',
+    staffName: 'Front Desk Test Three',
+    action: 'clockIn'
+  });
+  const exactClockOut = timeRow({
+    punchId: generatedPunchId(130_001),
+    timestamp: '2026-08-18T17:00:00-04:00',
+    staffId: 'front-desk-test-three',
+    staffName: 'Front Desk Test Three',
+    action: 'clockOut'
+  });
+  const exactRequestId = generatedRequestId(130_000);
+  const outsideRecent = ordinaryPeriodTimeRows({
+    count: 2,
+    startIndex: 130_010,
+    date: '2026-08-22',
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test'
+  });
+  const firstRecent = ordinaryPeriodTimeRows({
+    count: 2,
+    startIndex: 130_020,
+    date: '2026-08-23',
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test'
+  });
+  const latestRecent = ordinaryPeriodTimeRows({
+    count: 2,
+    startIndex: 130_030,
+    date: '2026-08-29',
+    staffId: 'front-desk-test-two',
+    staffName: 'Front Desk Test Two'
+  });
+  const harness = createHarness({
+    nowIso: lookupNow.toISOString(),
+    timeRows: [exactClockIn, exactClockOut, ...outsideRecent, ...firstRecent, ...latestRecent],
+    adjustmentRows: [[
+      exactRequestId,
+      '2026-08-19T12:00:00-04:00',
+      'Andrew Smith',
+      'front-desk-test-three',
+      'Front Desk Test Three',
+      exactClockIn[0],
+      exactClockOut[0],
+      exactClockIn[1],
+      exactClockOut[1],
+      '2026-08-18T08:55:00-04:00',
+      '2026-08-18T17:05:00-04:00',
+      'both',
+      'Correct Front Desk Test Three retained shift',
+      'adjusted'
+    ]]
+  });
+  const originalSheets = new Map(
+    [...harness.sheets].map(([name, sheet]) => [name, structuredClone(sheet.values)])
+  );
+  const review = readPagedStaffView(harness, { admin: true, now: lookupNow });
+
+  const recent = readStaffShiftLookup(harness, review.initial.view.token, {
+    mode: 'recent', now: lookupNow
+  });
+  assert.equal(recent.lookup.dateFrom, '2026-08-23');
+  assert.equal(recent.lookup.dateThrough, '2026-08-29');
+  assert.equal(recent.lookup.total, 2);
+  assert.equal(recent.lookup.truncated, false);
+  assert.deepEqual(
+    recent.lookup.items.map(shift => shift.clockIn.date),
+    ['2026-08-29', '2026-08-23'],
+    'the boundary day is included and the preceding day is excluded'
+  );
+
+  const exact = readStaffShiftLookup(harness, review.initial.view.token, {
+    mode: 'exactDate',
+    staffId: 'front-desk-test-three',
+    date: '2026-08-18',
+    now: lookupNow
+  });
+  assert.equal(exact.lookup.total, 1);
+  assert.equal(exact.lookup.items.length, 1);
+  const shift = exact.lookup.items[0];
+  assert.equal(shift.clockIn.staffName, 'Front Desk Test Three');
+  assert.equal(shift.clockIn.timestamp, '2026-08-18T08:55:00-04:00');
+  assert.equal(shift.clockOut.timestamp, '2026-08-18T17:05:00-04:00');
+  assert.equal(shift.clockIn.originalTimestamp, exactClockIn[1]);
+  assert.equal(shift.clockOut.originalTimestamp, exactClockOut[1]);
+  assert.equal(shift.latestAdjustment.requestId, exactRequestId);
+  assert.equal(shift.latestAdjustment.clockInPunchId, shift.clockIn.punchId);
+  assert.equal(shift.latestAdjustment.clockOutPunchId, shift.clockOut.punchId);
+
+  assert.deepEqual(harness.post(adminBody('staffTimeShiftLookupV3', {
+    viewToken: review.initial.view.token,
+    mode: 'recent',
+    staffId: 'front-desk-test-three',
+    date: ''
+  })), { ok: false, target: 'test', result: 'rejected' }, 'malformed targeting fails closed');
+  assert.deepEqual(harness.post(adminBody('staffTimeShiftLookupV3', {
+    viewToken: review.initial.view.token,
+    mode: 'exactDate',
+    staffId: 'front-desk-test-three',
+    date: '2026-08-23'
+  })), { ok: false, target: 'test', result: 'rejected' }, 'recent dates reject exactDate mode');
+
+  for (const [name, before] of originalSheets) {
+    assert.deepEqual(harness.sheets.get(name).values, before, `${name} remains read-only`);
+    assert.deepEqual(harness.sheets.get(name).operations, [], `${name} receives no write operation`);
+  }
+  harness.touchSpreadsheet();
+  assert.deepEqual(harness.post(adminBody('staffTimeShiftLookupV3', {
+    viewToken: review.initial.view.token,
+    mode: 'exactDate',
+    staffId: 'front-desk-test-three',
+    date: '2026-08-18'
+  })), { ok: false, target: 'test', result: 'stale' });
+
+  const cappedHarness = createHarness({
+    nowIso: lookupNow.toISOString(),
+    timeRows: ordinaryPeriodTimeRows({
+      count: 42,
+      startIndex: 131_000,
+      date: '2026-08-18',
+      staffId: 'front-desk-test-three',
+      staffName: 'Front Desk Test Three'
+    })
+  });
+  const cappedReview = readPagedStaffView(cappedHarness, { admin: true, now: lookupNow });
+  const capped = readStaffShiftLookup(cappedHarness, cappedReview.initial.view.token, {
+    mode: 'exactDate',
+    staffId: 'front-desk-test-three',
+    date: '2026-08-18',
+    now: lookupNow
+  });
+  assert.equal(capped.lookup.total, 21);
+  assert.equal(capped.lookup.items.length, 20);
+  assert.equal(capped.lookup.truncated, true);
+  assert.ok(capped.lookup.items.every(item => item.clockIn && item.clockOut));
+
+  const tooLargeHarness = createHarness({
+    nowIso: lookupNow.toISOString(),
+    timeRows: ordinaryPeriodTimeRows({
+      count: 102,
+      startIndex: 132_000,
+      date: '2026-08-18',
+      staffId: 'front-desk-test-three',
+      staffName: 'Front Desk Test Three'
+    })
+  });
+  const tooLargeReview = readPagedStaffView(tooLargeHarness, { admin: true, now: lookupNow });
+  assert.deepEqual(tooLargeHarness.post(adminBody('staffTimeShiftLookupV3', {
+    viewToken: tooLargeReview.initial.view.token,
+    mode: 'exactDate',
+    staffId: 'front-desk-test-three',
+    date: '2026-08-18'
+  })), { ok: false, target: 'test', result: 'too_large' });
 });
 
 test('Admin completed-shift history is bounded, paired, read-only, pageable, and stale-safe', () => {

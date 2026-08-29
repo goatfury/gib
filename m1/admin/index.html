@@ -404,7 +404,13 @@
     .staff-time-details > summary { cursor: pointer; font-weight: 800; }
     .staff-time-details > .staff-time-list,
     .staff-time-details > .staff-period-grid { margin-top: 10px; }
-    #staffTimeRecords, #staffTimeAudit { max-height: 360px; overflow-y: auto; padding-right: 4px; }
+    .staff-time-details > .staff-fix-form,
+    .staff-time-details > h3 { margin-top: 10px; }
+    #staffRecentShifts, #staffOlderShiftResults, #staffTimeRecords, #staffTimeAudit {
+      max-height: 360px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
     .staff-period-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .staff-fix-form {
       border: 1px solid #376b5a;
@@ -429,14 +435,14 @@
     }
     .staff-void-form .field { gap: 4px; }
     .staff-void-form input { padding: 8px 10px; }
-    .staff-history-controls {
+    .staff-lookup-controls {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
       gap: 9px;
       margin-top: 10px;
     }
-    .staff-history-controls .record-detail { margin: 0; }
+    .staff-lookup-controls .record-detail { margin: 0; }
     .staff-adjustment {
       margin-top: 8px;
       border: 1px solid #376b5a;
@@ -683,15 +689,46 @@
               <h3 id="staffClockedInHeading">Clocked in now</h3>
               <div id="staffClockedInNow" class="staff-time-list"></div>
             </section>
-            <section class="staff-time-block" aria-labelledby="staffTodayHeading">
-              <h3 id="staffTodayHeading">Today’s punches</h3>
-              <div id="staffTodayPunches" class="staff-time-list"></div>
-            </section>
-            <section id="staffNeedsAttentionSection" class="staff-time-block staff-time-attention" aria-labelledby="staffAttentionHeading" hidden>
-              <h3 id="staffAttentionHeading">Needs attention</h3>
-              <div id="staffNeedsAttention" class="staff-time-list"></div>
-            </section>
           </div>
+
+          <section class="staff-time-block" aria-labelledby="staffRecentShiftsHeading">
+            <h3 id="staffRecentShiftsHeading">Completed shifts · last 7 days</h3>
+            <div id="staffRecentShifts" class="staff-time-list" aria-live="polite" aria-busy="false">
+              <div class="empty">Sign in to load recent completed shifts.</div>
+            </div>
+            <div class="staff-lookup-controls">
+              <button id="staffRecentShiftsRetry" class="btn ghost small" type="button"
+                aria-controls="staffRecentShifts" hidden>Retry recent completed shifts</button>
+              <span id="staffRecentShiftsMessage" class="record-detail" role="status"></span>
+            </div>
+          </section>
+
+          <details id="staffOlderShiftFinder" class="staff-time-details">
+            <summary>Find an older shift</summary>
+            <form id="staffOlderShiftForm" class="staff-fix-form" novalidate>
+              <p class="muted" style="font-size:.8rem">Choose one staff member and the exact shift date.</p>
+              <div class="staff-fix-grid">
+                <div class="field">
+                  <label for="staffOlderShiftStaff">Staff member</label>
+                  <select id="staffOlderShiftStaff" name="staffId" required>
+                    <option value="">Choose staff</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="staffOlderShiftDate">Exact date</label>
+                  <input id="staffOlderShiftDate" name="date" type="date" required>
+                </div>
+              </div>
+              <div class="form-actions">
+                <button id="staffOlderShiftSubmit" class="btn primary" type="submit">Find shift</button>
+                <button id="staffOlderShiftRetry" class="btn ghost" type="button" hidden>Retry</button>
+              </div>
+              <div id="staffOlderShiftMessage" class="message" role="status"></div>
+              <div id="staffOlderShiftResults" class="staff-time-list" aria-live="polite" aria-busy="false">
+                <div class="empty">Choose a staff member and exact older date.</div>
+              </div>
+            </form>
+          </details>
 
           <details id="staffPayPeriods" class="staff-time-details">
             <summary>Pay-period totals</summary>
@@ -734,24 +771,31 @@
             <div id="staffCorrectionStatus" class="message" role="status"></div>
           </form>
 
-          <details class="staff-time-details">
-            <summary>Staff Time records</summary>
-            <div id="staffTimeRecords" class="staff-time-list"></div>
-            <h3>Completed shift history</h3>
-            <div id="staffCompletedShiftHistory" class="staff-time-list" aria-live="polite" aria-busy="false">
-              <div class="empty">Sign in to load completed shift history.</div>
+          <details id="staffTimeAdvanced" class="staff-time-details">
+            <summary>Advanced records and audit</summary>
+            <p class="muted" style="font-size:.8rem">Individual punches and the full correction audit load only when this section is opened.</p>
+            <div class="staff-lookup-controls">
+              <button id="staffTimeAdvancedRetry" class="btn ghost small" type="button" hidden>Retry advanced records and audit</button>
+              <span id="staffTimeAdvancedMessage" class="record-detail" role="status">Open this section to load advanced records and audit.</span>
             </div>
-            <div class="staff-history-controls">
-              <button id="staffTimeHistoryRetry" class="btn ghost small" type="button"
-                aria-controls="staffCompletedShiftHistory" hidden>Retry completed shift history</button>
-              <button id="staffTimeOlderHistory" class="btn ghost small" type="button"
-                aria-controls="staffCompletedShiftHistory" hidden>Load older completed shifts</button>
-              <span id="staffTimeHistoryScope" class="record-detail"></span>
+            <section class="staff-time-block" aria-labelledby="staffTodayHeading">
+              <h3 id="staffTodayHeading">Today’s punches</h3>
+              <div id="staffTodayPunches" class="staff-time-list" aria-live="polite">
+                <div class="empty">Open this section to load individual punches.</div>
+              </div>
+            </section>
+            <section id="staffNeedsAttentionSection" class="staff-time-block staff-time-attention" aria-labelledby="staffAttentionHeading" hidden>
+              <h3 id="staffAttentionHeading">Needs attention</h3>
+              <div id="staffNeedsAttention" class="staff-time-list"></div>
+            </section>
+            <h3>Staff Time records</h3>
+            <div id="staffTimeRecords" class="staff-time-list" aria-live="polite">
+              <div class="empty">Open this section to load individual punch records.</div>
             </div>
-          </details>
-          <details class="staff-time-details">
-            <summary>Staff time audit</summary>
-            <div id="staffTimeAudit" class="staff-time-list"></div>
+            <h3>Staff time audit</h3>
+            <div id="staffTimeAudit" class="staff-time-list" aria-live="polite">
+              <div class="empty">Open this section to load the correction audit.</div>
+            </div>
           </details>
         </div>
       </details>
@@ -878,15 +922,15 @@
       const STAFF_TIME_VIEW_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
       const STAFF_TIME_PAGE_LIMIT = 500;
       const STAFF_TIME_PAGE_MAX_BYTES = 200_000;
-      const STAFF_TIME_HISTORY_PAGE_LIMIT = 50;
-      const STAFF_TIME_HISTORY_PAGE_MAX_BYTES = 80_000;
+      const STAFF_TIME_SHIFT_LOOKUP_LIMIT = 20;
+      const STAFF_TIME_SHIFT_LOOKUP_MAX_BYTES = 80_000;
       const STAFF_TIME_RECORD_LIMIT = 500;
       const STAFF_TIME_ATTENTION_LIMIT = 600;
       const STAFF_TIME_AUDIT_LIMIT = 500;
       const STAFF_TIME_READ_TIMEOUT_MS = 25_000;
       const STAFF_TIME_READ_REQUEST_OPTIONS = Object.freeze({
         timeoutMs: STAFF_TIME_READ_TIMEOUT_MS,
-        timeoutMessage: 'Staff Time took too long to load. Retry completed shift history below.'
+        timeoutMessage: 'Staff Time took too long to load. Retry below.'
       });
       const MIN_CLASSES_BY_DAY = Object.freeze(IS_RICHMOND
         ? Object.fromEntries(SCHEDULE_DAYS.map(day => [day, 1]))
@@ -918,12 +962,18 @@
       let reviewedTabletPairingCode = '';
       let currentStaffTime = null;
       let staffTimeLoadGeneration = 0;
-      let currentStaffHistoryPage = null;
-      let staffHistoryReceiverUnavailable = false;
-      let staffHistoryInitialLoading = false;
-      let staffHistoryLoadError = '';
-      let staffHistoryPageLoading = false;
-      let staffHistoryPageError = '';
+      let currentStaffRecentLookup = null;
+      let staffRecentLoading = false;
+      let staffRecentLoadError = '';
+      let currentStaffOlderShiftLookup = null;
+      let currentStaffOlderShiftQuery = null;
+      let staffOlderShiftLoading = false;
+      let staffOlderShiftError = '';
+      let staffOlderShiftLoadGeneration = 0;
+      let staffAdvancedLoading = false;
+      let staffAdvancedLoaded = false;
+      let staffAdvancedError = '';
+      let staffAdvancedLoadGeneration = 0;
       let diagnosticWindow = null;
       let diagnosticRunId = '';
       let diagnosticPurpose = '';
@@ -2030,7 +2080,7 @@
 
       function validStaffTimeReviewStartResponse(value) {
         if (!exactObjectKeys(value, [
-          'ok', 'test', 'adminName', 'staff', 'clockedInNow', 'periods', 'view'
+          'ok', 'test', 'adminName', 'staff', 'shiftStaff', 'clockedInNow', 'periods', 'view'
         ])) return false;
         if (
           value.ok !== true
@@ -2039,6 +2089,8 @@
           || value.adminName !== currentAdminName
           || !Array.isArray(value.staff)
           || value.staff.length > 500
+          || !Array.isArray(value.shiftStaff)
+          || value.shiftStaff.length > 500
           || !Array.isArray(value.clockedInNow)
           || value.clockedInNow.length > 500
           || !exactObjectKeys(value.periods, ['current', 'previous'])
@@ -2052,6 +2104,20 @@
         ) return false;
         const staffIds = new Set();
         const staffNames = new Set();
+        const shiftStaffIds = new Set();
+        const shiftStaffNames = new Set();
+        for (const person of value.shiftStaff) {
+          const normalizedName = person && typeof person.staffName === 'string'
+            ? person.staffName.toLocaleLowerCase('en-US')
+            : '';
+          if (
+            !validStaffPerson(person)
+            || shiftStaffIds.has(person.staffId)
+            || shiftStaffNames.has(normalizedName)
+          ) return false;
+          shiftStaffIds.add(person.staffId);
+          shiftStaffNames.add(normalizedName);
+        }
         for (const person of value.staff) {
           const normalizedName = person && typeof person.staffName === 'string'
             ? person.staffName.toLocaleLowerCase('en-US')
@@ -2060,6 +2126,7 @@
             !validStaffPerson(person)
             || staffIds.has(person.staffId)
             || staffNames.has(normalizedName)
+            || !shiftStaffIds.has(person.staffId)
           ) return false;
           staffIds.add(person.staffId);
           staffNames.add(normalizedName);
@@ -2151,39 +2218,61 @@
           && latestAdjustment.correctedClockOutAt === clockOut.timestamp;
       }
 
-      function validStaffTimeHistoryPageResponse(value, expected) {
+      function validStaffTimeShiftLookupResponse(value, expected) {
         if (!exactObjectKeys(value, [
-          'ok', 'test', 'adminName', 'viewToken', 'offset', 'total', 'items', 'nextOffset'
+          'ok', 'test', 'adminName', 'viewToken', 'mode', 'dateFrom', 'dateThrough',
+          'staffId', 'date', 'total', 'items', 'truncated'
         ])) return false;
         if (
           !expected
+          || !['recent', 'exactDate'].includes(expected.mode)
           || value.ok !== true
           || typeof value.test !== 'boolean'
           || value.test !== testMode
           || value.adminName !== currentAdminName
           || value.viewToken !== expected.viewToken
-          || value.offset !== expected.offset
-          || !validStaffTimeCount(value.offset)
+          || value.mode !== expected.mode
+          || !validReviewDate(value.dateFrom)
+          || !validReviewDate(value.dateThrough)
           || !validStaffTimeCount(value.total)
-          || value.offset > value.total
           || !Array.isArray(value.items)
-          || value.items.length > STAFF_TIME_HISTORY_PAGE_LIMIT
-          || staffTimeJsonByteLength(value) > STAFF_TIME_HISTORY_PAGE_MAX_BYTES
+          || value.items.length > STAFF_TIME_SHIFT_LOOKUP_LIMIT
+          || value.total < value.items.length
+          || (value.total > 0 && value.items.length === 0)
+          || typeof value.truncated !== 'boolean'
+          || value.truncated !== (value.total > value.items.length)
+          || staffTimeJsonByteLength(value) > STAFF_TIME_SHIFT_LOOKUP_MAX_BYTES
+        ) return false;
+        if (value.mode === 'recent') {
+          if (
+            value.dateFrom !== shiftDate(expected.today, -6)
+            || value.dateThrough !== expected.today
+            || value.staffId !== ''
+            || value.date !== ''
+          ) return false;
+        } else if (
+          value.dateFrom !== expected.date
+          || value.dateThrough !== expected.date
+          || value.staffId !== expected.staffId
+          || value.date !== expected.date
         ) return false;
         const punchIds = new Set();
+        let previousClockIn = '';
         for (const shift of value.items) {
           if (
             !validStaffCompletedShift(shift)
+            || shift.clockIn.date < value.dateFrom
+            || shift.clockIn.date > value.dateThrough
+            || (value.mode === 'exactDate' && shift.clockIn.staffId !== value.staffId)
             || punchIds.has(shift.clockIn.punchId)
             || punchIds.has(shift.clockOut.punchId)
+            || (previousClockIn && shift.clockIn.timestamp > previousClockIn)
           ) return false;
           punchIds.add(shift.clockIn.punchId);
           punchIds.add(shift.clockOut.punchId);
+          previousClockIn = shift.clockIn.timestamp;
         }
-        const endOffset = value.offset + value.items.length;
-        return endOffset <= value.total
-          && !(value.items.length === 0 && value.offset < value.total)
-          && value.nextOffset === (endOffset < value.total ? endOffset : null);
+        return true;
       }
 
       function staffTimeStreamIdentity(stream, item) {
@@ -2206,7 +2295,7 @@
 
       function validStaffTimeReviewResponse(value) {
         if (!exactObjectKeys(value, [
-          'ok', 'test', 'adminName', 'staff', 'records', 'clockedInNow',
+          'ok', 'test', 'adminName', 'staff', 'shiftStaff', 'records', 'clockedInNow',
           'todayPunches', 'needsAttention', 'periods', 'audit', 'view'
         ])) return false;
         if (
@@ -2215,6 +2304,7 @@
           || value.test !== testMode
           || value.adminName !== currentAdminName
           || !Array.isArray(value.staff)
+          || !Array.isArray(value.shiftStaff)
           || !Array.isArray(value.records)
           || !Array.isArray(value.clockedInNow)
           || !Array.isArray(value.todayPunches)
@@ -2228,6 +2318,7 @@
           || value.view.today < value.periods.current.startDate
           || value.view.today > value.periods.current.endDate
           || value.staff.length > 500
+          || value.shiftStaff.length > 500
           || value.clockedInNow.length > 500
           || value.records.length !== value.view.recordCount
           || value.todayPunches.length !== value.view.todayPunchCount
@@ -2236,9 +2327,23 @@
         ) return false;
         const staffIds = new Set();
         const staffNames = new Set();
+        const shiftStaffById = new Map();
+        const shiftStaffNames = new Set();
         const punchIds = new Set();
         const recordById = new Map();
         const requestIds = new Set();
+        for (const person of value.shiftStaff) {
+          const normalizedName = person && typeof person.staffName === 'string'
+            ? person.staffName.toLocaleLowerCase('en-US')
+            : '';
+          if (
+            !validStaffPerson(person)
+            || shiftStaffById.has(person.staffId)
+            || shiftStaffNames.has(normalizedName)
+          ) return false;
+          shiftStaffById.set(person.staffId, normalizedName);
+          shiftStaffNames.add(normalizedName);
+        }
         for (const person of value.staff) {
           const normalizedName = person && typeof person.staffName === 'string'
             ? person.staffName.toLocaleLowerCase('en-US')
@@ -2247,6 +2352,7 @@
             !validStaffPerson(person)
             || staffIds.has(person.staffId)
             || staffNames.has(normalizedName)
+            || shiftStaffById.get(person.staffId) !== normalizedName
           ) return false;
           staffIds.add(person.staffId);
           staffNames.add(normalizedName);
@@ -2385,21 +2491,37 @@
         return items;
       }
 
-      async function fetchStaffTimeHistoryPage(initial, offset, generation) {
+      async function fetchStaffTimeShiftLookup(initial, query, generation) {
         const expected = {
           viewToken: initial.view.token,
-          offset
+          today: initial.view.today,
+          mode: query.mode,
+          staffId: query.mode === 'exactDate' ? query.staffId : '',
+          date: query.mode === 'exactDate' ? query.date : ''
         };
-        const page = await requestJson(API.staffTime, {
-          operation: 'historyPage',
-          viewToken: expected.viewToken,
-          offset: expected.offset
-        }, STAFF_TIME_READ_REQUEST_OPTIONS);
+        const request = expected.mode === 'recent'
+          ? {
+              operation: 'shiftLookup',
+              viewToken: expected.viewToken,
+              mode: 'recent'
+            }
+          : {
+              operation: 'shiftLookup',
+              viewToken: expected.viewToken,
+              mode: 'exactDate',
+              staffId: expected.staffId,
+              date: expected.date
+            };
+        const lookup = await requestJson(
+          API.staffTime,
+          request,
+          STAFF_TIME_READ_REQUEST_OPTIONS
+        );
         if (generation !== staffTimeLoadGeneration) return null;
-        if (!validStaffTimeHistoryPageResponse(page, expected)) {
-          throw new Error('Staff time returned an incomplete completed-shift history page. Nothing was changed.');
+        if (!validStaffTimeShiftLookupResponse(lookup, expected)) {
+          throw new Error('Staff time returned an incomplete completed-shift lookup. Nothing was changed.');
         }
-        return page;
+        return lookup;
       }
 
       function assembleStaffTimeReview(initial, records, needsAttention, audit) {
@@ -2414,6 +2536,7 @@
           test: initial.test,
           adminName: initial.adminName,
           staff: initial.staff,
+          shiftStaff: initial.shiftStaff,
           records,
           clockedInNow: initial.clockedInNow,
           todayPunches,
@@ -2428,6 +2551,16 @@
         return value;
       }
 
+      function staffTimeReviewShell(initial) {
+        return {
+          ...initial,
+          records: [],
+          todayPunches: [],
+          needsAttention: [],
+          audit: []
+        };
+      }
+
       async function loadStaffTimeReviewOnce(generation) {
         const initial = await requestJson(
           API.staffTime,
@@ -2438,6 +2571,29 @@
         if (!validStaffTimeReviewStartResponse(initial)) {
           throw new Error('Staff time returned an incomplete response. Nothing was changed.');
         }
+        let recentLookup = null;
+        try {
+          recentLookup = await fetchStaffTimeShiftLookup(
+            initial,
+            { mode: 'recent' },
+            generation
+          );
+        } catch (error) {
+          if (generation !== staffTimeLoadGeneration) return null;
+          if (
+            error.status === 401
+            || error.status === 403
+            || validStaffTimeStaleError(error)
+          ) throw error;
+          staffRecentLoadError = `Recent completed shifts could not be loaded. ${clean(error.message)
+            || 'The request did not complete.'}`;
+        }
+        if (generation !== staffTimeLoadGeneration) return null;
+        currentStaffRecentLookup = recentLookup;
+        return initial;
+      }
+
+      async function loadStaffTimeAdvancedReview(initial, generation) {
         const records = await fetchStaffTimeReviewStream(
           initial,
           'records',
@@ -2459,27 +2615,7 @@
           generation
         );
         if (!audit) return null;
-        let historyPage = null;
-        try {
-          historyPage = await fetchStaffTimeHistoryPage(initial, 0, generation);
-        } catch (error) {
-          if (generation !== staffTimeLoadGeneration) return null;
-          if (
-            error.status === 401
-            || error.status === 403
-            || validStaffTimeStaleError(error)
-          ) throw error;
-          if (validStaffTimeHistoryUnavailableError(error)) {
-            staffHistoryReceiverUnavailable = true;
-          } else {
-            staffHistoryLoadError = `Completed shift history could not be loaded. ${clean(error.message)
-              || 'The request did not complete.'}`;
-          }
-        }
-        if (generation !== staffTimeLoadGeneration) return null;
-        const review = assembleStaffTimeReview(initial, records, needsAttention, audit);
-        currentStaffHistoryPage = historyPage;
-        return review;
+        return assembleStaffTimeReview(initial, records, needsAttention, audit);
       }
 
       function validStaffTimeStaleError(error) {
@@ -2489,15 +2625,6 @@
           && error.data.ok === false
           && error.data.result === 'stale'
           && error.data.code === 'STAFF_TIME_VIEW_STALE';
-      }
-
-      function validStaffTimeHistoryUnavailableError(error) {
-        return Boolean(error)
-          && error.status === 502
-          && exactObjectKeys(error.data, ['ok', 'code', 'message'])
-          && error.data.ok === false
-          && error.data.code === 'STAFF_TIME_HISTORYPAGE_REJECTED'
-          && error.data.message === 'Staff time history page did not return a complete readable confirmation. Success is not being reported.';
       }
 
       async function loadStaffTimeReviewView(generation) {
@@ -3282,12 +3409,18 @@
         currentAuditHistory = [];
         persistentReviewOutcome = null;
         currentStaffTime = null;
-        currentStaffHistoryPage = null;
-        staffHistoryReceiverUnavailable = false;
-        staffHistoryInitialLoading = false;
-        staffHistoryLoadError = '';
-        staffHistoryPageLoading = false;
-        staffHistoryPageError = '';
+        currentStaffRecentLookup = null;
+        staffRecentLoading = false;
+        staffRecentLoadError = '';
+        currentStaffOlderShiftLookup = null;
+        currentStaffOlderShiftQuery = null;
+        staffOlderShiftLoading = false;
+        staffOlderShiftError = '';
+        staffOlderShiftLoadGeneration += 1;
+        staffAdvancedLoading = false;
+        staffAdvancedLoaded = false;
+        staffAdvancedError = '';
+        staffAdvancedLoadGeneration += 1;
         currentAdminName = '';
         adminRequestToken = '';
         $('#appPanel').hidden = true;
@@ -3301,19 +3434,26 @@
         $('#searchResults').hidden = true;
         $('#staffTimeSummary').textContent = 'Not loaded';
         $('#staffClockedInNow').replaceChildren();
-        $('#staffTodayPunches').replaceChildren();
+        $('#staffTodayPunches').replaceChildren(staffEmpty('Open this section to load individual punches.'));
         $('#staffNeedsAttention').replaceChildren();
         $('#staffNeedsAttentionSection').hidden = true;
         $('#staffPeriodTotals').replaceChildren();
-        $('#staffTimeRecords').replaceChildren();
-        $('#staffCompletedShiftHistory').replaceChildren(staffEmpty('Sign in to load completed shift history.'));
-        $('#staffCompletedShiftHistory').setAttribute('aria-busy', 'false');
-        $('#staffTimeHistoryRetry').hidden = true;
-        $('#staffTimeOlderHistory').hidden = true;
-        $('#staffTimeOlderHistory').disabled = false;
-        $('#staffTimeOlderHistory').textContent = 'Load older completed shifts';
-        $('#staffTimeHistoryScope').textContent = '';
-        $('#staffTimeAudit').replaceChildren();
+        $('#staffTimeRecords').replaceChildren(staffEmpty('Open this section to load individual punch records.'));
+        $('#staffRecentShifts').replaceChildren(staffEmpty('Sign in to load recent completed shifts.'));
+        $('#staffRecentShifts').setAttribute('aria-busy', 'false');
+        $('#staffRecentShiftsRetry').hidden = true;
+        $('#staffRecentShiftsMessage').textContent = '';
+        $('#staffOlderShiftStaff').replaceChildren(makeElement('option', '', 'Choose staff'));
+        $('#staffOlderShiftDate').value = '';
+        $('#staffOlderShiftDate').max = '';
+        $('#staffOlderShiftResults').replaceChildren(staffEmpty('Choose a staff member and exact older date.'));
+        $('#staffOlderShiftResults').setAttribute('aria-busy', 'false');
+        $('#staffOlderShiftRetry').hidden = true;
+        $('#staffOlderShiftSubmit').disabled = false;
+        showMessage($('#staffOlderShiftMessage'), '');
+        $('#staffTimeAudit').replaceChildren(staffEmpty('Open this section to load the correction audit.'));
+        $('#staffTimeAdvancedRetry').hidden = true;
+        $('#staffTimeAdvancedMessage').textContent = 'Open this section to load advanced records and audit.';
         $('#staffCorrectionName').replaceChildren(makeElement('option', '', 'Choose staff'));
         clearStaffCorrectionIdentity($('#staffCorrectionForm'));
         showMessage($('#staffTimeMessage'), '');
@@ -3359,7 +3499,7 @@
           adminRequestToken = data.requestToken;
           $('#loginPassphrase').value = '';
           setLoggedIn(data);
-          if (STAFF_CLOCK_ENABLED) beginStaffTimeHistoryLoading();
+          if (STAFF_CLOCK_ENABLED) beginStaffShiftLookupLoading();
           await loadReview(defaultYesterday());
           if (STAFF_CLOCK_ENABLED) {
             await loadStaffTime();
@@ -3627,32 +3767,33 @@
         return block;
       }
 
-      function populateStaffCorrectionNames(staff) {
-        const select = $('#staffCorrectionName');
-        const selected = select.value;
-        const options = [makeElement('option', '', 'Choose staff')];
-        options[0].value = '';
-        for (const person of staff) {
-          const option = makeElement('option', '', person.staffName);
-          option.value = person.staffId;
-          option.dataset.staffName = person.staffName;
-          options.push(option);
+      function populateStaffCorrectionNames(staff, shiftStaff) {
+        for (const { selector, people } of [
+          { selector: '#staffCorrectionName', people: staff },
+          { selector: '#staffOlderShiftStaff', people: shiftStaff }
+        ]) {
+          const select = $(selector);
+          const selected = select.value;
+          const options = [makeElement('option', '', 'Choose staff')];
+          options[0].value = '';
+          for (const person of people) {
+            const option = makeElement('option', '', person.staffName);
+            option.value = person.staffId;
+            option.dataset.staffName = person.staffName;
+            options.push(option);
+          }
+          select.replaceChildren(...options);
+          if (people.some(person => person.staffId === selected)) select.value = selected;
         }
-        select.replaceChildren(...options);
-        if (staff.some(person => person.staffId === selected)) select.value = selected;
       }
 
       function renderStaffTimeRecords(data) {
-        const cutoff = shiftDate(data.view.today, -6);
         const records = [...data.records].sort((left, right) => (
           Date.parse(right.timestamp) - Date.parse(left.timestamp)
           || right.punchId.localeCompare(left.punchId)
         ));
-        const visibleRecords = records.filter(record => (
-          record.date >= cutoff && record.date <= data.view.today
-        ));
         const completedShifts = staffCompletedShiftByClockIn(records);
-        const recordRows = visibleRecords.map(record => staffRecordElement(
+        const recordRows = records.map(record => staffRecordElement(
           record,
           true,
           completedShifts.get(record.punchId) || null
@@ -3664,8 +3805,6 @@
         recordList.replaceChildren(...recordRows);
         if (data.view.recordTotal === 0) {
           recordList.appendChild(staffEmpty('No Staff Time records yet.'));
-        } else if (!visibleRecords.length) {
-          recordList.appendChild(staffEmpty('No punches in the latest seven calendar days.'));
         }
       }
 
@@ -3674,7 +3813,21 @@
           `${shift.clockIn.staffName} · Completed shift`,
           `${staffTimestampLabel(shift.clockIn.timestamp)} to ${staffTimestampLabel(shift.clockOut.timestamp)}`
         );
-        row.appendChild(staffBadge(shift.clockIn.source, shift.clockIn.source === 'Admin-added' ? 'admin' : ''));
+        if (shift.clockIn.source === shift.clockOut.source) {
+          row.appendChild(staffBadge(
+            shift.clockIn.source,
+            shift.clockIn.source === 'Admin-added' ? 'admin' : ''
+          ));
+        } else {
+          row.appendChild(staffBadge(
+            `Clock-in · ${shift.clockIn.source}`,
+            shift.clockIn.source === 'Admin-added' ? 'admin' : ''
+          ));
+          row.appendChild(staffBadge(
+            `Clock-out · ${shift.clockOut.source}`,
+            shift.clockOut.source === 'Admin-added' ? 'admin' : ''
+          ));
+        }
         if (shift.latestAdjustment) {
           row.appendChild(staffBadge('Adjusted', 'admin'));
           row.appendChild(makeElement(
@@ -3686,71 +3839,127 @@
               `Latest audit: ${shift.latestAdjustment.reason} · ${shift.latestAdjustment.result}`
             ].join(' · ')
           ));
+        } else {
+          const carriedCorrections = [
+            ['Clock-in', shift.clockIn],
+            ['Clock-out', shift.clockOut]
+          ].filter(([, punch]) => Object.hasOwn(punch, 'adjustmentRequestId'));
+          if (carriedCorrections.length) {
+            row.appendChild(staffBadge('Existing punch correction', 'admin'));
+            row.appendChild(makeElement(
+              'div',
+              'record-detail staff-adjustment-evidence',
+              carriedCorrections.map(([label, punch]) => (
+                `${label} retains an earlier correction: original ${staffTimestampLabel(punch.originalTimestamp)}; current ${staffTimestampLabel(punch.timestamp)}`
+              )).join(' · ')
+            ));
+          }
         }
         row.appendChild(staffAdjustmentForm(shift));
         return row;
       }
 
-      function beginStaffTimeHistoryLoading() {
+      function beginStaffShiftLookupLoading() {
         currentStaffTime = null;
-        currentStaffHistoryPage = null;
-        staffHistoryReceiverUnavailable = false;
-        staffHistoryInitialLoading = true;
-        staffHistoryLoadError = '';
-        staffHistoryPageLoading = false;
-        staffHistoryPageError = '';
-        renderStaffTimeHistory();
+        currentStaffRecentLookup = null;
+        staffRecentLoading = true;
+        staffRecentLoadError = '';
+        currentStaffOlderShiftLookup = null;
+        currentStaffOlderShiftQuery = null;
+        staffOlderShiftLoading = false;
+        staffOlderShiftError = '';
+        staffOlderShiftLoadGeneration += 1;
+        staffAdvancedLoading = false;
+        staffAdvancedLoaded = false;
+        staffAdvancedError = '';
+        staffAdvancedLoadGeneration += 1;
+        renderStaffTimeAdvancedState();
+        renderStaffRecentShifts();
+        renderStaffOlderShiftLookup();
       }
 
-      function renderStaffTimeHistory() {
-        const page = currentStaffHistoryPage;
-        const history = $('#staffCompletedShiftHistory');
-        const retry = $('#staffTimeHistoryRetry');
-        const toggle = $('#staffTimeOlderHistory');
-        if (staffHistoryInitialLoading) {
+      function renderStaffRecentShifts() {
+        const lookup = currentStaffRecentLookup;
+        const history = $('#staffRecentShifts');
+        const retry = $('#staffRecentShiftsRetry');
+        const message = $('#staffRecentShiftsMessage');
+        if (staffRecentLoading) {
           history.setAttribute('aria-busy', 'true');
-          history.replaceChildren(staffEmpty('Loading completed shift history…'));
+          history.replaceChildren(staffEmpty('Loading recent completed shifts…'));
           retry.hidden = true;
-          toggle.hidden = true;
-          toggle.disabled = false;
-          toggle.textContent = 'Load older completed shifts';
-          $('#staffTimeHistoryScope').textContent = 'Loading the first completed-shift page…';
+          message.textContent = 'Loading the last seven New York calendar days…';
           return;
         }
         history.setAttribute('aria-busy', 'false');
-        if (!page) {
-          const message = staffHistoryLoadError || (staffHistoryReceiverUnavailable
-            ? 'Completed shift history is temporarily unavailable until the matching Staff Clock receiver is active. Current Staff time remains visible; nothing changed.'
-            : 'Completed shift history could not be loaded.');
-          history.replaceChildren(staffEmpty(message));
+        if (!lookup) {
+          const error = staffRecentLoadError || 'Recent completed shifts could not be loaded.';
+          history.replaceChildren(staffEmpty(error));
           retry.hidden = false;
-          toggle.hidden = true;
-          $('#staffTimeHistoryScope').textContent = staffHistoryReceiverUnavailable
-            ? 'History requires the matching receiver release. Retry after it is active.'
-            : 'Completed shift history did not load. Retry below.';
+          message.textContent = 'Recent completed shifts did not load. Retry below.';
           return;
         }
         retry.hidden = true;
-        history.replaceChildren(...page.items.map(staffCompletedShiftElement));
-        if (page.total === 0) {
-          history.appendChild(staffEmpty('No completed shifts yet.'));
-          $('#staffTimeHistoryScope').textContent = 'No completed shifts are retained.';
+        history.replaceChildren(...lookup.items.map(staffCompletedShiftElement));
+        if (lookup.total === 0) {
+          history.appendChild(staffEmpty('No completed shifts in the last seven days.'));
+          message.textContent = `${lookup.dateFrom} through ${lookup.dateThrough}.`;
         } else {
-          const first = page.offset + 1;
-          const last = page.offset + page.items.length;
-          $('#staffTimeHistoryScope').textContent = `Showing completed shifts ${first.toLocaleString('en-US')}–${last.toLocaleString('en-US')} of ${page.total.toLocaleString('en-US')}, newest first.`;
+          message.textContent = lookup.truncated
+            ? `Showing newest ${lookup.items.length.toLocaleString('en-US')} of ${lookup.total.toLocaleString('en-US')} completed shifts from ${lookup.dateFrom} through ${lookup.dateThrough}.`
+            : `Showing ${lookup.total.toLocaleString('en-US')} completed ${lookup.total === 1 ? 'shift' : 'shifts'} from ${lookup.dateFrom} through ${lookup.dateThrough}.`;
         }
-        if (staffHistoryPageError) history.appendChild(staffEmpty(staffHistoryPageError));
-        toggle.hidden = page.nextOffset === null;
-        toggle.disabled = staffHistoryPageLoading;
-        toggle.textContent = staffHistoryPageLoading
-          ? 'Loading…'
-          : staffHistoryPageError ? 'Retry older completed shifts' : 'Load older completed shifts';
       }
 
-      function renderStaffTime(data) {
+      function renderStaffOlderShiftLookup() {
+        const results = $('#staffOlderShiftResults');
+        const retry = $('#staffOlderShiftRetry');
+        const message = $('#staffOlderShiftMessage');
+        for (const control of [
+          $('#staffOlderShiftStaff'),
+          $('#staffOlderShiftDate'),
+          $('#staffOlderShiftSubmit')
+        ]) control.disabled = staffOlderShiftLoading;
+        retry.disabled = staffOlderShiftLoading;
+        if (staffOlderShiftLoading) {
+          results.setAttribute('aria-busy', 'true');
+          results.replaceChildren(staffEmpty('Loading the selected staff member and exact date…'));
+          retry.hidden = true;
+          showMessage(message, 'Finding the older completed shift…', 'working');
+          return;
+        }
+        results.setAttribute('aria-busy', 'false');
+        if (staffOlderShiftError) {
+          results.replaceChildren(staffEmpty(staffOlderShiftError));
+          retry.hidden = false;
+          showMessage(message, 'The older shift lookup failed. Retry uses the same staff member and exact date.');
+          return;
+        }
+        retry.hidden = true;
+        if (!currentStaffOlderShiftQuery || !currentStaffOlderShiftLookup) {
+          results.replaceChildren(staffEmpty('Choose a staff member and exact older date.'));
+          showMessage(message, '');
+          return;
+        }
+        const lookup = currentStaffOlderShiftLookup;
+        results.replaceChildren(...lookup.items.map(staffCompletedShiftElement));
+        const person = currentStaffTime?.shiftStaff.find(item => item.staffId === lookup.staffId);
+        const staffName = person?.staffName || 'Selected staff member';
+        if (lookup.total === 0) {
+          results.appendChild(staffEmpty(`No completed shifts found for ${staffName} on ${lookup.date}.`));
+          showMessage(message, `No completed shifts found for ${staffName} on ${lookup.date}.`);
+        } else {
+          showMessage(message, lookup.truncated
+            ? `Showing newest ${lookup.items.length.toLocaleString('en-US')} of ${lookup.total.toLocaleString('en-US')} completed shifts for ${staffName} on ${lookup.date}.`
+            : `Found ${lookup.total.toLocaleString('en-US')} completed ${lookup.total === 1 ? 'shift' : 'shifts'} for ${staffName} on ${lookup.date}.`);
+        }
+      }
+
+      function renderStaffTimePrimary(data) {
         currentStaffTime = data;
-        populateStaffCorrectionNames(data.staff);
+        populateStaffCorrectionNames(data.staff, data.shiftStaff);
+        const olderDate = $('#staffOlderShiftDate');
+        olderDate.max = shiftDate(data.view.today, -7);
+        if (olderDate.value > olderDate.max) olderDate.value = '';
         $('#staffTimeSummary').textContent = `${data.clockedInNow.length} clocked in · ${data.view.todayPunchTotal.toLocaleString('en-US')} today`;
 
         const clockedIn = $('#staffClockedInNow');
@@ -3759,6 +3968,18 @@
           `Since ${staffTimestampLabel(item.clockInAt)}`
         )));
         if (!data.clockedInNow.length) clockedIn.appendChild(staffEmpty('No one is clocked in.'));
+
+        $('#staffPeriodTotals').replaceChildren(
+          staffPeriodElement('Current pay period', data.periods.current),
+          staffPeriodElement('Previous pay period', data.periods.previous)
+        );
+
+        renderStaffRecentShifts();
+        renderStaffOlderShiftLookup();
+      }
+
+      function renderStaffTimeAdvanced(data) {
+        currentStaffTime = data;
 
         const today = $('#staffTodayPunches');
         const todayRows = data.todayPunches.map(item => {
@@ -3784,13 +4005,7 @@
         attention.replaceChildren(...data.needsAttention.map(item => staffTimeRow(item.staffName, item.message)));
         attentionSection.hidden = data.needsAttention.length === 0;
 
-        $('#staffPeriodTotals').replaceChildren(
-          staffPeriodElement('Current pay period', data.periods.current),
-          staffPeriodElement('Previous pay period', data.periods.previous)
-        );
-
         renderStaffTimeRecords(data);
-        renderStaffTimeHistory();
 
         const audit = $('#staffTimeAudit');
         const auditRows = data.audit.map(item => {
@@ -3821,6 +4036,63 @@
         }
         audit.replaceChildren(...auditRows);
         if (data.view.auditTotal === 0) audit.appendChild(staffEmpty('No Staff time corrections yet.'));
+        for (const list of [today, $('#staffTimeRecords'), audit]) {
+          list.setAttribute('aria-busy', 'false');
+        }
+        staffAdvancedLoading = false;
+        staffAdvancedLoaded = true;
+        staffAdvancedError = '';
+        renderStaffTimeAdvancedState();
+      }
+
+      function renderStaffTimeAdvancedState() {
+        const retry = $('#staffTimeAdvancedRetry');
+        const message = $('#staffTimeAdvancedMessage');
+        const today = $('#staffTodayPunches');
+        const records = $('#staffTimeRecords');
+        const audit = $('#staffTimeAudit');
+        const attentionSection = $('#staffNeedsAttentionSection');
+        const attention = $('#staffNeedsAttention');
+        if (!staffAdvancedLoaded) {
+          attention.replaceChildren();
+          attentionSection.hidden = true;
+        }
+        if (staffAdvancedLoading) {
+          for (const [list, label] of [
+            [today, 'Loading today’s individual punches…'],
+            [records, 'Loading individual punch records…'],
+            [audit, 'Loading the correction audit…']
+          ]) {
+            list.setAttribute('aria-busy', 'true');
+            list.replaceChildren(staffEmpty(label));
+          }
+          retry.hidden = true;
+          message.textContent = 'Loading advanced records and audit…';
+          return;
+        }
+        for (const list of [today, records, audit]) list.setAttribute('aria-busy', 'false');
+        if (staffAdvancedError) {
+          for (const list of [today, records, audit]) {
+            list.replaceChildren(staffEmpty(staffAdvancedError));
+          }
+          retry.hidden = false;
+          message.textContent = 'Advanced records and audit did not load. Retry below.';
+          return;
+        }
+        retry.hidden = true;
+        if (staffAdvancedLoaded) {
+          message.textContent = 'Advanced records and audit loaded.';
+          return;
+        }
+        today.replaceChildren(staffEmpty('Open this section to load individual punches.'));
+        records.replaceChildren(staffEmpty('Open this section to load individual punch records.'));
+        audit.replaceChildren(staffEmpty('Open this section to load the correction audit.'));
+        message.textContent = 'Open this section to load advanced records and audit.';
+      }
+
+      function renderStaffTime(data) {
+        renderStaffTimePrimary(data);
+        renderStaffTimeAdvanced(data);
       }
 
       function newStaffUuid() {
@@ -4374,11 +4646,14 @@
           || !STAFF_PUNCH_ID_PATTERN.test(clockOutPunchId)
           || clockInPunchId === clockOutPunchId
         ) return null;
-        const historyShift = currentStaffHistoryPage?.items.find(shift => (
+        const lookupShift = [
+          ...(currentStaffRecentLookup?.items || []),
+          ...(currentStaffOlderShiftLookup?.items || [])
+        ].find(shift => (
           shift.clockIn.punchId === clockInPunchId
           && shift.clockOut.punchId === clockOutPunchId
         )) || null;
-        const completedShift = historyShift || (currentStaffTime
+        const completedShift = lookupShift || (currentStaffTime
           ? staffCompletedShiftByClockIn(currentStaffTime.records).get(clockInPunchId)
           : null);
         if (!completedShift || completedShift.clockOut.punchId !== clockOutPunchId) return null;
@@ -4486,29 +4761,33 @@
 
       async function loadStaffTime(options = {}) {
         const generation = ++staffTimeLoadGeneration;
-        beginStaffTimeHistoryLoading();
+        beginStaffShiftLookupLoading();
         if (options.quiet !== true) {
           $('#staff-time').classList.add('loading');
           showMessage($('#staffTimeMessage'), 'Loading Staff time…', 'working');
         }
         try {
-          const data = await loadStaffTimeReviewView(generation);
+          const initial = await loadStaffTimeReviewView(generation);
           if (generation !== staffTimeLoadGeneration) return false;
-          if (!data) return false;
-          staffHistoryInitialLoading = false;
-          renderStaffTime(data);
+          if (!initial) return false;
+          const data = staffTimeReviewShell(initial);
+          staffRecentLoading = false;
+          renderStaffTimePrimary(data);
           showMessage($('#staffTimeMessage'), '');
           setStaffCorrectionDefaults();
+          if ($('#staffTimeAdvanced').open && options.deferAdvanced !== true) {
+            void loadStaffTimeAdvanced();
+          }
           return true;
         } catch (error) {
           if (generation !== staffTimeLoadGeneration) return false;
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
           } else {
-            staffHistoryInitialLoading = false;
-            staffHistoryLoadError = `Completed shift history could not be loaded. ${clean(error.message)
+            staffRecentLoading = false;
+            staffRecentLoadError = `Recent completed shifts could not be loaded. ${clean(error.message)
               || 'The request did not complete.'}`;
-            renderStaffTimeHistory();
+            renderStaffRecentShifts();
             showMessage($('#staffTimeMessage'), error.message);
           }
           return false;
@@ -4517,81 +4796,189 @@
         }
       }
 
-      async function retryStaffTimeHistory() {
-        if (staffHistoryPageLoading || staffHistoryInitialLoading) return;
+      async function loadStaffTimeAdvanced() {
+        if (!currentStaffTime || staffAdvancedLoading || staffAdvancedLoaded) return false;
+        const generation = staffTimeLoadGeneration;
+        const advancedGeneration = ++staffAdvancedLoadGeneration;
+        const initial = currentStaffTime;
+        staffAdvancedLoading = true;
+        staffAdvancedError = '';
+        renderStaffTimeAdvancedState();
+        try {
+          const data = await loadStaffTimeAdvancedReview(initial, generation);
+          if (
+            !data
+            || generation !== staffTimeLoadGeneration
+            || advancedGeneration !== staffAdvancedLoadGeneration
+          ) return false;
+          renderStaffTimeAdvanced(data);
+          return true;
+        } catch (error) {
+          if (
+            generation !== staffTimeLoadGeneration
+            || advancedGeneration !== staffAdvancedLoadGeneration
+          ) return false;
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Admin login required.');
+          } else {
+            staffAdvancedError = validStaffTimeStaleError(error)
+              ? 'Staff Time changed while advanced records were loading.'
+              : `Advanced records and audit could not be loaded. ${clean(error.message)
+                || 'The request did not complete.'}`;
+          }
+          return false;
+        } finally {
+          if (
+            generation === staffTimeLoadGeneration
+            && advancedGeneration === staffAdvancedLoadGeneration
+          ) {
+            staffAdvancedLoading = false;
+            renderStaffTimeAdvancedState();
+          }
+        }
+      }
+
+      async function retryStaffTimeAdvanced() {
+        if (staffAdvancedLoading) return;
+        const refreshed = await loadStaffTime({ quiet: true, deferAdvanced: true });
+        if (!refreshed) {
+          staffAdvancedLoading = false;
+          staffAdvancedLoaded = false;
+          staffAdvancedError = 'Staff Time could not be refreshed. Retry when the connection is available.';
+          renderStaffTimeAdvancedState();
+          return;
+        }
+        await loadStaffTimeAdvanced();
+      }
+
+      async function retryStaffRecentShifts() {
+        if (staffRecentLoading) return;
         if (!currentStaffTime) {
           await loadStaffTime();
           return;
         }
         const generation = staffTimeLoadGeneration;
-        staffHistoryInitialLoading = true;
-        staffHistoryLoadError = '';
-        staffHistoryReceiverUnavailable = false;
-        staffHistoryPageLoading = true;
-        staffHistoryPageError = '';
-        renderStaffTimeHistory();
+        staffRecentLoading = true;
+        staffRecentLoadError = '';
+        renderStaffRecentShifts();
         try {
-          const page = await fetchStaffTimeHistoryPage(currentStaffTime, 0, generation);
-          if (!page || generation !== staffTimeLoadGeneration) return;
-          currentStaffHistoryPage = page;
+          const lookup = await fetchStaffTimeShiftLookup(
+            currentStaffTime,
+            { mode: 'recent' },
+            generation
+          );
+          if (!lookup || generation !== staffTimeLoadGeneration) return;
+          currentStaffRecentLookup = lookup;
         } catch (error) {
           if (generation !== staffTimeLoadGeneration) return;
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
           } else if (validStaffTimeStaleError(error)) {
             await loadStaffTime({ quiet: true });
-          } else if (validStaffTimeHistoryUnavailableError(error)) {
-            staffHistoryReceiverUnavailable = true;
           } else {
-            staffHistoryLoadError = `Completed shift history could not be loaded. ${clean(error.message)
+            currentStaffRecentLookup = null;
+            staffRecentLoadError = `Recent completed shifts could not be loaded. ${clean(error.message)
               || 'The request did not complete.'}`;
           }
         } finally {
           if (generation === staffTimeLoadGeneration) {
-            staffHistoryInitialLoading = false;
-            staffHistoryPageLoading = false;
-            renderStaffTimeHistory();
+            staffRecentLoading = false;
+            renderStaffRecentShifts();
           }
         }
       }
 
-      async function loadOlderStaffTimeHistory() {
+      function readStaffOlderShiftQuery(form) {
+        const staffId = String(form.elements.staffId.value || '');
+        const date = String(form.elements.date.value || '');
+        const person = currentStaffTime?.shiftStaff.find(item => item.staffId === staffId);
         if (
-          staffHistoryPageLoading
-          || !currentStaffTime
-          || !currentStaffHistoryPage
-          || currentStaffHistoryPage.nextOffset === null
-        ) return;
-        const generation = staffTimeLoadGeneration;
-        staffHistoryPageLoading = true;
-        staffHistoryPageError = '';
-        renderStaffTimeHistory();
+          !person
+          || !validReviewDate(date)
+          || date > shiftDate(currentStaffTime.view.today, -7)
+        ) return null;
+        return Object.freeze({ mode: 'exactDate', staffId: person.staffId, date });
+      }
+
+      async function loadStaffOlderShiftLookup(query) {
+        if (!currentStaffTime || staffOlderShiftLoading || !query) return;
+        const staffGeneration = staffTimeLoadGeneration;
+        const lookupGeneration = ++staffOlderShiftLoadGeneration;
+        currentStaffOlderShiftQuery = query;
+        currentStaffOlderShiftLookup = null;
+        staffOlderShiftLoading = true;
+        staffOlderShiftError = '';
+        renderStaffOlderShiftLookup();
         try {
-          const page = await fetchStaffTimeHistoryPage(
+          const lookup = await fetchStaffTimeShiftLookup(
             currentStaffTime,
-            currentStaffHistoryPage.nextOffset,
-            generation
+            query,
+            staffGeneration
           );
-          if (!page || generation !== staffTimeLoadGeneration) return;
-          currentStaffHistoryPage = page;
-          showMessage($('#staffTimeMessage'), '');
+          if (
+            !lookup
+            || staffGeneration !== staffTimeLoadGeneration
+            || lookupGeneration !== staffOlderShiftLoadGeneration
+          ) return;
+          currentStaffOlderShiftLookup = lookup;
         } catch (error) {
-          if (generation !== staffTimeLoadGeneration) return;
+          if (
+            staffGeneration !== staffTimeLoadGeneration
+            || lookupGeneration !== staffOlderShiftLoadGeneration
+          ) return;
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
           } else if (validStaffTimeStaleError(error)) {
-            await loadStaffTime({ quiet: true });
+            const refreshed = await loadStaffTime({ quiet: true });
+            currentStaffOlderShiftQuery = query;
+            currentStaffOlderShiftLookup = null;
+            staffOlderShiftLoading = false;
+            staffOlderShiftError = refreshed
+              ? 'Staff time changed while searching. Retry the same staff member and date.'
+              : 'Staff time changed and could not be refreshed. Retry the same staff member and date.';
+            renderStaffOlderShiftLookup();
           } else {
-            staffHistoryPageError = `Older completed shifts could not be loaded. ${clean(error.message)
+            staffOlderShiftError = `The older shift could not be loaded. ${clean(error.message)
               || 'The request did not complete.'}`;
-            showMessage($('#staffTimeMessage'), error.message);
           }
         } finally {
-          if (generation === staffTimeLoadGeneration) {
-            staffHistoryPageLoading = false;
-            renderStaffTimeHistory();
+          if (
+            staffGeneration === staffTimeLoadGeneration
+            && lookupGeneration === staffOlderShiftLoadGeneration
+          ) {
+            staffOlderShiftLoading = false;
+            renderStaffOlderShiftLookup();
           }
         }
+      }
+
+      async function submitStaffOlderShiftLookup(form) {
+        if (staffOlderShiftLoading) return;
+        const query = readStaffOlderShiftQuery(form);
+        if (!query) {
+          showMessage(
+            $('#staffOlderShiftMessage'),
+            'Choose a staff member and an exact date earlier than the last seven days.'
+          );
+          return;
+        }
+        await loadStaffOlderShiftLookup(query);
+      }
+
+      async function retryStaffOlderShiftLookup() {
+        if (!currentStaffOlderShiftQuery || staffOlderShiftLoading) return;
+        const query = currentStaffOlderShiftQuery;
+        if (!currentStaffTime) {
+          const refreshed = await loadStaffTime({ quiet: true });
+          currentStaffOlderShiftQuery = query;
+          currentStaffOlderShiftLookup = null;
+          if (!refreshed) {
+            staffOlderShiftError = 'Staff time could not be refreshed. Retry the same staff member and date.';
+            renderStaffOlderShiftLookup();
+            return;
+          }
+        }
+        await loadStaffOlderShiftLookup(query);
       }
 
       async function submitStaffCorrection(form) {
@@ -5336,9 +5723,25 @@
         event.preventDefault();
         submitStaffCorrection(event.currentTarget);
       });
-      $('#staffTimeHistoryRetry').addEventListener('click', retryStaffTimeHistory);
-      $('#staffTimeOlderHistory').addEventListener('click', loadOlderStaffTimeHistory);
-      ['#staffTimeRecords', '#staffCompletedShiftHistory'].forEach(selector => {
+      $('#staffRecentShiftsRetry').addEventListener('click', retryStaffRecentShifts);
+      $('#staffOlderShiftForm').addEventListener('input', () => {
+        if (staffOlderShiftLoading) return;
+        staffOlderShiftLoadGeneration += 1;
+        currentStaffOlderShiftQuery = null;
+        currentStaffOlderShiftLookup = null;
+        staffOlderShiftError = '';
+        renderStaffOlderShiftLookup();
+      });
+      $('#staffOlderShiftForm').addEventListener('submit', event => {
+        event.preventDefault();
+        submitStaffOlderShiftLookup(event.currentTarget);
+      });
+      $('#staffOlderShiftRetry').addEventListener('click', retryStaffOlderShiftLookup);
+      $('#staffTimeAdvanced').addEventListener('toggle', event => {
+        if (event.currentTarget.open) void loadStaffTimeAdvanced();
+      });
+      $('#staffTimeAdvancedRetry').addEventListener('click', retryStaffTimeAdvanced);
+      ['#staffRecentShifts', '#staffOlderShiftResults', '#staffTimeRecords'].forEach(selector => {
         $(selector).addEventListener('click', event => {
           const cancel = event.target.closest('[data-staff-adjust-cancel]');
           if (!cancel) return;

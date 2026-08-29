@@ -16,6 +16,8 @@ import {
   sanitizeStaffTimeCorrectionResult,
   sanitizeStaffTimeHistoryPage,
   sanitizeStaffTimeHistoryPageRequest,
+  sanitizeStaffShiftLookup,
+  sanitizeStaffShiftLookupRequest,
   sanitizeStaffTimeReview,
   sanitizeStaffViewPage,
   sanitizeStaffViewPageRequest,
@@ -68,11 +70,13 @@ function validPreviewSameOriginRequest(request) {
 function adminFailureResponse(google, operation) {
   const failureClass = googleFailureClass(google);
   const unreachable = failureClass === 'UNREACHABLE';
-  const label = operation === 'review' || operation === 'reviewPage' || operation === 'historyPage'
+  const label = operation === 'review' || operation === 'reviewPage' || operation === 'historyPage' || operation === 'shiftLookup'
     ? operation === 'reviewPage'
       ? 'Staff time review page'
       : operation === 'historyPage'
         ? 'Staff time history page'
+        : operation === 'shiftLookup'
+          ? 'Staff time completed-shift lookup'
         : 'Staff time review'
     : operation === 'correct'
       ? 'Staff time correction'
@@ -137,6 +141,7 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
     operation !== 'review'
     && operation !== 'reviewPage'
     && operation !== 'historyPage'
+    && operation !== 'shiftLookup'
     && operation !== 'correct'
     && operation !== 'adjust'
     && operation !== 'void'
@@ -160,6 +165,7 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
       test: runtime.preview,
       adminName: auth.session.adminName,
       staff: review.staff,
+      shiftStaff: review.shiftStaff,
       clockedInNow: review.clockedInNow,
       periods: review.periods,
       view: review.view
@@ -230,6 +236,60 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
       total: page.total,
       items: page.items,
       nextOffset: page.nextOffset
+    });
+  }
+
+  if (operation === 'shiftLookup') {
+    const lookupRequest = sanitizeStaffShiftLookupRequest(parsed.value, 'shiftLookup', {
+      now: dateNow
+    });
+    if (!lookupRequest) {
+      return jsonResponse(400, { ok: false, message: 'Completed-shift lookup was rejected.' });
+    }
+    const google = await postGoogle(runtime, 'staffTimeShiftLookupV3', {
+      viewToken: lookupRequest.viewToken,
+      mode: lookupRequest.mode,
+      staffId: lookupRequest.staffId,
+      date: lookupRequest.date
+    }, fetchImpl);
+    if (google.readable && isStaffViewStale(google.value, target)) {
+      return jsonResponse(409, {
+        ok: false,
+        result: 'stale',
+        code: 'STAFF_TIME_VIEW_STALE'
+      });
+    }
+    if (
+      google.readable
+      && exactObjectKeys(google.value, ['ok', 'target', 'result'])
+      && google.value.ok === false
+      && google.value.target === target
+      && google.value.result === 'too_large'
+    ) {
+      return jsonResponse(409, {
+        ok: false,
+        result: 'too_large',
+        code: 'STAFF_TIME_SHIFT_LOOKUP_TOO_LARGE',
+        message: 'That date has too many shifts for a safe lookup. Nothing changed.'
+      });
+    }
+    const lookup = google.readable
+      ? sanitizeStaffShiftLookup(google.value, target, lookupRequest, { now: dateNow })
+      : null;
+    if (!lookup) return adminFailureResponse(google, operation);
+    return jsonResponse(200, {
+      ok: true,
+      test: runtime.preview,
+      adminName: auth.session.adminName,
+      viewToken: lookup.viewToken,
+      mode: lookup.mode,
+      dateFrom: lookup.dateFrom,
+      dateThrough: lookup.dateThrough,
+      staffId: lookup.staffId,
+      date: lookup.date,
+      total: lookup.total,
+      items: lookup.items,
+      truncated: lookup.truncated
     });
   }
 

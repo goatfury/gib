@@ -77,6 +77,8 @@ var GIB_M1_STAFF_AUDIT_LIMIT_ = 500;
 var GIB_M1_STAFF_ATTENTION_LIMIT_ = 600;
 var GIB_M1_STAFF_PAGE_SIZE_ = 500;
 var GIB_M1_STAFF_HISTORY_PAGE_SIZE_ = 50;
+var GIB_M1_STAFF_SHIFT_LOOKUP_RESULT_LIMIT_ = 20;
+var GIB_M1_STAFF_SHIFT_LOOKUP_DATE_SCAN_LIMIT_ = 50;
 var GIB_M1_STAFF_HISTORY_WINDOW_PAGE_LIMIT_ = 64;
 var GIB_M1_STAFF_HISTORY_INDEX_CHUNK_LIMIT_ = 64;
 var GIB_M1_STAFF_HISTORY_INDEX_CHUNK_SHIFT_LIMIT_ = 5600;
@@ -161,6 +163,7 @@ function adReceiverV2_(e) {
       || action === 'staffTimeReviewV2'
       || action === 'staffTimeReviewPageV2'
       || action === 'staffTimeHistoryPageV2'
+      || action === 'staffTimeShiftLookupV3'
       || action === 'staffTimeCorrect'
       || action === 'staffTimeAdjust'
       || action === 'staffTimeVoid'
@@ -187,6 +190,7 @@ function adReceiverV2_(e) {
       if (action === 'staffTimeReviewV2') return staffTimeReviewV2Action_(body);
       if (action === 'staffTimeReviewPageV2') return staffTimeReviewPageV2Action_(body);
       if (action === 'staffTimeHistoryPageV2') return staffTimeHistoryPageV2Action_(body);
+      if (action === 'staffTimeShiftLookupV3') return staffTimeShiftLookupV3Action_(body);
       if (action === 'staffTimeCorrect') return staffTimeCorrectAction_(body);
       if (action === 'staffTimeAdjust') return staffTimeAdjustAction_(body);
       return staffTimeVoidAction_(body);
@@ -3865,17 +3869,23 @@ function staffClockBuildView_(state, includeAdmin) {
     throw new Error('Staff Clock view token could not be created.');
   }
   view.token = token;
+  var summary = {
+    ok: true,
+    target: target,
+    staff: staffState.active,
+    clockedInNow: analysis.clockedInNow,
+    periods: periods,
+    view: view
+  };
+  if (includeAdmin) {
+    summary.shiftStaff = staffState.all.map(function(staff) {
+      return { staffId: staff.staffId, staffName: staff.staffName };
+    });
+  }
   return {
     target: target,
     signature: state.signature,
-    summary: {
-      ok: true,
-      target: target,
-      staff: staffState.active,
-      clockedInNow: analysis.clockedInNow,
-      periods: periods,
-      view: view
-    },
+    summary: summary,
     streams: {
       records: publicRecords,
       attention: publicIssues,
@@ -3995,6 +4005,96 @@ function staffClockHistoryPageRequest_(body) {
     || offset > GIB_M1_MAX_SAFE_INTEGER_
   ) return null;
   return { viewToken: viewToken, offset: offset };
+}
+
+function staffClockShiftLookupRequest_(body) {
+  var viewToken = body && typeof body.viewToken === 'string' ? body.viewToken : '';
+  var mode = body && typeof body.mode === 'string' ? body.mode : '';
+  var staffId = body && typeof body.staffId === 'string' ? body.staffId : '';
+  var date = body && typeof body.date === 'string' ? body.date : '';
+  if (!GIB_M1_STAFF_VIEW_TOKEN_PATTERN_.test(viewToken)) return null;
+  if (mode === 'recent') {
+    return !staffId && !date
+      ? { viewToken: viewToken, mode: mode, staffId: '', date: '' }
+      : null;
+  }
+  if (
+    mode !== 'exactDate'
+    || !GIB_M1_STAFF_ID_PATTERN_.test(staffId)
+    || !validCalendarDate_(date)
+  ) return null;
+  return { viewToken: viewToken, mode: mode, staffId: staffId, date: date };
+}
+
+function staffClockShiftLookupEnvelope_(
+  target,
+  request,
+  dateFrom,
+  dateThrough,
+  total,
+  items,
+  itemCount
+) {
+  var selected = items.slice(0, itemCount);
+  return {
+    ok: true,
+    target: target,
+    viewToken: request.viewToken,
+    mode: request.mode,
+    dateFrom: dateFrom,
+    dateThrough: dateThrough,
+    staffId: request.staffId,
+    date: request.date,
+    total: total,
+    items: selected,
+    truncated: total > selected.length
+  };
+}
+
+function staffClockBoundedShiftLookup_(
+  target,
+  request,
+  dateFrom,
+  dateThrough,
+  total,
+  items
+) {
+  var maximum = Math.min(GIB_M1_STAFF_SHIFT_LOOKUP_RESULT_LIMIT_, items.length);
+  if (maximum === 0) {
+    return total === 0
+      ? staffClockShiftLookupEnvelope_(
+        target,
+        request,
+        dateFrom,
+        dateThrough,
+        total,
+        items,
+        0
+      )
+      : null;
+  }
+  var low = 1;
+  var high = maximum;
+  var accepted = null;
+  while (low <= high) {
+    var count = Math.floor((low + high) / 2);
+    var candidate = staffClockShiftLookupEnvelope_(
+      target,
+      request,
+      dateFrom,
+      dateThrough,
+      total,
+      items,
+      count
+    );
+    if (staffClockPageByteLength_(candidate) <= GIB_M1_STAFF_HISTORY_PAGE_MAX_BYTES_) {
+      accepted = candidate;
+      low = count + 1;
+    } else {
+      high = count - 1;
+    }
+  }
+  return accepted;
 }
 
 function staffClockPublicCompletedShift_(shift, adjustmentState) {
@@ -4706,6 +4806,212 @@ function staffClockMaterializeHistoryItems_(state, descriptors) {
   });
 }
 
+function staffClockHistoryDateAtOffset_(cache, state, historyIndex, request, offset, dates) {
+  if (Object.prototype.hasOwnProperty.call(dates, offset)) return dates[offset];
+  var descriptors = staffClockReadHistoryDescriptors_(
+    cache,
+    historyIndex,
+    { viewToken: request.viewToken, offset: offset },
+    1
+  );
+  if (!descriptors || descriptors.length !== 1) {
+    throw new Error('Staff Clock history lookup index is unavailable.');
+  }
+  var shifts = staffClockMaterializeHistoryItems_(state, descriptors);
+  if (
+    shifts.length !== 1
+    || !shifts[0].clockIn
+    || !validCalendarDate_(shifts[0].clockIn.date)
+  ) {
+    throw new Error('Staff Clock history lookup date is unavailable.');
+  }
+  dates[offset] = shifts[0].clockIn.date;
+  return dates[offset];
+}
+
+function staffClockHistoryFirstDateAtMost_(
+  cache,
+  state,
+  historyIndex,
+  request,
+  total,
+  targetDate,
+  dates
+) {
+  var low = 0;
+  var high = total;
+  while (low < high) {
+    var middle = Math.floor((low + high) / 2);
+    if (
+      staffClockHistoryDateAtOffset_(
+        cache,
+        state,
+        historyIndex,
+        request,
+        middle,
+        dates
+      ) <= targetDate
+    ) {
+      high = middle;
+    } else {
+      low = middle + 1;
+    }
+  }
+  return low;
+}
+
+function staffClockHistoryFirstDateBefore_(
+  cache,
+  state,
+  historyIndex,
+  request,
+  total,
+  targetDate,
+  dates
+) {
+  var low = 0;
+  var high = total;
+  while (low < high) {
+    var middle = Math.floor((low + high) / 2);
+    if (
+      staffClockHistoryDateAtOffset_(
+        cache,
+        state,
+        historyIndex,
+        request,
+        middle,
+        dates
+      ) < targetDate
+    ) {
+      high = middle;
+    } else {
+      low = middle + 1;
+    }
+  }
+  return low;
+}
+
+function staffClockReadShiftLookup_(body) {
+  var target = requestTarget_(body);
+  var request = staffClockShiftLookupRequest_(body);
+  if (!request) return { ok: false, target: target, result: 'rejected' };
+  var state = staffClockViewState_(body, true);
+  var recentDateFrom = staffClockDateFromMs_(
+    staffClockDateMs_(state.today) - 6 * 24 * 60 * 60 * 1000
+  );
+  if (request.mode === 'exactDate') {
+    var knownStaff = state.staffState.all.some(function(staff) {
+      return staff.staffId === request.staffId;
+    });
+    if (!knownStaff || request.date >= recentDateFrom) {
+      return { ok: false, target: target, result: 'rejected' };
+    }
+  }
+  var dateFrom = request.mode === 'recent' ? recentDateFrom : request.date;
+  var dateThrough = request.mode === 'recent' ? state.today : request.date;
+  var cache = staffClockCache_();
+  var manifest = staffClockCacheReadJson_(
+    cache,
+    staffClockCacheManifestKey_(request.viewToken)
+  );
+  if (!staffClockManifestMatches_(manifest, state, request.viewToken)) {
+    return { ok: false, target: target, result: 'stale' };
+  }
+  var indexRead = staffClockCacheReadJsonStatus_(
+    cache,
+    staffClockCacheHistoryIndexKey_()
+  );
+  if (
+    indexRead.status !== 'hit'
+    || !staffClockHistoryIndexMatches_(indexRead.value, state, request, manifest)
+  ) {
+    staffClockInvalidateCachedView_(cache, manifest);
+    return { ok: false, target: target, result: 'stale' };
+  }
+  var historyIndex = indexRead.value;
+  var totalHistory = manifest.history.total;
+  var dates = {};
+  var startOffset;
+  var endOffset;
+  var descriptors;
+  var materialized;
+  var matches;
+  try {
+    startOffset = staffClockHistoryFirstDateAtMost_(
+      cache,
+      state,
+      historyIndex,
+      request,
+      totalHistory,
+      dateThrough,
+      dates
+    );
+    endOffset = staffClockHistoryFirstDateBefore_(
+      cache,
+      state,
+      historyIndex,
+      request,
+      totalHistory,
+      dateFrom,
+      dates
+    );
+    if (endOffset < startOffset) {
+      throw new Error('Staff Clock history lookup range is invalid.');
+    }
+    var dateSpan = endOffset - startOffset;
+    if (
+      request.mode === 'exactDate'
+      && dateSpan > GIB_M1_STAFF_SHIFT_LOOKUP_DATE_SCAN_LIMIT_
+    ) {
+      return { ok: false, target: target, result: 'too_large' };
+    }
+    var descriptorCount = request.mode === 'recent'
+      ? Math.min(dateSpan, GIB_M1_STAFF_SHIFT_LOOKUP_RESULT_LIMIT_)
+      : dateSpan;
+    descriptors = staffClockReadHistoryDescriptors_(
+      cache,
+      historyIndex,
+      { viewToken: request.viewToken, offset: startOffset },
+      descriptorCount
+    );
+    if (!descriptors || descriptors.length !== descriptorCount) {
+      throw new Error('Staff Clock history lookup index is incomplete.');
+    }
+    var boundedDescriptors = staffClockBoundHistoryDescriptorReads_(descriptors);
+    if (
+      request.mode === 'exactDate'
+      && boundedDescriptors.length !== descriptors.length
+    ) {
+      return { ok: false, target: target, result: 'too_large' };
+    }
+    if (request.mode === 'recent') descriptors = boundedDescriptors;
+    materialized = staffClockMaterializeHistoryItems_(state, descriptors);
+    matches = request.mode === 'recent'
+      ? materialized
+      : materialized.filter(function(shift) {
+        return shift.clockIn.staffId === request.staffId;
+      });
+    var totalMatches = request.mode === 'recent' ? dateSpan : matches.length;
+    var lookup = staffClockBoundedShiftLookup_(
+      target,
+      request,
+      dateFrom,
+      dateThrough,
+      totalMatches,
+      matches
+    );
+    if (!lookup) return { ok: false, target: target, result: 'too_large' };
+    if (!staffClockViewStateStillCurrent_(state)) {
+      staffClockInvalidateCachedView_(cache, manifest);
+      return { ok: false, target: target, result: 'stale' };
+    }
+    return lookup;
+  } catch (error) {
+    staffClockInvalidateCachedView_(cache, manifest);
+    return { ok: false, target: target, result: 'stale' };
+  }
+}
+
 function staffClockMaterializedHistoryPageEnvelope_(
   target,
   request,
@@ -5294,6 +5600,12 @@ function staffTimeReviewPageV2Action_(body) {
 function staffTimeHistoryPageV2Action_(body) {
   return staffClockWithLock_('Staff time was busy. Nothing changed.', function() {
     return jsonResult_(staffClockReadHistoryPage_(body));
+  });
+}
+
+function staffTimeShiftLookupV3Action_(body) {
+  return staffClockWithLock_('Staff time was busy. Nothing changed.', function() {
+    return jsonResult_(staffClockReadShiftLookup_(body));
   });
 }
 

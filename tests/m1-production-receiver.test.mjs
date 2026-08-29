@@ -711,6 +711,7 @@ test('production Staff Clock reads only Mandy from exact empty tabs without writ
   assert.match(reviewToken, /^[0-9a-f]{64}$/u);
   assert.deepEqual(review, {
     ...snapshot,
+    shiftStaff: [{ staffId: 'mandy', staffName: 'Mandy' }],
     view: {
       ...snapshot.view,
       token: reviewToken
@@ -875,6 +876,7 @@ test('production Staff Clock pages exact records and attention while Admin adds 
     'clockedInNow',
     'ok',
     'periods',
+    'shiftStaff',
     'staff',
     'target',
     'view'
