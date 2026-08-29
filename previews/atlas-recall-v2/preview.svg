@@ -30,6 +30,12 @@
         const answerKey=doc.createElement('script');
         answerKey.src='end-answer-key.js?v=10dc0782';
         answerKey.onerror=()=>{doc.body.dataset.endAnswerKeyError='End-of-round answer key failed to load.'};
+        answerKey.onload=()=>{
+          const hints=doc.createElement('script');
+          hints.src='letter-hints.js?v=cecbe7b2';
+          hints.onerror=()=>{doc.body.dataset.letterHintError='Letter hints failed to load.'};
+          doc.body.appendChild(hints);
+        };
         doc.body.appendChild(answerKey);
       };
       doc.body.appendChild(injected);
