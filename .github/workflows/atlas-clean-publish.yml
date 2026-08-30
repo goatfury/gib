@@ -1,0 +1,87 @@
+name: Atlas clean publish and public QA
+on:
+  push:
+    branches: [atlas-recall-v2-review]
+    paths: ['.github/workflows/atlas-clean-publish.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: atlas-clean-review-publish
+  cancel-in-progress: false
+jobs:
+  publish-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: mcr.microsoft.com/playwright:v1.55.0-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install browser test package
+        run: npm install --prefix /tmp/atlas-browser playwright@1.55.0
+      - name: Receive clean source, publish only Atlas, test exact public URL
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          cat > /tmp/atlas-runner.mjs <<'JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import crypto from 'node:crypto';
+          import zlib from 'node:zlib';
+          import { spawnSync } from 'node:child_process';
+          const repo='goatfury/gib', branch='atlas-recall-v2-review', siteId='d744facc-e06b-4809-8757-4e14ea0e8d9c';
+          const root='previews/atlas-recall-v2', ops=root+'/.publish-session';
+          const headers={Authorization:'Bearer '+process.env.GH_TOKEN,'X-GitHub-Api-Version':'2022-11-28','Content-Type':'application/json'};
+          async function api(endpoint,method='GET',body){const r=await fetch('https://api.github.com/repos/'+repo+'/'+endpoint,{method,headers,body:body?JSON.stringify(body):undefined});if(r.status===404)return null;if(!r.ok)throw Error('GitHub '+r.status+' '+endpoint);return r.status===204?{}:r.json();}
+          const {publicKey,privateKey}=crypto.generateKeyPairSync('rsa',{modulusLength:3072});
+          const publicRecord={runId:process.env.RUN_ID,publicKey:publicKey.export({type:'spki',format:'pem'}),createdAt:new Date().toISOString()};
+          const old=await api('contents/'+ops+'/receiver.json?ref='+branch);
+          await api('contents/'+ops+'/receiver.json','PUT',{message:'Publish ephemeral Atlas deployment receiver key [skip ci]',branch,sha:old?.sha,content:Buffer.from(JSON.stringify(publicRecord,null,2)).toString('base64')});
+          console.log('Atlas receiver ready for run '+process.env.RUN_ID+'. Private key exists only in this process.');
+          let envelope;
+          for(let i=0;i<180;i++){const f=await api('contents/'+ops+'/envelope.json?ref='+branch);if(f){const v=JSON.parse(Buffer.from(f.content,'base64').toString());if(v.runId===process.env.RUN_ID){envelope=v;break;}}await new Promise(r=>setTimeout(r,5000));}
+          if(!envelope)throw Error('No deployment envelope received within 15 minutes.');
+          const key=crypto.privateDecrypt({key:privateKey,oaepHash:'sha256'},Buffer.from(envelope.key,'base64'));
+          const decipher=crypto.createDecipheriv('aes-256-gcm',key,Buffer.from(envelope.iv,'base64'));
+          decipher.setAuthTag(Buffer.from(envelope.tag,'base64'));
+          const packed=Buffer.concat([decipher.update(Buffer.from(envelope.data,'base64')),decipher.final()]);
+          const payload=JSON.parse(zlib.brotliDecompressSync(packed).toString());
+          if(payload.siteId!==siteId || !payload.proxy.startsWith('https://netlify-mcp.netlify.app/proxy/'))throw Error('Wrong deployment target.');
+          console.log('::add-mask::'+payload.proxy);
+          const clean=path.join(root,'clean');fs.mkdirSync(clean,{recursive:true});
+          for(const [name,content]of Object.entries(payload.files)){if(!/^[a-zA-Z0-9_.-]+$/.test(name))throw Error('Unsafe source file name');fs.writeFileSync(path.join(clean,name),content);}
+          const run=(cmd,args,options={})=>{const r=spawnSync(cmd,args,{stdio:'inherit',...options});if(r.status!==0)throw Error(cmd+' failed with '+r.status);};
+          run('node',[path.join(clean,'recover-original-data.mjs')]);
+          run('node',[path.join(clean,'build.mjs')]);
+          const dist=path.join(clean,'dist');
+          const build=JSON.parse(fs.readFileSync(path.join(dist,'build.json'),'utf8'));
+          if(build.buildId!==payload.expectedBuild)throw Error('Source/build mismatch: '+build.buildId+' != '+payload.expectedBuild);
+          const tracked={};
+          for(const name of fs.readdirSync(clean)){if(fs.statSync(path.join(clean,name)).isFile() && name!=='recover-original-data.mjs')tracked[clean+'/'+name]=fs.readFileSync(path.join(clean,name),'utf8');}
+          for(const name of fs.readdirSync(dist))tracked[root+'/'+name]=fs.readFileSync(path.join(dist,name),'utf8');
+          const ref=await api('git/ref/heads/'+branch),parent=await api('git/commits/'+ref.object.sha);
+          const oldTree=await api('git/trees/'+parent.tree.sha+'?recursive=1');
+          const tree=[];
+          for(const item of oldTree.tree){if(item.type==='blob'&&item.path.startsWith(root+'/')&&!Object.hasOwn(tracked,item.path))tree.push({path:item.path,mode:'100644',type:'blob',sha:null});}
+          for(const [p,content]of Object.entries(tracked)){const blob=await api('git/blobs','POST',{content,encoding:'utf-8'});tree.push({path:p,mode:'100644',type:'blob',sha:blob.sha});}
+          const newTree=await api('git/trees','POST',{base_tree:parent.tree.sha,tree});
+          const commit=await api('git/commits','POST',{message:'Replace Atlas wrappers with clean, self-contained country/capital review build '+build.buildId,tree:newTree.sha,parents:[ref.object.sha]});
+          await api('git/refs/heads/'+branch,'PATCH',{sha:commit.sha,force:false});
+          console.log('Clean source and exact deploy files committed: '+commit.sha+'; build '+build.buildId);
+          // A directory outside the monorepo prevents unrelated Netlify config/functions from being uploaded.
+          const publish='/tmp/atlas-publish';fs.rmSync(publish,{recursive:true,force:true});fs.cpSync(dist,publish,{recursive:true});
+          run('npx',['-y','@netlify/mcp@latest','--site-id',siteId,'--proxy-path',payload.proxy],{cwd:publish,timeout:600000});
+          fs.mkdirSync('atlas-public-evidence',{recursive:true});
+          fs.writeFileSync('atlas-public-evidence/deployment.json',JSON.stringify({siteId,buildId:build.buildId,commit:commit.sha,url:'https://atlas-recall-v2-review-019fb86e.netlify.app/'},null,2));
+          run('node',[path.join(clean,'public-qa.mjs')],{env:{...process.env,TARGET_URL:'https://atlas-recall-v2-review-019fb86e.netlify.app/',EXPECTED_BUILD:build.buildId,EVIDENCE_DIR:path.resolve('atlas-public-evidence')},timeout:420000});
+          JS
+          node /tmp/atlas-runner.mjs
+      - name: Preserve browser screenshots and test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-public-browser-evidence
+          path: atlas-public-evidence
+          retention-days: 14
+          if-no-files-found: warn
