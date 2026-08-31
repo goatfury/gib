@@ -782,7 +782,7 @@ test('completed-shift history contracts require bounded complete pairs and exact
   }, 'test', request, { now: NOW }), null);
 });
 
-test('completed-shift lookup contracts pin seven recent days and one bounded older staff/date search', () => {
+test('completed-shift lookup contracts pin seven recent days and one bounded exact staff/date search', () => {
   const lookupNow = new Date('2026-08-29T16:00:00.000Z');
   const recentRequest = sanitizeStaffShiftLookupRequest({
     operation: 'shiftLookup', viewToken: VIEW_TOKEN, mode: 'recent'
@@ -815,13 +815,23 @@ test('completed-shift lookup contracts pin seven recent days and one bounded old
     items: [lookupShift({ date: '2026-08-18' })]
   });
   assert.ok(sanitizeStaffShiftLookup(exactResponse, 'test', exactRequest, { now: lookupNow }));
+  const selectionNow = new Date('2026-09-01T03:30:00.000Z');
+  for (const date of ['2026-08-26', '2026-08-24', '2026-08-18', '2026-08-31']) {
+    assert.ok(sanitizeStaffShiftLookupRequest({
+      operation: 'shiftLookup',
+      viewToken: VIEW_TOKEN,
+      mode: 'exactDate',
+      staffId: 'front-desk-test-three',
+      date
+    }, 'shiftLookup', { now: selectionNow }), `${date} is a valid targeted lookup date`);
+  }
   assert.equal(sanitizeStaffShiftLookupRequest({
     operation: 'shiftLookup',
     viewToken: VIEW_TOKEN,
     mode: 'exactDate',
     staffId: 'front-desk-test-three',
-    date: '2026-08-23'
-  }, 'shiftLookup', { now: lookupNow }), null, 'recent dates cannot bypass the seven-day view');
+    date: '2026-09-01'
+  }, 'shiftLookup', { now: selectionNow }), null, 'tomorrow remains blocked');
 
   const cappedItems = Array.from({ length: MAX_STAFF_SHIFT_LOOKUP_RESULTS }, (_, index) => (
     lookupShift({ index: index + 10 })
@@ -1629,13 +1639,35 @@ test('Admin shiftLookup pins the receiver contract and maps stale, too-large, an
   });
   assert.equal(malformed.status, 502);
 
+  const selectionNow = new Date('2026-09-01T03:30:00.000Z');
+  const recentExactBody = { ...exactBody, date: '2026-08-26' };
+  let recentExactUpstream;
+  const recentExact = await handleAdminStaffTime(adminRequest({ body: recentExactBody }), {
+    env: ENV,
+    now: NOW_MS,
+    dateNow: selectionNow,
+    fetch: async (_url, options) => {
+      recentExactUpstream = JSON.parse(options.body);
+      return googleResponse(shiftLookup({
+        mode: 'exactDate',
+        dateFrom: recentExactBody.date,
+        dateThrough: recentExactBody.date,
+        staffId: recentExactBody.staffId,
+        date: recentExactBody.date,
+        items: [lookupShift({ date: recentExactBody.date })]
+      }));
+    }
+  });
+  assert.equal(recentExact.status, 200);
+  assert.equal(recentExactUpstream.date, '2026-08-26');
+
   let called = false;
   const rejected = await handleAdminStaffTime(adminRequest({
-    body: { ...exactBody, date: '2026-08-23' }
+    body: { ...exactBody, date: '2026-09-01' }
   }), {
     env: ENV,
     now: NOW_MS,
-    dateNow: lookupNow,
+    dateNow: selectionNow,
     fetch: async () => {
       called = true;
       return googleResponse(shiftLookup());
@@ -2013,14 +2045,26 @@ test('Staff Clock and Staff Time adjustment remain unavailable for the Richmond 
     adminRequest({ body: adjustmentRequest() }),
     dependencies
   );
+  const lookup = await handleAdminStaffTime(adminRequest({ body: {
+    operation: 'shiftLookup',
+    viewToken: VIEW_TOKEN,
+    mode: 'exactDate',
+    staffId: 'front-desk-test-three',
+    date: '2026-08-26'
+  } }), dependencies);
   assert.equal(tablet.status, 404);
   assert.equal(admin.status, 404);
+  assert.equal(lookup.status, 404);
   assert.equal(called, false);
   assert.deepEqual(await responseBody(tablet), {
     ok: false,
     message: 'Staff Clock is disabled for this installation.'
   });
   assert.deepEqual(await responseBody(admin), {
+    ok: false,
+    message: 'Staff Clock is disabled for this installation.'
+  });
+  assert.deepEqual(await responseBody(lookup), {
     ok: false,
     message: 'Staff Clock is disabled for this installation.'
   });

@@ -5118,7 +5118,7 @@ function staffClockReadShiftLookup_(body) {
     var knownStaff = state.staffState.all.some(function(staff) {
       return staff.staffId === request.staffId;
     });
-    if (!knownStaff || request.date >= recentDateFrom) {
+    if (!knownStaff || request.date > state.today) {
       return { ok: false, target: target, result: 'rejected' };
     }
   }

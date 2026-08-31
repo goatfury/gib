@@ -509,6 +509,7 @@
     .staff-correction-panel[hidden] { display: none; }
     .staff-correction-panel { margin-top: 10px; }
     .staff-section-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .staff-finder-panel { margin-top: 0; }
     .staff-attention-action { margin-top: 8px; }
     .staff-recent-heading {
       display: flex;
@@ -542,15 +543,54 @@
       margin-top: 10px;
     }
     .staff-lookup-controls .record-detail { margin: 0; }
+    .staff-completed-shift {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 7px 12px;
+      align-items: center;
+      padding: 8px 0;
+    }
+    .staff-completed-shift:first-child { padding-top: 0; }
+    .staff-completed-shift-copy { min-width: 0; }
+    .staff-shift-facts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px 12px;
+      margin-top: 2px;
+    }
+    .staff-shift-facts span { white-space: nowrap; }
     .staff-adjustment {
-      margin-top: 8px;
-      border: 1px solid #376b5a;
+      margin: 0;
+      border: 0;
       border-radius: 10px;
+      background: transparent;
+      padding: 0;
+    }
+    .staff-adjustment[open] {
+      grid-column: 1 / -1;
+      border: 1px solid #376b5a;
       background: rgba(15, 95, 72, .1);
       padding: 8px 10px;
     }
-    .staff-adjustment > summary { cursor: pointer; color: #c8fae8; font-weight: 800; }
-    .staff-adjustment > summary { display: flex; align-items: center; min-height: 44px; }
+    .staff-adjustment > summary {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      border: 1px solid #376b5a;
+      border-radius: 9px;
+      padding: 0 12px;
+      cursor: pointer;
+      color: #c8fae8;
+      font-weight: 800;
+      list-style: none;
+    }
+    .staff-adjustment > summary::-webkit-details-marker { display: none; }
+    .staff-adjustment[open] > summary {
+      justify-content: flex-start;
+      border: 0;
+      padding: 0;
+    }
     .staff-adjustment-originals {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -606,6 +646,13 @@
       .calendar { width: 100%; }
       .staff-time-grid { grid-template-columns: 1fr; }
       .staff-fix-grid { grid-template-columns: 1fr 1fr; }
+      .staff-time-panel .mode-panel-head { align-items: stretch; flex-direction: column; }
+      .staff-time-panel .mode-panel-head .staff-section-actions {
+        display: grid;
+        grid-template-columns: 1fr;
+        width: 100%;
+      }
+      .staff-time-panel .mode-panel-head .btn { width: 100%; }
     }
     @media (max-width: 560px) {
       .shell { width: min(100% - 18px, 1120px); padding-top: 16px; }
@@ -819,15 +866,45 @@
               <h2>Staff Clock</h2>
               <span id="staffTimeSummary" class="count">Loading…</span>
             </div>
-            <button id="staffCorrectionOpen" class="btn primary" type="button" aria-controls="staffCorrectionPanel" aria-expanded="false">Add missed punch</button>
+            <div class="staff-section-actions">
+              <button id="staffOlderShiftOpen" class="btn ghost" type="button" aria-controls="staffOlderShiftFinder" aria-expanded="false">Find a shift</button>
+              <button id="staffCorrectionOpen" class="btn primary" type="button" aria-controls="staffCorrectionPanel" aria-expanded="false">Add missed punch</button>
+            </div>
           </div>
-          <div id="staffTimeMessage" class="message" role="alert"></div>
-          <button id="staffTimeRetry" class="btn ghost small" type="button" hidden>Retry Staff Clock</button>
+          <div id="staffTimeMessage" class="message" role="status" aria-live="polite"></div>
+          <button id="staffTimeRetry" class="btn ghost small" type="button" aria-controls="staffNeedsAttention staffClockedInNow" hidden>Retry Staff Clock</button>
+
+          <section id="staffOlderShiftFinder" class="staff-correction-panel staff-finder-panel" aria-labelledby="staffOlderShiftHeading" hidden>
+            <form id="staffOlderShiftForm" class="staff-fix-form" novalidate>
+              <h3 id="staffOlderShiftHeading">Find a shift</h3>
+              <div class="staff-fix-grid">
+                <div class="field">
+                  <label for="staffOlderShiftStaff">Staff member</label>
+                  <select id="staffOlderShiftStaff" name="staffId" required><option value="">Choose staff</option></select>
+                </div>
+                <div class="field">
+                  <label for="staffOlderShiftDate">Exact date</label>
+                  <input id="staffOlderShiftDate" name="date" type="date" required>
+                </div>
+              </div>
+              <div class="form-actions">
+                <button id="staffOlderShiftSubmit" class="btn primary" type="submit">Find shift</button>
+                <button id="staffOlderShiftRetry" class="btn ghost" type="button" hidden>Retry</button>
+              </div>
+              <div id="staffOlderShiftMessage" class="message" role="status"></div>
+              <div id="staffOlderShiftResults" class="staff-time-list" aria-live="polite" aria-busy="false">
+                <div class="empty">Loading staff names and today’s New York date…</div>
+              </div>
+            </form>
+          </section>
 
           <section id="staffNeedsAttentionSection" class="staff-time-block staff-time-attention" aria-labelledby="staffAttentionHeading">
             <h3 id="staffAttentionHeading">Needs attention</h3>
             <div id="staffNeedsAttention" class="staff-time-list" aria-live="polite" aria-busy="false">
               <div class="empty">Loading Staff Clock attention…</div>
+            </div>
+            <div class="staff-lookup-controls">
+              <button id="staffNeedsAttentionRetry" class="btn ghost small" type="button" aria-controls="staffNeedsAttention" hidden>Retry Needs attention</button>
             </div>
           </section>
 
@@ -869,10 +946,13 @@
             </form>
           </section>
 
-          <section class="staff-time-block" aria-labelledby="staffClockedInHeading">
+          <section id="staffClockedInSection" class="staff-time-block" aria-labelledby="staffClockedInHeading">
             <h3 id="staffClockedInHeading">Clocked in now</h3>
             <div id="staffClockedInNow" class="staff-time-list" aria-live="polite" aria-busy="false">
               <div class="empty">Loading current Staff Clock status…</div>
+            </div>
+            <div class="staff-lookup-controls">
+              <button id="staffClockedInRetry" class="btn ghost small" type="button" aria-controls="staffClockedInNow" hidden>Retry Clocked in now</button>
             </div>
           </section>
 
@@ -890,30 +970,6 @@
               <span id="staffRecentShiftsMessage" class="record-detail" role="status"></span>
             </div>
           </section>
-
-          <details id="staffOlderShiftFinder" class="staff-time-details">
-            <summary>Find an older shift</summary>
-            <form id="staffOlderShiftForm" class="staff-fix-form" novalidate>
-              <div class="staff-fix-grid">
-                <div class="field">
-                  <label for="staffOlderShiftStaff">Staff member</label>
-                  <select id="staffOlderShiftStaff" name="staffId" required><option value="">Choose staff</option></select>
-                </div>
-                <div class="field">
-                  <label for="staffOlderShiftDate">Exact date</label>
-                  <input id="staffOlderShiftDate" name="date" type="date" required>
-                </div>
-              </div>
-              <div class="form-actions">
-                <button id="staffOlderShiftSubmit" class="btn primary" type="submit">Find shift</button>
-                <button id="staffOlderShiftRetry" class="btn ghost" type="button" hidden>Retry</button>
-              </div>
-              <div id="staffOlderShiftMessage" class="message" role="status"></div>
-              <div id="staffOlderShiftResults" class="staff-time-list" aria-live="polite" aria-busy="false">
-                <div class="empty">Choose a staff member and exact older date.</div>
-              </div>
-            </form>
-          </details>
 
           <details id="staffPayPeriods" class="staff-time-details">
             <summary>Pay-period totals</summary>
@@ -1065,6 +1121,7 @@
       const STAFF_RECENT_INITIAL_LIMIT = 8;
       const STAFF_RECENT_INCREMENT = 8;
       const STAFF_RECENT_MAX_VISIBLE = 20;
+      const STAFF_TIME_SLOW_NOTICE_MS = 3_000;
       const STAFF_ATTENTION_ACTIONS = Object.freeze({
         missing_clock_out: Object.freeze({ punchAction: 'clockOut', linkedPunchAction: 'clockIn' }),
         clock_out_without_clock_in: Object.freeze({ punchAction: 'clockIn', linkedPunchAction: 'clockOut' })
@@ -1107,11 +1164,23 @@
       let reviewedTabletPairingCode = '';
       let currentStaffTime = null;
       let staffTimeLoadGeneration = 0;
+      let staffPrimaryLoading = false;
+      let staffPrimaryLoadError = '';
+      let staffPrimarySlowTimer = 0;
       let currentStaffRecentLookup = null;
       let currentStaffAttention = [];
+      let staffAttentionLoading = false;
+      let staffAttentionLoadError = '';
+      let staffAttentionNeedsRefresh = false;
+      let staffAttentionLoadGeneration = 0;
+      let staffAttentionSlowTimer = 0;
       let staffRecentVisibleLimit = STAFF_RECENT_INITIAL_LIMIT;
+      let staffRecentQueued = false;
       let staffRecentLoading = false;
       let staffRecentLoadError = '';
+      let staffRecentNeedsRefresh = false;
+      let staffRecentLoadGeneration = 0;
+      let staffRecentSlowTimer = 0;
       let currentStaffOlderShiftLookup = null;
       let currentStaffOlderShiftQuery = null;
       let staffOlderShiftLoading = false;
@@ -2733,33 +2802,6 @@
         if (!validStaffTimeReviewStartResponse(initial)) {
           throw new Error('Staff time returned an incomplete response. Nothing was changed.');
         }
-        const needsAttention = await fetchStaffTimeReviewStream(
-          initial,
-          'attention',
-          initial.view.attentionCount,
-          generation
-        );
-        if (!needsAttention || generation !== staffTimeLoadGeneration) return null;
-        currentStaffAttention = needsAttention;
-        let recentLookup = null;
-        try {
-          recentLookup = await fetchStaffTimeShiftLookup(
-            initial,
-            { mode: 'recent' },
-            generation
-          );
-        } catch (error) {
-          if (generation !== staffTimeLoadGeneration) return null;
-          if (
-            error.status === 401
-            || error.status === 403
-            || validStaffTimeStaleError(error)
-          ) throw error;
-          staffRecentLoadError = `Recent completed shifts could not be loaded. ${clean(error.message)
-            || 'The request did not complete.'}`;
-        }
-        if (generation !== staffTimeLoadGeneration) return null;
-        currentStaffRecentLookup = recentLookup;
         return initial;
       }
 
@@ -3591,6 +3633,9 @@
       function setLoggedOut(message = '') {
         clearDiagnosticRun(true);
         clearTabletPairingReview({ clearCode: true });
+        clearStaffPrimarySlowNotice();
+        clearStaffAttentionSlowNotice();
+        clearStaffRecentSlowNotice();
         reviewLoadGeneration += 1;
         staffTimeLoadGeneration += 1;
         currentRecords = [];
@@ -3598,11 +3643,20 @@
         currentAuditHistory = [];
         persistentReviewOutcome = null;
         currentStaffTime = null;
+        staffPrimaryLoading = false;
+        staffPrimaryLoadError = '';
         currentStaffRecentLookup = null;
         currentStaffAttention = [];
+        staffAttentionLoading = false;
+        staffAttentionLoadError = '';
+        staffAttentionNeedsRefresh = false;
+        staffAttentionLoadGeneration += 1;
         staffRecentVisibleLimit = STAFF_RECENT_INITIAL_LIMIT;
+        staffRecentQueued = false;
         staffRecentLoading = false;
         staffRecentLoadError = '';
+        staffRecentNeedsRefresh = false;
+        staffRecentLoadGeneration += 1;
         currentStaffOlderShiftLookup = null;
         currentStaffOlderShiftQuery = null;
         staffOlderShiftLoading = false;
@@ -3634,8 +3688,12 @@
         $('#searchRetry').hidden = true;
         $('#staffTimeSummary').textContent = 'Not loaded';
         $('#staffClockedInNow').replaceChildren();
+        $('#staffClockedInNow').setAttribute('aria-busy', 'false');
+        $('#staffClockedInRetry').hidden = true;
         $('#staffTodayPunches').replaceChildren(staffEmpty('Open this section to load individual punches.'));
         $('#staffNeedsAttention').replaceChildren();
+        $('#staffNeedsAttention').setAttribute('aria-busy', 'false');
+        $('#staffNeedsAttentionRetry').hidden = true;
         $('#staffPeriodTotals').replaceChildren();
         $('#staffTimeRecords').replaceChildren(staffEmpty('Open this section to load individual punch records.'));
         $('#staffRecentShifts').replaceChildren(staffEmpty('Sign in to load recent completed shifts.'));
@@ -3646,7 +3704,7 @@
         $('#staffOlderShiftStaff').replaceChildren(makeElement('option', '', 'Choose staff'));
         $('#staffOlderShiftDate').value = '';
         $('#staffOlderShiftDate').max = '';
-        $('#staffOlderShiftResults').replaceChildren(staffEmpty('Choose a staff member and exact older date.'));
+        $('#staffOlderShiftResults').replaceChildren(staffEmpty('Choose a staff member and exact date.'));
         $('#staffOlderShiftResults').setAttribute('aria-busy', 'false');
         $('#staffOlderShiftRetry').hidden = true;
         $('#staffOlderShiftSubmit').disabled = false;
@@ -3658,7 +3716,8 @@
         clearStaffCorrectionIdentity($('#staffCorrectionForm'));
         $('#staffCorrectionPanel').hidden = true;
         $('#staffCorrectionOpen').setAttribute('aria-expanded', 'false');
-        $('#staffOlderShiftFinder').open = false;
+        $('#staffOlderShiftFinder').hidden = true;
+        $('#staffOlderShiftOpen').setAttribute('aria-expanded', 'false');
         $('#staffPayPeriods').open = false;
         $('#staffTimeAdvanced').open = false;
         $('#staffTimeRetry').hidden = true;
@@ -3713,7 +3772,6 @@
           adminRequestToken = data.requestToken;
           $('#loginPassphrase').value = '';
           setLoggedIn(data);
-          if (STAFF_CLOCK_ENABLED) beginStaffShiftLookupLoading();
           if (requestedManagerMode() === 'staff-time') {
             const staffLoad = loadStaffTime();
             const dailyLoad = loadReview(defaultYesterday());
@@ -3808,7 +3866,27 @@
       function staffAdjustmentForm(shift) {
         const { clockIn, clockOut } = shift;
         const details = makeElement('details', 'staff-adjustment');
-        details.appendChild(makeElement('summary', '', 'Adjust punch'));
+        const summary = makeElement('summary', '', 'Adjust');
+        summary.setAttribute('aria-label', `Adjust punch for ${clockIn.staffName}`);
+        details.appendChild(summary);
+        details.addEventListener('toggle', () => {
+          const ownForm = details.querySelector('[data-staff-adjust-form]');
+          if (!details.open) {
+            if (ownForm?.getAttribute('aria-busy') === 'true') details.open = true;
+            return;
+          }
+          const otherOpenForms = Array.from(document.querySelectorAll('.staff-adjustment[open]'))
+            .filter(candidate => candidate !== details);
+          const savingForm = otherOpenForms.find(candidate => (
+            candidate.querySelector('[data-staff-adjust-form]')?.getAttribute('aria-busy') === 'true'
+          ));
+          if (savingForm) {
+            details.open = false;
+            savingForm.querySelector('summary')?.focus({ preventScroll: true });
+            return;
+          }
+          otherOpenForms.forEach(candidate => { candidate.open = false; });
+        });
         details.appendChild(makeElement(
           'div',
           'record-detail',
@@ -4037,28 +4115,36 @@
       }
 
       function staffCompletedShiftElement(shift) {
-        const row = staffTimeRow(
-          shift.clockIn.staffName,
-          `Clock-in ${staffTimestampLabel(shift.clockIn.timestamp)} · Clock-out ${staffTimestampLabel(shift.clockOut.timestamp)} · Duration ${staffShiftDurationLabel(shift)}`
+        const row = makeElement('div', 'staff-time-row staff-completed-shift');
+        const copy = makeElement('div', 'staff-completed-shift-copy');
+        const adjustment = staffAdjustmentForm(shift);
+        let adjustmentEvidence = null;
+        copy.appendChild(makeElement('strong', '', shift.clockIn.staffName));
+        const facts = makeElement('div', 'record-detail staff-shift-facts');
+        facts.append(
+          makeElement('span', '', `Clock-in ${staffTimestampLabel(shift.clockIn.timestamp)}`),
+          makeElement('span', '', `Clock-out ${staffTimestampLabel(shift.clockOut.timestamp)}`),
+          makeElement('span', '', `Duration ${staffShiftDurationLabel(shift)}`)
         );
+        copy.appendChild(facts);
         if (shift.clockIn.source === shift.clockOut.source) {
-          row.appendChild(staffBadge(
+          copy.appendChild(staffBadge(
             shift.clockIn.source,
             shift.clockIn.source === 'Admin-added' ? 'admin' : ''
           ));
         } else {
-          row.appendChild(staffBadge(
+          copy.appendChild(staffBadge(
             `Clock-in · ${shift.clockIn.source}`,
             shift.clockIn.source === 'Admin-added' ? 'admin' : ''
           ));
-          row.appendChild(staffBadge(
+          copy.appendChild(staffBadge(
             `Clock-out · ${shift.clockOut.source}`,
             shift.clockOut.source === 'Admin-added' ? 'admin' : ''
           ));
         }
         if (shift.latestAdjustment) {
-          row.appendChild(staffBadge('Adjusted', 'admin'));
-          row.appendChild(makeElement(
+          copy.appendChild(staffBadge('Adjusted', 'admin'));
+          adjustmentEvidence = makeElement(
             'div',
             'record-detail staff-adjustment-evidence',
             [
@@ -4066,34 +4152,99 @@
               `Corrected time: ${staffTimestampLabel(shift.clockIn.timestamp)} to ${staffTimestampLabel(shift.clockOut.timestamp)}`,
               `Latest audit: ${shift.latestAdjustment.reason} · ${shift.latestAdjustment.result}`
             ].join(' · ')
-          ));
+          );
         } else {
           const carriedCorrections = [
             ['Clock-in', shift.clockIn],
             ['Clock-out', shift.clockOut]
           ].filter(([, punch]) => Object.hasOwn(punch, 'adjustmentRequestId'));
           if (carriedCorrections.length) {
-            row.appendChild(staffBadge('Existing punch correction', 'admin'));
-            row.appendChild(makeElement(
+            copy.appendChild(staffBadge('Existing punch correction', 'admin'));
+            adjustmentEvidence = makeElement(
               'div',
               'record-detail staff-adjustment-evidence',
               carriedCorrections.map(([label, punch]) => (
                 `${label} retains an earlier correction: original ${staffTimestampLabel(punch.originalTimestamp)}; current ${staffTimestampLabel(punch.timestamp)}`
               )).join(' · ')
-            ));
+            );
+          } else {
+            copy.appendChild(staffBadge('No correction'));
           }
         }
-        row.appendChild(staffAdjustmentForm(shift));
+        if (adjustmentEvidence) adjustment.appendChild(adjustmentEvidence);
+        row.append(copy, adjustment);
         return row;
       }
 
+      function clearStaffPrimarySlowNotice() {
+        if (staffPrimarySlowTimer) window.clearTimeout(staffPrimarySlowTimer);
+        staffPrimarySlowTimer = 0;
+      }
+
+      function clearStaffAttentionSlowNotice() {
+        if (staffAttentionSlowTimer) window.clearTimeout(staffAttentionSlowTimer);
+        staffAttentionSlowTimer = 0;
+      }
+
+      function clearStaffRecentSlowNotice() {
+        if (staffRecentSlowTimer) window.clearTimeout(staffRecentSlowTimer);
+        staffRecentSlowTimer = 0;
+      }
+
+      function startStaffPrimarySlowNotice(generation) {
+        clearStaffPrimarySlowNotice();
+        staffPrimarySlowTimer = window.setTimeout(() => {
+          if (generation !== staffTimeLoadGeneration || !staffPrimaryLoading) return;
+          showMessage($('#staffTimeMessage'), 'Still loading Staff Clock records…', 'working');
+          $('#staffNeedsAttention').replaceChildren(staffEmpty('Still loading Staff Clock records…'));
+          $('#staffClockedInNow').replaceChildren(staffEmpty('Still loading Staff Clock records…'));
+        }, STAFF_TIME_SLOW_NOTICE_MS);
+      }
+
+      function startStaffAttentionSlowNotice(generation, attentionGeneration) {
+        clearStaffAttentionSlowNotice();
+        staffAttentionSlowTimer = window.setTimeout(() => {
+          if (
+            generation !== staffTimeLoadGeneration
+            || attentionGeneration !== staffAttentionLoadGeneration
+            || !staffAttentionLoading
+          ) return;
+          $('#staffNeedsAttention').replaceChildren(staffEmpty('Still loading Staff Clock records…'));
+        }, STAFF_TIME_SLOW_NOTICE_MS);
+      }
+
+      function startStaffRecentSlowNotice(generation, recentGeneration) {
+        clearStaffRecentSlowNotice();
+        staffRecentSlowTimer = window.setTimeout(() => {
+          if (
+            generation !== staffTimeLoadGeneration
+            || recentGeneration !== staffRecentLoadGeneration
+            || !staffRecentLoading
+          ) return;
+          $('#staffRecentShifts').replaceChildren(staffEmpty('Still loading recent Staff Clock records…'));
+          $('#staffRecentShiftsMessage').textContent = 'Still loading the last seven New York calendar days…';
+        }, STAFF_TIME_SLOW_NOTICE_MS);
+      }
+
       function beginStaffShiftLookupLoading() {
+        clearStaffPrimarySlowNotice();
+        clearStaffAttentionSlowNotice();
+        clearStaffRecentSlowNotice();
         currentStaffTime = null;
         currentStaffRecentLookup = null;
         currentStaffAttention = [];
+        staffPrimaryLoading = true;
+        staffPrimaryLoadError = '';
+        staffAttentionLoading = true;
+        staffAttentionLoadError = '';
+        staffAttentionNeedsRefresh = false;
+        staffAttentionLoadGeneration += 1;
         staffRecentVisibleLimit = STAFF_RECENT_INITIAL_LIMIT;
-        staffRecentLoading = true;
+        staffRecentQueued = true;
+        staffRecentLoading = false;
         staffRecentLoadError = '';
+        staffRecentNeedsRefresh = false;
+        staffRecentLoadGeneration += 1;
         currentStaffOlderShiftLookup = null;
         currentStaffOlderShiftQuery = null;
         staffOlderShiftLoading = false;
@@ -4105,12 +4256,86 @@
         staffAdvancedLoadGeneration += 1;
         $('#staffNeedsAttention').setAttribute('aria-busy', 'true');
         $('#staffNeedsAttention').replaceChildren(staffEmpty('Loading Staff Clock attention…'));
+        $('#staffNeedsAttentionRetry').hidden = true;
         $('#staffClockedInNow').setAttribute('aria-busy', 'true');
         $('#staffClockedInNow').replaceChildren(staffEmpty('Loading current Staff Clock status…'));
+        $('#staffClockedInRetry').hidden = true;
+        $('#staffTimeSummary').textContent = 'Loading Staff Clock…';
+        $('#staffCorrectionOpen').disabled = true;
         $('#staffTimeRetry').hidden = true;
         renderStaffTimeAdvancedState();
         renderStaffRecentShifts();
         renderStaffOlderShiftLookup();
+      }
+
+      function renderStaffAttentionState() {
+        const attention = $('#staffNeedsAttention');
+        const retry = $('#staffNeedsAttentionRetry');
+        if (staffAttentionLoading) {
+          attention.setAttribute('aria-busy', 'true');
+          attention.replaceChildren(staffEmpty('Loading Staff Clock attention…'));
+          retry.hidden = true;
+          return;
+        }
+        attention.setAttribute('aria-busy', 'false');
+        if (staffAttentionLoadError || !currentStaffTime) {
+          attention.replaceChildren(staffEmpty(
+            staffAttentionLoadError || 'Staff Clock attention could not be loaded.'
+          ));
+          retry.hidden = false;
+          return;
+        }
+        retry.hidden = true;
+        const attentionRows = currentStaffAttention.map(item => {
+          const row = staffTimeRow(item.staffName, item.message);
+          const actionDefinition = STAFF_ATTENTION_ACTIONS[item.code];
+          const primaryAction = primaryValidatedStaffAttentionAction(item, currentStaffTime.clockedInNow);
+          const action = makeElement(
+            'button',
+            'btn ghost small staff-attention-action',
+            primaryAction ? `Add missed ${staffActionLabel(primaryAction)}` : 'Review records'
+          );
+          action.type = 'button';
+          if (primaryAction) {
+            action.dataset.staffCorrectionStaff = item.staffId;
+            action.dataset.staffCorrectionAction = primaryAction;
+          } else if (actionDefinition) {
+            action.dataset.staffAttentionResolve = 'true';
+            action.dataset.staffAttentionStaff = item.staffId;
+            action.dataset.staffAttentionCode = item.code;
+          } else {
+            action.dataset.staffAttentionAdvanced = 'true';
+          }
+          row.appendChild(action);
+          return row;
+        });
+        attention.replaceChildren(...attentionRows);
+        if (!attentionRows.length) attention.appendChild(staffEmpty('No Staff Clock issues need attention.'));
+      }
+
+      function renderStaffClockedInState() {
+        const clockedIn = $('#staffClockedInNow');
+        const retry = $('#staffClockedInRetry');
+        if (staffPrimaryLoading) {
+          clockedIn.setAttribute('aria-busy', 'true');
+          clockedIn.replaceChildren(staffEmpty('Loading current Staff Clock status…'));
+          retry.hidden = true;
+          return;
+        }
+        clockedIn.setAttribute('aria-busy', 'false');
+        if (staffPrimaryLoadError || !currentStaffTime) {
+          clockedIn.replaceChildren(staffEmpty(
+            staffPrimaryLoadError || 'Current Staff Clock status could not be loaded.'
+          ));
+          retry.hidden = false;
+          return;
+        }
+        retry.hidden = true;
+        clockedIn.replaceChildren(...currentStaffTime.clockedInNow.map(item => staffTimeRow(
+          item.staffName,
+          `Since ${staffTimestampLabel(item.clockInAt)}`
+        )));
+        if (!currentStaffTime.clockedInNow.length) clockedIn.appendChild(staffEmpty('No one is clocked in.'));
       }
 
       function renderStaffRecentShifts() {
@@ -4119,6 +4344,14 @@
         const retry = $('#staffRecentShiftsRetry');
         const showMore = $('#staffRecentShowMore');
         const message = $('#staffRecentShiftsMessage');
+        if (staffRecentQueued) {
+          history.setAttribute('aria-busy', 'true');
+          history.replaceChildren(staffEmpty('Recent completed shifts will load after current Staff Clock status.'));
+          retry.hidden = true;
+          showMore.hidden = true;
+          message.textContent = 'Waiting for Needs attention and Clocked in now…';
+          return;
+        }
         if (staffRecentLoading) {
           history.setAttribute('aria-busy', 'true');
           history.replaceChildren(staffEmpty('Loading recent completed shifts…'));
@@ -4153,29 +4386,41 @@
         const results = $('#staffOlderShiftResults');
         const retry = $('#staffOlderShiftRetry');
         const message = $('#staffOlderShiftMessage');
+        const unavailable = !currentStaffTime;
         for (const control of [
           $('#staffOlderShiftStaff'),
           $('#staffOlderShiftDate'),
           $('#staffOlderShiftSubmit')
-        ]) control.disabled = staffOlderShiftLoading;
+        ]) control.disabled = staffOlderShiftLoading || unavailable;
         retry.disabled = staffOlderShiftLoading;
+        if (unavailable) {
+          results.setAttribute('aria-busy', staffPrimaryLoading ? 'true' : 'false');
+          results.replaceChildren(staffEmpty(staffPrimaryLoading
+            ? 'Loading staff names and today’s New York date…'
+            : 'Find a shift is unavailable until Staff Clock status loads.'));
+          retry.hidden = true;
+          showMessage(message, staffPrimaryLoading
+            ? 'Find a shift will be ready as soon as Staff Clock status loads.'
+            : 'Retry Staff Clock above to enable exact-date search.', staffPrimaryLoading ? 'working' : '');
+          return;
+        }
         if (staffOlderShiftLoading) {
           results.setAttribute('aria-busy', 'true');
           results.replaceChildren(staffEmpty('Loading the selected staff member and exact date…'));
           retry.hidden = true;
-          showMessage(message, 'Finding the older completed shift…', 'working');
+          showMessage(message, 'Finding the completed shift…', 'working');
           return;
         }
         results.setAttribute('aria-busy', 'false');
         if (staffOlderShiftError) {
           results.replaceChildren(staffEmpty(staffOlderShiftError));
           retry.hidden = false;
-          showMessage(message, 'The older shift lookup failed. Retry uses the same staff member and exact date.');
+          showMessage(message, 'The shift lookup failed. Retry uses the same staff member and exact date.');
           return;
         }
         retry.hidden = true;
         if (!currentStaffOlderShiftQuery || !currentStaffOlderShiftLookup) {
-          results.replaceChildren(staffEmpty('Choose a staff member and exact older date.'));
+          results.replaceChildren(staffEmpty('Choose a staff member and exact date.'));
           showMessage(message, '');
           return;
         }
@@ -4197,52 +4442,19 @@
         currentStaffTime = data;
         populateStaffCorrectionNames(data.staff, data.shiftStaff);
         const olderDate = $('#staffOlderShiftDate');
-        olderDate.max = shiftDate(data.view.today, -7);
+        olderDate.max = data.view.today;
         if (olderDate.value > olderDate.max) olderDate.value = '';
-        $('#staffTimeSummary').textContent = `${data.needsAttention.length} need attention · ${data.clockedInNow.length} clocked in`;
-
-        const attention = $('#staffNeedsAttention');
-        attention.setAttribute('aria-busy', 'false');
-        const attentionRows = data.needsAttention.map(item => {
-          const row = staffTimeRow(item.staffName, item.message);
-          const actionDefinition = STAFF_ATTENTION_ACTIONS[item.code];
-          const primaryAction = primaryValidatedStaffAttentionAction(item, data.clockedInNow);
-          const action = makeElement(
-            'button',
-            'btn ghost small staff-attention-action',
-            primaryAction ? `Add missed ${staffActionLabel(primaryAction)}` : 'Review records'
-          );
-          action.type = 'button';
-          if (primaryAction) {
-            action.dataset.staffCorrectionStaff = item.staffId;
-            action.dataset.staffCorrectionAction = primaryAction;
-          } else if (actionDefinition) {
-            action.dataset.staffAttentionResolve = 'true';
-            action.dataset.staffAttentionStaff = item.staffId;
-            action.dataset.staffAttentionCode = item.code;
-          } else {
-            action.dataset.staffAttentionAdvanced = 'true';
-          }
-          row.appendChild(action);
-          return row;
-        });
-        attention.replaceChildren(...attentionRows);
-        if (!attentionRows.length) attention.appendChild(staffEmpty('No Staff Clock issues need attention.'));
-
-        const clockedIn = $('#staffClockedInNow');
-        clockedIn.setAttribute('aria-busy', 'false');
-        clockedIn.replaceChildren(...data.clockedInNow.map(item => staffTimeRow(
-          item.staffName,
-          `Since ${staffTimestampLabel(item.clockInAt)}`
-        )));
-        if (!data.clockedInNow.length) clockedIn.appendChild(staffEmpty('No one is clocked in.'));
+        $('#staffTimeSummary').textContent = staffAttentionLoading
+          ? `Loading attention · ${data.clockedInNow.length} clocked in`
+          : `${currentStaffAttention.length} need attention · ${data.clockedInNow.length} clocked in`;
+        $('#staffCorrectionOpen').disabled = false;
+        renderStaffClockedInState();
 
         $('#staffPeriodTotals').replaceChildren(
           staffPeriodElement('Current pay period', data.periods.current),
           staffPeriodElement('Previous pay period', data.periods.previous)
         );
 
-        renderStaffRecentShifts();
         renderStaffOlderShiftLookup();
       }
 
@@ -4417,7 +4629,13 @@
       }
 
       function renderStaffTime(data) {
+        currentStaffAttention = data.needsAttention;
+        staffPrimaryLoading = false;
+        staffPrimaryLoadError = '';
+        staffAttentionLoading = false;
+        staffAttentionLoadError = '';
         renderStaffTimePrimary(data);
+        renderStaffAttentionState();
         renderStaffTimeAdvanced(data);
       }
 
@@ -4980,6 +5198,16 @@
         if (!timeInput.value) timeInput.value = `${parts.hour}:${parts.minute}`;
       }
 
+      function toggleStaffOlderShiftFinder() {
+        const panel = $('#staffOlderShiftFinder');
+        const opening = panel.hidden;
+        panel.hidden = !opening;
+        $('#staffOlderShiftOpen').setAttribute('aria-expanded', opening ? 'true' : 'false');
+        if (opening) {
+          window.requestAnimationFrame(() => $('#staffOlderShiftStaff').focus({ preventScroll: true }));
+        }
+      }
+
       function openStaffCorrectionPanel({ staffId = '', punchAction = '' } = {}) {
         const panel = $('#staffCorrectionPanel');
         const form = $('#staffCorrectionForm');
@@ -5151,56 +5379,163 @@
         if (submit) submit.textContent = working ? 'Saving…' : label;
       }
 
-      async function loadStaffTime(options = {}) {
-        const generation = ++staffTimeLoadGeneration;
-        beginStaffShiftLookupLoading();
-        if (options.quiet !== true) {
-          $('#staff-time').classList.add('loading');
-          showMessage($('#staffTimeMessage'), 'Loading Staff time…', 'working');
-        }
+      async function loadStaffAttention(initial, generation) {
+        if (!initial || generation !== staffTimeLoadGeneration) return false;
+        const attentionGeneration = ++staffAttentionLoadGeneration;
+        staffAttentionLoading = true;
+        staffAttentionLoadError = '';
+        staffAttentionNeedsRefresh = false;
+        renderStaffAttentionState();
+        startStaffAttentionSlowNotice(generation, attentionGeneration);
+        let loaded = false;
         try {
-          const initial = await loadStaffTimeReviewView(generation);
-          if (generation !== staffTimeLoadGeneration) return false;
-          if (!initial) return false;
-          const data = staffTimeReviewShell(initial);
-          staffRecentLoading = false;
-          renderStaffTimePrimary(data);
-          showMessage($('#staffTimeMessage'), '');
-          $('#staffTimeRetry').hidden = true;
-          setStaffCorrectionDefaults();
-          if ($('#staffTimeAdvanced').open && options.deferAdvanced !== true) {
-            void loadStaffTimeAdvanced();
-          }
+          const needsAttention = await fetchStaffTimeReviewStream(
+            initial,
+            'attention',
+            initial.view.attentionCount,
+            generation
+          );
+          if (
+            !needsAttention
+            || generation !== staffTimeLoadGeneration
+            || attentionGeneration !== staffAttentionLoadGeneration
+          ) return false;
+          currentStaffAttention = needsAttention;
+          if (currentStaffTime) currentStaffTime.needsAttention = needsAttention;
+          loaded = true;
           return true;
         } catch (error) {
-          if (generation !== staffTimeLoadGeneration) return false;
+          if (
+            generation !== staffTimeLoadGeneration
+            || attentionGeneration !== staffAttentionLoadGeneration
+          ) return false;
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
           } else {
-            staffRecentLoading = false;
-            staffRecentLoadError = `Recent completed shifts could not be loaded. ${clean(error.message)
-              || 'The request did not complete.'}`;
-            $('#staffNeedsAttention').setAttribute('aria-busy', 'false');
-            $('#staffNeedsAttention').replaceChildren(staffEmpty('Staff Clock attention could not be loaded.'));
-            $('#staffClockedInNow').setAttribute('aria-busy', 'false');
-            $('#staffClockedInNow').replaceChildren(staffEmpty('Current Staff Clock status could not be loaded.'));
+            if (validStaffTimeStaleError(error)) {
+              staffAttentionNeedsRefresh = true;
+              staffAttentionLoadError = 'Staff Clock changed while Needs attention was loading. Retry this section.';
+            } else {
+              staffAttentionLoadError = `Needs attention could not be loaded. ${clean(error.message)
+                || 'The request did not complete.'}`;
+            }
+          }
+          return false;
+        } finally {
+          if (
+            generation === staffTimeLoadGeneration
+            && attentionGeneration === staffAttentionLoadGeneration
+          ) {
+            clearStaffAttentionSlowNotice();
+            staffAttentionLoading = false;
+            renderStaffAttentionState();
+            if (currentStaffTime) {
+              $('#staffTimeSummary').textContent = loaded
+                ? `${currentStaffAttention.length} need attention · ${currentStaffTime.clockedInNow.length} clocked in`
+                : `Needs attention unavailable · ${currentStaffTime.clockedInNow.length} clocked in`;
+            }
+          }
+        }
+      }
+
+      async function loadStaffTime(options = {}) {
+        const generation = ++staffTimeLoadGeneration;
+        beginStaffShiftLookupLoading();
+        showMessage($('#staffTimeMessage'), 'Loading Staff Clock records…', 'working');
+        startStaffPrimarySlowNotice(generation);
+        try {
+          const initial = await loadStaffTimeReviewView(generation);
+          if (generation !== staffTimeLoadGeneration || !initial) return false;
+          clearStaffPrimarySlowNotice();
+          staffPrimaryLoading = false;
+          renderStaffTimePrimary(staffTimeReviewShell(initial));
+          showMessage($('#staffTimeMessage'), 'Clocked in now loaded. Loading Needs attention…', 'working');
+          $('#staffTimeRetry').hidden = true;
+          setStaffCorrectionDefaults();
+
+          const attentionLoaded = await loadStaffAttention(initial, generation);
+          if (generation !== staffTimeLoadGeneration) return false;
+          staffRecentQueued = false;
+          if (staffAttentionNeedsRefresh) {
+            staffRecentNeedsRefresh = true;
+            staffRecentLoadError = 'Staff Clock changed before recent completed shifts could load. Retry this section.';
             renderStaffRecentShifts();
-            showMessage($('#staffTimeMessage'), `Staff Clock could not be loaded. ${clean(error.message)}`);
+          } else {
+            renderStaffRecentShifts();
+            void loadStaffRecentShifts(generation);
+          }
+          if (attentionLoaded) {
+            showMessage($('#staffTimeMessage'), 'Needs attention and Clocked in now loaded.', 'success');
+          } else if (currentStaffTime) {
+            showMessage($('#staffTimeMessage'), 'Clocked in now loaded. Needs attention needs Retry.');
+          }
+          if (
+            attentionLoaded
+            && $('#staffTimeAdvanced').open
+            && options.deferAdvanced !== true
+          ) void loadStaffTimeAdvanced();
+          return true;
+        } catch (error) {
+          if (generation !== staffTimeLoadGeneration) return false;
+          clearStaffPrimarySlowNotice();
+          staffPrimaryLoading = false;
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Admin login required.');
+          } else {
+            const detail = clean(error.message) || 'The request did not complete.';
+            staffPrimaryLoadError = `Current Staff Clock status could not be loaded. ${detail}`;
+            staffAttentionLoading = false;
+            staffAttentionLoadError = `Needs attention could not be loaded. ${detail}`;
+            staffAttentionLoadGeneration += 1;
+            staffRecentQueued = false;
+            staffRecentLoading = false;
+            staffRecentLoadError = `Recent completed shifts could not start because Staff Clock status did not load. ${detail}`;
+            staffRecentLoadGeneration += 1;
+            renderStaffClockedInState();
+            renderStaffAttentionState();
+            renderStaffRecentShifts();
+            renderStaffOlderShiftLookup();
+            $('#staffTimeSummary').textContent = 'Staff Clock unavailable';
+            $('#staffCorrectionOpen').disabled = true;
+            showMessage($('#staffTimeMessage'), `Staff Clock could not be loaded. ${detail}`);
             $('#staffTimeRetry').hidden = false;
           }
           return false;
         } finally {
-          if (generation === staffTimeLoadGeneration) $('#staff-time').classList.remove('loading');
+          if (generation === staffTimeLoadGeneration) clearStaffPrimarySlowNotice();
         }
       }
 
       async function retryStaffTime() {
-        if ($('#staff-time').classList.contains('loading')) return;
+        if (staffPrimaryLoading) return;
         await loadStaffTime();
       }
 
+      async function retryStaffAttention() {
+        if (staffAttentionLoading) return;
+        if (staffAttentionNeedsRefresh) {
+          await loadStaffTime({ quiet: true });
+          return;
+        }
+        if (!currentStaffTime) {
+          await loadStaffTime();
+          return;
+        }
+        const loaded = await loadStaffAttention(currentStaffTime, staffTimeLoadGeneration);
+        if (loaded) {
+          showMessage($('#staffTimeMessage'), 'Needs attention and Clocked in now loaded.', 'success');
+          if ($('#staffTimeAdvanced').open) void loadStaffTimeAdvanced();
+        }
+      }
+
       async function loadStaffTimeAdvanced() {
-        if (!currentStaffTime || staffAdvancedLoading || staffAdvancedLoaded) return false;
+        if (
+          !currentStaffTime
+          || staffAttentionLoading
+          || staffAttentionLoadError
+          || staffAdvancedLoading
+          || staffAdvancedLoaded
+        ) return false;
         const generation = staffTimeLoadGeneration;
         const advancedGeneration = ++staffAdvancedLoadGeneration;
         const initial = currentStaffTime;
@@ -5244,51 +5579,80 @@
       async function retryStaffTimeAdvanced() {
         if (staffAdvancedLoading) return;
         const refreshed = await loadStaffTime({ quiet: true, deferAdvanced: true });
-        if (!refreshed) {
+        if (!refreshed || staffAttentionLoadError) {
           staffAdvancedLoading = false;
           staffAdvancedLoaded = false;
-          staffAdvancedError = 'Staff Time could not be refreshed. Retry when the connection is available.';
+          staffAdvancedError = staffAttentionLoadError
+            ? 'Needs attention must load before advanced records and audit. Retry Needs attention first.'
+            : 'Staff Time could not be refreshed. Retry when the connection is available.';
           renderStaffTimeAdvancedState();
           return;
         }
         await loadStaffTimeAdvanced();
       }
 
-      async function retryStaffRecentShifts() {
-        if (staffRecentLoading) return;
-        if (!currentStaffTime) {
-          await loadStaffTime();
-          return;
-        }
-        const generation = staffTimeLoadGeneration;
+      async function loadStaffRecentShifts(generation = staffTimeLoadGeneration) {
+        if (staffRecentLoading || !currentStaffTime || generation !== staffTimeLoadGeneration) return false;
+        const recentGeneration = ++staffRecentLoadGeneration;
+        staffRecentQueued = false;
         staffRecentLoading = true;
         staffRecentLoadError = '';
+        staffRecentNeedsRefresh = false;
         renderStaffRecentShifts();
+        startStaffRecentSlowNotice(generation, recentGeneration);
         try {
           const lookup = await fetchStaffTimeShiftLookup(
             currentStaffTime,
             { mode: 'recent' },
             generation
           );
-          if (!lookup || generation !== staffTimeLoadGeneration) return;
+          if (
+            !lookup
+            || generation !== staffTimeLoadGeneration
+            || recentGeneration !== staffRecentLoadGeneration
+          ) return false;
           currentStaffRecentLookup = lookup;
+          return true;
         } catch (error) {
-          if (generation !== staffTimeLoadGeneration) return;
+          if (
+            generation !== staffTimeLoadGeneration
+            || recentGeneration !== staffRecentLoadGeneration
+          ) return false;
           if (error.status === 401 || error.status === 403) {
             setLoggedOut('Admin login required.');
           } else if (validStaffTimeStaleError(error)) {
-            await loadStaffTime({ quiet: true });
+            currentStaffRecentLookup = null;
+            staffRecentNeedsRefresh = true;
+            staffRecentLoadError = 'Staff Clock changed while recent completed shifts were loading. Retry this section.';
           } else {
             currentStaffRecentLookup = null;
             staffRecentLoadError = `Recent completed shifts could not be loaded. ${clean(error.message)
-              || 'The request did not complete.'}`;
+                || 'The request did not complete.'}`;
           }
+          return false;
         } finally {
-          if (generation === staffTimeLoadGeneration) {
+          if (
+            generation === staffTimeLoadGeneration
+            && recentGeneration === staffRecentLoadGeneration
+          ) {
+            clearStaffRecentSlowNotice();
             staffRecentLoading = false;
             renderStaffRecentShifts();
           }
         }
+      }
+
+      async function retryStaffRecentShifts() {
+        if (staffRecentLoading) return;
+        if (staffRecentNeedsRefresh) {
+          await loadStaffTime({ quiet: true });
+          return;
+        }
+        if (!currentStaffTime) {
+          await loadStaffTime();
+          return;
+        }
+        await loadStaffRecentShifts(staffTimeLoadGeneration);
       }
 
       function showMoreRecentShifts() {
@@ -5307,7 +5671,7 @@
         if (
           !person
           || !validReviewDate(date)
-          || date > shiftDate(currentStaffTime.view.today, -7)
+          || date > currentStaffTime.view.today
         ) return null;
         return Object.freeze({ mode: 'exactDate', staffId: person.staffId, date });
       }
@@ -5350,7 +5714,7 @@
               : 'Staff time changed and could not be refreshed. Retry the same staff member and date.';
             renderStaffOlderShiftLookup();
           } else {
-            staffOlderShiftError = `The older shift could not be loaded. ${clean(error.message)
+            staffOlderShiftError = `The shift could not be loaded. ${clean(error.message)
               || 'The request did not complete.'}`;
           }
         } finally {
@@ -5370,7 +5734,7 @@
         if (!query) {
           showMessage(
             $('#staffOlderShiftMessage'),
-            'Choose a staff member and an exact date earlier than the last seven days.'
+            'Choose a staff member and an exact date through today.'
           );
           return;
         }
@@ -6162,6 +6526,7 @@
       $('#dailyReviewRetry').addEventListener('click', () => loadReview(currentDate || defaultYesterday()));
       $('#searchButton').addEventListener('click', searchInstructor);
       $('#searchRetry').addEventListener('click', searchInstructor);
+      $('#staffOlderShiftOpen').addEventListener('click', toggleStaffOlderShiftFinder);
       $('#staffCorrectionOpen').addEventListener('click', () => openStaffCorrectionPanel());
       $('#staffCorrectionCancel').addEventListener('click', closeStaffCorrectionPanel);
       $('#staffNeedsAttention').addEventListener('click', event => {
@@ -6192,6 +6557,8 @@
       $('#staffRecentShiftsRetry').addEventListener('click', retryStaffRecentShifts);
       $('#staffRecentShowMore').addEventListener('click', showMoreRecentShifts);
       $('#staffTimeRetry').addEventListener('click', retryStaffTime);
+      $('#staffNeedsAttentionRetry').addEventListener('click', retryStaffAttention);
+      $('#staffClockedInRetry').addEventListener('click', retryStaffTime);
       $('#staffOlderShiftForm').addEventListener('input', () => {
         if (staffOlderShiftLoading) return;
         staffOlderShiftLoadGeneration += 1;

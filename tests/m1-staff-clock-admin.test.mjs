@@ -344,6 +344,7 @@ function staffAudit(index, record, operation = 'correct') {
 
 function renderStaffTimeRuntime(data, {
   recentLookup = shiftLookup(),
+  recentQueued = false,
   recentLoading = false,
   recentError = '',
   recentVisibleLimit = 8,
@@ -354,7 +355,13 @@ function renderStaffTimeRuntime(data, {
   advancedLoading = false,
   advancedLoaded = true,
   advancedError = '',
-  renderAdvancedStateOnly = false
+  renderAdvancedStateOnly = false,
+  renderSectionStatesOnly = false,
+  primaryLoading = false,
+  primaryError = '',
+  attentionLoading = false,
+  attentionError = '',
+  attention = data.needsAttention
 } = {}) {
   const functions = sourceBetween(
     adminHtml,
@@ -371,6 +378,9 @@ function renderStaffTimeRuntime(data, {
       this.textContent = '';
       this.value = '';
       this.hidden = false;
+      this.disabled = false;
+      this.open = false;
+      this.listeners = {};
     }
 
     appendChild(child) {
@@ -389,6 +399,32 @@ function renderStaffTimeRuntime(data, {
     setAttribute(name, value) {
       this.attributes[name] = String(value);
     }
+
+    getAttribute(name) {
+      return this.attributes[name] || '';
+    }
+
+    addEventListener(type, handler) {
+      this.listeners[type] = handler;
+    }
+
+    dispatch(type) {
+      this.listeners[type]?.({ currentTarget: this, target: this });
+    }
+
+    focus() {
+      this.focused = true;
+    }
+
+    querySelector(selector) {
+      if (selector === 'summary' && this.tagName === 'summary') return this;
+      if (selector === '[data-staff-adjust-form]' && this.dataset.staffAdjustForm) return this;
+      for (const child of this.children) {
+        const found = child.querySelector?.(selector);
+        if (found) return found;
+      }
+      return null;
+    }
   }
   const nodes = {
     '#staffNeedsAttentionSection': new FakeElement('section'),
@@ -402,6 +438,7 @@ function renderStaffTimeRuntime(data, {
     nodes,
     data: structuredClone(data),
     recentLookup: structuredClone(recentLookup),
+    recentQueued,
     recentLoading,
     recentError,
     recentVisibleLimit,
@@ -413,6 +450,12 @@ function renderStaffTimeRuntime(data, {
     advancedLoaded,
     advancedError,
     renderAdvancedStateOnly,
+    renderSectionStatesOnly,
+    primaryLoading,
+    primaryError,
+    attentionLoading,
+    attentionError,
+    attention: structuredClone(attention),
     createElement: tagName => new FakeElement(tagName)
   });
   new vm.Script(`
@@ -426,10 +469,20 @@ function renderStaffTimeRuntime(data, {
     });
     let currentStaffTime = null;
     let currentStaffRecentLookup = recentLookup;
-    let currentStaffAttention = data.needsAttention;
+    let currentStaffAttention = attention;
+    let staffPrimaryLoading = primaryLoading;
+    let staffPrimaryLoadError = primaryError;
+    let staffPrimarySlowTimer = 0;
+    let staffAttentionLoading = attentionLoading;
+    let staffAttentionLoadError = attentionError;
+    let staffAttentionLoadGeneration = 0;
+    let staffAttentionSlowTimer = 0;
     let staffRecentVisibleLimit = recentVisibleLimit;
+    let staffRecentQueued = recentQueued;
     let staffRecentLoading = recentLoading;
     let staffRecentLoadError = recentError;
+    let staffRecentLoadGeneration = 0;
+    let staffRecentSlowTimer = 0;
     let currentStaffOlderShiftLookup = olderLookup;
     let currentStaffOlderShiftQuery = olderQuery;
     let staffOlderShiftLoading = olderLoading;
@@ -437,7 +490,34 @@ function renderStaffTimeRuntime(data, {
     let staffAdvancedLoading = advancedLoading;
     let staffAdvancedLoaded = advancedLoaded;
     let staffAdvancedError = advancedError;
-    const document = { createElement };
+    const allElements = () => {
+      const seen = new Set();
+      const found = [];
+      const visit = element => {
+        if (!element || seen.has(element)) return;
+        seen.add(element);
+        found.push(element);
+        element.children.forEach(visit);
+      };
+      Object.values(nodes).forEach(visit);
+      return found;
+    };
+    const document = {
+      createElement,
+      querySelectorAll(selector) {
+        if (selector === '.staff-adjustment[open]') {
+          return allElements().filter(element => (
+            element.className === 'staff-adjustment' && element.open
+          ));
+        }
+        return [];
+      }
+    };
+    const window = {
+      setTimeout() { return 1; },
+      clearTimeout() {},
+      requestAnimationFrame(callback) { callback(); }
+    };
     function $(selector) {
       if (!nodes[selector]) nodes[selector] = createElement('div');
       return nodes[selector];
@@ -461,14 +541,58 @@ function renderStaffTimeRuntime(data, {
         && Number.isFinite(Date.parse(value));
     }
     ${functions}
-    if (renderAdvancedStateOnly) {
+    if (renderSectionStatesOnly) {
+      currentStaffTime = primaryLoading || primaryError ? null : data;
+      renderStaffClockedInState();
+      renderStaffAttentionState();
+      renderStaffRecentShifts();
+      renderStaffOlderShiftLookup();
+    } else if (renderAdvancedStateOnly) {
+      staffPrimaryLoading = false;
+      staffPrimaryLoadError = '';
+      staffAttentionLoading = false;
+      staffAttentionLoadError = '';
       renderStaffTimePrimary(data);
+      renderStaffAttentionState();
+      renderStaffRecentShifts();
+      renderStaffOlderShiftLookup();
       renderStaffTimeAdvancedState();
     } else {
       renderStaffTime(data);
+      renderStaffRecentShifts();
+      renderStaffOlderShiftLookup();
     }
   `, { filename: 'staff-time-admin-render.js' }).runInContext(context);
   return nodes;
+}
+
+function readStaffShiftQueryRuntime({ today, date, staffId = 'mandy-test' }) {
+  const validDateSource = sourceBetween(
+    adminHtml,
+    'function validReviewDate(',
+    'function validReviewTimestamp('
+  );
+  const querySource = sourceBetween(
+    adminHtml,
+    'function readStaffOlderShiftQuery(',
+    'async function loadStaffOlderShiftLookup('
+  );
+  const context = vm.createContext({ Date, Object, today, date, staffId });
+  new vm.Script(`
+    ${validDateSource}
+    let currentStaffTime = {
+      shiftStaff: [{ staffId: 'mandy-test', staffName: 'Mandy Test' }],
+      view: { today }
+    };
+    ${querySource}
+    globalThis.query = readStaffOlderShiftQuery({
+      elements: {
+        staffId: { value: staffId },
+        date: { value: date }
+      }
+    });
+  `, { filename: 'staff-time-admin-exact-date-query.js' }).runInContext(context);
+  return context.query ? JSON.parse(JSON.stringify(context.query)) : null;
 }
 
 function elementText(element) {
@@ -483,6 +607,23 @@ function countElements(element, predicate) {
     (count, child) => count + countElements(child, predicate),
     0
   );
+}
+
+function findElements(element, predicate) {
+  return [
+    ...(predicate(element) ? [element] : []),
+    ...element.children.flatMap(child => findElements(child, predicate))
+  ];
+}
+
+function deferredValue() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 async function runPagination(initial, streams, {
@@ -533,6 +674,7 @@ async function runPagination(initial, streams, {
     let testMode = true;
     let currentAdminName = 'Andrew Smith';
     let staffTimeLoadGeneration = 7;
+    let currentStaffAttention = [];
     let currentStaffRecentLookup = null;
     let staffRecentLoadError = '';
     let staleRemaining = staleOnce ? 1 : 0;
@@ -591,8 +733,33 @@ async function runPagination(initial, streams, {
       };
     }
     ${functions}
+    async function loadProgressivePrimary(generation) {
+      const start = await loadStaffTimeReviewView(generation);
+      if (!start) return null;
+      const attention = await fetchStaffTimeReviewStream(
+        start,
+        'attention',
+        start.view.attentionCount,
+        generation
+      );
+      if (!attention) return null;
+      currentStaffAttention = attention;
+      try {
+        currentStaffRecentLookup = await fetchStaffTimeShiftLookup(
+          start,
+          { mode: 'recent' },
+          generation
+        );
+      } catch (error) {
+        if (error.status === 401 || error.status === 403 || validStaffTimeStaleError(error)) throw error;
+        currentStaffRecentLookup = null;
+        staffRecentLoadError = 'Recent completed shifts could not be loaded. '
+          + (clean(error.message) || 'The request did not complete.');
+      }
+      return start;
+    }
     globalThis.hooks = {
-      loadStaffTimeReviewView,
+      loadProgressivePrimary,
       loadStaffTimeAdvancedReview,
       validStaffTimeStaleError,
       lookupState: () => ({
@@ -601,13 +768,13 @@ async function runPagination(initial, streams, {
       })
     };
   `, { filename: 'staff-time-admin-pagination.js' }).runInContext(context);
-  let start = await context.hooks.loadStaffTimeReviewView(7);
+  let start = await context.hooks.loadProgressivePrimary(7);
   let data;
   try {
     data = await context.hooks.loadStaffTimeAdvancedReview(start, 7);
   } catch (error) {
     if (!context.hooks.validStaffTimeStaleError(error)) throw error;
-    start = await context.hooks.loadStaffTimeReviewView(7);
+    start = await context.hooks.loadProgressivePrimary(7);
     data = await context.hooks.loadStaffTimeAdvancedReview(start, 7);
   }
   return { data, calls: context.calls, lookupState: context.hooks.lookupState() };
@@ -790,24 +957,27 @@ test('Admin exposes exactly two compact, mutually exclusive manager modes', () =
   assert.doesNotMatch(app.match(/<details id="staffPayPeriods"[^>]*>/u)?.[0] || '', /\bopen\b/u);
   assert.match(app, /id="staffCorrectionOpen"[^>]*aria-controls="staffCorrectionPanel"[^>]*aria-expanded="false"[^>]*>Add missed punch/u);
   assert.match(app, /<section id="staffCorrectionPanel"[^>]*hidden/u);
-  assert.match(app, /Recent completed shifts[\s\S]*Find an older shift[\s\S]*Advanced records and audit/u);
+  assert.match(app, /staffOlderShiftOpen[^>]*>Find a shift<\/button>[\s\S]*Needs attention[\s\S]*Clocked in now[\s\S]*Recent completed shifts/u);
   assert.equal(idCount('staffRecentShifts'), 1);
+  assert.equal(idCount('staffOlderShiftOpen'), 1);
   assert.equal(idCount('staffOlderShiftFinder'), 1);
   assert.equal(idCount('staffOlderShiftResults'), 1);
   assert.equal(idCount('staffTimeAdvanced'), 1);
-  assert.match(app, /<details id="staffOlderShiftFinder"[^>]*>[\s\S]*<summary>Find an older shift<\/summary>/u);
+  assert.match(app, /id="staffOlderShiftOpen"[^>]*aria-controls="staffOlderShiftFinder"[^>]*aria-expanded="false"/u);
+  assert.match(app, /<section id="staffOlderShiftFinder"[^>]*hidden[^>]*>[\s\S]*id="staffOlderShiftForm"/u);
   assert.match(app, /<details id="staffTimeAdvanced"[^>]*>[\s\S]*Advanced records and audit[\s\S]*staffTimeRecords[\s\S]*staffTimeAudit/u);
   const advancedMarkup = sourceBetween(app, '<details id="staffTimeAdvanced"', '</details>\n        </div>\n      </section>');
   assert.match(advancedMarkup, /Today’s punches[\s\S]*Staff Time records[\s\S]*Staff time audit/u);
   assert.doesNotMatch(advancedMarkup, /Needs attention/u);
   assert.match(advancedMarkup, /Open this section to load advanced records and audit/u);
   assert.match(advancedMarkup, /staffTimeAdvancedRetry[^>]*hidden/u);
-  assert.doesNotMatch(app.match(/<details id="staffOlderShiftFinder"[^>]*>/u)?.[0] || '', /\bopen\b/u);
   assert.doesNotMatch(app.match(/<details id="staffTimeAdvanced"[^>]*>/u)?.[0] || '', /\bopen\b/u);
   assert.doesNotMatch(app, /Load older completed shifts|staffTimeOlderHistory|staffCompletedShiftHistory/u);
   const staffStyles = sourceBetween(adminHtml, '.staff-time-panel {', '@media (max-width:');
   assert.match(staffStyles, /overflow:\s*visible/u);
   assert.doesNotMatch(staffStyles, /overflow-y:\s*(?:auto|scroll)|max-height/u);
+  const staffLoadSource = sourceBetween(adminHtml, 'async function loadStaffTime(options = {})', 'async function retryStaffTime()');
+  assert.doesNotMatch(staffLoadSource, /classList\.(?:add|remove)\('loading'\)/u);
 });
 
 test('Staff time reuses the existing secured Admin request path and loads only after login', () => {
@@ -831,7 +1001,10 @@ test('Staff time reuses the existing secured Admin request path and loads only a
   assert.match(pagingSource, /operation: 'shiftLookup'/u);
   assert.match(pagingSource, /mode: 'recent'/u);
   assert.match(pagingSource, /validStaffTimeShiftLookupResponse\(lookup, expected\)/u);
-  assert.match(pagingSource, /fetchStaffTimeShiftLookup\(\s*initial,\s*\{ mode: 'recent' \},\s*generation/u);
+  assert.doesNotMatch(
+    sourceBetween(adminHtml, 'async function loadStaffTimeReviewOnce(', 'async function loadStaffTimeAdvancedReview('),
+    /fetchStaffTimeShiftLookup/u
+  );
   assert.match(
     pagingSource,
     /requestJson\(\s*API\.staffTime,\s*\{ operation: 'review' \},\s*STAFF_TIME_READ_REQUEST_OPTIONS/u
@@ -839,6 +1012,7 @@ test('Staff time reuses the existing secured Admin request path and loads only a
   assert.match(pagingSource, /validStaffTimeReviewStartResponse\(initial\)/u);
   const loadSource = sourceBetween(adminHtml, 'async function loadStaffTime(', 'async function submitStaffCorrection(');
   assert.match(loadSource, /loadStaffTimeReviewView\(generation\)/u);
+  assert.match(loadSource, /await loadStaffAttention\(initial, generation\)[\s\S]*void loadStaffRecentShifts\(generation\)/u);
   const initializeSource = sourceBetween(
     adminHtml,
     'async function initialize(',
@@ -1223,7 +1397,6 @@ test('TEST Admin entry preserves the direct Staff Clock hash and activates only 
       events.push('logged-in');
       applyManagerMode();
     }
-    function beginStaffShiftLookupLoading() { events.push('shift-loading'); }
     function defaultYesterday() { return '2026-08-26'; }
     async function loadReview() { events.push('review-loaded'); }
     async function loadStaffTime() { events.push('staff-loaded'); }
@@ -1241,7 +1414,7 @@ test('TEST Admin entry preserves the direct Staff Clock hash and activates only 
   });
   assert.deepEqual(
     Array.from(context.events),
-    ['logged-in', 'shift-loading', 'staff-loaded', 'review-loaded']
+    ['logged-in', 'staff-loaded', 'review-loaded']
   );
   assert.equal(nodes['#sign-ins'].hidden, true);
   assert.equal(nodes['#staff-time'].hidden, false);
@@ -1357,7 +1530,6 @@ test('#staff-time starts Staff Clock loading without waiting for Daily sign-ins'
       return { requestToken: 'a'.repeat(32), adminName: body.adminName, test: true };
     }
     function setLoggedIn() { events.push('logged-in'); }
-    function beginStaffShiftLookupLoading() { events.push('staff-loading-state'); }
     function defaultYesterday() { return '2026-08-26'; }
     function requestedManagerMode() { return location.hash === '#staff-time' ? 'staff-time' : 'sign-ins'; }
     function applyManagerMode() { events.push('mode-applied'); }
@@ -1376,7 +1548,288 @@ test('#staff-time starts Staff Clock loading without waiting for Daily sign-ins'
   context.hooks.release();
   await loginPromise;
   assert.equal(staffStartedBeforeDailyFinished, true);
-  assert.ok(context.events.indexOf('staff-start') > context.events.indexOf('staff-loading-state'));
+  assert.ok(context.events.indexOf('staff-start') > context.events.indexOf('logged-in'));
+});
+
+test('progressive Staff Clock loading is one-shot and exact lookup works while recent history is pending', async () => {
+  const timerSource = sourceBetween(
+    adminHtml,
+    'function clearStaffPrimarySlowNotice()',
+    'function beginStaffShiftLookupLoading()'
+  );
+  const attentionSource = sourceBetween(
+    adminHtml,
+    'async function loadStaffAttention(',
+    'async function loadStaffTime(options = {})'
+  );
+  const primarySource = sourceBetween(
+    adminHtml,
+    'async function loadStaffTime(options = {})',
+    'async function retryStaffTime()'
+  );
+  const recentSource = sourceBetween(
+    adminHtml,
+    'async function loadStaffRecentShifts(',
+    'async function retryStaffRecentShifts()'
+  );
+  const exactSource = sourceBetween(
+    adminHtml,
+    'function readStaffOlderShiftQuery(',
+    'async function submitStaffOlderShiftLookup('
+  );
+  const primaryGate = deferredValue();
+  const recentGate = deferredValue();
+  const initial = reviewStartResponse({
+    view: { ...reviewStartResponse().view, today: '2026-08-31', attentionCount: 1 }
+  });
+  const attention = [{
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test',
+    code: 'missing_clock_out',
+    message: 'Mandy Test is still clocked in.',
+    occurrenceCount: 1,
+    linkedPunchIds: [PUNCH_ONE]
+  }];
+  const exactLookup = shiftLookup({
+    mode: 'exactDate',
+    dateFrom: '2026-08-26',
+    dateThrough: '2026-08-26',
+    staffId: 'mandy-test',
+    date: '2026-08-26',
+    total: 1,
+    items: [completedHistoryShift(1_500)]
+  });
+  const recentLookup = shiftLookup({
+    dateFrom: '2026-08-25',
+    dateThrough: '2026-08-31',
+    total: 1,
+    items: [completedHistoryShift(1_502)]
+  });
+  const context = vm.createContext({
+    Object,
+    Array,
+    primaryGate,
+    recentGate,
+    initial,
+    attention,
+    exactLookup,
+    recentLookup,
+    calls: [],
+    events: []
+  });
+  new vm.Script(`
+    const STAFF_TIME_SLOW_NOTICE_MS = 3_000;
+    let staffTimeLoadGeneration = 0;
+    let staffPrimaryLoading = false;
+    let staffPrimaryLoadError = '';
+    let staffPrimarySlowTimer = 0;
+    let currentStaffTime = null;
+    let currentStaffAttention = [];
+    let staffAttentionLoading = false;
+    let staffAttentionLoadError = '';
+    let staffAttentionNeedsRefresh = false;
+    let staffAttentionLoadGeneration = 0;
+    let staffAttentionSlowTimer = 0;
+    let currentStaffRecentLookup = null;
+    let staffRecentQueued = false;
+    let staffRecentLoading = false;
+    let staffRecentLoadError = '';
+    let staffRecentNeedsRefresh = false;
+    let staffRecentLoadGeneration = 0;
+    let staffRecentSlowTimer = 0;
+    let currentStaffOlderShiftLookup = null;
+    let currentStaffOlderShiftQuery = null;
+    let staffOlderShiftLoading = false;
+    let staffOlderShiftError = '';
+    let staffOlderShiftLoadGeneration = 0;
+    let staffAdvancedLoading = false;
+    let staffAdvancedLoaded = false;
+    let staffAdvancedError = '';
+    let staffAdvancedLoadGeneration = 0;
+    let nextTimerId = 1;
+    const timers = new Map();
+    const nodes = {};
+    function node(selector) {
+      if (!nodes[selector]) {
+        nodes[selector] = {
+          textContent: '', hidden: true, disabled: false, open: false, attributes: {}, children: [],
+          setAttribute(name, value) { this.attributes[name] = String(value); },
+          replaceChildren(...children) { this.textContent = ''; this.children = children; }
+        };
+      }
+      return nodes[selector];
+    }
+    function $(selector) { return node(selector); }
+    const window = {
+      setTimeout(callback, delay) {
+        const id = nextTimerId++;
+        timers.set(id, { callback, delay });
+        return id;
+      },
+      clearTimeout(id) { timers.delete(id); }
+    };
+    function staffEmpty(message) { return { textContent: message }; }
+    function showMessage(target, message) { target.textContent = message || ''; }
+    function clean(value) { return String(value == null ? '' : value).trim(); }
+    function validStaffTimeStaleError() { return false; }
+    function setLoggedOut(message) { events.push('logged-out:' + message); }
+    function validReviewDate(value) { return /^\\d{4}-\\d{2}-\\d{2}$/.test(value); }
+    function staffTimeReviewShell(value) {
+      return { ...value, records: [], todayPunches: [], needsAttention: [], audit: [] };
+    }
+    function beginStaffShiftLookupLoading() {
+      currentStaffTime = null;
+      currentStaffAttention = [];
+      currentStaffRecentLookup = null;
+      staffPrimaryLoading = true;
+      staffPrimaryLoadError = '';
+      staffAttentionLoading = true;
+      staffAttentionLoadError = '';
+      staffAttentionNeedsRefresh = false;
+      staffAttentionLoadGeneration += 1;
+      staffRecentQueued = true;
+      staffRecentLoading = false;
+      staffRecentLoadError = '';
+      staffRecentNeedsRefresh = false;
+      staffRecentLoadGeneration += 1;
+      currentStaffOlderShiftLookup = null;
+      currentStaffOlderShiftQuery = null;
+      staffOlderShiftLoading = false;
+      staffOlderShiftError = '';
+      staffOlderShiftLoadGeneration += 1;
+      events.push('shell');
+      renderStaffRecentShifts();
+      renderStaffOlderShiftLookup();
+    }
+    function renderStaffTimePrimary(data) {
+      currentStaffTime = data;
+      node('#staffClockedInNow').textContent = data.clockedInNow.map(item => item.staffName).join(', ');
+      events.push('primary');
+      renderStaffOlderShiftLookup();
+    }
+    function renderStaffAttentionState() {
+      if (staffAttentionLoading) {
+        node('#staffNeedsAttention').textContent = 'Loading Staff Clock attention…';
+        events.push('attention-loading');
+      } else if (staffAttentionLoadError) {
+        node('#staffNeedsAttention').textContent = staffAttentionLoadError;
+        events.push('attention-error');
+      } else {
+        node('#staffNeedsAttention').textContent = currentStaffAttention.map(item => item.staffName).join(', ') || 'No Staff Clock issues need attention.';
+        events.push('attention-success');
+      }
+    }
+    function renderStaffRecentShifts() {
+      if (staffRecentQueued) node('#staffRecentShifts').textContent = 'Waiting for primary Staff Clock status…';
+      else if (staffRecentLoading) node('#staffRecentShifts').textContent = 'Loading recent completed shifts…';
+      else if (staffRecentLoadError) node('#staffRecentShifts').textContent = staffRecentLoadError;
+      else if (currentStaffRecentLookup) node('#staffRecentShifts').textContent = 'Recent completed shifts loaded.';
+      events.push(staffRecentLoading ? 'recent-loading' : currentStaffRecentLookup ? 'recent-success' : 'recent-state');
+    }
+    function renderStaffOlderShiftLookup() {
+      const unavailable = !currentStaffTime;
+      node('#staffOlderShiftStaff').disabled = unavailable || staffOlderShiftLoading;
+      node('#staffOlderShiftDate').disabled = unavailable || staffOlderShiftLoading;
+      node('#staffOlderShiftSubmit').disabled = unavailable || staffOlderShiftLoading;
+      node('#staffOlderShiftResults').textContent = unavailable
+        ? 'Loading staff names and today’s New York date…'
+        : currentStaffOlderShiftLookup ? 'Exact shift loaded.' : 'Choose a staff member and exact date.';
+    }
+    function setStaffCorrectionDefaults() {}
+    function loadStaffTimeAdvanced() { events.push('advanced'); }
+    async function loadStaffTimeReviewView() {
+      calls.push({ operation: 'review' });
+      return primaryGate.promise;
+    }
+    async function fetchStaffTimeReviewStream(_initial, stream) {
+      calls.push({ operation: 'reviewPage', stream });
+      return attention;
+    }
+    async function fetchStaffTimeShiftLookup(_initial, query) {
+      calls.push({ operation: 'shiftLookup', ...query });
+      return query.mode === 'recent' ? recentGate.promise : exactLookup;
+    }
+    ${timerSource}
+    ${attentionSource}
+    ${primarySource}
+    ${recentSource}
+    ${exactSource}
+    globalThis.hooks = {
+      loadStaffTime,
+      readStaffOlderShiftQuery,
+      loadStaffOlderShiftLookup,
+      fireTimers() {
+        const pending = Array.from(timers.entries());
+        for (const [id, timer] of pending) {
+          timers.delete(id);
+          timer.callback();
+        }
+      },
+      timerDelays: () => Array.from(timers.values()).map(timer => timer.delay),
+      text: selector => node(selector).textContent || node(selector).children.map(child => child.textContent).join(' '),
+      disabled: selector => node(selector).disabled,
+      state: () => ({
+        currentStaff: currentStaffTime,
+        attention: currentStaffAttention,
+        recent: currentStaffRecentLookup,
+        recentLoading: staffRecentLoading,
+        exact: currentStaffOlderShiftLookup
+      })
+    };
+  `, { filename: 'staff-time-progressive-loading.js' }).runInContext(context);
+
+  const loadPromise = context.hooks.loadStaffTime();
+  assert.deepEqual(context.hooks.timerDelays(), [3_000]);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.calls)), [{ operation: 'review' }]);
+  context.hooks.fireTimers();
+  assert.match(context.hooks.text('#staffTimeMessage'), /Still loading Staff Clock records/u);
+  assert.match(context.hooks.text('#staffNeedsAttention'), /Still loading Staff Clock records/u);
+  assert.match(context.hooks.text('#staffClockedInNow'), /Still loading Staff Clock records/u);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.calls)), [{ operation: 'review' }], 'the slow notice makes no request');
+
+  primaryGate.resolve(initial);
+  assert.equal(await loadPromise, true);
+  const afterPrimary = context.hooks.state();
+  assert.equal(afterPrimary.currentStaff.clockedInNow[0].staffName, 'Mandy Test');
+  assert.equal(afterPrimary.attention[0].staffName, 'Mandy Test');
+  assert.equal(afterPrimary.recent, null);
+  assert.equal(afterPrimary.recentLoading, true);
+  assert.ok(context.events.indexOf('primary') < context.events.lastIndexOf('attention-success'));
+  assert.ok(context.events.lastIndexOf('attention-success') < context.events.lastIndexOf('recent-loading'));
+  assert.equal(context.hooks.disabled('#staffOlderShiftSubmit'), false);
+
+  const query = context.hooks.readStaffOlderShiftQuery({
+    elements: {
+      staffId: { value: 'mandy-test' },
+      date: { value: '2026-08-26' }
+    }
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(query)), {
+    mode: 'exactDate',
+    staffId: 'mandy-test',
+    date: '2026-08-26'
+  });
+  await context.hooks.loadStaffOlderShiftLookup(query);
+  assert.equal(context.hooks.state().exact.date, '2026-08-26');
+  const shiftCallsBeforeRecentNotice = JSON.parse(JSON.stringify(context.calls))
+    .filter(call => call.operation === 'shiftLookup');
+  assert.deepEqual(shiftCallsBeforeRecentNotice, [
+    { operation: 'shiftLookup', mode: 'recent' },
+    { operation: 'shiftLookup', mode: 'exactDate', staffId: 'mandy-test', date: '2026-08-26' }
+  ]);
+
+  assert.deepEqual(context.hooks.timerDelays(), [3_000]);
+  context.hooks.fireTimers();
+  assert.match(context.hooks.text('#staffRecentShifts'), /Still loading recent Staff Clock records/u);
+  assert.equal(context.calls.filter(call => call.operation === 'shiftLookup').length, 2, 'the recent slow notice makes no duplicate request');
+
+  recentGate.resolve(recentLookup);
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(context.hooks.state().recent.total, 1);
+  assert.equal(context.hooks.state().recentLoading, false);
+  assert.deepEqual(context.hooks.timerDelays(), []);
+  assert.equal(context.calls.filter(call => call.operation === 'shiftLookup' && call.mode === 'recent').length, 1);
 });
 
 test('a fresh Admin entry resets stale page scroll before review begins', () => {
@@ -1925,19 +2378,36 @@ test('recent completed shifts have explicit loading, success, failure, and retry
   assert.equal(successNodes['#staffRecentShifts'].children.length, 1);
   assert.match(successNodes['#staffRecentShiftsMessage'].textContent, /2026-08-12 through 2026-08-18/u);
 
-  const tenRecentShifts = Array.from({ length: 10 }, (_, index) => completedHistoryShift(1000 + index * 2));
-  const cappedLookup = shiftLookup({ total: 10, items: tenRecentShifts });
+  const copiedSheetShifts = Array.from({ length: 20 }, (_, index) => completedHistoryShift(1000 + index * 2));
+  const cappedLookup = shiftLookup({
+    total: 41,
+    items: copiedSheetShifts,
+    truncated: true
+  });
   const cappedNodes = renderStaffTimeRuntime(data, { recentLookup: cappedLookup });
   assert.equal(cappedNodes['#staffRecentShifts'].children.length, 8);
   assert.equal(cappedNodes['#staffRecentShowMore'].hidden, false);
-  assert.match(cappedNodes['#staffRecentShiftsMessage'].textContent, /Showing newest 8 of 10/u);
-  assert.match(elementText(cappedNodes['#staffRecentShifts'].children[0]), /Duration 8 hr 0 min/u);
+  assert.match(cappedNodes['#staffRecentShiftsMessage'].textContent, /Showing newest 8 of 41/u);
+  for (const row of cappedNodes['#staffRecentShifts'].children) {
+    assert.equal(row.className, 'staff-time-row staff-completed-shift');
+    assert.match(elementText(row), /Mandy Test[\s\S]*Clock-in[\s\S]*Clock-out[\s\S]*Duration 8 hr 0 min/u);
+    assert.match(elementText(row), /No correction/u);
+    const adjusters = findElements(row, element => element.className === 'staff-adjustment');
+    assert.equal(adjusters.length, 1);
+    assert.equal(adjusters[0].open, false);
+    assert.match(elementText(adjusters[0]), /Adjust/u);
+  }
   const expandedNodes = renderStaffTimeRuntime(data, {
     recentLookup: cappedLookup,
     recentVisibleLimit: 16
   });
-  assert.equal(expandedNodes['#staffRecentShifts'].children.length, 10);
-  assert.equal(expandedNodes['#staffRecentShowMore'].hidden, true);
+  assert.equal(expandedNodes['#staffRecentShifts'].children.length, 16);
+  assert.equal(expandedNodes['#staffRecentShowMore'].hidden, false);
+
+  const emptyNodes = renderStaffTimeRuntime(data, { recentLookup: shiftLookup() });
+  assert.match(elementText(emptyNodes['#staffRecentShifts']), /No completed shifts in the last seven days/u);
+  assert.equal(emptyNodes['#staffRecentShifts'].attributes['aria-busy'], 'false');
+  assert.equal(emptyNodes['#staffRecentShiftsRetry'].hidden, true);
 
   const failure = await runPagination(
     reviewStartResponse(),
@@ -1971,16 +2441,91 @@ test('recent completed shifts have explicit loading, success, failure, and retry
   );
   const retrySource = sourceBetween(
     adminHtml,
-    'async function retryStaffRecentShifts()',
+    'async function loadStaffRecentShifts(',
     'function readStaffOlderShiftQuery('
   );
-  assert.match(beginSource, /staffRecentLoading = true[\s\S]*renderStaffRecentShifts\(\)/u);
+  const retryOnlySource = sourceBetween(
+    adminHtml,
+    'async function retryStaffRecentShifts()',
+    'function showMoreRecentShifts()'
+  );
+  assert.match(beginSource, /staffRecentQueued = true[\s\S]*staffRecentLoading = false[\s\S]*renderStaffRecentShifts\(\)/u);
   assert.match(renderSource, /aria-busy[\s\S]*Loading recent completed shifts/u);
   assert.match(renderSource, /Recent completed shifts did not load\. Retry below/u);
   assert.match(renderSource, /lookup\.items\.slice\(0, staffRecentVisibleLimit\)/u);
   assert.match(retrySource, /fetchStaffTimeShiftLookup\([\s\S]*mode: 'recent'/u);
+  assert.match(retryOnlySource, /await loadStaffRecentShifts\(staffTimeLoadGeneration\)/u);
   assert.match(retrySource, /staffRecentVisibleLimit = Math\.min\([\s\S]*STAFF_RECENT_MAX_VISIBLE[\s\S]*STAFF_RECENT_INCREMENT/u);
   assert.doesNotMatch(adminHtml, /operation: 'historyPage'|Load older completed shifts/u);
+});
+
+test('primary, attention, recent, and finder sections never render a blank asynchronous state', () => {
+  const loading = renderStaffTimeRuntime(reviewResponse(), {
+    primaryLoading: true,
+    attentionLoading: true,
+    recentLookup: null,
+    recentQueued: true,
+    renderSectionStatesOnly: true
+  });
+  assert.match(elementText(loading['#staffClockedInNow']), /Loading current Staff Clock status/u);
+  assert.match(elementText(loading['#staffNeedsAttention']), /Loading Staff Clock attention/u);
+  assert.match(elementText(loading['#staffRecentShifts']), /will load after current Staff Clock status/u);
+  assert.match(elementText(loading['#staffOlderShiftResults']), /Loading staff names and today’s New York date/u);
+  for (const selector of [
+    '#staffClockedInNow', '#staffNeedsAttention', '#staffRecentShifts', '#staffOlderShiftResults'
+  ]) {
+    assert.notEqual(elementText(loading[selector]).trim(), '');
+    assert.equal(loading[selector].attributes['aria-busy'], 'true');
+  }
+  assert.equal(loading['#staffClockedInRetry'].hidden, true);
+  assert.equal(loading['#staffNeedsAttentionRetry'].hidden, true);
+  assert.equal(loading['#staffRecentShiftsRetry'].hidden, true);
+  assert.equal(loading['#staffOlderShiftSubmit'].disabled, true);
+
+  const attentionItem = {
+    staffId: 'mandy-test',
+    staffName: 'Mandy Test',
+    code: 'missing_clock_out',
+    message: 'Mandy Test is still clocked in.',
+    occurrenceCount: 1,
+    linkedPunchIds: [PUNCH_ONE]
+  };
+  const useful = renderStaffTimeRuntime(reviewResponse(), {
+    attention: [attentionItem],
+    recentLookup: shiftLookup({ total: 1, items: [completedHistoryShift()] }),
+    renderSectionStatesOnly: true
+  });
+  assert.match(elementText(useful['#staffClockedInNow']), /Mandy Test[\s\S]*Since/u);
+  assert.match(elementText(useful['#staffNeedsAttention']), /Mandy Test is still clocked in/u);
+  assert.match(elementText(useful['#staffRecentShifts']), /Duration 8 hr 0 min/u);
+  assert.match(elementText(useful['#staffOlderShiftResults']), /Choose a staff member and exact date/u);
+  assert.equal(useful['#staffOlderShiftSubmit'].disabled, false);
+
+  const emptyData = reviewResponse();
+  emptyData.clockedInNow = [];
+  const empty = renderStaffTimeRuntime(emptyData, {
+    attention: [],
+    recentLookup: shiftLookup(),
+    renderSectionStatesOnly: true
+  });
+  assert.match(elementText(empty['#staffClockedInNow']), /No one is clocked in/u);
+  assert.match(elementText(empty['#staffNeedsAttention']), /No Staff Clock issues need attention/u);
+  assert.match(elementText(empty['#staffRecentShifts']), /No completed shifts in the last seven days/u);
+
+  const failure = renderStaffTimeRuntime(reviewResponse(), {
+    primaryError: 'Current Staff Clock status could not be loaded. Lookup timed out.',
+    attentionError: 'Needs attention could not be loaded. Lookup timed out.',
+    recentLookup: null,
+    recentError: 'Recent completed shifts could not start. Lookup timed out.',
+    renderSectionStatesOnly: true
+  });
+  assert.match(elementText(failure['#staffClockedInNow']), /Lookup timed out/u);
+  assert.match(elementText(failure['#staffNeedsAttention']), /Lookup timed out/u);
+  assert.match(elementText(failure['#staffRecentShifts']), /Lookup timed out/u);
+  assert.match(elementText(failure['#staffOlderShiftResults']), /unavailable until Staff Clock status loads/u);
+  assert.equal(failure['#staffClockedInRetry'].hidden, false);
+  assert.equal(failure['#staffNeedsAttentionRetry'].hidden, false);
+  assert.equal(failure['#staffRecentShiftsRetry'].hidden, false);
 });
 
 test('Needs attention allows only one exact clocked-in match before Advanced validation', async () => {
@@ -2314,16 +2859,22 @@ test('attention correction and Advanced actions scroll their opened target into 
   assert.match(advancedTaskSource, /\.open = true[\s\S]*\.focus\([\s\S]*\.scrollIntoView\(/u);
 });
 
-test('older shift finder is collapsed and handles exact staff-date success, no-results, error, and retry', () => {
+test('heading shift finder starts closed and handles exact staff-date success, no-results, error, and retry', () => {
   const finderMarkup = sourceBetween(
     adminHtml,
-    '<details id="staffOlderShiftFinder"',
+    '<section id="staffOlderShiftFinder"',
     '<details id="staffTimeAdvanced"'
   );
-  assert.match(finderMarkup, /<summary>Find an older shift<\/summary>/u);
-  assert.doesNotMatch(finderMarkup.match(/<details[^>]*>/u)?.[0] || '', /\bopen\b/u);
+  assert.match(adminHtml, /id="staffOlderShiftOpen"[^>]*aria-controls="staffOlderShiftFinder"[^>]*aria-expanded="false"[^>]*>Find a shift<\/button>/u);
+  assert.match(finderMarkup.match(/<section[^>]*>/u)?.[0] || '', /\bhidden\b/u);
+  assert.match(finderMarkup, /<h3 id="staffOlderShiftHeading">Find a shift<\/h3>/u);
   assert.match(finderMarkup, /id="staffOlderShiftStaff" name="staffId" required/u);
   assert.match(finderMarkup, /id="staffOlderShiftDate" name="date" type="date" required/u);
+  assert.doesNotMatch(
+    finderMarkup.match(/<input id="staffOlderShiftDate"[^>]*>/u)?.[0] || '',
+    /\bmin=/u,
+    'retained older dates have no artificial lower bound'
+  );
   assert.match(finderMarkup, /id="staffOlderShiftRetry"[^>]*hidden/u);
 
   const query = { mode: 'exactDate', staffId: 'mandy-test', date: '2026-07-01' };
@@ -2334,7 +2885,7 @@ test('older shift finder is collapsed and handles exact staff-date success, no-r
   assert.match(elementText(loadingNodes['#staffOlderShiftResults']), /Loading the selected staff member and exact date/u);
   assert.equal(loadingNodes['#staffOlderShiftResults'].attributes['aria-busy'], 'true');
   assert.equal(loadingNodes['#staffOlderShiftSubmit'].disabled, true);
-  assert.match(loadingNodes['#staffOlderShiftMessage'].textContent, /Finding the older completed shift/u);
+  assert.match(loadingNodes['#staffOlderShiftMessage'].textContent, /Finding the completed shift/u);
 
   const olderShift = completedHistoryShift(985, {
     clockIn: {
@@ -2379,7 +2930,7 @@ test('older shift finder is collapsed and handles exact staff-date success, no-r
 
   const errorNodes = renderStaffTimeRuntime(reviewResponse(), {
     olderQuery: query,
-    olderError: 'The older shift could not be loaded. Lookup timed out.'
+    olderError: 'The shift could not be loaded. Lookup timed out.'
   });
   assert.match(elementText(errorNodes['#staffOlderShiftResults']), /Lookup timed out/u);
   assert.equal(errorNodes['#staffOlderShiftRetry'].hidden, false);
@@ -2396,14 +2947,119 @@ test('older shift finder is collapsed and handles exact staff-date success, no-r
     'function readStaffOlderShiftQuery(',
     'async function submitStaffCorrection('
   );
-  assert.match(searchSource, /date > shiftDate\(currentStaffTime\.view\.today, -7\)/u);
+  assert.match(searchSource, /date > currentStaffTime\.view\.today/u);
   assert.match(searchSource, /currentStaffOlderShiftQuery = query/u);
   assert.match(searchSource, /staffOlderShiftLoadGeneration/u);
   assert.match(searchSource, /retryStaffOlderShiftLookup[\s\S]*currentStaffOlderShiftQuery/u);
+  assert.match(adminHtml, /\$\('#staffOlderShiftRetry'\)\.addEventListener\('click', retryStaffOlderShiftLookup\)/u);
   assert.match(
     searchSource,
     /validStaffTimeStaleError\(error\)[\s\S]*await loadStaffTime\(\{ quiet: true \}\)[\s\S]*currentStaffOlderShiftQuery = query[\s\S]*Staff time changed while searching\. Retry the same staff member and date\.[\s\S]*renderStaffOlderShiftLookup\(\)/u
   );
+});
+
+test('shift finder accepts August 26, August 24, older dates, and today while blocking tomorrow', () => {
+  const today = '2026-08-31';
+  for (const date of ['2026-08-26', '2026-08-24', '2026-08-18', today]) {
+    assert.deepEqual(readStaffShiftQueryRuntime({ today, date }), {
+      mode: 'exactDate',
+      staffId: 'mandy-test',
+      date
+    }, `${date} remains selectable`);
+  }
+  assert.equal(readStaffShiftQueryRuntime({ today, date: '2026-09-01' }), null);
+
+  const data = reviewResponse();
+  data.view.today = today;
+  const nodes = renderStaffTimeRuntime(data);
+  assert.equal(nodes['#staffOlderShiftDate'].max, today, 'the native date picker disables tomorrow');
+  assert.notEqual(nodes['#staffOlderShiftDate'].disabled, true, 'the exact-date picker is immediately usable');
+  assert.match(elementText(nodes['#staffOlderShiftResults']), /Choose a staff member and exact date/u);
+});
+
+test('exact-date lookup finds a recent shift outside the first eight and keeps Adjust punch', () => {
+  const data = reviewResponse();
+  data.view.today = '2026-08-31';
+  data.shiftStaff.push({ staffId: 'marvin-test', staffName: 'Marvin Test' });
+  const visibleRecent = Array.from({ length: 8 }, (_, index) => {
+    const shift = completedHistoryShift(1_100 + index * 2);
+    return {
+      ...shift,
+      clockIn: {
+        ...shift.clockIn,
+        timestamp: '2026-08-27T09:00:00-04:00',
+        date: '2026-08-27'
+      },
+      clockOut: {
+        ...shift.clockOut,
+        timestamp: '2026-08-27T17:00:00-04:00',
+        date: '2026-08-27'
+      }
+    };
+  });
+  const targetBase = completedHistoryShift(1_200);
+  const target = {
+    ...targetBase,
+    clockIn: {
+      ...targetBase.clockIn,
+      timestamp: '2026-08-26T09:00:00-04:00',
+      date: '2026-08-26',
+      staffId: 'marvin-test',
+      staffName: 'Marvin Test'
+    },
+    clockOut: {
+      ...targetBase.clockOut,
+      timestamp: '2026-08-26T17:00:00-04:00',
+      date: '2026-08-26',
+      staffId: 'marvin-test',
+      staffName: 'Marvin Test'
+    }
+  };
+  const query = { mode: 'exactDate', staffId: 'marvin-test', date: '2026-08-26' };
+  const recentLookup = shiftLookup({
+    dateFrom: '2026-08-25',
+    dateThrough: '2026-08-31',
+    total: 9,
+    items: [...visibleRecent, target]
+  });
+  const exactLookup = shiftLookup({
+    mode: 'exactDate',
+    dateFrom: query.date,
+    dateThrough: query.date,
+    staffId: query.staffId,
+    date: query.date,
+    total: 1,
+    items: [target]
+  });
+  const { validStaffTimeShiftLookupResponse } = validatorRuntime();
+  assert.equal(validStaffTimeShiftLookupResponse(recentLookup, {
+    viewToken: VIEW_TOKEN,
+    mode: 'recent',
+    today: data.view.today
+  }), true);
+  assert.equal(validStaffTimeShiftLookupResponse(exactLookup, {
+    viewToken: VIEW_TOKEN,
+    mode: query.mode,
+    staffId: query.staffId,
+    date: query.date
+  }), true);
+  const nodes = renderStaffTimeRuntime(data, {
+    recentLookup,
+    olderQuery: query,
+    olderLookup: exactLookup
+  });
+
+  assert.doesNotMatch(elementText(nodes['#staffRecentShifts']), /Marvin Test/u);
+  assert.equal(nodes['#staffRecentShifts'].children.length, 8);
+  assert.equal(nodes['#staffRecentShowMore'].hidden, false);
+  assert.match(
+    elementText(nodes['#staffOlderShiftResults']),
+    /Marvin Test[\s\S]*Clock-in[\s\S]*Clock-out[\s\S]*Duration 8 hr 0 min[\s\S]*No correction[\s\S]*Adjust/u
+  );
+  assert.equal(countElements(
+    nodes['#staffOlderShiftResults'],
+    element => element.className === 'staff-adjustment-form'
+  ), 1);
 });
 
 test('recent and older workflows stay usable while Advanced loads or fails explicitly', () => {
@@ -2450,15 +3106,19 @@ test('recent and older workflows stay usable while Advanced loads or fails expli
     'async function loadStaffTimeReviewOnce(',
     'async function loadStaffTimeAdvancedReview('
   );
+  const progressiveLoad = sourceBetween(
+    adminHtml,
+    'async function loadStaffAttention(',
+    'async function retryStaffTime()'
+  );
   const advancedLoad = sourceBetween(
     adminHtml,
     'async function loadStaffTimeAdvancedReview(',
     'function validStaffTimeStaleError('
   );
-  assert.match(
-    primaryLoad,
-    /fetchStaffTimeReviewStream\([\s\S]*'attention'[\s\S]*fetchStaffTimeShiftLookup/u
-  );
+  assert.doesNotMatch(primaryLoad, /fetchStaffTimeReviewStream|fetchStaffTimeShiftLookup/u);
+  assert.match(progressiveLoad, /fetchStaffTimeReviewStream\([\s\S]*'attention'/u);
+  assert.match(progressiveLoad, /renderStaffTimePrimary\([\s\S]*await loadStaffAttention\([\s\S]*void loadStaffRecentShifts/u);
   assert.match(advancedLoad, /'records'[\s\S]*'audit'/u);
   assert.doesNotMatch(advancedLoad, /'attention'/u);
 });
@@ -2470,11 +3130,11 @@ test('rendering covers all review collections with safe Admin-added, VOID, total
     'data.records',
     'data.clockedInNow',
     'data.todayPunches',
-    'data.needsAttention',
     'data.periods.current',
     'data.periods.previous',
     'data.audit'
   ]) assert.match(renderSource, new RegExp(field.replace('.', '\\.')));
+  assert.match(renderSource, /currentStaffAttention/u);
   assert.match(renderSource, /Admin-added/u);
   assert.match(renderSource, /VOID/u);
   assert.match(adminHtml, /Math\.floor\(total\.totalSeconds \/ 3_600\)/u);
@@ -2639,7 +3299,7 @@ test('one recent lookup accepts and renders a legitimate mixed re-pair without a
     element => element.className === 'staff-adjustment-form'
   ), 1);
   const historyText = elementText(nodes['#staffRecentShifts']);
-  assert.match(historyText, /Adjust punch/u);
+  assert.match(historyText, /Adjust/u);
   assert.match(historyText, /Clock-in · Tablet/u);
   assert.match(historyText, /Clock-out · Admin-added/u);
   assert.match(historyText, /Existing punch correction/u);
@@ -2666,7 +3326,7 @@ test('completed shifts render one clear adjustment form plus original and correc
     element => element.className === 'staff-adjustment-form'
   ), 1);
   const recordText = elementText(nodes['#staffRecentShifts']);
-  assert.match(recordText, /Adjust punch/u);
+  assert.match(recordText, /Adjust/u);
   assert.match(recordText, /Current clock-in \(before this change\)/u);
   assert.match(recordText, /Current clock-out \(before this change\)/u);
   assert.match(recordText, /Proposed corrected clock-in · America\/New_York/u);
@@ -2682,6 +3342,55 @@ test('completed shifts render one clear adjustment form plus original and correc
   assert.match(auditText, /Original:/u);
   assert.match(auditText, /Corrected:/u);
   assert.match(auditText, /Manager verified the written time card/u);
+});
+
+test('opening Adjust closes every other adjustment form across recent and exact results', () => {
+  const data = reviewResponse();
+  const recentShifts = [completedHistoryShift(1_300), completedHistoryShift(1_302)];
+  const exactShift = completedHistoryShift(1_304);
+  const query = { mode: 'exactDate', staffId: 'mandy-test', date: '2026-08-11' };
+  const nodes = renderStaffTimeRuntime(data, {
+    recentLookup: shiftLookup({ total: 2, items: recentShifts }),
+    olderQuery: query,
+    olderLookup: shiftLookup({
+      mode: 'exactDate',
+      dateFrom: query.date,
+      dateThrough: query.date,
+      staffId: query.staffId,
+      date: query.date,
+      total: 1,
+      items: [exactShift]
+    })
+  });
+  const recentAdjusters = findElements(
+    nodes['#staffRecentShifts'],
+    element => element.className === 'staff-adjustment'
+  );
+  const exactAdjusters = findElements(
+    nodes['#staffOlderShiftResults'],
+    element => element.className === 'staff-adjustment'
+  );
+  assert.equal(recentAdjusters.length, 2);
+  assert.equal(exactAdjusters.length, 1);
+  assert.equal([...recentAdjusters, ...exactAdjusters].filter(element => element.open).length, 0);
+
+  recentAdjusters[0].open = true;
+  recentAdjusters[0].dispatch('toggle');
+  assert.equal(recentAdjusters[0].open, true);
+
+  exactAdjusters[0].open = true;
+  exactAdjusters[0].dispatch('toggle');
+  assert.equal(recentAdjusters[0].open, false);
+  assert.equal(exactAdjusters[0].open, true);
+  assert.equal([...recentAdjusters, ...exactAdjusters].filter(element => element.open).length, 1);
+
+  const savingForm = exactAdjusters[0].querySelector('[data-staff-adjust-form]');
+  savingForm.setAttribute('aria-busy', 'true');
+  recentAdjusters[1].open = true;
+  recentAdjusters[1].dispatch('toggle');
+  assert.equal(recentAdjusters[1].open, false, 'a saving adjustment remains the one open form');
+  assert.equal(exactAdjusters[0].open, true);
+  assert.equal(exactAdjusters[0].querySelector('summary').focused, true);
 });
 
 test('correction IDs are permanent for an exact retry and regenerate only after input changes', () => {

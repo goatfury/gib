@@ -103,20 +103,30 @@ test('Daily review is decision-first: counts, missing rows, then collapsed compl
   assert.ok(render.indexOf("$('#classList')") < render.indexOf("$('#completedClassList')"));
 });
 
-test('Staff Clock prioritizes attention and keeps every heavy workflow closed', () => {
+test('Staff Clock puts its two manager actions and focused finder before live and recent records', () => {
   const staff = sourceBetween(adminHtml, '<section id="staff-time"', '</section>\n    </section>');
+  const findAction = staff.indexOf('id="staffOlderShiftOpen"');
+  const missedPunch = staff.indexOf('id="staffCorrectionOpen"');
+  const finder = staff.indexOf('id="staffOlderShiftFinder"');
   const attention = staff.indexOf('id="staffNeedsAttentionSection"');
   const clockedIn = staff.indexOf('id="staffClockedInNow"');
   const recent = staff.indexOf('id="staffRecentShifts"');
-  const older = staff.indexOf('id="staffOlderShiftFinder"');
   const pay = staff.indexOf('id="staffPayPeriods"');
   const advanced = staff.indexOf('id="staffTimeAdvanced"');
-  assert.ok(attention >= 0 && clockedIn > attention && recent > clockedIn);
-  assert.ok(older > recent && pay > older && advanced > pay);
+  assert.ok(findAction >= 0 && missedPunch > findAction && finder > missedPunch);
+  assert.ok(attention > finder && clockedIn > attention && recent > clockedIn);
+  assert.ok(pay > recent && advanced > pay);
+
+  const heading = sourceBetween(staff, '<div class="mode-panel-head">', '</div>\n          </div>');
+  assert.match(heading, /staffOlderShiftOpen[\s\S]*>Find a shift<\/button>/u);
+  assert.match(heading, /staffCorrectionOpen[\s\S]*>Add missed punch<\/button>/u);
+  assert.equal((staff.match(/>Find a shift<\/button>/gu) || []).length, 1);
 
   assert.match(openingTag('staffCorrectionPanel'), /\bhidden\b/u);
   assert.match(adminHtml, /id="staffCorrectionOpen"[^>]*aria-expanded="false"[^>]*>Add missed punch/u);
-  for (const id of ['staffOlderShiftFinder', 'staffPayPeriods', 'staffTimeAdvanced']) {
+  assert.match(openingTag('staffOlderShiftFinder'), /\bhidden\b/u);
+  assert.match(adminHtml, /id="staffOlderShiftOpen"[^>]*aria-controls="staffOlderShiftFinder"[^>]*aria-expanded="false"/u);
+  for (const id of ['staffPayPeriods', 'staffTimeAdvanced']) {
     assert.doesNotMatch(openingTag(id), /\bopen\b/u, `${id} must start closed`);
   }
   const advancedMarkup = sourceBetween(adminHtml, '<details id="staffTimeAdvanced"', '</details>');
@@ -124,7 +134,7 @@ test('Staff Clock prioritizes attention and keeps every heavy workflow closed', 
   assert.doesNotMatch(advancedMarkup, /Needs attention/u);
 });
 
-test('recent shifts start at eight, show complete shift facts, and expand only on request', () => {
+test('recent shifts start at eight compact rows with correction status and one-open adjustment behavior', () => {
   assert.match(adminHtml, /const STAFF_RECENT_INITIAL_LIMIT = 8;/u);
   assert.match(adminHtml, /staffRecentVisibleLimit = STAFF_RECENT_INITIAL_LIMIT/u);
   assert.match(adminHtml, /lookup\.items\.slice\(0, staffRecentVisibleLimit\)/u);
@@ -132,9 +142,16 @@ test('recent shifts start at eight, show complete shift facts, and expand only o
   assert.match(adminHtml, /STAFF_RECENT_MAX_VISIBLE = 20/u);
   assert.match(
     adminHtml,
-    /Clock-in \$\{staffTimestampLabel\(shift\.clockIn\.timestamp\)\} · Clock-out \$\{staffTimestampLabel\(shift\.clockOut\.timestamp\)\} · Duration \$\{staffShiftDurationLabel\(shift\)\}/u
+    /`Clock-in \$\{staffTimestampLabel\(shift\.clockIn\.timestamp\)\}`[\s\S]*`Clock-out \$\{staffTimestampLabel\(shift\.clockOut\.timestamp\)\}`[\s\S]*`Duration \$\{staffShiftDurationLabel\(shift\)\}`/u
   );
-  assert.match(adminHtml, /row\.appendChild\(staffAdjustmentForm\(shift\)\)/u);
+  assert.match(adminHtml, /staff-time-row staff-completed-shift/u);
+  assert.match(adminHtml, /staffBadge\('No correction'\)/u);
+  assert.match(adminHtml, /staffBadge\('Adjusted', 'admin'\)/u);
+  assert.match(adminHtml, /makeElement\('summary', '', 'Adjust'\)/u);
+  assert.match(
+    adminHtml,
+    /querySelectorAll\('\.staff-adjustment\[open\]'\)[\s\S]*candidate !== details[\s\S]*candidate\.open = false/u
+  );
 });
 
 test('manager workflow has explicit asynchronous states and no nested scroll container', () => {
@@ -145,7 +162,11 @@ test('manager workflow has explicit asynchronous states and no nested scroll con
     'Every scheduled class has a recorded instructor sign-in',
     'Instructor sign-ins loaded',
     'Loading Staff Clock attention',
+    'Still loading Staff Clock records',
     'No Staff Clock issues need attention',
+    'Retry Needs attention',
+    'No one is clocked in',
+    'Retry Clocked in now',
     'Retry Staff Clock',
     'Loading recent completed shifts',
     'No completed shifts in the last seven days',
@@ -171,14 +192,44 @@ test('mode controls support keyboard and Fire-sized touch interaction', () => {
   assert.match(adminHtml, /summary:focus-visible/u);
   assert.match(openingTag('sign-ins'), /role="tabpanel"[\s\S]*tabindex="-1"/u);
   assert.match(openingTag('staff-time'), /role="tabpanel"[\s\S]*tabindex="-1"/u);
+
+  const fireStyles = sourceBetween(adminHtml, '@media (max-width: 820px)', '@media (max-width: 560px)');
+  assert.match(fireStyles, /\.staff-time-panel \.mode-panel-head[\s\S]*flex-direction:\s*column/u);
+  assert.match(fireStyles, /\.staff-time-panel \.mode-panel-head \.staff-section-actions[\s\S]*grid-template-columns:\s*1fr/u);
+  assert.match(fireStyles, /\.staff-time-panel \.mode-panel-head \.btn\s*\{\s*width:\s*100%/u);
 });
 
 test('Richmond hides the Staff Clock mode and panel through the installation profile', () => {
   assert.match(adminHtml, /const STAFF_CLOCK_ENABLED = INSTALLATION\.featureFlags\.staffClock === true;/u);
   assert.match(adminHtml, /\$\('#staffModeControl'\)\.hidden = !STAFF_CLOCK_ENABLED;/u);
   assert.match(adminHtml, /\$\('#staff-time'\)\.hidden = true;/u);
-  assert.match(
-    sourceBetween(adminHtml, 'function applyManagerMode(', 'function setLoggedOut('),
-    /staff\.hidden = !staffActive \|\| !STAFF_CLOCK_ENABLED/u
-  );
+  const modeSource = sourceBetween(adminHtml, 'function requestedManagerMode()', 'function setLoggedOut(');
+  assert.match(modeSource, /staff\.hidden = !staffActive \|\| !STAFF_CLOCK_ENABLED/u);
+
+  const staffPanel = sourceBetween(adminHtml, '<section id="staff-time"', '<div id="toast"');
+  assert.match(staffPanel, /id="staffOlderShiftOpen"[^>]*>Find a shift<\/button>/u);
+  assert.equal(adminHtml.indexOf('id="staffOlderShiftOpen"') > adminHtml.indexOf('<section id="staff-time"'), true);
+  assert.match(staffPanel, /id="staffOlderShiftDate"/u, 'the date finder remains inside the hidden Staff Clock panel');
+  const nodes = Object.fromEntries([
+    '#sign-ins', '#staff-time', '#dailyModeControl', '#staffModeControl', '#appPanel'
+  ].map(selector => [selector, {
+    hidden: false,
+    tabIndex: 0,
+    attributes: {},
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    focus() { this.focused = true; }
+  }]));
+  const context = vm.createContext({ nodes });
+  new vm.Script(`
+    const STAFF_CLOCK_ENABLED = false;
+    const location = { hash: '#staff-time' };
+    const window = { requestAnimationFrame(callback) { callback(); } };
+    function $(selector) { return nodes[selector]; }
+    ${modeSource}
+    globalThis.hooks = { requestedManagerMode, applyManagerMode };
+  `).runInContext(context);
+  assert.equal(context.hooks.requestedManagerMode(), 'sign-ins');
+  context.hooks.applyManagerMode();
+  assert.equal(nodes['#sign-ins'].hidden, false);
+  assert.equal(nodes['#staff-time'].hidden, true);
 });

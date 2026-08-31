@@ -1840,7 +1840,7 @@ test('maximum-length Unicode records stay under the receiver byte ceiling across
 });
 
 test('Staff Time shift lookup pins seven recent days and one bounded exact staff/date result', () => {
-  const lookupNow = new Date('2026-08-29T16:00:00.000Z');
+  const lookupNow = new Date('2026-09-01T03:30:00.000Z');
   const exactClockIn = timeRow({
     punchId: generatedPunchId(130_000),
     timestamp: '2026-08-18T09:00:00-04:00',
@@ -1859,21 +1859,21 @@ test('Staff Time shift lookup pins seven recent days and one bounded exact staff
   const outsideRecent = ordinaryPeriodTimeRows({
     count: 2,
     startIndex: 130_010,
-    date: '2026-08-22',
+    date: '2026-08-24',
     staffId: 'mandy-test',
     staffName: 'Mandy Test'
   });
   const firstRecent = ordinaryPeriodTimeRows({
     count: 2,
     startIndex: 130_020,
-    date: '2026-08-23',
+    date: '2026-08-26',
     staffId: 'mandy-test',
     staffName: 'Mandy Test'
   });
   const latestRecent = ordinaryPeriodTimeRows({
-    count: 2,
+    count: 16,
     startIndex: 130_030,
-    date: '2026-08-29',
+    date: '2026-08-31',
     staffId: 'front-desk-test-two',
     staffName: 'Front Desk Test Two'
   });
@@ -1905,15 +1905,13 @@ test('Staff Time shift lookup pins seven recent days and one bounded exact staff
   const recent = readStaffShiftLookup(harness, review.initial.view.token, {
     mode: 'recent', now: lookupNow
   });
-  assert.equal(recent.lookup.dateFrom, '2026-08-23');
-  assert.equal(recent.lookup.dateThrough, '2026-08-29');
-  assert.equal(recent.lookup.total, 2);
+  assert.equal(recent.lookup.dateFrom, '2026-08-25');
+  assert.equal(recent.lookup.dateThrough, '2026-08-31');
+  assert.equal(recent.lookup.total, 9);
   assert.equal(recent.lookup.truncated, false);
-  assert.deepEqual(
-    recent.lookup.items.map(shift => shift.clockIn.date),
-    ['2026-08-29', '2026-08-23'],
-    'the boundary day is included and the preceding day is excluded'
-  );
+  assert.deepEqual(recent.lookup.items.slice(0, 8).map(shift => shift.clockIn.date),
+    Array(8).fill('2026-08-31'));
+  assert.equal(recent.lookup.items[8].clockIn.date, '2026-08-26');
 
   const exact = readStaffShiftLookup(harness, review.initial.view.token, {
     mode: 'exactDate',
@@ -1933,6 +1931,36 @@ test('Staff Time shift lookup pins seven recent days and one bounded exact staff
   assert.equal(shift.latestAdjustment.clockInPunchId, shift.clockIn.punchId);
   assert.equal(shift.latestAdjustment.clockOutPunchId, shift.clockOut.punchId);
 
+  const recentExact = readStaffShiftLookup(harness, review.initial.view.token, {
+    mode: 'exactDate',
+    staffId: 'mandy-test',
+    date: '2026-08-26',
+    now: lookupNow
+  });
+  assert.equal(recentExact.lookup.total, 1);
+  assert.equal(recentExact.lookup.items[0].clockIn.date, '2026-08-26');
+  assert.equal(
+    recent.lookup.items.slice(0, 8).some(item => (
+      item.clockIn.punchId === recentExact.lookup.items[0].clockIn.punchId
+    )),
+    false,
+    'the targeted recent shift is not among the first eight displayed'
+  );
+  assert.equal(
+    recent.lookup.items[8].clockIn.punchId,
+    recentExact.lookup.items[0].clockIn.punchId,
+    'exact-date lookup returns the ninth recent shift without browsing the recent list'
+  );
+
+  const todayExact = readStaffShiftLookup(harness, review.initial.view.token, {
+    mode: 'exactDate',
+    staffId: 'front-desk-test-two',
+    date: '2026-08-31',
+    now: lookupNow
+  });
+  assert.equal(todayExact.lookup.total, 8);
+  assert.equal(todayExact.lookup.items[0].clockIn.date, '2026-08-31');
+
   assert.deepEqual(harness.post(adminBody('staffTimeShiftLookupV3', {
     viewToken: review.initial.view.token,
     mode: 'recent',
@@ -1943,8 +1971,8 @@ test('Staff Time shift lookup pins seven recent days and one bounded exact staff
     viewToken: review.initial.view.token,
     mode: 'exactDate',
     staffId: 'front-desk-test-three',
-    date: '2026-08-23'
-  })), { ok: false, target: 'test', result: 'rejected' }, 'recent dates reject exactDate mode');
+    date: '2026-09-01'
+  })), { ok: false, target: 'test', result: 'rejected' }, 'future dates reject exactDate mode');
 
   for (const [name, before] of originalSheets) {
     assert.deepEqual(harness.sheets.get(name).values, before, `${name} remains read-only`);

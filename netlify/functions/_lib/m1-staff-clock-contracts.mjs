@@ -989,8 +989,8 @@ export function sanitizeStaffShiftLookupRequest(
     || !validDate(input.date)
   ) return null;
   const now = options.now instanceof Date ? options.now : new Date();
-  const recentDateFrom = shiftDate(newYorkWallTime(now).slice(0, 10), -6);
-  if (input.date >= recentDateFrom) return null;
+  const today = newYorkWallTime(now).slice(0, 10);
+  if (input.date > today) return null;
   return Object.freeze({
     operation: expectedOperation,
     viewToken: input.viewToken,
