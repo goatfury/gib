@@ -892,7 +892,7 @@
           </section>
 
           <details id="staffOlderShiftFinder" class="staff-time-details">
-            <summary>Find an older shift</summary>
+            <summary>Find a shift</summary>
             <form id="staffOlderShiftForm" class="staff-fix-form" novalidate>
               <div class="staff-fix-grid">
                 <div class="field">
@@ -910,7 +910,7 @@
               </div>
               <div id="staffOlderShiftMessage" class="message" role="status"></div>
               <div id="staffOlderShiftResults" class="staff-time-list" aria-live="polite" aria-busy="false">
-                <div class="empty">Choose a staff member and exact older date.</div>
+                <div class="empty">Choose a staff member and exact date.</div>
               </div>
             </form>
           </details>
@@ -3646,7 +3646,7 @@
         $('#staffOlderShiftStaff').replaceChildren(makeElement('option', '', 'Choose staff'));
         $('#staffOlderShiftDate').value = '';
         $('#staffOlderShiftDate').max = '';
-        $('#staffOlderShiftResults').replaceChildren(staffEmpty('Choose a staff member and exact older date.'));
+        $('#staffOlderShiftResults').replaceChildren(staffEmpty('Choose a staff member and exact date.'));
         $('#staffOlderShiftResults').setAttribute('aria-busy', 'false');
         $('#staffOlderShiftRetry').hidden = true;
         $('#staffOlderShiftSubmit').disabled = false;
@@ -4163,19 +4163,19 @@
           results.setAttribute('aria-busy', 'true');
           results.replaceChildren(staffEmpty('Loading the selected staff member and exact date…'));
           retry.hidden = true;
-          showMessage(message, 'Finding the older completed shift…', 'working');
+          showMessage(message, 'Finding the completed shift…', 'working');
           return;
         }
         results.setAttribute('aria-busy', 'false');
         if (staffOlderShiftError) {
           results.replaceChildren(staffEmpty(staffOlderShiftError));
           retry.hidden = false;
-          showMessage(message, 'The older shift lookup failed. Retry uses the same staff member and exact date.');
+          showMessage(message, 'The shift lookup failed. Retry uses the same staff member and exact date.');
           return;
         }
         retry.hidden = true;
         if (!currentStaffOlderShiftQuery || !currentStaffOlderShiftLookup) {
-          results.replaceChildren(staffEmpty('Choose a staff member and exact older date.'));
+          results.replaceChildren(staffEmpty('Choose a staff member and exact date.'));
           showMessage(message, '');
           return;
         }
@@ -4197,7 +4197,7 @@
         currentStaffTime = data;
         populateStaffCorrectionNames(data.staff, data.shiftStaff);
         const olderDate = $('#staffOlderShiftDate');
-        olderDate.max = shiftDate(data.view.today, -7);
+        olderDate.max = data.view.today;
         if (olderDate.value > olderDate.max) olderDate.value = '';
         $('#staffTimeSummary').textContent = `${data.needsAttention.length} need attention · ${data.clockedInNow.length} clocked in`;
 
@@ -5307,7 +5307,7 @@
         if (
           !person
           || !validReviewDate(date)
-          || date > shiftDate(currentStaffTime.view.today, -7)
+          || date > currentStaffTime.view.today
         ) return null;
         return Object.freeze({ mode: 'exactDate', staffId: person.staffId, date });
       }
@@ -5350,7 +5350,7 @@
               : 'Staff time changed and could not be refreshed. Retry the same staff member and date.';
             renderStaffOlderShiftLookup();
           } else {
-            staffOlderShiftError = `The older shift could not be loaded. ${clean(error.message)
+            staffOlderShiftError = `The shift could not be loaded. ${clean(error.message)
               || 'The request did not complete.'}`;
           }
         } finally {
@@ -5370,7 +5370,7 @@
         if (!query) {
           showMessage(
             $('#staffOlderShiftMessage'),
-            'Choose a staff member and an exact date earlier than the last seven days.'
+            'Choose a staff member and an exact date through today.'
           );
           return;
         }

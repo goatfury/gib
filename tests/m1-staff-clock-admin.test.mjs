@@ -471,6 +471,35 @@ function renderStaffTimeRuntime(data, {
   return nodes;
 }
 
+function readStaffShiftQueryRuntime({ today, date, staffId = 'mandy-test' }) {
+  const validDateSource = sourceBetween(
+    adminHtml,
+    'function validReviewDate(',
+    'function validReviewTimestamp('
+  );
+  const querySource = sourceBetween(
+    adminHtml,
+    'function readStaffOlderShiftQuery(',
+    'async function loadStaffOlderShiftLookup('
+  );
+  const context = vm.createContext({ Date, Object, today, date, staffId });
+  new vm.Script(`
+    ${validDateSource}
+    let currentStaffTime = {
+      shiftStaff: [{ staffId: 'mandy-test', staffName: 'Mandy Test' }],
+      view: { today }
+    };
+    ${querySource}
+    globalThis.query = readStaffOlderShiftQuery({
+      elements: {
+        staffId: { value: staffId },
+        date: { value: date }
+      }
+    });
+  `, { filename: 'staff-time-admin-exact-date-query.js' }).runInContext(context);
+  return context.query ? JSON.parse(JSON.stringify(context.query)) : null;
+}
+
 function elementText(element) {
   return [
     element.textContent,
@@ -790,12 +819,12 @@ test('Admin exposes exactly two compact, mutually exclusive manager modes', () =
   assert.doesNotMatch(app.match(/<details id="staffPayPeriods"[^>]*>/u)?.[0] || '', /\bopen\b/u);
   assert.match(app, /id="staffCorrectionOpen"[^>]*aria-controls="staffCorrectionPanel"[^>]*aria-expanded="false"[^>]*>Add missed punch/u);
   assert.match(app, /<section id="staffCorrectionPanel"[^>]*hidden/u);
-  assert.match(app, /Recent completed shifts[\s\S]*Find an older shift[\s\S]*Advanced records and audit/u);
+  assert.match(app, /Recent completed shifts[\s\S]*Find a shift[\s\S]*Advanced records and audit/u);
   assert.equal(idCount('staffRecentShifts'), 1);
   assert.equal(idCount('staffOlderShiftFinder'), 1);
   assert.equal(idCount('staffOlderShiftResults'), 1);
   assert.equal(idCount('staffTimeAdvanced'), 1);
-  assert.match(app, /<details id="staffOlderShiftFinder"[^>]*>[\s\S]*<summary>Find an older shift<\/summary>/u);
+  assert.match(app, /<details id="staffOlderShiftFinder"[^>]*>[\s\S]*<summary>Find a shift<\/summary>/u);
   assert.match(app, /<details id="staffTimeAdvanced"[^>]*>[\s\S]*Advanced records and audit[\s\S]*staffTimeRecords[\s\S]*staffTimeAudit/u);
   const advancedMarkup = sourceBetween(app, '<details id="staffTimeAdvanced"', '</details>\n        </div>\n      </section>');
   assert.match(advancedMarkup, /Today’s punches[\s\S]*Staff Time records[\s\S]*Staff time audit/u);
@@ -2314,16 +2343,21 @@ test('attention correction and Advanced actions scroll their opened target into 
   assert.match(advancedTaskSource, /\.open = true[\s\S]*\.focus\([\s\S]*\.scrollIntoView\(/u);
 });
 
-test('older shift finder is collapsed and handles exact staff-date success, no-results, error, and retry', () => {
+test('shift finder is collapsed and handles exact staff-date success, no-results, error, and retry', () => {
   const finderMarkup = sourceBetween(
     adminHtml,
     '<details id="staffOlderShiftFinder"',
     '<details id="staffTimeAdvanced"'
   );
-  assert.match(finderMarkup, /<summary>Find an older shift<\/summary>/u);
+  assert.match(finderMarkup, /<summary>Find a shift<\/summary>/u);
   assert.doesNotMatch(finderMarkup.match(/<details[^>]*>/u)?.[0] || '', /\bopen\b/u);
   assert.match(finderMarkup, /id="staffOlderShiftStaff" name="staffId" required/u);
   assert.match(finderMarkup, /id="staffOlderShiftDate" name="date" type="date" required/u);
+  assert.doesNotMatch(
+    finderMarkup.match(/<input id="staffOlderShiftDate"[^>]*>/u)?.[0] || '',
+    /\bmin=/u,
+    'retained older dates have no artificial lower bound'
+  );
   assert.match(finderMarkup, /id="staffOlderShiftRetry"[^>]*hidden/u);
 
   const query = { mode: 'exactDate', staffId: 'mandy-test', date: '2026-07-01' };
@@ -2334,7 +2368,7 @@ test('older shift finder is collapsed and handles exact staff-date success, no-r
   assert.match(elementText(loadingNodes['#staffOlderShiftResults']), /Loading the selected staff member and exact date/u);
   assert.equal(loadingNodes['#staffOlderShiftResults'].attributes['aria-busy'], 'true');
   assert.equal(loadingNodes['#staffOlderShiftSubmit'].disabled, true);
-  assert.match(loadingNodes['#staffOlderShiftMessage'].textContent, /Finding the older completed shift/u);
+  assert.match(loadingNodes['#staffOlderShiftMessage'].textContent, /Finding the completed shift/u);
 
   const olderShift = completedHistoryShift(985, {
     clockIn: {
@@ -2379,7 +2413,7 @@ test('older shift finder is collapsed and handles exact staff-date success, no-r
 
   const errorNodes = renderStaffTimeRuntime(reviewResponse(), {
     olderQuery: query,
-    olderError: 'The older shift could not be loaded. Lookup timed out.'
+    olderError: 'The shift could not be loaded. Lookup timed out.'
   });
   assert.match(elementText(errorNodes['#staffOlderShiftResults']), /Lookup timed out/u);
   assert.equal(errorNodes['#staffOlderShiftRetry'].hidden, false);
@@ -2396,14 +2430,119 @@ test('older shift finder is collapsed and handles exact staff-date success, no-r
     'function readStaffOlderShiftQuery(',
     'async function submitStaffCorrection('
   );
-  assert.match(searchSource, /date > shiftDate\(currentStaffTime\.view\.today, -7\)/u);
+  assert.match(searchSource, /date > currentStaffTime\.view\.today/u);
   assert.match(searchSource, /currentStaffOlderShiftQuery = query/u);
   assert.match(searchSource, /staffOlderShiftLoadGeneration/u);
   assert.match(searchSource, /retryStaffOlderShiftLookup[\s\S]*currentStaffOlderShiftQuery/u);
+  assert.match(adminHtml, /\$\('#staffOlderShiftRetry'\)\.addEventListener\('click', retryStaffOlderShiftLookup\)/u);
   assert.match(
     searchSource,
     /validStaffTimeStaleError\(error\)[\s\S]*await loadStaffTime\(\{ quiet: true \}\)[\s\S]*currentStaffOlderShiftQuery = query[\s\S]*Staff time changed while searching\. Retry the same staff member and date\.[\s\S]*renderStaffOlderShiftLookup\(\)/u
   );
+});
+
+test('shift finder accepts August 26, August 24, older dates, and today while blocking tomorrow', () => {
+  const today = '2026-08-31';
+  for (const date of ['2026-08-26', '2026-08-24', '2026-08-18', today]) {
+    assert.deepEqual(readStaffShiftQueryRuntime({ today, date }), {
+      mode: 'exactDate',
+      staffId: 'mandy-test',
+      date
+    }, `${date} remains selectable`);
+  }
+  assert.equal(readStaffShiftQueryRuntime({ today, date: '2026-09-01' }), null);
+
+  const data = reviewResponse();
+  data.view.today = today;
+  const nodes = renderStaffTimeRuntime(data);
+  assert.equal(nodes['#staffOlderShiftDate'].max, today, 'the native date picker disables tomorrow');
+  assert.notEqual(nodes['#staffOlderShiftDate'].disabled, true, 'the exact-date picker is immediately usable');
+  assert.match(elementText(nodes['#staffOlderShiftResults']), /Choose a staff member and exact date/u);
+});
+
+test('exact-date lookup finds a recent shift outside the first eight and keeps Adjust punch', () => {
+  const data = reviewResponse();
+  data.view.today = '2026-08-31';
+  data.shiftStaff.push({ staffId: 'marvin-test', staffName: 'Marvin Test' });
+  const visibleRecent = Array.from({ length: 8 }, (_, index) => {
+    const shift = completedHistoryShift(1_100 + index * 2);
+    return {
+      ...shift,
+      clockIn: {
+        ...shift.clockIn,
+        timestamp: '2026-08-27T09:00:00-04:00',
+        date: '2026-08-27'
+      },
+      clockOut: {
+        ...shift.clockOut,
+        timestamp: '2026-08-27T17:00:00-04:00',
+        date: '2026-08-27'
+      }
+    };
+  });
+  const targetBase = completedHistoryShift(1_200);
+  const target = {
+    ...targetBase,
+    clockIn: {
+      ...targetBase.clockIn,
+      timestamp: '2026-08-26T09:00:00-04:00',
+      date: '2026-08-26',
+      staffId: 'marvin-test',
+      staffName: 'Marvin Test'
+    },
+    clockOut: {
+      ...targetBase.clockOut,
+      timestamp: '2026-08-26T17:00:00-04:00',
+      date: '2026-08-26',
+      staffId: 'marvin-test',
+      staffName: 'Marvin Test'
+    }
+  };
+  const query = { mode: 'exactDate', staffId: 'marvin-test', date: '2026-08-26' };
+  const recentLookup = shiftLookup({
+    dateFrom: '2026-08-25',
+    dateThrough: '2026-08-31',
+    total: 9,
+    items: [...visibleRecent, target]
+  });
+  const exactLookup = shiftLookup({
+    mode: 'exactDate',
+    dateFrom: query.date,
+    dateThrough: query.date,
+    staffId: query.staffId,
+    date: query.date,
+    total: 1,
+    items: [target]
+  });
+  const { validStaffTimeShiftLookupResponse } = validatorRuntime();
+  assert.equal(validStaffTimeShiftLookupResponse(recentLookup, {
+    viewToken: VIEW_TOKEN,
+    mode: 'recent',
+    today: data.view.today
+  }), true);
+  assert.equal(validStaffTimeShiftLookupResponse(exactLookup, {
+    viewToken: VIEW_TOKEN,
+    mode: query.mode,
+    staffId: query.staffId,
+    date: query.date
+  }), true);
+  const nodes = renderStaffTimeRuntime(data, {
+    recentLookup,
+    olderQuery: query,
+    olderLookup: exactLookup
+  });
+
+  assert.doesNotMatch(elementText(nodes['#staffRecentShifts']), /Marvin Test/u);
+  assert.equal(nodes['#staffRecentShifts'].children.length, 8);
+  assert.equal(nodes['#staffRecentShowMore'].hidden, false);
+  assert.match(
+    elementText(nodes['#staffOlderShiftResults']),
+    /Marvin Test[\s\S]*Clock-in[\s\S]*Clock-out[\s\S]*Duration 8 hr 0 min[\s\S]*Adjust punch/u
+  );
+  assert.equal(countElements(
+    nodes['#staffOlderShiftResults'],
+    element => element.className === 'staff-adjustment-form'
+  ), 1);
 });
 
 test('recent and older workflows stay usable while Advanced loads or fails explicitly', () => {

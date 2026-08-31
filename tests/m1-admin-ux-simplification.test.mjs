@@ -177,8 +177,31 @@ test('Richmond hides the Staff Clock mode and panel through the installation pro
   assert.match(adminHtml, /const STAFF_CLOCK_ENABLED = INSTALLATION\.featureFlags\.staffClock === true;/u);
   assert.match(adminHtml, /\$\('#staffModeControl'\)\.hidden = !STAFF_CLOCK_ENABLED;/u);
   assert.match(adminHtml, /\$\('#staff-time'\)\.hidden = true;/u);
-  assert.match(
-    sourceBetween(adminHtml, 'function applyManagerMode(', 'function setLoggedOut('),
-    /staff\.hidden = !staffActive \|\| !STAFF_CLOCK_ENABLED/u
-  );
+  const modeSource = sourceBetween(adminHtml, 'function requestedManagerMode()', 'function setLoggedOut(');
+  assert.match(modeSource, /staff\.hidden = !staffActive \|\| !STAFF_CLOCK_ENABLED/u);
+
+  const staffPanel = sourceBetween(adminHtml, '<section id="staff-time"', '<div id="toast"');
+  assert.match(staffPanel, /id="staffOlderShiftDate"/u, 'the date finder remains inside the hidden Staff Clock panel');
+  const nodes = Object.fromEntries([
+    '#sign-ins', '#staff-time', '#dailyModeControl', '#staffModeControl', '#appPanel'
+  ].map(selector => [selector, {
+    hidden: false,
+    tabIndex: 0,
+    attributes: {},
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    focus() { this.focused = true; }
+  }]));
+  const context = vm.createContext({ nodes });
+  new vm.Script(`
+    const STAFF_CLOCK_ENABLED = false;
+    const location = { hash: '#staff-time' };
+    const window = { requestAnimationFrame(callback) { callback(); } };
+    function $(selector) { return nodes[selector]; }
+    ${modeSource}
+    globalThis.hooks = { requestedManagerMode, applyManagerMode };
+  `).runInContext(context);
+  assert.equal(context.hooks.requestedManagerMode(), 'sign-ins');
+  context.hooks.applyManagerMode();
+  assert.equal(nodes['#sign-ins'].hidden, false);
+  assert.equal(nodes['#staff-time'].hidden, true);
 });
