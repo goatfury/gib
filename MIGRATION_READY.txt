@@ -1,0 +1,1 @@
+This marker is written only after the refined-products preview workflow has produced PREVIEW_RELEASE.json. It may be replaced during migration.
