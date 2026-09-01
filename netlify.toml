@@ -1,5 +1,5 @@
 [build]
-  command = "node build-audited.mjs"
+  command = "npm run check"
   publish = "public"
   functions = "netlify/functions"
 

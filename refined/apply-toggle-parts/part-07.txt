@@ -1,0 +1,32 @@
+rDot=svgEl('circle',{cx:x(start),cy:y(first),r:7,class:'cursor-dot'});
+      chartState={x,y,cursorLine,cursorDot};
+      return;
+    }
+
+    if (mode === 'gulf') {
+      const unknownStart = dt('2026-02-28');`,
+  'refined chart branch marker',
+);
+
+replaceOnce(
+  `    regions.forEach(r => {
+      const value = mix[r.id];`,
+  `    regions.forEach(r => {
+      const value = mix[r.id];
+      $('node-' + r.id).classList.remove('no-report');
+      $('node-' + r.id).querySelector('.node-name').textContent = r.short;`,
+  'liquid world reset marker',
+);
+
+html = html.replaceAll(
+  `    updateAsOf();
+    renderChart();
+    update(0);`,
+  `    updateAsOf();
+    applyRefinedCoverageClasses();
+    renderChart();
+    update(0);`,
+);
+
+await writeFile(htmlPath, html, 'utf8');
+console.log('Installed the Crude & liquids / Refined products toggle with fixed-cohort JODI data.');

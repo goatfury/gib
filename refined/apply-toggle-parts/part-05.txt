@@ -1,0 +1,97 @@
+ const reading = refinedReadingAt(mode,date);
+    const narrative = refinedNarrative(mode,reading);
+    const pct = Math.round(reading.value / baseline * 100);
+    $('dateDisplay').textContent = reading.held ? \`\${fmtDate(date)} · latest \${reading.label}\` : reading.label;
+    $('flowNumber').classList.remove('range');
+    $('flowNumber').textContent = reading.value.toFixed(2);
+    $('barrelUnit').textContent = reading.held ? 'latest report · m b/d' : reading.latest ? 'latest month · m b/d' : 'monthly avg · m b/d';
+    $('percentDisplay').textContent = pct + '% of Sep ’25 cohort';
+    const refinedRatio = Math.max(0,Math.min(1,reading.value/baseline));
+    $('meterBar').style.transform = \`scaleX(\${refinedRatio})\`;
+    document.documentElement.dataset.refinedBarrelRatio = refinedRatio.toFixed(6);
+    updateBarrel(reading.value,baseline,\`\${reading.value.toFixed(2)} million barrels per day, \${reading.label}, JODI reported cohort\`);
+    $('phaseKicker').textContent = narrative.kicker;
+    $('phaseTitle').textContent = narrative.title;
+    $('phaseText').textContent = narrative.brief;
+    $('phaseLongText').textContent = narrative.long;
+    $('numberType').textContent = mode === 'gulf' ? 'Monthly total-product exports · 3-state cohort' : 'Monthly total-product refinery output · 47-country cohort';
+    $('coreSource').textContent = 'JODI-Oil World Database · August 20, 2026 update';
+    $('confidence').textContent = reading.held ? 'Latest month held; later months not yet reported' : reading.latest ? 'Latest monthly release; subject to revision' : 'Comparable fixed reporting cohort';
+    if (mode === 'gulf') updateRefinedGulfMap(reading); else updateRefinedWorldMap(date);
+    return reading;
+  }`,
+  'refined helper marker',
+);
+
+replaceOnce(
+  `  function buildMixBar() {
+    const bar = $('mixBar');
+    const legend = $('mixLegend');
+    bar.replaceChildren();
+    legend.replaceChildren();
+    regions.forEach(r => {`,
+  `  function buildMixBar() {
+    const bar = $('mixBar');
+    const legend = $('mixLegend');
+    bar.replaceChildren();
+    legend.replaceChildren();
+    activeRegions().forEach(r => {`,
+  'mix build marker',
+);
+replaceOnce(
+  `  function updateMixBar(date, mix) {
+    regions.forEach(r => {`,
+  `  function updateMixBar(date, mix) {
+    activeRegions().forEach(r => {`,
+  'mix update marker',
+);
+replaceOnce(
+  `    $('mixCaption').textContent = fmtDate(date) + ' · interpolated monthly EIA arenas · ' + mix.total.toFixed(1) + 'm b/d total';`,
+  `    $('mixCaption').textContent = stream === 'refined'
+      ? (refinedReadingAt('world',date).held ? 'Latest June JODI cohort held through this date' : refinedReadingAt('world',date).label) + ' · fixed reporting cohort · ' + mix.total.toFixed(1) + 'm b/d reported'
+      : fmtDate(date) + ' · interpolated monthly EIA arenas · ' + mix.total.toFixed(1) + 'm b/d total';`,
+  'mix caption marker',
+);
+
+replaceOnce(
+  `    const phase = phaseAt(cfg.phases, date);
+    const baseline = activeCopy().baseline;`,
+  `    const phase = stream === 'liquids' ? phaseAt(cfg.phases, date) : null;
+    const baseline = activeCopy().baseline;`,
+  'update phase marker',
+);
+replaceOnce(
+  `    $('dateDisplay').textContent = fmtDate(date);
+    timeline.setAttribute('aria-valuetext', fmtDate(date));
+
+    let phaseKicker = phase.kicker;`,
+  `    $('dateDisplay').textContent = fmtDate(date);
+    timeline.setAttribute('aria-valuetext', fmtDate(date));
+
+    if (stream === 'refined') {
+      const refinedReading = updateRefinedDashboard(date,baseline);
+      updateCursor(date,refinedReading.value);
+      if (fromUser && playing) stop();
+      return;
+    }
+
+    let phaseKicker = phase.kicker;`,
+  'refined update branch marker',
+);
+
+replaceOnce(
+  `    $('gulfMethod').classList.toggle('hidden', mode !== 'gulf');
+    $('worldMethod').classList.toggle('hidden', mode !== 'world');`,
+  `    $('gulfMethod').classList.toggle('hidden', stream !== 'liquids' || mode !== 'gulf');
+    $('worldMethod').classList.toggle('hidden', stream !== 'liquids' || mode !== 'world');
+    $('refinedGulfMethod').classList.toggle('hidden', stream !== 'refined' || mode !== 'gulf');
+    $('refinedWorldMethod').classList.toggle('hidden', stream !== 'refined' || mode !== 'world');`,
+  'method toggle marker',
+);
+replaceOnce(
+  `    $('chart').setAttribute('aria-label', mode === 'gulf'
+      ? \`Timeline of total Gulf oil exports from September 2025 through \${fmtMonth(end)}\`
+      : \`Timeline of world petroleum and other liquid fuels production from September 2025 through \${fmtMonth(end)}\`);
+    renderChart();`,
+  `    $('chart').setAttribute('aria-label', stream === 'refined'
+      ? (mode === 'gulf' ? 'Timeline of reported Gulf refined-product exports' : 'Timeline of reported refinery output for a 47-country cohort'

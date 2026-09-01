@@ -27,6 +27,7 @@
   }
 
   function isGulf() {
+    if (document.documentElement.classList.contains('refined-products')) return false;
     const map = $('gulfMap');
     return Boolean(map && !map.classList.contains('hidden'));
   }

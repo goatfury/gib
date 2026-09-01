@@ -1,0 +1,91 @@
+nthly. The atlas keeps the unreported tail visible instead of treating the June value as July, August or September output.'
+    };
+    if (month <= '2026-02') return {
+      kicker:'Comparable reporting cohort', title:'Refinery output stays near its autumn range',
+      brief:'The fixed 47-country cohort moves between roughly 62 and 68 million b/d.',
+      long:'Every country is present in every displayed month. The line therefore compares the same reporters rather than a changing collection of submissions.'
+    };
+    if (month <= '2026-05') return {
+      kicker:'Refinery-output downturn', title:'The reported cohort falls into a spring trough',
+      brief:'Output drops from 64.6 million b/d in February to 58.3 in May.',
+      long:'The fixed reporting cohort loses about 6.3 million b/d between February and May. This is reported refinery output, not crude production or product demand.'
+    }
+    return {
+      kicker:'Latest June report', title:'The reported cohort rebounds',
+      brief:'June rises to 63.3 million b/d, close to the September cohort baseline.',
+      long:'June is the latest JODI month in this release and may be revised later. It is the current reported cohort, not a final world total.'
+    };
+  }
+
+  function applyRefinedCoverageClasses() {
+    const alpha3 = new Set(refinedData.world.cohort.alpha3);
+    document.querySelectorAll('#worldMap .world-country').forEach(node => {
+      node.classList.toggle('refined-reporter', stream === 'refined' && alpha3.has(node.dataset.iso));
+    });
+    const reported = new Set(['SAUDI ARABIA','KUWAIT']);
+    const missing = new Set(['UAE','IRAN','IRAQ','OMAN','QATAR']);
+    document.querySelectorAll('#gulfMap .country-label').forEach(node => {
+      const label = node.textContent.trim();
+      node.classList.toggle('refined-reported', stream === 'refined' && reported.has(label));
+      node.classList.toggle('refined-unreported', stream === 'refined' && missing.has(label));
+    });
+  }
+
+  function updateRefinedGulfMap(reading) {
+    const baseline = refinedData.gulf.months[0];
+    const sa = reading.countries.SA / baseline.countries.SA;
+    const hormuz = (reading.countries.KW + reading.countries.BH) / (baseline.countries.KW + baseline.countries.BH);
+    setRoute('hormuzRoute', Math.max(.08, hormuz), 13);
+    setRoute('eastWestRoute', Math.max(.08, sa), 10);
+    setRoute('redNorthRoute', Math.max(.08, sa), 8);
+    setRoute('redSouthRoute', Math.max(.06, sa * .72), 7);
+    setRoute('uaeRoute', .04, 9);
+    setRoute('omanRoute', .04, 6);
+    ['hormuzDanger','mandebDanger','yanbuDanger'].forEach(id => $(id).classList.remove('on'));
+    setStatus(0, 'Reported exporters', 'Saudi Arabia · Kuwait · Bahrain', 'good');
+    setStatus(1, 'Missing Gulf states', 'UAE · Iran · Iraq · Oman · Qatar', 'warn');
+    setStatus(2, 'Coverage', 'Reported cohort—not Gulf total', 'warn');
+  }
+
+  function updateRefinedWorldMap(date) {
+    const mix = refinedRegionMixAt(date);
+    refinedRegions.forEach(r => {
+      const value = mix[r.id];
+      const delta = value - r.values[0];
+      const circle = $('circle-' + r.id);
+      const group = $('node-' + r.id);
+      const nameLabel = group.querySelector('.node-name');
+      const valueLabel = $('value-' + r.id);
+      const deltaLabel = $('delta-' + r.id);
+      const noReport = r.reporterCount === 0;
+      group.classList.toggle('no-report', noReport);
+      nameLabel.textContent = r.short;
+      if (noReport) {
+        circle.setAttribute('r','8');
+        valueLabel.textContent = 'n/r';
+        deltaLabel.textContent = 'not in cohort';
+        nameLabel.setAttribute('y','-16');
+        deltaLabel.setAttribute('y','22');
+        setWorldChangeLine(r, 0);
+        group.setAttribute('aria-label', r.name + ': no country in the comparable reporting cohort');
+        return;
+      }
+      const radius = Math.sqrt(Math.max(0,value)) * 5;
+      circle.setAttribute('r',radius.toFixed(2));
+      circle.style.fill = r.color;
+      circle.style.opacity = '.94';
+      nameLabel.setAttribute('y',(-radius-8).toFixed(1));
+      valueLabel.textContent = value.toFixed(1);
+      deltaLabel.setAttribute('y',(radius+14).toFixed(1));
+      deltaLabel.textContent = fmtSigned(delta) + ' vs Sep’25';
+      group.setAttribute('aria-label', r.name + ': ' + value.toFixed(1) + ' million barrels per day, ' + fmtSigned(delta) + ' versus September 2025');
+      setWorldChangeLine(r,delta);
+    });
+    setStatus(0, 'Comparable cohort', '47 countries · same denominator', 'good');
+    setStatus(1, 'Coverage gap', 'Russia + Latin America unreported', 'warn');
+    setStatus(2, 'Latest month', mix.latest ? 'June latest release' : 'Monthly JODI report', mix.latest ? 'warn' : 'good');
+    updateMixBar(date,mix);
+  }
+
+  function updateRefinedDashboard(date, baseline) {
+   
