@@ -1,0 +1,211 @@
+name: Temporary refined-products preview and QA
+
+on:
+  pull_request:
+    branches:
+      - oil-flow-atlas
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build-deploy-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      PREVIEW_SITE_ID: bdcb59e0-d7c1-4173-a5e1-0e19b75c2cff
+      PROXY_BASE: https://netlify-mcp.netlify.app/proxy/eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..CQwGDvt8vefF_5--.AozlMlfqlRaGgIOmQCHIxc_35vVUEPItIHyZk-zXWdPFp4kT8IXKBMUtXimTauzo0A4Ulf_aBZX6UgELanlvawebC8dxma2sBDcZdfLAvKVoMkdfpkG-X33JW3kqAuuYN6DnEvOoHcGt440uv81rbAppFoziMsB_l-F73QePi6ovmb5sO081kKcovjGf0ijgFv_BeOCi9G1sCdIWwUEU8ws6pRv-wed3EyWhfwHINWTAwF70yEuKS0AlzCQ0pCDVOs0i9P-aOxgbSHiE2Zcquvg8_yN0WMRZMWjNSbp1kIo8CVLfLywUtMWkbZYJv6XHmyDnb_nXrWFjDrxxPcuJAwbAs50BRqUqMq1xC2kLtWsdmxCDDTMz7SlmQpZ6tdoERa4eY0I5.KtsMnNq3FWtbRHnCKY1IGQ
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Generate checked-in JODI snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/build-refined-products-data.py
+          test -s refined-products/refined-products-data.json
+          python3 - <<'PY'
+          import json
+          data=json.load(open('refined-products/refined-products-data.json'))
+          assert data['schema']==1
+          assert len(data['months'])>=6
+          assert data['coverage']['latestCountries']>=20
+          for key in ('output','demand','exports','imports'):
+              assert data['months'][-1]['global'][key] > 0, (key,data['months'][-1]['global'])
+          print(json.dumps({
+              'latestPeriod':data['latestPeriod'],
+              'coverage':data['coverage'],
+              'global':data['months'][-1]['global'],
+              'reportedProduct':data['reportedProduct'],
+              'reportedUnit':data['reportedUnit'],
+          },indent=2))
+          PY
+          if ! git diff --quiet -- refined-products/refined-products-data.json; then
+            git config user.name goatfury
+            git config user.email goatfury@gmail.com
+            git add refined-products/refined-products-data.json
+            git commit -m 'Add JODI refined-products snapshot'
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          fi
+
+      - name: Build and locally browser-test both streams
+        shell: bash
+        run: |
+          set -euo pipefail
+          node build-audited.mjs
+          publish_asset="$(find . -type f -name refined-products.js ! -path './refined-products/*' | head -1)"
+          test -n "$publish_asset"
+          publish_dir="$(dirname "$publish_asset")"
+          test -s "$publish_dir/index.html"
+          test -s "$publish_dir/refined-products-data.json"
+          echo "PUBLISH_DIR=$publish_dir" >> "$GITHUB_ENV"
+
+          npm init -y >/dev/null 2>&1
+          npm install --no-audit --no-fund puppeteer-core@24.16.0 >/dev/null
+          chrome="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)"
+          echo "CHROME_PATH=$chrome" >> "$GITHUB_ENV"
+          python3 -m http.server 8765 --directory "$publish_dir" >/tmp/oil-atlas-http.log 2>&1 &
+          echo $! > /tmp/oil-atlas-http.pid
+          sleep 1
+
+          cat > /tmp/local-qa.cjs <<'JS'
+          const puppeteer=require('puppeteer-core');
+          (async()=>{
+            const browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
+            const errors=[];
+            try{
+              const page=await browser.newPage();
+              await page.setViewport({width:1440,height:900,deviceScaleFactor:1});
+              page.on('console',m=>{if(m.type()==='error')errors.push(m.text())});
+              page.on('pageerror',e=>errors.push(e.message));
+              await page.goto('http://127.0.0.1:8765/?qa=local',{waitUntil:'networkidle0',timeout:60000});
+              await page.waitForFunction(()=>window.__OIL_ATLAS_STREAM__?.getState?.().installed,{timeout:20000});
+              const crude=await page.evaluate(()=>({
+                body:document.body.className,
+                crude:document.querySelector('#oilStreamToggle [data-stream=crude]')?.getAttribute('aria-pressed'),
+                refined:document.querySelector('#oilStreamToggle [data-stream=refined]')?.getAttribute('aria-pressed'),
+                overflow:Math.max(0,document.documentElement.scrollWidth-innerWidth),
+              }));
+              if(crude.crude!=='true'||crude.refined!=='false'||crude.body.includes('refined-products-active')||crude.overflow)throw Error('Crude baseline failed '+JSON.stringify(crude));
+              await page.click('#oilStreamToggle [data-stream=refined]');
+              await page.waitForFunction(()=>document.body.classList.contains('refined-products-active')&&document.querySelectorAll('.rp-metric-value').length===4,{timeout:10000});
+              const refined=await page.evaluate(()=>({
+                state:window.__OIL_ATLAS_STREAM__.getState(),
+                metrics:[...document.querySelectorAll('.rp-metric-value')].map(x=>x.textContent.trim()),
+                exporters:document.querySelectorAll('.rp-trade .rp-row').length,
+                disclosure:document.querySelector('.rp-stream-disclosure')?.textContent,
+                overflow:Math.max(0,document.documentElement.scrollWidth-innerWidth),
+              }));
+              if(refined.metrics.some(x=>x.startsWith('—'))||refined.exporters<8||!refined.disclosure?.includes('JODI')||refined.overflow)throw Error('Refined desktop failed '+JSON.stringify(refined));
+              await page.screenshot({path:'refined-products-desktop.png'});
+              await page.click('#oilStreamToggle [data-stream=crude]');
+              if(await page.evaluate(()=>document.body.classList.contains('refined-products-active')))throw Error('Crude restore failed');
+              await page.close();
+
+              const mobile=await browser.newPage();
+              await mobile.setViewport({width:390,height:844,deviceScaleFactor:1,isMobile:true});
+              mobile.on('console',m=>{if(m.type()==='error')errors.push(m.text())});
+              mobile.on('pageerror',e=>errors.push(e.message));
+              await mobile.goto('http://127.0.0.1:8765/?stream=refined&qa=mobile',{waitUntil:'networkidle0',timeout:60000});
+              await mobile.waitForFunction(()=>document.body.classList.contains('refined-products-active')&&document.querySelectorAll('.rp-metric-value').length===4,{timeout:20000});
+              const mobileState=await mobile.evaluate(()=>({
+                overflow:Math.max(0,document.documentElement.scrollWidth-innerWidth),
+                toggle:document.querySelector('#oilStreamToggle')?.getBoundingClientRect().toJSON(),
+                metrics:document.querySelector('.rp-metrics')?.getBoundingClientRect().toJSON(),
+              }));
+              if(mobileState.overflow||!mobileState.toggle||mobileState.toggle.right>390.5||mobileState.metrics.right>390.5)throw Error('Refined mobile failed '+JSON.stringify(mobileState));
+              await mobile.screenshot({path:'refined-products-mobile.png',fullPage:true});
+              await mobile.close();
+              if(errors.length)throw Error('Browser errors '+JSON.stringify(errors));
+            }finally{await browser.close()}
+          })().catch(e=>{console.error(e);process.exit(1)});
+          JS
+          NODE_PATH="$GITHUB_WORKSPACE/node_modules" node /tmp/local-qa.cjs
+          kill "$(cat /tmp/oil-atlas-http.pid)"
+
+      - name: Deploy tested source to the dedicated preview site
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clean -fdx -e node_modules >/dev/null
+          rm -rf .git node_modules
+          zip -q -r /tmp/oil-atlas-source.zip .
+          response="$(curl -fsS -X POST -F "zip=@/tmp/oil-atlas-source.zip;type=application/zip" "$PROXY_BASE/api/v1/sites/$PREVIEW_SITE_ID/builds")"
+          printf '%s\n' "$response" > /tmp/deploy.json
+          deploy_id="$(python3 -c 'import json;d=json.load(open("/tmp/deploy.json"));d=d[0] if isinstance(d,list) else d;print(d.get("deploy_id") or d.get("id") or "")')"
+          test -n "$deploy_id"
+          for attempt in $(seq 1 90); do
+            curl -fsS "$PROXY_BASE/api/v1/deploys/$deploy_id" -o /tmp/status.json
+            state="$(python3 -c 'import json;print(json.load(open("/tmp/status.json")).get("state",""))')"
+            echo "state=$state"
+            [ "$state" = ready ] && break
+            [ "$state" = error ] && { cat /tmp/status.json; exit 1; }
+            sleep 5
+          done
+          test "$(python3 -c 'import json;print(json.load(open("/tmp/status.json")).get("state",""))')" = ready
+          preview_url="$(python3 -c 'import json;d=json.load(open("/tmp/status.json"));print(d.get("deploy_ssl_url") or d.get("ssl_url") or d.get("url") or "")')"
+          site_url="$(python3 -c 'import json;d=json.load(open("/tmp/status.json"));print(d.get("ssl_url") or d.get("url") or "")')"
+          test -n "$preview_url"
+          echo "PREVIEW_URL=$preview_url" >> "$GITHUB_ENV"
+          echo "PREVIEW_DEPLOY_ID=$deploy_id" >> "$GITHUB_ENV"
+          printf '%s\n' "$preview_url" > PREVIEW_URL.txt
+          printf '{"deploy_id":"%s","immutable_url":"%s","site_url":"%s","source_commit":"%s"}\n' "$deploy_id" "$preview_url" "$site_url" "${{ github.event.pull_request.head.sha }}" > PREVIEW_RELEASE.json
+          echo "Immutable preview: $preview_url"
+
+      - name: Browser-QA the actual deployed preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/deployed-qa.cjs <<'JS'
+          const puppeteer=require('puppeteer-core');
+          (async()=>{
+            const browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
+            const errors=[];
+            try{
+              for(const viewport of [{width:1440,height:900},{width:390,height:844,isMobile:true}]){
+                const page=await browser.newPage();
+                await page.setViewport({...viewport,deviceScaleFactor:1});
+                page.on('console',m=>{if(m.type()==='error')errors.push(m.text())});
+                page.on('pageerror',e=>errors.push(e.message));
+                await page.goto(`${process.env.PREVIEW_URL}/?stream=refined&deployedQa=${Date.now()}`,{waitUntil:'networkidle0',timeout:90000});
+                await page.waitForFunction(()=>window.__OIL_ATLAS_STREAM__?.getState?.().installed&&document.body.classList.contains('refined-products-active'),{timeout:30000});
+                const result=await page.evaluate(()=>({
+                  period:window.__OIL_ATLAS_STREAM__.getState().period,
+                  metrics:[...document.querySelectorAll('.rp-metric-value')].map(x=>x.textContent.trim()),
+                  rows:document.querySelectorAll('.rp-trade .rp-row').length,
+                  overflow:Math.max(0,document.documentElement.scrollWidth-innerWidth),
+                  crudePressed:document.querySelector('[data-stream=crude]')?.getAttribute('aria-pressed'),
+                  refinedPressed:document.querySelector('[data-stream=refined]')?.getAttribute('aria-pressed'),
+                }));
+                if(!result.period||result.metrics.length!==4||result.metrics.some(x=>x.startsWith('—'))||result.rows<8||result.overflow||result.crudePressed!=='false'||result.refinedPressed!=='true')throw Error('Deployed QA failed '+JSON.stringify({viewport,result}));
+                await page.screenshot({path:`deployed-${viewport.width}.png`,fullPage:viewport.width<500});
+                await page.close();
+              }
+              if(errors.length)throw Error('Deployed browser errors '+JSON.stringify(errors));
+            }finally{await browser.close()}
+          })().catch(e=>{console.error(e);process.exit(1)});
+          JS
+          NODE_PATH="$GITHUB_WORKSPACE/node_modules" node /tmp/deployed-qa.cjs
+          git config user.name goatfury
+          git config user.email goatfury@gmail.com
+          git add PREVIEW_URL.txt PREVIEW_RELEASE.json
+          git commit -m 'Record verified refined-products preview' || true
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: refined-products-preview-qa
+          path: |
+            refined-products-desktop.png
+            refined-products-mobile.png
+            deployed-*.png
+            PREVIEW_URL.txt
+            PREVIEW_RELEASE.json
+          if-no-files-found: warn
+          retention-days: 2
