@@ -1,0 +1,216 @@
+name: Temporary Oil Atlas preview deploy and browser QA
+
+on:
+  pull_request:
+    branches:
+      - oil-flow-atlas
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-and-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SITE_ID: bdcb59e0-d7c1-4173-a5e1-0e19b75c2cff
+      SITE_URL: https://oil-flow-atlas-refined-preview.netlify.app
+      PROXY_PATH: https://netlify-mcp.netlify.app/proxy/eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..REaHwIZ-bi5y3S38.j8p1EnaKYvrCHj-IvTeQrtf5YafwrdME-Fh4_uzf5fE9cFwgP_G9TVywkATu4k0w7RIJ1dgPRoM9AKn_JnPNek37ccF2NrEVvu0JJxdOiMV5Cad8KI8ItaHgSgDmDDYfk3fIETDbguQGaWBz88ga2CdXJr9ZOh0ZM84LTJF67RVGicWHKaG2kxKvDdnbVeyli9uqWPQwqgtd3W234T1vI3SbA7lHUd1YV7or34kV7RQfhekKNtMeO3QGOBV-0Fj7M4MlrjwwjIx6zfYMbhIAzfcMRrcbpQAv4uSPR-y2J9DvixbuSIUrcJPUPYu4FNcrIdazUaQhG4a1LiVWynVQaFO-6_ui88ZBo1lkkJsMwY1wTjfJpQ1rlXwNpxPP7krufh2Nhpm5.QX2podzP0I8_cev_kmuVLA
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build and test exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p qa
+          npm install --no-audit --no-fund
+          node build-audited.mjs | tee qa/build.log
+          node --test tests/*.test.mjs | tee qa/tests.log
+          node --check public/smooth-oil.js
+          node --check public/ship-traffic.js
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          html=Path('public/index.html').read_text()
+          scripts=re.findall(r'<script>([\s\S]*?)</script>',html)
+          assert scripts
+          Path('/tmp/oil-inline.js').write_text(scripts[-1])
+          assert 'realistic-gulf-map' in html
+          assert 'refinedProductData' in html
+          assert html.count('class="regional-country"') >= 12
+          PY
+          node --check /tmp/oil-inline.js
+          sha256sum public/index.html | tee qa/local-index.sha256
+          rm -f .generated-apply-refined-map.mjs
+
+      - name: Deploy exact candidate to dedicated preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx -y @netlify/mcp@latest --site-id "$SITE_ID" --proxy-path "$PROXY_PATH" | tee qa/deploy.log
+          expected="$(awk '{print $1}' qa/local-index.sha256)"
+          for attempt in $(seq 1 60); do
+            if curl -fsSL -H 'Accept-Encoding: identity' "$SITE_URL/?identity=$RANDOM-$attempt" -o qa/live-index.html; then
+              actual="$(sha256sum qa/live-index.html | awk '{print $1}')"
+              echo "expected=$expected actual=$actual attempt=$attempt"
+              if [ "$actual" = "$expected" ]; then break; fi
+            fi
+            sleep 5
+          done
+          test "$(sha256sum qa/live-index.html | awk '{print $1}')" = "$expected"
+
+      - name: Browser QA deployed preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund puppeteer-core@24.16.0
+          chrome="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
+          test -n "$chrome"
+          export CHROME_PATH="$chrome"
+          cat > /tmp/oil-qa.cjs <<'JS'
+          const fs = require('fs');
+          const puppeteer = require('puppeteer-core');
+          const site = process.env.SITE_URL;
+          const results = { site, desktop: {}, mobile: {}, errors: [] };
+          const assert = (condition, message, detail) => {
+            if (!condition) throw new Error(`${message}${detail === undefined ? '' : ` — ${JSON.stringify(detail)}`}`);
+          };
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+          async function pageFor(browser, viewport) {
+            const page = await browser.newPage();
+            await page.setViewport(viewport);
+            const errors = [];
+            page.on('console', msg => { if (msg.type() === 'error') errors.push(`console:${msg.text()}`); });
+            page.on('pageerror', err => errors.push(`pageerror:${err.message}`));
+            await page.goto(`${site}/?qa=${Date.now()}`, { waitUntil: 'networkidle0', timeout: 60000 });
+            await page.waitForSelector('#refinedProduct', { timeout: 20000 });
+            await page.evaluate(() => document.dispatchEvent(new PointerEvent('pointerdown', { bubbles:true })));
+            await sleep(350);
+            return { page, errors };
+          }
+          async function setDay(page, iso) {
+            await page.evaluate((date) => {
+              const start = Date.parse('2025-09-01T00:00:00Z');
+              const day = Math.round((Date.parse(`${date}T00:00:00Z`) - start) / 86400000);
+              const timeline = document.querySelector('#timeline');
+              timeline.value = String(day);
+              timeline.dispatchEvent(new Event('input', { bubbles:true }));
+            }, iso);
+            await sleep(160);
+          }
+          (async () => {
+            const browser = await puppeteer.launch({ executablePath:process.env.CHROME_PATH, headless:true, args:['--no-sandbox','--disable-dev-shm-usage'] });
+            try {
+              const desktopCtx = await pageFor(browser, { width:1440, height:900, deviceScaleFactor:1 });
+              const page = desktopCtx.page;
+              await setDay(page, '2025-09-01');
+              const geography = await page.evaluate(() => ({
+                countries:document.querySelectorAll('#regionalCountries .regional-country').length,
+                realistic:document.querySelector('#gulfMap')?.classList.contains('realistic-gulf-map'),
+                mapBox:document.querySelector('#gulfMap')?.getAttribute('viewBox'),
+                overflow:Math.max(0, document.documentElement.scrollWidth - innerWidth),
+                product:document.documentElement.dataset.productMode,
+                title:document.querySelector('#pageTitle')?.textContent.trim(),
+              }));
+              assert(geography.realistic && geography.countries >= 12, 'Real Gulf geography missing', geography);
+              assert(geography.overflow === 0, 'Desktop horizontal overflow', geography);
+              assert(geography.product === 'liquids', 'Default product changed', geography);
+
+              await page.click('#refinedProduct');
+              await page.waitForFunction(() => document.documentElement.dataset.productMode === 'refined');
+              await setDay(page, '2025-09-01');
+              const refinedGulf = await page.evaluate(() => ({
+                title:document.querySelector('#pageTitle')?.textContent.trim(),
+                mapTitle:document.querySelector('#mapTitle')?.textContent.trim(),
+                number:document.querySelector('#flowNumber')?.textContent.trim(),
+                statuses:[0,1,2].map(i => `${document.querySelector(`#statusTitle${i}`)?.textContent.trim()}: ${document.querySelector(`#statusText${i}`)?.textContent.trim()}`),
+                selected:document.querySelector('#refinedProduct')?.getAttribute('aria-pressed'),
+              }));
+              assert(refinedGulf.title === 'Gulf refined-product exports', 'Refined Gulf title failed', refinedGulf);
+              assert(refinedGulf.number === '3.08' || refinedGulf.number === '3.1', 'September Gulf refined subtotal failed', refinedGulf);
+              assert(refinedGulf.statuses.some(text => text.includes('Saudi Arabia')), 'Refined Gulf reporters missing', refinedGulf);
+              assert(refinedGulf.selected === 'true', 'Refined switch state failed', refinedGulf);
+              await page.screenshot({ path:'qa/desktop-refined-gulf.png', fullPage:true });
+
+              await page.click('#worldMode');
+              await setDay(page, '2025-09-01');
+              const refinedWorld = await page.evaluate(() => ({
+                title:document.querySelector('#pageTitle')?.textContent.trim(),
+                number:document.querySelector('#flowNumber')?.textContent.trim(),
+                mapTitle:document.querySelector('#mapTitle')?.textContent.trim(),
+                mix:document.querySelector('#mixCaption')?.textContent.trim(),
+                overflow:Math.max(0, document.documentElement.scrollWidth - innerWidth),
+              }));
+              assert(refinedWorld.title === 'World refined-product exports', 'Refined world title failed', refinedWorld);
+              assert(refinedWorld.number === '23.5', 'September world panel total failed', refinedWorld);
+              assert(refinedWorld.mix.includes('JODI export panel'), 'Refined mix panel failed', refinedWorld);
+              assert(refinedWorld.overflow === 0, 'Refined world overflow', refinedWorld);
+              await page.screenshot({ path:'qa/desktop-refined-world.png', fullPage:true });
+
+              await page.click('#liquidsProduct');
+              await page.waitForFunction(() => document.documentElement.dataset.productMode === 'liquids');
+              await page.click('#gulfMode');
+              const restored = await page.evaluate(() => ({ title:document.querySelector('#pageTitle')?.textContent.trim(), product:document.documentElement.dataset.productMode }));
+              assert(restored.title === 'Gulf oil evidence' && restored.product === 'liquids', 'Crude/liquids view did not restore', restored);
+
+              const before = await page.$eval('#timeline', e => Number(e.value));
+              await page.click('#playButton');
+              await sleep(700);
+              const after = await page.$eval('#timeline', e => Number(e.value));
+              assert(after > before, 'Playback did not advance', { before, after });
+              await page.click('#playButton');
+              assert(desktopCtx.errors.length === 0, 'Desktop console/page errors', desktopCtx.errors);
+              results.desktop = { geography, refinedGulf, refinedWorld, restored, playback:{before,after}, errors:desktopCtx.errors };
+              await page.close();
+
+              const mobileCtx = await pageFor(browser, { width:390, height:844, deviceScaleFactor:1 });
+              const mobile = mobileCtx.page;
+              await mobile.click('#refinedProduct');
+              await mobile.waitForFunction(() => document.documentElement.dataset.productMode === 'refined');
+              await setDay(mobile, '2026-06-15');
+              const mobileState = await mobile.evaluate(() => ({
+                title:document.querySelector('#pageTitle')?.textContent.trim(),
+                number:document.querySelector('#flowNumber')?.textContent.trim(),
+                overflow:Math.max(0, document.documentElement.scrollWidth - innerWidth),
+                switchVisible:!!document.querySelector('.product-switch') && getComputedStyle(document.querySelector('.product-switch')).display !== 'none',
+                mapHeight:document.querySelector('#gulfMap')?.getBoundingClientRect().height,
+              }));
+              assert(mobileState.title === 'Gulf refined-product exports', 'Mobile refined mode failed', mobileState);
+              assert(mobileState.number === '1.61' || mobileState.number === '1.6', 'Mobile June subtotal failed', mobileState);
+              assert(mobileState.overflow === 0 && mobileState.switchVisible, 'Mobile layout failed', mobileState);
+              assert(mobileCtx.errors.length === 0, 'Mobile console/page errors', mobileCtx.errors);
+              results.mobile = { ...mobileState, errors:mobileCtx.errors };
+              await mobile.screenshot({ path:'qa/mobile-refined-gulf.png', fullPage:true });
+              await mobile.close();
+              fs.writeFileSync('qa/browser-qa.json', JSON.stringify(results, null, 2));
+              console.log(JSON.stringify(results, null, 2));
+            } finally {
+              await browser.close();
+            }
+          })().catch(error => {
+            results.errors.push(error.stack || String(error));
+            fs.writeFileSync('qa/browser-qa.json', JSON.stringify(results, null, 2));
+            console.error(error);
+            process.exit(1);
+          });
+          JS
+          NODE_PATH="$GITHUB_WORKSPACE/node_modules" node /tmp/oil-qa.cjs
+
+      - name: Preserve QA proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oil-refined-preview-qa
+          path: qa
+          retention-days: 3
+          if-no-files-found: warn
