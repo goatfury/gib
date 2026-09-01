@@ -27,19 +27,21 @@ jobs:
           npm run check
           echo "$HTML_SHA  public/index.html" | sha256sum -c -
           git merge-base --is-ancestor 906d4a30ea41ae27a7c27b9eaadd38b1f0ba4fc4 HEAD
-      - name: Deploy static review artifact
+      - name: Deploy review build with its serverless functions
         shell: bash
         run: |
           set -euo pipefail
-          (cd public && zip -q -r /tmp/site.zip .)
-          curl -fsS -X POST -F "zip=@/tmp/site.zip;type=application/zip" "$PROXY_BASE/api/v1/sites/$SITE_ID/builds" -o /tmp/deploy.json
+          zip -q -r /tmp/source.zip . \
+            -x '.git/*' 'node_modules/*' '.github/*' 'qa/*' '.netlify/*' '*.zip'
+          curl -fsS -X POST -F "zip=@/tmp/source.zip;type=application/zip" "$PROXY_BASE/api/v1/sites/$SITE_ID/builds" -o /tmp/deploy.json
           deploy_id="$(python3 -c 'import json; d=json.load(open("/tmp/deploy.json")); d=d[0] if isinstance(d,list) else d; print(d.get("deploy_id") or d.get("id") or "")')"
           test -n "$deploy_id"
           for n in $(seq 1 72); do
             curl -fsS "$PROXY_BASE/api/v1/deploys/$deploy_id" -o /tmp/status.json
             state="$(python3 -c 'import json; print(json.load(open("/tmp/status.json")).get("state", ""))')"
+            echo "state=$state"
             [ "$state" = ready ] && break
-            [ "$state" = error ] && exit 1
+            [ "$state" = error ] && { cat /tmp/status.json; exit 1; }
             sleep 5
           done
           test "$(python3 -c 'import json; print(json.load(open("/tmp/status.json")).get("state", ""))')" = ready
@@ -51,6 +53,10 @@ jobs:
           set -euo pipefail
           curl -fsSL -H 'Accept-Encoding: identity' "$SITE_URL/?id=$RANDOM" -o /tmp/live.html
           echo "$HTML_SHA  /tmp/live.html" | sha256sum -c -
+          for endpoint in /api/oil_data /api/hormuz_traffic; do
+            status="$(curl -sS -o /tmp/api.json -w '%{http_code}' "$SITE_URL$endpoint")"
+            test "$status" = 200
+          done
           npm install --no-save --no-package-lock --no-audit --no-fund puppeteer-core@24.16.0 >/dev/null
           chrome="$(command -v google-chrome || command -v chromium)"
           mkdir -p qa
@@ -61,8 +67,9 @@ jobs:
           function ok(v,m,d){if(!v)throw new Error(m+' '+JSON.stringify(d||{}));}
           async function run(browser,name,vp){
             const page=await browser.newPage(); await page.setViewport(vp); const errors=[];
-            page.on('console',m=>{if(m.type()==='error')errors.push(m.text())}); page.on('pageerror',e=>errors.push(e.message));
-            await page.goto(site+'/?qaPause=1&t='+Date.now(),{waitUntil:'domcontentloaded',timeout:60000});
+            page.on('console',m=>{if(m.type()==='error')errors.push(`console:${m.text()}`)}); page.on('pageerror',e=>errors.push(`pageerror:${e.message}`));
+            page.on('response',r=>{if(r.status()>=400)errors.push(`http:${r.status()}:${r.url()}`)});
+            await page.goto(site+'/?qaPause=1&t='+Date.now(),{waitUntil:'networkidle2',timeout:60000});
             await page.waitForSelector('#refinedStream');
             await page.evaluate(()=>{const i=document.querySelector('#timeline'),s=Date.UTC(2025,8,1),d=Date.UTC(2026,5,1);i.value=Math.round((d-s)/86400000);i.dispatchEvent(new Event('input',{bubbles:true}));i.dispatchEvent(new Event('change',{bubbles:true}))});
             await sleep(400); await page.click('#refinedStream'); await sleep(350);
