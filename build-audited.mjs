@@ -16,4 +16,4 @@ await import('./build.mjs');
 await import('./apply-smooth-oil.mjs');
 await import('./apply-ship-traffic.mjs');
 await import('./apply-presentation.mjs');
-await import('./apply-refined-toggle.mjs');
+await import('./apply-refined-map.mjs');

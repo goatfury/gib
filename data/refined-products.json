@@ -1,0 +1,356 @@
+{
+  "schemaVersion": 1,
+  "source": "JODI Oil World Database, secondary products, total products exports, monthly KBD",
+  "sourceUrl": "https://www.jodidata.org/oil/database/data-downloads.aspx",
+  "publishedThrough": "2026-06",
+  "months": [
+    "2025-09",
+    "2025-10",
+    "2025-11",
+    "2025-12",
+    "2026-01",
+    "2026-02",
+    "2026-03",
+    "2026-04",
+    "2026-05",
+    "2026-06"
+  ],
+  "worldPanel": {
+    "countries": [
+      "AM",
+      "AT",
+      "AU",
+      "BE",
+      "BG",
+      "BH",
+      "BN",
+      "CA",
+      "CH",
+      "CN",
+      "CY",
+      "CZ",
+      "DE",
+      "DK",
+      "DZ",
+      "EE",
+      "ES",
+      "FI",
+      "FR",
+      "GB",
+      "GR",
+      "HK",
+      "HR",
+      "HU",
+      "ID",
+      "IE",
+      "IS",
+      "IT",
+      "JP",
+      "KR",
+      "KW",
+      "LT",
+      "LU",
+      "LV",
+      "MD",
+      "MY",
+      "NG",
+      "NL",
+      "NO",
+      "NZ",
+      "PL",
+      "PT",
+      "SA",
+      "SE",
+      "SG",
+      "SI",
+      "SK",
+      "TR",
+      "TW",
+      "US"
+    ],
+    "values": [
+      23.4841,
+      22.8315,
+      22.7807,
+      24.2766,
+      23.7794,
+      23.8764,
+      22.5747,
+      22.3175,
+      21.7809,
+      23.99
+    ],
+    "regions": [
+      {
+        "id": "us",
+        "name": "United States",
+        "short": "U.S.",
+        "color": "#54d2d2",
+        "countries": [
+          "US"
+        ],
+        "values": [
+          6.0548,
+          6.0747,
+          6.5507,
+          6.7073,
+          6.2151,
+          6.21,
+          6.9092,
+          7.0943,
+          7.2374,
+          7.8647
+        ]
+      },
+      {
+        "id": "canada",
+        "name": "Canada",
+        "short": "Canada",
+        "color": "#7bdcb5",
+        "countries": [
+          "CA"
+        ],
+        "values": [
+          0.496,
+          0.483,
+          0.573,
+          0.624,
+          0.562,
+          0.563,
+          0.611,
+          0.561,
+          0.639,
+          0.662
+        ]
+      },
+      {
+        "id": "eurocasp",
+        "name": "European export hubs",
+        "short": "Europe",
+        "color": "#b88cff",
+        "countries": [
+          "NL",
+          "BE",
+          "DE",
+          "FR",
+          "GB",
+          "ES",
+          "IT",
+          "PT",
+          "GR",
+          "AT",
+          "CH",
+          "DK",
+          "SE",
+          "NO",
+          "FI",
+          "IE",
+          "IS",
+          "PL",
+          "CZ",
+          "SK",
+          "HU",
+          "BG",
+          "HR",
+          "SI",
+          "EE",
+          "LV",
+          "LT",
+          "LU",
+          "CY",
+          "MD",
+          "AM",
+          "TR"
+        ],
+        "values": [
+          7.1342,
+          7.2422,
+          7.0353,
+          7.2792,
+          7.244,
+          7.141,
+          7.3951,
+          7.3887,
+          6.9536,
+          7.3478
+        ]
+      },
+      {
+        "id": "opec",
+        "name": "Gulf reporting panel",
+        "short": "Gulf panel",
+        "color": "#ffc857",
+        "countries": [
+          "SA",
+          "KW",
+          "BH"
+        ],
+        "values": [
+          3.08,
+          2.62,
+          2.429,
+          2.846,
+          3.216,
+          3.346,
+          1.587,
+          1.231,
+          1.521,
+          1.608
+        ]
+      },
+      {
+        "id": "russia",
+        "name": "China",
+        "short": "China",
+        "color": "#ff8fab",
+        "countries": [
+          "CN"
+        ],
+        "values": [
+          1.3081,
+          1.1418,
+          1.323,
+          1.3281,
+          1.0984,
+          1.1014,
+          1.1764,
+          0.8391,
+          0.8244,
+          1.0884
+        ]
+      },
+      {
+        "id": "asia",
+        "name": "Northeast Asia",
+        "short": "NE Asia",
+        "color": "#d0a7ff",
+        "countries": [
+          "KR",
+          "JP",
+          "TW"
+        ],
+        "values": [
+          2.1273,
+          1.8527,
+          1.7783,
+          2.069,
+          2.2109,
+          2.2062,
+          1.6878,
+          1.2347,
+          1.3448,
+          1.6995
+        ]
+      },
+      {
+        "id": "meaf",
+        "name": "Southeast Asian hubs",
+        "short": "SE Asia",
+        "color": "#ff9f43",
+        "countries": [
+          "SG",
+          "MY",
+          "ID",
+          "BN"
+        ],
+        "values": [
+          2.7144,
+          2.8167,
+          2.55,
+          2.7704,
+          2.7818,
+          2.7694,
+          2.5677,
+          3.083,
+          2.5518,
+          3.0596
+        ]
+      },
+      {
+        "id": "latam",
+        "name": "Other consistent reporters",
+        "short": "Other panel",
+        "color": "#7bb8ff",
+        "countries": [
+          "AU",
+          "DZ",
+          "HK",
+          "NG",
+          "NZ"
+        ],
+        "values": [
+          0.5692,
+          0.6004,
+          0.5414,
+          0.6526,
+          0.4512,
+          0.5394,
+          0.6404,
+          0.8857,
+          0.7089,
+          0.66
+        ]
+      }
+    ],
+    "baseline": 24.2766
+  },
+  "gulfPanel": {
+    "countries": [
+      "SA",
+      "KW",
+      "BH"
+    ],
+    "countryValues": {
+      "SA": [
+        1.601,
+        1.406,
+        1.275,
+        1.471,
+        1.512,
+        1.652,
+        1.157,
+        1.009,
+        1.083,
+        1.028
+      ],
+      "KW": [
+        1.137,
+        0.843,
+        0.789,
+        0.973,
+        1.327,
+        1.275,
+        0.384,
+        0.184,
+        0.383,
+        0.509
+      ],
+      "BH": [
+        0.342,
+        0.371,
+        0.365,
+        0.402,
+        0.377,
+        0.419,
+        0.046,
+        0.038,
+        0.055,
+        0.071
+      ]
+    },
+    "values": [
+      3.08,
+      2.62,
+      2.429,
+      2.846,
+      3.216,
+      3.346,
+      1.587,
+      1.231,
+      1.521,
+      1.608
+    ],
+    "prewarAverage": 2.9228
+  },
+  "coverageNote": "Fixed panel of countries reporting every month from September 2025 through June 2026; values are reported exports, not a complete world total."
+}
