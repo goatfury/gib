@@ -1,0 +1,190 @@
+name: Temporary Oil Atlas refined preview and QA
+
+on:
+  pull_request:
+    branches:
+      - oil-flow-atlas
+
+permissions:
+  contents: read
+
+jobs:
+  build-deploy-qa:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SITE_ID: bdcb59e0-d7c1-4173-a5e1-0e19b75c2cff
+      SITE_URL: https://oil-flow-atlas-refined-preview.netlify.app
+      EXPECTED_HTML_SHA: c150283f391ea3d9ec2899da1e114de2c3a3e9d80b99a19badaac49329b338b7
+      EXPECTED_CSS_SHA: 8faa5b6a04aa60d58d4670892e3ba37eeba9aadd25258802b51059913949e1e6
+      EXPECTED_DATA_SHA: 6763a997d0f5795e3701746c01feaae37f21cdb325b38aac8da41cd24d1b9425
+      PROXY_BASE: https://netlify-mcp.netlify.app/proxy/eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..QyX5atxKa7lhN9Oi.bK_pLuEC_kFIzGDv09KN8ZrmWIj31YCsoUb0r4ya8gO9KrBmXQdk68n8wqUJK7rlsXfQ5iPOCBW9aoQvttKl-Y0WvonsFK3W-2gMakOIqR2QjrqjpKfGTnr9scamu9gt29fqMXkTT-ezDAC6Y-9Ityh2nyQMn6gAmweZgXreSArJep8LxWqR4u2yqJAWePKWUNrGotFo0eTEtixPP3wktDYExjs47lRrN-bvAIXPi96GEciocZ-M95_ZOjsDaTgmBFPP3j_zq3ZuxktiRXfoTTZQNc8zQ3NhJHVG_K8DWyISTXs1LJSaPJwYgrsfXoHlHw_utgyxl0NMvL177OKO8t-W3F5PuZiPg_kPM4R5xEOPK1N2Ei9TeKIYPtJbfS4IaVWoeXuM.VqOkmHQYxTu_ZaGtbeRODw
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Build and test exact feature source
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-package-lock --no-audit --no-fund
+          npm run check
+          echo "$EXPECTED_HTML_SHA  public/index.html" | sha256sum -c -
+          echo "$EXPECTED_CSS_SHA  public/refined-toggle.css" | sha256sum -c -
+          echo "$EXPECTED_DATA_SHA  public/data/refined-products.json" | sha256sum -c -
+          test "$(git rev-parse HEAD^)" = "906d4a30ea41ae27a7c27b9eaadd38b1f0ba4fc4"
+
+      - name: Deploy exact built artifact to dedicated preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd public && zip -q -r /tmp/oil-preview.zip .)
+          response="$(curl -fsS -X POST -F "zip=@/tmp/oil-preview.zip;type=application/zip" "$PROXY_BASE/api/v1/sites/$SITE_ID/builds")"
+          printf '%s\n' "$response" > /tmp/deploy.json
+          deploy_id="$(python3 -c 'import json; d=json.load(open("/tmp/deploy.json")); d=d[0] if isinstance(d,list) else d; print(d.get("deploy_id") or d.get("id") or "")')"
+          test -n "$deploy_id"
+          for attempt in $(seq 1 72); do
+            curl -fsS "$PROXY_BASE/api/v1/deploys/$deploy_id" -o /tmp/status.json
+            state="$(python3 -c 'import json; print(json.load(open("/tmp/status.json")).get("state", ""))')"
+            echo "state=$state"
+            [ "$state" = ready ] && break
+            [ "$state" = error ] && { cat /tmp/status.json; exit 1; }
+            sleep 5
+          done
+          test "$(python3 -c 'import json; print(json.load(open("/tmp/status.json")).get("state", ""))')" = ready
+          immutable="$(python3 -c 'import json; d=json.load(open("/tmp/status.json")); print(d.get("deploy_ssl_url") or "")')"
+          echo "DEPLOY_ID=$deploy_id" >> "$GITHUB_ENV"
+          echo "IMMUTABLE_URL=$immutable" >> "$GITHUB_ENV"
+          echo "Immutable preview: $immutable"
+
+      - name: Verify live artifact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 18); do
+            if curl -fsSL -H 'Accept-Encoding: identity' "$SITE_URL/?identity=$RANDOM$RANDOM" -o /tmp/live.html; then
+              actual="$(sha256sum /tmp/live.html | awk '{print $1}')"
+              [ "$actual" = "$EXPECTED_HTML_SHA" ] && break
+            fi
+            sleep 3
+          done
+          echo "$EXPECTED_HTML_SHA  /tmp/live.html" | sha256sum -c -
+
+      - name: Browser QA deployed preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock --no-audit --no-fund puppeteer-core@24.16.0 >/dev/null
+          chrome="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)"
+          mkdir -p qa
+          cat > qa/run.cjs <<'JS'
+          const fs = require('fs');
+          const puppeteer = require('puppeteer-core');
+          const site = process.env.SITE_URL;
+          const results = { site, deployId: process.env.DEPLOY_ID, immutableUrl: process.env.IMMUTABLE_URL, viewports: {}, errors: [] };
+          const assert = (condition, message, detail) => { if (!condition) throw new Error(`${message}${detail === undefined ? '' : ` — ${JSON.stringify(detail)}`}`); };
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+          async function setJune(page) {
+            await page.evaluate(() => {
+              const start = Date.UTC(2025, 8, 1);
+              const june = Date.UTC(2026, 5, 1);
+              const input = document.getElementById('timeline');
+              input.value = String(Math.round((june - start) / 86400000));
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              input.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+            await sleep(250);
+          }
+          async function inspect(page, label) {
+            const errors = [];
+            page.on('console', msg => { if (msg.type() === 'error') errors.push(`console:${msg.text()}`); });
+            page.on('pageerror', error => errors.push(`pageerror:${error.message}`));
+            await page.goto(`${site}/?qaPause=1&browserQa=${Date.now()}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await page.waitForSelector('#refinedStream', { timeout: 20000 });
+            await sleep(500);
+            await setJune(page);
+            const initial = await page.evaluate(() => ({
+              overflow: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+              refinedPressed: document.getElementById('refinedStream').getAttribute('aria-pressed'),
+              liquidPressed: document.getElementById('liquidsStream').getAttribute('aria-pressed'),
+            }));
+            assert(initial.overflow === 0, `${label}: initial horizontal overflow`, initial);
+            assert(initial.refinedPressed === 'false' && initial.liquidPressed === 'true', `${label}: initial toggle state`, initial);
+            await page.click('#refinedStream');
+            await sleep(300);
+            const gulf = await page.evaluate(() => ({
+              refined: document.documentElement.classList.contains('refined-products'),
+              value: document.getElementById('flowNumber')?.textContent.trim(),
+              title: document.getElementById('phaseTitle')?.textContent.trim(),
+              coverage: document.getElementById('refinedCoverage')?.textContent.replace(/\s+/g, ' ').trim(),
+              chart: document.getElementById('chart')?.getAttribute('aria-label'),
+              refinedPressed: document.getElementById('refinedStream').getAttribute('aria-pressed'),
+              points: document.querySelectorAll('.refined-month-point').length,
+              overflow: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            }));
+            assert(gulf.refined, `${label}: refined class missing`, gulf);
+            assert(gulf.value === '1.61', `${label}: June Gulf value`, gulf);
+            assert(/recover only part/i.test(gulf.title), `${label}: Gulf narrative`, gulf);
+            assert(/Saudi Arabia, Kuwait and Bahrain/i.test(gulf.coverage), `${label}: Gulf coverage`, gulf);
+            assert(/reported Gulf refined-product exports/i.test(gulf.chart), `${label}: Gulf chart label`, gulf);
+            assert(gulf.refinedPressed === 'true' && gulf.points === 10 && gulf.overflow === 0, `${label}: Gulf controls/chart/overflow`, gulf);
+            await page.click('[data-mode="world"]');
+            await sleep(300);
+            const world = await page.evaluate(() => ({
+              value: document.getElementById('flowNumber')?.textContent.trim(),
+              title: document.getElementById('phaseTitle')?.textContent.trim(),
+              coverage: document.getElementById('refinedCoverage')?.textContent.replace(/\s+/g, ' ').trim(),
+              chart: document.getElementById('chart')?.getAttribute('aria-label'),
+              noReport: document.querySelectorAll('.world-node.no-report').length,
+              points: document.querySelectorAll('.refined-month-point').length,
+              overflow: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            }));
+            assert(world.value === '63.31', `${label}: June world value`, world);
+            assert(/reported cohort rebounds/i.test(world.title), `${label}: world narrative`, world);
+            assert(/47 countries/i.test(world.coverage), `${label}: world coverage`, world);
+            assert(/47-country cohort/i.test(world.chart), `${label}: world chart label`, world);
+            assert(world.noReport >= 2 && world.points === 10 && world.overflow === 0, `${label}: world coverage/chart/overflow`, world);
+            await page.click('#liquidsStream');
+            await sleep(250);
+            const restored = await page.evaluate(() => ({
+              refined: document.documentElement.classList.contains('refined-products'),
+              liquidPressed: document.getElementById('liquidsStream').getAttribute('aria-pressed'),
+              chart: document.getElementById('chart')?.getAttribute('aria-label'),
+              overflow: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            }));
+            assert(!restored.refined && restored.liquidPressed === 'true', `${label}: liquids restore`, restored);
+            assert(/world petroleum and other liquid fuels/i.test(restored.chart), `${label}: liquids chart restored`, restored);
+            assert(errors.length === 0 && restored.overflow === 0, `${label}: console/page/overflow errors`, { errors, restored });
+            results.viewports[label] = { initial, gulf, world, restored, errors };
+          }
+          (async () => {
+            const browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+            try {
+              for (const [label, viewport] of Object.entries({ desktop1879: { width:1879,height:800 }, desktop1440: { width:1440,height:900 }, mobile390: { width:390,height:844 } })) {
+                const page = await browser.newPage();
+                await page.setViewport(viewport);
+                await inspect(page, label);
+                await page.click('#refinedStream');
+                await setJune(page);
+                if (label === 'desktop1879') await page.screenshot({ path:'qa/desktop-refined-gulf.png', fullPage:true });
+                if (label === 'mobile390') await page.screenshot({ path:'qa/mobile-refined-gulf.png', fullPage:true });
+                await page.close();
+              }
+              fs.writeFileSync('qa/results.json', JSON.stringify(results, null, 2));
+              console.log(JSON.stringify(results, null, 2));
+            } finally { await browser.close(); }
+          })().catch(error => { results.errors.push(error.stack || String(error)); fs.writeFileSync('qa/results.json', JSON.stringify(results, null, 2)); console.error(error); process.exit(1); });
+          JS
+          CHROME_PATH="$chrome" node qa/run.cjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: oil-refined-preview-qa
+          path: qa
+          if-no-files-found: warn
+          retention-days: 2
