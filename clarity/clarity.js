@@ -42,11 +42,11 @@
     };
   }
 
-  function relativePhrase(value, baseline, noun) {
+  function relativePhrase(value, baseline, noun, verb = 'are') {
     const change = ((value / baseline) - 1) * 100;
     const rounded = Math.round(Math.abs(change));
-    if (Math.abs(change) < 0.5) return `${noun} match the September 2025 baseline`;
-    return `${noun} are ${rounded}% ${change < 0 ? 'below' : 'above'} September 2025`;
+    if (Math.abs(change) < 0.5) return `${noun} ${verb === 'is' ? 'matches' : 'match'} the September 2025 baseline`;
+    return `${noun} ${verb} ${rounded}% ${change < 0 ? 'below' : 'above'} September 2025`;
   }
 
   function gulfTakeaway(reading) {
@@ -89,7 +89,7 @@
         text: 'The same 47 countries remain in every month; Russia and Latin America are outside this strict cohort.',
       };
     }
-    const title = relativePhrase(reading.value, baseline.value, reading.held ? 'Latest reported refinery output' : 'Reported refinery output');
+    const title = relativePhrase(reading.value, baseline.value, reading.held ? 'Latest reported refinery output' : 'Reported refinery output', 'is');
     const changes = Object.keys(reading.regions)
       .filter((id) => baseline.regions[id] > 0)
       .map((id) => ({ id, delta: reading.regions[id] - baseline.regions[id] }));
