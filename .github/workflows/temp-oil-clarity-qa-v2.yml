@@ -1,0 +1,107 @@
+name: Temporary Oil Atlas clarity browser QA v2
+
+on:
+  pull_request:
+    branches:
+      - oil-flow-atlas
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SOURCE_COMMIT: 1064d737960a76b55bdc5a4f8b696af3acfd4ab3
+      SITE_URL: https://oil-flow-atlas-refined-preview.netlify.app
+      EXPECTED_HTML_SHA: c3b4e0fb21d625242aad33357be69708fc89b741e339859e34f66cb428b83fd4
+      EXPECTED_JS_SHA: f5682132744f5e24ebe0fe4832cb7dc61d82e2c80699215855cf5c8ae8d65a01
+      EXPECTED_CSS_SHA: 19604702e51560836802f635c24eb2df05e7c7cbcd0052ef08548379475e4a1b
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+          fetch-depth: 1
+
+      - name: Verify source, tests, and deployed identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p qa
+          npm install --no-audit --no-fund
+          node build-audited.mjs | tee qa/build.log
+          node --test tests/*.test.mjs | tee qa/tests.log
+          echo "$EXPECTED_HTML_SHA  public/index.html" | sha256sum -c -
+          echo "$EXPECTED_JS_SHA  public/clarity.js" | sha256sum -c -
+          echo "$EXPECTED_CSS_SHA  public/clarity.css" | sha256sum -c -
+          curl -fsSL -H 'Accept-Encoding: identity' "$SITE_URL/?identity=$RANDOM" -o qa/live-index.html
+          curl -fsSL -H 'Accept-Encoding: identity' "$SITE_URL/clarity.js?identity=$RANDOM" -o qa/live-clarity.js
+          curl -fsSL -H 'Accept-Encoding: identity' "$SITE_URL/clarity.css?identity=$RANDOM" -o qa/live-clarity.css
+          echo "$EXPECTED_HTML_SHA  qa/live-index.html" | sha256sum -c -
+          echo "$EXPECTED_JS_SHA  qa/live-clarity.js" | sha256sum -c -
+          echo "$EXPECTED_CSS_SHA  qa/live-clarity.css" | sha256sum -c -
+
+      - name: Browser QA the deployed preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund puppeteer-core@24.16.0
+          export CHROME_PATH="$(command -v google-chrome || command -v chromium)"
+          cat > /tmp/qa.cjs <<'JS'
+          const fs=require('fs'),puppeteer=require('puppeteer-core');
+          const site=process.env.SITE_URL,sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          const out={site,desktop:{},mobile:{},errors:[]};
+          const ok=(x,m,d)=>{if(!x)throw new Error(`${m} — ${JSON.stringify(d)}`)};
+          async function open(browser,width,height){
+            const page=await browser.newPage();await page.setViewport({width,height});const errors=[];
+            page.on('console',m=>{if(m.type()==='error')errors.push(`console:${m.text()}`)});
+            page.on('pageerror',e=>errors.push(`pageerror:${e.message}`));
+            page.on('requestfailed',r=>{const e=r.failure()?.errorText||'';if(!e.includes('ERR_ABORTED'))errors.push(`request:${r.url()} ${e}`)});
+            await page.goto(`${site}/?qa=${Date.now()}`,{waitUntil:'networkidle0',timeout:60000});
+            await page.waitForSelector('#refinedStream',{timeout:20000});
+            await page.evaluate(()=>document.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true})));
+            await sleep(300);return{page,errors};
+          }
+          async function setDate(page,iso){await page.evaluate(iso=>{const s=Date.parse('2025-09-01T00:00:00Z'),t=timeline;t.value=String(Math.round((Date.parse(iso+'T00:00:00Z')-s)/86400000));t.dispatchEvent(new Event('input',{bubbles:true}))},iso);await sleep(250)}
+          (async()=>{const browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});try{
+            const d=await open(browser,1440,900),p=d.page;
+            let state=await p.evaluate(()=>({g:gulfMode.textContent.trim(),w:worldMode.textContent.trim(),hidden:refinedHeadlineCaveat.classList.contains('hidden')}));
+            ok(state.g==='Gulf routes'&&state.w==='Whole world'&&state.hidden,'Default mode changed',state);
+            await p.click('#refinedStream');await setDate(p,'2026-06-15');await p.waitForFunction(()=>phaseTitle.textContent.includes('48% below'));
+            const gulf=await p.evaluate(()=>({g:gulfMode.textContent.trim(),w:worldMode.textContent.trim(),c:refinedHeadlineCaveat.textContent.trim(),v:parseFloat(flowNumber.textContent),title:phaseTitle.textContent.trim(),take:phaseText.textContent.trim(),key:refinedCoverage.textContent.replace(/\s+/g,' ').trim(),reported:document.querySelectorAll('#gulfMap .refined-reported-land').length,unreported:document.querySelectorAll('#gulfMap .refined-unreported-land').length,overflow:document.documentElement.scrollWidth-innerWidth,aria:barrelGauge.getAttribute('aria-label')}));
+            ok(gulf.g==='Gulf reported exports'&&gulf.w==='Global refinery output','Measurement labels failed',gulf);
+            ok(gulf.c==='Saudi Arabia, Kuwait and Bahrain only — not a Gulf total.','Gulf caveat failed',gulf);
+            ok(Math.abs(gulf.v-1.608)<.06&&gulf.title==='Reported exports are 48% below September 2025','Gulf readout failed',gulf);
+            ok(gulf.take.includes('Kuwait has rebounded from April')&&gulf.reported===3&&gulf.unreported===5,'Gulf takeaway/map failed',gulf);
+            ok(gulf.key.includes('hatched = unreported')&&gulf.aria.includes('not a Gulf total')&&gulf.overflow<=0,'Gulf clarity failed',gulf);
+            await p.screenshot({path:'qa/desktop-gulf-clarity.png',fullPage:true});
+            await p.click('#worldMode');await setDate(p,'2026-06-15');await p.waitForFunction(()=>phaseTitle.textContent.includes('2% below'));
+            const world=await p.evaluate(()=>({c:refinedHeadlineCaveat.textContent.trim(),v:parseFloat(flowNumber.textContent),title:phaseTitle.textContent.trim(),take:phaseText.textContent.trim(),key:refinedCoverage.textContent.replace(/\s+/g,' ').trim(),overflow:document.documentElement.scrollWidth-innerWidth}));
+            ok(world.c==='Fixed 47-country reporting cohort — not a world total.','World caveat failed',world);
+            ok(Math.abs(world.v-63.3139)<.06&&world.title==='Reported refinery output is 2% below September 2025','World readout failed',world);
+            ok(world.take.includes('U.S. is the largest increase')&&world.take.includes('Asia-Pacific is the largest decline'),'World takeaway failed',world);
+            ok(world.key.includes('brighter countries report in every month')&&world.overflow<=0,'World clarity failed',world);
+            await p.screenshot({path:'qa/desktop-world-clarity.png',fullPage:true});
+            await p.click('#liquidsStream');await p.click('#gulfMode');await sleep(250);
+            const restored=await p.evaluate(()=>({g:gulfMode.textContent.trim(),w:worldMode.textContent.trim(),hidden:refinedHeadlineCaveat.classList.contains('hidden'),reported:document.querySelectorAll('#gulfMap .refined-reported-land').length,unreported:document.querySelectorAll('#gulfMap .refined-unreported-land').length,title:pageTitle.textContent.trim()}));
+            ok(restored.g==='Gulf routes'&&restored.w==='Whole world'&&restored.hidden&&restored.reported===0&&restored.unreported===0&&restored.title==='Gulf oil evidence','Original view failed to restore',restored);
+            const before=await p.$eval('#timeline',e=>+e.value);await p.click('#playButton');await sleep(700);const after=await p.$eval('#timeline',e=>+e.value);ok(after>before,'Playback failed',{before,after});
+            ok(!d.errors.length,'Desktop errors',d.errors);out.desktop={gulf,world,restored,playback:{before,after}};await p.close();
+            const m=await open(browser,390,844),mp=m.page;await mp.click('#refinedStream');await setDate(mp,'2026-06-15');await mp.waitForFunction(()=>phaseTitle.textContent.includes('48% below'));
+            const mobile=await mp.evaluate(()=>({g:gulfMode.textContent.trim(),w:worldMode.textContent.trim(),c:refinedHeadlineCaveat.textContent.trim(),title:phaseTitle.textContent.trim(),reported:document.querySelectorAll('#gulfMap .refined-reported-land').length,unreported:document.querySelectorAll('#gulfMap .refined-unreported-land').length,overflow:document.documentElement.scrollWidth-innerWidth,width:refinedHeadlineCaveat.getBoundingClientRect().width}));
+            ok(mobile.g==='Gulf reported exports'&&mobile.w==='Global refinery output'&&mobile.title==='Reported exports are 48% below September 2025','Mobile labels/readout failed',mobile);
+            ok(mobile.reported===3&&mobile.unreported===5&&mobile.overflow<=0&&mobile.width>100,'Mobile map/layout failed',mobile);
+            ok(!m.errors.length,'Mobile errors',m.errors);out.mobile=mobile;await mp.screenshot({path:'qa/mobile-gulf-clarity.png',fullPage:true});await mp.close();
+            fs.writeFileSync('qa/browser-qa.json',JSON.stringify(out,null,2));console.log(JSON.stringify(out,null,2));
+          }finally{await browser.close()}})().catch(e=>{out.errors.push(e.stack||String(e));fs.writeFileSync('qa/browser-qa.json',JSON.stringify(out,null,2));console.error(e);process.exit(1)});
+          JS
+          NODE_PATH="$GITHUB_WORKSPACE/node_modules" node /tmp/qa.cjs
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oil-clarity-preview-qa-v2
+          path: qa
+          retention-days: 3
+          if-no-files-found: warn
