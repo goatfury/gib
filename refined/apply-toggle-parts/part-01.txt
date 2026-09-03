@@ -1,0 +1,88 @@
+import { readFile, writeFile, copyFile, mkdir } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = dirname(fileURLToPath(import.meta.url));
+const htmlPath = resolve(root, 'public/index.html');
+const dataPath = resolve(root, 'refined/refined-data.json');
+const cssSource = resolve(root, 'refined/refined-toggle.css');
+const cssTarget = resolve(root, 'public/refined-toggle.css');
+const publicDataTarget = resolve(root, 'public/data/refined-products.json');
+
+await mkdir(resolve(root, 'public/data'), { recursive: true });
+await copyFile(cssSource, cssTarget);
+await copyFile(dataPath, publicDataTarget);
+
+let html = await readFile(htmlPath, 'utf8');
+if (html.includes('oil-refined-toggle-2026-09-01')) {
+  console.log('Refined-products toggle already installed.');
+  process.exit(0);
+}
+const refinedData = JSON.parse(await readFile(dataPath, 'utf8'));
+
+function replaceOnce(needle, replacement, label) {
+  const count = html.split(needle).length - 1;
+  if (count !== 1) throw new Error(`${label}: expected one match, found ${count}`);
+  html = html.replace(needle, replacement);
+}
+
+replaceOnce(
+  '  <link rel="stylesheet" href="/presentation.css">',
+  '  <link rel="stylesheet" href="/presentation.css">\n  <link rel="stylesheet" href="/refined-toggle.css">\n  <meta name="oil-refined-toggle" content="oil-refined-toggle-2026-09-01">',
+  'stylesheet marker',
+);
+
+replaceOnce(
+  '    <div class="mode-switch" role="group" aria-label="Data view">',
+  `    <div class="stream-switch" role="group" aria-label="Oil stream">
+      <button id="liquidsStream" class="active" data-stream="liquids" aria-pressed="true">Crude &amp; liquids</button>
+      <button id="refinedStream" data-stream="refined" aria-pressed="false">Refined products</button>
+    </div>
+    <div class="mode-switch" role="group" aria-label="Data view">`,
+  'controls marker',
+);
+
+replaceOnce(
+  '      </div>\n      <svg id="gulfMap"',
+  `      </div>
+      <div class="refined-coverage hidden" id="refinedCoverage" role="note"></div>
+      <svg id="gulfMap"`,
+  'map coverage marker',
+);
+
+replaceOnce(
+  '    </div>\n  </details>\n  <footer>',
+  `    </div>
+    <div class="method hidden" id="refinedGulfMethod">
+      <p><strong>Refined Gulf view:</strong> monthly JODI total-oil-product exports for the three Gulf states with a complete comparable series from September 2025 through June 2026: Saudi Arabia, Kuwait and Bahrain. This is a reported cohort, not a total for the Gulf.</p>
+      <p><strong>What remains unknown:</strong> the UAE, Iran, Iraq, Oman and Qatar do not provide a complete comparable total-products export series in this JODI slice. Their flows are not estimated or silently filled. Route lines remain schematic because JODI reports origin totals, not destinations.</p>
+      <div class="source-list">
+        <a href="https://www.jodidata.org/oil/database/overview.aspx" target="_blank" rel="noopener">JODI — Oil database overview</a>
+        <a href="https://www.jodidata.org/oil/database/data-downloads.aspx" target="_blank" rel="noopener">JODI — Annual CSV downloads</a>
+      </div>
+    </div>
+    <div class="method hidden" id="refinedWorldMethod">
+      <p><strong>Refined world view:</strong> monthly JODI total-oil-product refinery output for a fixed 47-country cohort. Every country in the cohort has a numeric value for every month from September 2025 through June 2026, so changes do not come from countries entering or leaving the denominator.</p>
+      <p><strong>Coverage:</strong> this is not a claimed world total. The September cohort volume is roughly three-quarters of 2025 global refinery throughput. Russia and Latin America have no members in the strict comparable cohort; empty arenas are shown as unreported rather than zero production.</p>
+      <div class="source-list">
+        <a href="https://www.jodidata.org/oil/database/overview.aspx" target="_blank" rel="noopener">JODI — Oil database overview</a>
+        <a href="https://www.jodidata.org/oil/database/data-downloads.aspx" target="_blank" rel="noopener">JODI — Annual CSV downloads</a>
+        <a href="https://www.opec.org/pr-detail/601-29-april-2026.html" target="_blank" rel="noopener">OPEC — 2026 Annual Statistical Bulletin highlights</a>
+      </div>
+    </div>
+  </details>
+  <footer>`,
+  'method marker',
+);
+
+replaceOnce(
+  "  const DAY = 86400000;",
+  `  const DAY = 86400000;
+  const refinedData = ${JSON.stringify(refinedData)};`,
+  'data injection marker',
+);
+
+replaceOnce(
+  `  const configs = {
+    gulf: { periods:gulfPeriods, observations:gulfObservations, hormuzQuarters, events:gulfEvents, phases:gulfPhases, yMin:0, yMax:28, yTicks:[0,5,10,15,20,25], accent:'#ffc857' },
+    world: { anchors:worldAnchors, events:worldEvents, phase

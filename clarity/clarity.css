@@ -1,0 +1,54 @@
+/* Meaning-first refinements for the two-stream Oil Atlas. */
+.barrel-topline > div:first-child { min-width: 0; }
+.refined-headline-caveat {
+  max-width: 205px;
+  margin-top: 4px;
+  color: #edf9f7;
+  font-size: .66rem;
+  font-weight: 850;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+html.refined-products .barrel-measure { color: #afc5cd; }
+html.refined-products .mode-switch button {
+  max-width: 176px;
+  min-height: 38px;
+  line-height: 1.08;
+  white-space: normal;
+}
+html.refined-products #gulfMap .regional-country {
+  opacity: .34;
+  filter: saturate(.42);
+  transition: opacity .22s ease, filter .22s ease, fill .22s ease, stroke .22s ease;
+}
+html.refined-products #gulfMap .regional-country.refined-reported-land {
+  fill: #356f70;
+  stroke: #c8fff7;
+  stroke-width: 1.2;
+  opacity: 1;
+  filter: none;
+}
+html.refined-products #gulfMap .regional-country.refined-unreported-land {
+  fill: url(#refinedMissingLandHatch);
+  stroke: #7d909d;
+  stroke-width: .9;
+  opacity: .72;
+  filter: saturate(.2);
+}
+html.refined-products #gulfMap .country-label { opacity: .3; }
+html.refined-products #gulfMap .country-label.refined-reported { opacity: 1; fill: #effffc; }
+html.refined-products #gulfMap .country-label.refined-unreported { opacity: .55; fill: #a8b5be; }
+html.refined-products .barrel-story { min-height: 104px; }
+html.refined-products .barrel-story p { -webkit-line-clamp: 3; }
+
+@media (max-width: 1080px) and (min-width: 821px) {
+  .refined-headline-caveat { max-width: 175px; font-size: .61rem; }
+  html.refined-products .mode-switch button { max-width: 145px; font-size: .66rem; }
+}
+@media (max-width: 820px) {
+  .refined-headline-caveat { max-width: min(245px, calc(100vw - 112px)); font-size: .68rem; }
+  html.refined-products .mode-switch button { max-width: none; min-height: 46px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html.refined-products #gulfMap .regional-country { transition: none; }
+}

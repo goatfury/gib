@@ -34,6 +34,8 @@ if (archive.version !== 1 || !archive.files || typeof archive.files !== 'object'
 }
 
 for (const [relativePath, content] of Object.entries(archive.files)) {
+  // README is maintained as source documentation; do not replace it with the archived legacy copy.
+  if (relativePath === 'README.md') continue;
   const outputPath = safePath(relativePath);
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, content, 'utf8');

@@ -1,0 +1,66 @@
+s:worldPhases, yMin:90, yMax:112, yTicks:[90,95,100,105,110], accent:'#54d2d2' }
+  };`,
+  `  const configs = {
+    gulf: { periods:gulfPeriods, observations:gulfObservations, hormuzQuarters, events:gulfEvents, phases:gulfPhases, yMin:0, yMax:28, yTicks:[0,5,10,15,20,25], accent:'#ffc857' },
+    world: { anchors:worldAnchors, events:worldEvents, phases:worldPhases, yMin:90, yMax:112, yTicks:[90,95,100,105,110], accent:'#54d2d2' }
+  };
+
+  const refinedCopy = {
+    gulf: {
+      title: 'Refined-product flows',
+      deck: 'See <strong>reported refined-product exports</strong> without pretending incomplete Gulf reporting is a regional total.',
+      note: '<strong>Refined Gulf:</strong> monthly JODI product exports for Saudi Arabia, Kuwait and Bahrain. Other Gulf states stay visibly unreported.',
+      mapTitle: 'Reported Gulf product exports', mapSubtitle: '', mapPill: '3-state cohort · routes schematic',
+      benchmarkLabel: 'Reported refined-product exports', benchmarkSuffix: 'of Sep 2025 cohort', baseline: refinedData.gulf.baseline,
+      chartTitle: 'Reported Gulf refined-product exports',
+      chartSubtitle: 'Saudi Arabia, Kuwait and Bahrain · fixed monthly JODI cohort · million barrels per day.',
+      legend: '<span class="period">Monthly reported average</span><span class="observation">June latest month</span><span class="unknown">Awaiting next JODI month</span>',
+      roles: [
+        ['Saudi Arabia', '<strong>The largest reported exporter.</strong> Its product exports remain above 1 million b/d in June, but below the September 2025 cohort baseline.'],
+        ['Kuwait', '<strong>The sharpest visible rebound.</strong> Reported exports recover from 0.18 million b/d in April to 0.51 in June.'],
+        ['Bahrain', '<strong>Small but complete.</strong> Bahrain contributes a modest, consistently reported product-export series.'],
+        ['Missing Gulf states', '<strong>Unknown, not zero.</strong> UAE, Iran, Iraq, Oman and Qatar are excluded because this JODI slice lacks a complete comparable series.']
+      ]
+    },
+    world: {
+      title: 'Refinery output',
+      deck: 'Watch <strong>reported refinery output</strong> across one fixed 47-country cohort, with missing coverage kept visible.',
+      note: '<strong>Refined world:</strong> monthly JODI refinery output for the same 47 reporting countries in every month. This is not a claimed world total.',
+      mapTitle: 'Reported refinery output', mapSubtitle: '', mapPill: '47-country cohort · area = output',
+      benchmarkLabel: 'Reported refinery output', benchmarkSuffix: 'of Sep 2025 cohort', baseline: refinedData.world.baseline,
+      chartTitle: 'JODI refinery-output cohort',
+      chartSubtitle: 'Fixed 47-country reporting cohort · monthly averages · million barrels per day.',
+      legend: '<span>Monthly reported average</span><span class="observation">June latest month</span><span class="unknown">Awaiting next JODI month</span>',
+      roles: [
+        ['Asia-Pacific reporters', '<strong>The largest reported arena.</strong> China, Japan, South Korea and six other consistent reporters dominate the cohort.'],
+        ['United States', '<strong>The largest single reporter.</strong> June is the latest month in the current JODI release and may be revised later.'],
+        ['Europe + Caspian reporters', '<strong>The broadest reporting group.</strong> Thirty-one consistent reporters make this the cohort’s deepest geographic coverage.'],
+        ['Coverage gap', '<strong>Unreported is not zero.</strong> Russia and Latin America have no members in the strict ten-month comparable cohort.']
+      ]
+    }
+  };
+
+  const refinedConfigs = {
+    gulf: { yMin:0, yMax:3.6, yTicks:[0,1,2,3], accent:'#70d7c9' },
+    world: { yMin:50, yMax:70, yTicks:[50,55,60,65,70], accent:'#70d7c9' }
+  };
+  const refinedRegionDates = refinedData.world.months.map(item => dt(item.month));
+  const refinedRegions = Object.keys(refinedData.world.cohort.regionMeta).map(id => {
+    const meta = refinedData.world.cohort.regionMeta[id];
+    return { id, ...meta, reporterCount:refinedData.world.cohort.regionReporterCounts[id], values:refinedData.world.months.map(item => item.regions[id]) };
+  });
+  const activeCopy = () => stream === 'refined' ? refinedCopy[mode] : copy[mode];
+  const activeConfig = () => stream === 'refined' ? refinedConfigs[mode] : configs[mode];
+  const activeRegions = () => stream === 'refined' ? refinedRegions : regions;`,
+  'config marker',
+);
+
+replaceOnce(
+  "  let mode = 'gulf';",
+  "  let mode = 'gulf';\n  let stream = 'liquids';",
+  'stream state marker',
+);
+
+html = html.replaceAll('configs[mode].accent', 'activeConfig().accent');
+html = html.replaceAll('const cfg = configs[mode];', 'const cfg = activeConfig();');
+html = html.replaceAll('const baseline = copy[mode].

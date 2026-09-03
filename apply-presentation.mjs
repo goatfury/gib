@@ -168,12 +168,15 @@ const singleOwnerMotionScript = String.raw`
     lastFrame = now;
 
     if (ensureClaims()) {
+      const refinedMode = root.classList.contains('refined-products');
+      const targetRatio = refinedMode ? Number(root.dataset.refinedBarrelRatio) : Number.NaN;
       const targetOil = Number(root.dataset.presentationOil);
-      if (Number.isFinite(targetOil)) {
-        if (!Number.isFinite(visualOil)) visualOil = targetOil;
+      if ((refinedMode && Number.isFinite(targetRatio)) || (!refinedMode && Number.isFinite(targetOil))) {
+        const targetVisual = refinedMode ? targetRatio * OIL_SCALE : targetOil;
+        if (!Number.isFinite(visualOil)) visualOil = targetVisual;
         const tau = isPlaying() ? .62 : .12;
         const amount = 1 - Math.exp(-deltaSeconds / tau);
-        visualOil += (targetOil - visualOil) * amount;
+        visualOil += (targetVisual - visualOil) * amount;
 
         const ratio = Math.max(0, Math.min(1, visualOil / OIL_SCALE));
         const surfaceY = 54 + (1 - ratio) * 320;
@@ -270,6 +273,7 @@ const calmPhaseCardScript = String.raw`
   }
 
   function isGulf() {
+    if (document.documentElement.classList.contains('refined-products')) return false;
     const map = document.getElementById('gulfMap');
     return Boolean(map && !map.classList.contains('hidden'));
   }

@@ -1,0 +1,533 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-01T00:00:00Z",
+  "source": {
+    "name": "JODI-Oil World Database",
+    "overviewUrl": "https://www.jodidata.org/oil/database/overview.aspx",
+    "downloadUrl": "https://www.jodidata.org/_resources/files/downloads/oil-data/annual-csv/secondary/secondaryyear2026.csv",
+    "releaseLabel": "August 20, 2026 update",
+    "reportedThrough": "2026-06-30",
+    "definition": "Total oil products. Gulf view uses exports; whole-world view uses refinery output. Values are monthly averages in million barrels per day.",
+    "latestMonthStatus": "June is the latest JODI month in the August 20, 2026 release. JODI colour codes describe comparability assessment; values may be revised in later releases."
+  },
+  "world": {
+    "metric": "refinery output",
+    "unit": "million barrels per day",
+    "baselineMonth": "2025-09-01",
+    "baseline": 64.4549,
+    "months": [
+      {
+        "month": "2025-09-01",
+        "label": "Sep 2025",
+        "value": 64.4549,
+        "regions": {
+          "opec": 5.301,
+          "us": 18.2687,
+          "canada": 2.655,
+          "latam": 0,
+          "russia": 0,
+          "eurocasp": 13.0192,
+          "meaf": 0.386,
+          "asia": 24.825
+        },
+        "latest": false
+      },
+      {
+        "month": "2025-10-01",
+        "label": "Oct 2025",
+        "value": 61.9744,
+        "regions": {
+          "opec": 4.708,
+          "us": 16.9354,
+          "canada": 2.713,
+          "latam": 0,
+          "russia": 0,
+          "eurocasp": 12.7026,
+          "meaf": 0.399,
+          "asia": 24.5164
+        },
+        "latest": false
+      },
+      {
+        "month": "2025-11-01",
+        "label": "Nov 2025",
+        "value": 64.9143,
+        "regions": {
+          "opec": 4.646,
+          "us": 18.4603,
+          "canada": 2.896,
+          "latam": 0,
+          "russia": 0,
+          "eurocasp": 12.651,
+          "meaf": 0.425,
+          "asia": 25.836
+        },
+        "latest": false
+      },
+      {
+        "month": "2025-12-01",
+        "label": "Dec 2025",
+        "value": 67.6124,
+        "regions": {
+          "opec": 4.928,
+          "us": 18.9933,
+          "canada": 2.82,
+          "latam": 0,
+          "russia": 0,
+          "eurocasp": 13.4914,
+          "meaf": 0.426,
+          "asia": 26.9537
+        },
+        "latest": false
+      },
+      {
+        "month": "2026-01-01",
+        "label": "Jan 2026",
+        "value": 65.028,
+        "regions": {
+          "opec": 5.084,
+          "us": 18.0049,
+          "canada": 2.776,
+          "latam": 0,
+          "russia": 0,
+          "eurocasp": 12.7769,
+          "meaf": 0.417,
+          "asia": 25.9692
+        },
+        "latest": false
+      },
+      {
+        "month": "2026-02-01",
+        "label": "Feb 2026",
+        "value": 64.5995,
+        "regions": {
+          "opec": 5.419,
+          "us": 17.3658,
+          "canada": 2.753,
+          "latam": 0,
+          "russia": 0,
+          "eurocasp": 12.4098,
+          "meaf": 0.438,
+          "asia": 26.2139
+        },
+        "latest": false
+      },
+      {
+        "month": "2026-03-01",
+        "label": "Mar 2026",
+        "value": 62.3551,
+        "regions": {
+          "opec": 4.213,
+          "us": 18.0393,
+          "canada": 2.701,
+          "latam": 0,
+          "russia": 0,
+          "eurocasp": 12.2188,
+          "meaf": 0.069,
+          "asia": 25.114
+        },
+        "latest": false
+      },
+      {
+        "month": "2026-04-01",
+        "label": "Apr 2026",
+        "value": 58.7822,
+        "regions": {
+          "opec": 4.061,
+          "us": 17.799,
+          "canada": 2.467,
+          "latam": 0,
+          "russia": 0,
+          "eurocasp": 12.8772,
+          "meaf": 0.085,
+          "asia": 21.493
+        },
+        "latest": false
+      },
+      {
+        "month": "2026-05-01",
+        "label": "May 2026",
+        "value": 58.2664,
+        "regions": {
+          "opec": 4.216,
+          "us": 18.2353,
+          "canada": 2.49,
+          "latam": 0,
+          "russia": 0,
+          "eurocasp": 13.0067,
+          "meaf": 0.079,
+          "asia": 20.2394
+        },
+        "latest": false
+      },
+      {
+        "month": "2026-06-01",
+        "label": "Jun 2026",
+        "value": 63.3139,
+        "regions": {
+          "opec": 4.376,
+          "us": 23.9056,
+          "canada": 2.565,
+          "latam": 0,
+          "russia": 0,
+          "eurocasp": 13.1866,
+          "meaf": 0.078,
+          "asia": 19.2027
+        },
+        "latest": true
+      }
+    ],
+    "cohort": {
+      "countryCount": 47,
+      "basis": "Countries with numeric total-products refinery-output data in every month from September 2025 through June 2026.",
+      "codes": [
+        "AT",
+        "AU",
+        "BE",
+        "BG",
+        "BH",
+        "BN",
+        "CA",
+        "CH",
+        "CN",
+        "CY",
+        "CZ",
+        "DE",
+        "DK",
+        "DZ",
+        "EE",
+        "ES",
+        "FI",
+        "FR",
+        "GB",
+        "GR",
+        "HR",
+        "HU",
+        "ID",
+        "IE",
+        "IS",
+        "IT",
+        "JP",
+        "KR",
+        "KW",
+        "LT",
+        "LU",
+        "LV",
+        "MD",
+        "MY",
+        "NG",
+        "NL",
+        "NO",
+        "NZ",
+        "PL",
+        "PT",
+        "SA",
+        "SE",
+        "SI",
+        "SK",
+        "TR",
+        "TW",
+        "US"
+      ],
+      "countries": [
+        "Austria",
+        "Australia",
+        "Belgium",
+        "Bulgaria",
+        "Bahrain",
+        "Brunei Darussalam",
+        "Canada",
+        "Switzerland",
+        "China",
+        "Cyprus",
+        "Czechia",
+        "Germany",
+        "Denmark",
+        "Algeria",
+        "Estonia",
+        "Spain",
+        "Finland",
+        "France",
+        "United Kingdom",
+        "Greece",
+        "Croatia",
+        "Hungary",
+        "Indonesia",
+        "Ireland",
+        "Iceland",
+        "Italy",
+        "Japan",
+        "Korea, Republic of",
+        "Kuwait",
+        "Lithuania",
+        "Luxembourg",
+        "Latvia",
+        "Moldova, Republic of",
+        "Malaysia",
+        "Nigeria",
+        "Netherlands",
+        "Norway",
+        "New Zealand",
+        "Poland",
+        "Portugal",
+        "Saudi Arabia",
+        "Sweden",
+        "Slovenia",
+        "Slovakia",
+        "Türkiye",
+        "Taiwan, Province of China",
+        "United States"
+      ],
+      "regionReporterCounts": {
+        "opec": 4,
+        "us": 1,
+        "canada": 1,
+        "latam": 0,
+        "russia": 0,
+        "eurocasp": 31,
+        "meaf": 1,
+        "asia": 9
+      },
+      "regionMeta": {
+        "opec": {
+          "name": "OPEC reporting cohort",
+          "short": "OPEC rpt.",
+          "color": "#ffc857"
+        },
+        "us": {
+          "name": "United States",
+          "short": "U.S.",
+          "color": "#54d2d2"
+        },
+        "canada": {
+          "name": "Canada",
+          "short": "Canada",
+          "color": "#7bdcb5"
+        },
+        "latam": {
+          "name": "Latin America reporting cohort",
+          "short": "Latin Am.",
+          "color": "#7bb8ff"
+        },
+        "russia": {
+          "name": "Russia",
+          "short": "Russia",
+          "color": "#ff8fab"
+        },
+        "eurocasp": {
+          "name": "Europe and Caspian reporting cohort",
+          "short": "Eur.+Casp.",
+          "color": "#b88cff"
+        },
+        "meaf": {
+          "name": "Non-OPEC Middle East and Africa reporting cohort",
+          "short": "ME+Africa",
+          "color": "#ff9f43"
+        },
+        "asia": {
+          "name": "Asia-Pacific reporting cohort",
+          "short": "Asia-Pac.",
+          "color": "#d0a7ff"
+        }
+      },
+      "globalThroughputBenchmark2025": 86.89,
+      "benchmarkSource": "OPEC Annual Statistical Bulletin 2026",
+      "approxBenchmarkCoveragePct": 74.2,
+      "alpha3": [
+        "AUT",
+        "AUS",
+        "BEL",
+        "BGR",
+        "BHR",
+        "BRN",
+        "CAN",
+        "CHE",
+        "CHN",
+        "CYP",
+        "CZE",
+        "DEU",
+        "DNK",
+        "DZA",
+        "EST",
+        "ESP",
+        "FIN",
+        "FRA",
+        "GBR",
+        "GRC",
+        "HRV",
+        "HUN",
+        "IDN",
+        "IRL",
+        "ISL",
+        "ITA",
+        "JPN",
+        "KOR",
+        "KWT",
+        "LTU",
+        "LUX",
+        "LVA",
+        "MDA",
+        "MYS",
+        "NGA",
+        "NLD",
+        "NOR",
+        "NZL",
+        "POL",
+        "PRT",
+        "SAU",
+        "SWE",
+        "SVN",
+        "SVK",
+        "TUR",
+        "TWN",
+        "USA"
+      ]
+    }
+  },
+  "gulf": {
+    "metric": "total oil product exports",
+    "unit": "million barrels per day",
+    "baselineMonth": "2025-09-01",
+    "baseline": 3.08,
+    "months": [
+      {
+        "month": "2025-09-01",
+        "label": "Sep 2025",
+        "value": 3.08,
+        "countries": {
+          "BH": 0.342,
+          "KW": 1.137,
+          "SA": 1.601
+        },
+        "latest": false
+      },
+      {
+        "month": "2025-10-01",
+        "label": "Oct 2025",
+        "value": 2.62,
+        "countries": {
+          "BH": 0.371,
+          "KW": 0.843,
+          "SA": 1.406
+        },
+        "latest": false
+      },
+      {
+        "month": "2025-11-01",
+        "label": "Nov 2025",
+        "value": 2.429,
+        "countries": {
+          "BH": 0.365,
+          "KW": 0.789,
+          "SA": 1.275
+        },
+        "latest": false
+      },
+      {
+        "month": "2025-12-01",
+        "label": "Dec 2025",
+        "value": 2.846,
+        "countries": {
+          "BH": 0.402,
+          "KW": 0.973,
+          "SA": 1.471
+        },
+        "latest": false
+      },
+      {
+        "month": "2026-01-01",
+        "label": "Jan 2026",
+        "value": 3.216,
+        "countries": {
+          "BH": 0.377,
+          "KW": 1.327,
+          "SA": 1.512
+        },
+        "latest": false
+      },
+      {
+        "month": "2026-02-01",
+        "label": "Feb 2026",
+        "value": 3.346,
+        "countries": {
+          "BH": 0.419,
+          "KW": 1.275,
+          "SA": 1.652
+        },
+        "latest": false
+      },
+      {
+        "month": "2026-03-01",
+        "label": "Mar 2026",
+        "value": 1.587,
+        "countries": {
+          "BH": 0.046,
+          "KW": 0.384,
+          "SA": 1.157
+        },
+        "latest": false
+      },
+      {
+        "month": "2026-04-01",
+        "label": "Apr 2026",
+        "value": 1.231,
+        "countries": {
+          "BH": 0.038,
+          "KW": 0.184,
+          "SA": 1.009
+        },
+        "latest": false
+      },
+      {
+        "month": "2026-05-01",
+        "label": "May 2026",
+        "value": 1.521,
+        "countries": {
+          "BH": 0.055,
+          "KW": 0.383,
+          "SA": 1.083
+        },
+        "latest": false
+      },
+      {
+        "month": "2026-06-01",
+        "label": "Jun 2026",
+        "value": 1.608,
+        "countries": {
+          "BH": 0.071,
+          "KW": 0.509,
+          "SA": 1.028
+        },
+        "latest": true
+      }
+    ],
+    "cohort": {
+      "countryCount": 3,
+      "codes": [
+        "BH",
+        "KW",
+        "SA"
+      ],
+      "countries": [
+        "Bahrain",
+        "Kuwait",
+        "Saudi Arabia"
+      ],
+      "missingGulfCodes": [
+        "AE",
+        "IR",
+        "IQ",
+        "OM",
+        "QA"
+      ],
+      "missingGulfCountries": [
+        "United Arab Emirates",
+        "Iran",
+        "Iraq",
+        "Oman",
+        "Qatar"
+      ],
+      "basis": "Gulf states with numeric total-products export data in every month from September 2025 through June 2026."
+    }
+  }
+}

@@ -1,0 +1,88 @@
+baseline;', 'const baseline = activeCopy().baseline;');
+html = html.replaceAll('const c = copy[mode];', 'const c = activeCopy();');
+
+replaceOnce(
+  `  function updateAsOf() {
+    const dot = $('dataStatusDot');`,
+  `  function updateAsOf() {
+    const dot = $('dataStatusDot');
+    if (stream === 'refined') {
+      dot.className = 'data-dot live';
+      $('asOfLabel').textContent = 'JODI monthly release';
+      $('asOfValue').textContent = 'Reported through June 2026 · updated August 20';
+      $('asOfMeta').textContent = mode === 'gulf'
+        ? '3-state comparable export cohort · not a Gulf total'
+        : '47-country comparable refinery-output cohort · not a world total';
+      return;
+    }`,
+  'as-of marker',
+);
+
+replaceOnce(
+  `  function evidenceQualifier(item) {
+    if (item.kind === 'reference-average') return 'prewar avg · not daily';
+    if (item.kind === 'tracker-range') return 'week range · 2 trackers';
+    if (item.kind === 'comparison-range') return 'comparison only';
+    if (item.kind === 'fuzzy-low') return 'May low · day unknown';
+    if (item.kind === 'monthly-average') return \`\${new Intl.DateTimeFormat('en-US',{month:'short',timeZone:'UTC'}).format(item.startT)} avg · not daily\`;
+    if (item.kind === 'peak') return 'early-Jul peak';
+    if (item.kind === 'approx-level') return item.label.includes('June') ? 'early-Jun level' : 'later-Jul level';
+    return item.statistic || 'period evidence';
+  }`,
+  `  function evidenceQualifier(item) {
+    if (item.kind === 'reference-average') return 'prewar avg · not daily';
+    if (item.kind === 'tracker-range') return 'week range · 2 trackers';
+    if (item.kind === 'comparison-range') return 'comparison only';
+    if (item.kind === 'fuzzy-low') return 'May low · day unknown';
+    if (item.kind === 'monthly-average') return \`\${new Intl.DateTimeFormat('en-US',{month:'short',timeZone:'UTC'}).format(item.startT)} avg · not daily\`;
+    if (item.kind === 'peak') return 'early-Jul peak';
+    if (item.kind === 'approx-level') return item.label.includes('June') ? 'early-Jun level' : 'later-Jul level';
+    return item.statistic || 'period evidence';
+  }
+
+  function refinedReadingAt(view, date) {
+    const items = refinedData[view].months;
+    const monthStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+    let item = items[0];
+    for (const candidate of items) {
+      if (dt(candidate.month) <= monthStart) item = candidate;
+      else break;
+    }
+    const latest = items.at(-1);
+    const held = monthStart > dt(latest.month);
+    return { ...item, t:dt(item.month), held, latestMonth:latest.month };
+  }
+
+  function refinedRegionMixAt(date) {
+    const reading = refinedReadingAt('world', date);
+    return { ...reading.regions, total:reading.value, held:reading.held, latest:reading.latest };
+  }
+
+  function refinedNarrative(view, reading) {
+    const month = reading.month.slice(0,7);
+    if (view === 'gulf') {
+      if (reading.held) return {
+        kicker:'Awaiting the next report', title:'June remains the latest comparable month',
+        brief:'The calendar advances, but the reported product-export cohort does not.',
+        long:'JODI is monthly and currently runs through June 2026. The atlas holds the latest reported cohort value rather than inventing July or August exports.'
+      };
+      if (month <= '2026-02') return {
+        kicker:'Reported prewar cohort', title:'Three exporters carry the visible product trade',
+        brief:'Saudi Arabia, Kuwait and Bahrain report 2.4–3.3 million b/d across these months.',
+        long:'This is a fixed three-state reporting cohort. It is useful for like-for-like change, but it is not a total for all Gulf refined-product exports.'
+      };
+      if (month <= '2026-04') return {
+        kicker:'Reported export shock', title:'The visible product trade falls by more than half',
+        brief:'The three-state cohort drops from 3.35 million b/d in February to 1.23 in April.',
+        long:'Saudi Arabia, Kuwait and Bahrain all remain in the denominator. The decline is therefore a real change inside this reported cohort, not a coverage change.'
+      };
+      return {
+        kicker:reading.latest ? 'Latest June report' : 'Partial recovery', title:'Product exports recover only part of the loss',
+        brief:'The cohort rises to 1.61 million b/d in June, still about half its September baseline.',
+        long:'June is the latest JODI month. The three reporters recover from April, while five other Gulf states remain outside the comparable series.'
+      };
+    }
+    if (reading.held) return {
+      kicker:'Awaiting the next report', title:'June remains the latest comparable month',
+      brief:'The 47-country cohort is held at its latest published monthly value.',
+      long:'JODI updates mo

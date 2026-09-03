@@ -1,0 +1,82 @@
+)
+      : mode === 'gulf'
+        ? \`Timeline of total Gulf oil exports from September 2025 through \${fmtMonth(end)}\`
+        : \`Timeline of world petroleum and other liquid fuels production from September 2025 through \${fmtMonth(end)}\`);
+    $('refinedCoverage').classList.toggle('hidden', stream !== 'refined');
+    $('refinedCoverage').innerHTML = mode === 'gulf'
+      ? '<strong>Reported cohort:</strong> Saudi Arabia, Kuwait and Bahrain. Five Gulf states remain unreported here; routes show geography, not destinations.'
+      : '<strong>Comparable cohort:</strong> 47 countries reporting every month. Empty arenas mean no comparable reporter—not zero refinery output.';
+    applyRefinedCoverageClasses();
+    renderChart();`,
+  'chart aria marker',
+);
+
+replaceOnce(
+  `  $('barrelDataButton').addEventListener('click', () => setBarrelDetails($('barrelDetails').classList.contains('hidden')));`,
+  `  function switchStream(next) {
+    if (!['liquids','refined'].includes(next) || next === stream) return;
+    setBarrelDetails(false);
+    stream = next;
+    document.documentElement.classList.toggle('refined-products', stream === 'refined');
+    document.querySelectorAll('[data-stream]').forEach(btn => {
+      const active = btn.dataset.stream === stream;
+      btn.classList.toggle('active',active);
+      btn.setAttribute('aria-pressed',active ? 'true' : 'false');
+    });
+    buildMixBar();
+    switchMode(mode);
+  }
+
+  $('barrelDataButton').addEventListener('click', () => setBarrelDetails($('barrelDetails').classList.contains('hidden')));`,
+  'stream switch function marker',
+);
+replaceOnce(
+  `  document.querySelectorAll('[data-mode]').forEach(btn => btn.addEventListener('click', () => switchMode(btn.dataset.mode)));`,
+  `  document.querySelectorAll('[data-mode]').forEach(btn => btn.addEventListener('click', () => switchMode(btn.dataset.mode)));
+  document.querySelectorAll('[data-stream]').forEach(btn => btn.addEventListener('click', () => switchStream(btn.dataset.stream)));`,
+  'stream event marker',
+);
+
+replaceOnce(
+  `    const baseline = activeCopy().baseline;
+    svgEl('line',{x1:margin.l,y1:y(baseline),x2:W-margin.r,y2:y(baseline),class:'prewar-line'});`,
+  `    const baseline = activeCopy().baseline;
+    svgEl('line',{x1:margin.l,y1:y(baseline),x2:W-margin.r,y2:y(baseline),class:'prewar-line'});`,
+  'baseline marker',
+);
+
+replaceOnce(
+  `    if (mode === 'gulf') {
+      const unknownStart = dt('2026-02-28');`,
+  `    if (stream === 'refined') {
+      const items = refinedData[mode].months.map(item => ({ ...item, t:dt(item.month), startT:dt(item.month), endT:new Date(Date.UTC(dt(item.month).getUTCFullYear(),dt(item.month).getUTCMonth()+1,0)), label:item.label, source:'JODI-Oil World Database', statistic:'monthly reported average' }));
+      const latestEnd = new Date(Date.UTC(items.at(-1).t.getUTCFullYear(),items.at(-1).t.getUTCMonth()+1,0));
+      if (end > latestEnd) {
+        const tail = svgEl('rect',{x:x(latestEnd),y:margin.t,width:Math.max(0,x(end)-x(latestEnd)),height:innerH,class:'refined-tail'});
+        tail.style.fill = \`url(#\${hatchId})\`;
+      }
+      const points=[];
+      items.forEach((item,index) => {
+        const left=x(clampDate(item.t));
+        const next=index < items.length-1 ? items[index+1].t : new Date(latestEnd.getTime()+DAY);
+        const right=x(clampDate(next));
+        if (!points.length) points.push([left,y(item.value)]);
+        points.push([right,y(item.value)]);
+        if (index < items.length-1) points.push([right,y(items[index+1].value)]);
+      });
+      const lineD=points.map((point,index)=>(index?'L':'M')+point[0].toFixed(2)+','+point[1].toFixed(2)).join(' ');
+      const floorY=y(cfg.yMin);
+      const areaD=lineD+\` L \${x(clampDate(new Date(latestEnd.getTime()+DAY)))},\${floorY} L \${x(start)},\${floorY} Z\`;
+      svgEl('path',{d:areaD,class:'refined-month-area'});
+      svgEl('path',{d:lineD,class:'refined-month-line'});
+      items.forEach(item => {
+        const dot=svgEl('circle',{cx:x(item.t),cy:y(item.value),r:6,class:'refined-month-point'+(item.latest?' latest':'')});
+        bindTip(dot,item,item.value,item.latest?'latest monthly report':'monthly reported average');
+      });
+      const baseLabel=svgEl('text',{x:W-margin.r,y:y(baseline)-7,'text-anchor':'end',class:'refined-baseline-label'});
+      baseLabel.textContent=baseline.toFixed(1)+' Sep ’25 cohort';
+      const note=svgEl('text',{x:margin.l+8,y:margin.t+17,class:'chart-note'});
+      note.textContent=compact ? 'Fixed JODI cohort · monthly steps' : 'Monthly JODI values use a fixed reporting cohort; hatched tail awaits the next release.';
+      const cursorLine=svgEl('line',{x1:x(start),y1:margin.t,x2:x(start),y2:H-margin.b,class:'cursor-line'});
+      const first=items[0].value;
+      const curso

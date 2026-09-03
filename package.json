@@ -1,10 +1,12 @@
 {
-  "name": "oil-flow-atlas-netlify-preview",
+  "name": "oil-atlas",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build-audited.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "npm run build && npm test"
   },
   "engines": {
     "node": ">=22"

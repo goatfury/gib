@@ -141,6 +141,7 @@
   }
 
   function removeUnknownLabels() {
+    if (document.documentElement.classList.contains('refined-products')) return;
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walker.nextNode())) {
@@ -151,6 +152,10 @@
   function update() {
     const map = $('gulfMap');
     const timeline = $('timeline');
+    if (document.documentElement.classList.contains('refined-products')) {
+      state.lastKey = '';
+      return;
+    }
     if (!map || !timeline || map.classList.contains('hidden')) return;
     const index = Math.max(0, Number(timeline.value) || 0);
     const date = new Date(START + index * DAY);
