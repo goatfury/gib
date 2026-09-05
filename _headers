@@ -38,6 +38,17 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
 
+/m1/connection.html
+  Cache-Control: no-store, max-age=0
+  Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+
+/m1/connection-check.mjs
+  Cache-Control: no-store, max-age=0
+  X-Content-Type-Options: nosniff
+
 /.netlify/functions/m1-admin-*
   Cache-Control: no-store, max-age=0
   X-Content-Type-Options: nosniff

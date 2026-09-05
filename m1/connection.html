@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Richmond BJJ · Connection check</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0f172a; color: #f1f5f9; }
+    body { margin: 0; padding: 24px 16px; }
+    main { max-width: 600px; margin: auto; }
+    .eyebrow, .note { color: #b6c4d8; }
+    h1 { font-size: 1.7rem; margin: 8px 0 24px; }
+    h2 { font-size: 1.25rem; margin: 0 0 10px; }
+    #result { padding: 20px; border: 1px solid #516584; border-radius: 14px; background: #19263c; }
+    #result[data-tone="good"] { border-color: #4ade80; }
+    #result[data-tone="attention"] { border-color: #fbbf24; }
+    p { line-height: 1.5; }
+    dl { margin: 20px 0; }
+    dl div { display: flex; justify-content: space-between; gap: 20px; padding: 12px 0; border-bottom: 1px solid #334155; }
+    dt { color: #b6c4d8; }
+    dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+    button, .actions a { padding: 14px 18px; border-radius: 10px; border: 1px solid #64748b; background: #243752; color: white; font: inherit; text-decoration: none; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .actions a { background: #0369a1; }
+    .note { font-size: .9rem; }
+  </style>
+  <script type="module" src="./connection-check.mjs?v=2026-09-05-r1"></script>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">Richmond BJJ · This device</div>
+    <h1>Connection check</h1>
+    <section id="result" role="status" aria-live="polite">
+      <h2 id="headline">Checking the connection…</h2>
+      <p id="explanation">This can take up to 30 seconds.</p>
+    </section>
+    <dl>
+      <div><dt>Sign-in service</dt><dd id="service">Checking…</dd></div>
+      <div><dt>Tablet authorization</dt><dd id="authorization">Checking…</dd></div>
+      <div><dt>Production sheet</dt><dd id="sheet">Checking…</dd></div>
+      <div><dt>Automatic sending</dt><dd id="automatic">Checking…</dd></div>
+      <div><dt>Sign-ins waiting here</dt><dd id="waiting">Checking…</dd></div>
+      <div><dt>Sign-ins saved here</dt><dd id="saved">Checking…</dd></div>
+      <div><dt>Last confirmed upload</dt><dd id="last">Checking…</dd></div>
+      <div><dt>Checked at</dt><dd id="checked">—</dd></div>
+    </dl>
+    <p class="note">Use the sign-in tablet and its usual browser. This check reads its saved counts and checks access to the production sheet. It does not send sign-ins or change settings.</p>
+    <p class="note">A successful check confirms access right now. A new sign-in appearing in the sheet is still the proof of delivery. This page pauses automatic sending if it replaces the sign-in page; return when finished.</p>
+    <div class="actions"><a href="/m1/">Return to sign-in</a><button id="again" type="button">Check again</button></div>
+    <noscript><p>JavaScript is unavailable. This connection check cannot run in this browser.</p></noscript>
+  </main>
+</body>
+</html>
