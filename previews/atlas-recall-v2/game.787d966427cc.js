@@ -25,6 +25,23 @@
   let autoTimer = null, teachingTimer = null, teachingQueue = [], teachingActive = false, composing = false, drag = null;
   let spotlight = null, hoverCountry = null, movedMap = false;
   const mapLabel = $('mapLabel'), mapLabelName = $('mapLabelName'), mapLabelDetail = $('mapLabelDetail');
+  const labelAnchors = new Map();
+  for (const [id, nodes] of mapNodes) {
+    const node = nodes[0];
+    if (node.classList.contains('country-marker')) {
+      const m = node.transform.baseVal.consolidate()?.matrix;
+      labelAnchors.set(id, { x: m?.e || 0, y: m?.f || 0 }); continue;
+    }
+    let largest = null;
+    for (const part of (node.getAttribute('d') || '').split(/M/i).filter(Boolean)) {
+      const values = part.match(/-?\d+(?:\.\d+)?/g)?.map(Number) || [];
+      const points = []; for (let i = 0; i + 1 < values.length; i += 2) points.push([values[i], values[i + 1]]);
+      let area = 0, x = 0, y = 0;
+      for (let i = 0; i < points.length; i++) { const a = points[i], b = points[(i + 1) % points.length], cross = a[0] * b[1] - b[0] * a[1]; area += cross; x += (a[0] + b[0]) * cross; y += (a[1] + b[1]) * cross; }
+      if (Math.abs(area) > .01 && (!largest || Math.abs(area) > largest.area)) largest = { x: x / (3 * area), y: y / (3 * area), area: Math.abs(area) };
+    }
+    if (largest) labelAnchors.set(id, largest);
+  }
 
   function loadRecords() {
     try {
@@ -118,7 +135,9 @@
     mapLabel.hidden = false;
     const node = mapNodes.get(id)?.[0]; if (!node) return;
     const rect = node.getBoundingClientRect(), stage = dom.mapStage.getBoundingClientRect();
-    const x = rect.left + rect.width / 2 - stage.left, y = rect.top + rect.height / 2 - stage.top;
+    const anchor = labelAnchors.get(id), matrix = dom.worldMap.getScreenCTM();
+    const point = anchor && matrix ? new DOMPoint(anchor.x, anchor.y).matrixTransform(matrix) : { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    const x = point.x - stage.left, y = point.y - stage.top;
     if (x < 0 || x > stage.width || y < 0 || y > stage.height) { mapLabel.hidden = true; return; }
     const width = mapLabel.offsetWidth, height = mapLabel.offsetHeight;
     mapLabel.style.left = Math.max(8, Math.min(stage.width - width - 8, x - width / 2)) + 'px';
@@ -130,6 +149,7 @@
     if (state.phase !== 'ended') {
       state.pending = state.capitals.has(id) || state.revealedCapitals.has(id) ? null : id;
       clearHint(); renderEntry();
+      clearTeaching(); feedback('Revisit:', byId.get(id).quizName, state.capitals.has(id) ? byId.get(id).capital : '');
       cue(state.pending ? 'Try its capital, or keep going.' : 'Enter checks a close spelling.');
       dom.answerInput.focus({ preventScroll: true });
     }

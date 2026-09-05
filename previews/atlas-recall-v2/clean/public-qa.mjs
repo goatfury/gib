@@ -52,10 +52,10 @@ try {
   check('1366×768: fixed whole-world map at 100%, one input, visible Hint, no old hint card, no page scrolling');
 
   await field.pressSequentially('C', { delay: 70 });
-  assert.match(await page.locator('#roundStatus').innerText(), /Round live/);
+  assert.match(await page.locator('#roundStatus').innerText(), /Click a green country/);
   await field.pressSequentially('anada', { delay: 70 });
   await counts(1, 0);
-  assert.equal(await field.getAttribute('placeholder'), 'Capital of Canada?');
+  assert.equal(await field.getAttribute('placeholder'), 'Type its capital, or your next country');
   assert.equal(await page.locator('#inputLabel').innerText(), 'Capital of Canada?');
   await screenshot('02-public-capital-of-canada');
   check('Typing the first letter starts the round; Canada counts and the same field asks for its capital');
@@ -89,19 +89,18 @@ try {
   await counts(2, 2);
   await field.pressSequentially('ia', { delay: 45 });
   await counts(3, 2);
-  assert.equal(await field.getAttribute('placeholder'), 'Capital of Nigeria?');
+  assert.equal(await field.getAttribute('placeholder'), 'Type its capital, or your next country');
   await enter('France', 4, 2);
-  await shown('Abuja');
-  assert.match(await page.locator('#feedback').innerText(), /Shown, not counted:[\s\S]*Abuja/);
-  assert.equal(await field.getAttribute('placeholder'), 'Capital of France?');
-  await screenshot('05-public-skipped-abuja-not-counted');
+  assert.doesNotMatch(await page.locator('#feedback').innerText(), /Abuja/);
+  assert.equal(await field.getAttribute('placeholder'), 'Type its capital, or your next country');
+  await screenshot('05-public-capital-skipped-without-reveal');
   assert.equal(await page.locator('#zoomReadout').innerText(), '100%');
   await page.waitForTimeout(2300);
-  check('Nigeria is not accidentally consumed as Niger; the next country reveals Abuja without a capital point or map movement');
+  check('Nigeria is not accidentally consumed as Niger; the next country leaves Abuja unrevealed and eligible for later recall');
 
   await enter('Tokyo', 4, 3);
   await shown('Tokyo');
-  assert.equal(await field.getAttribute('placeholder'), 'Capital of France?');
+  assert.equal(await field.getAttribute('placeholder'), 'Type its capital, or your next country');
   assert.equal(await page.locator('#countryPercent').innerText(), '2%');
   assert.equal(await page.locator('#capitalPercent').innerText(), '2%');
   await screenshot('06-public-out-of-order-tokyo');
@@ -119,7 +118,7 @@ try {
   await screenshot('08-public-capital-second-letter');
   check('Capital Hint reveals only P, then Pa; neither click changes progress');
 
-  await field.press('Tab');
+  await page.locator('#showBtn').click();
   assert.equal(await page.locator('#showBtn').isVisible(), false);
   await counts(4, 3);
   await shown('Paris');
@@ -134,7 +133,7 @@ try {
   await counts(4, 3);
   assert.equal(await page.locator('#zoomReadout').innerText(), '100%');
   await screenshot('10-public-country-second-letter');
-  check('Blank Tab reveals without points; country Hint highlights unrecalled Afghanistan and reveals A then Af without zooming');
+  check('Explicit Show reveals without points; country Hint highlights unrecalled Afghanistan and reveals A then Af without zooming');
 
   await page.locator('#finishBtn').click();
   assert.equal(await page.locator('#answerKey').evaluate(e => e.open), true);
@@ -183,7 +182,17 @@ try {
   await page.reload({ waitUntil: 'networkidle' }); await counts(0, 0);
   assert.equal(await page.locator('#zoomReadout').innerText(), '100%');
   assert.equal(await page.locator('#autoZoomBtn').getAttribute('aria-pressed'), 'false');
-  check('Extra checks: capital-first entry, rejection of nonsense, UK/DRC/Kyrgistan aliases, blank Enter and Show skips, no points for previously shown answers, and no stale zoom on reload');
+  check('Extra checks: capital-first entry, rejection of nonsense, UK/DRC/Kyrgistan aliases, blank Enter skip and explicit Show reveal, no points for previously shown answers, and no stale zoom on reload');
+  await enter('France', 1, 0); await enter('Germany', 2, 0);
+  assert.doesNotMatch(await page.locator('#feedback').innerText(), /Paris/);
+  await page.getByRole('button', { name: 'France, try capital', exact: true }).press('Enter');
+  assert.equal(await page.locator('#inputLabel').innerText(), 'Capital of France?');
+  await enter('Paris', 2, 1);
+  assert.equal(await page.locator('#mapLabelName').innerText(), 'France');
+  assert.equal(await page.locator('#mapLabelDetail').innerText(), 'Paris');
+  await page.getByRole('button', { name: 'Germany, try capital', exact: true }).press('Enter');
+  await field.press('Enter'); await enter('Berlin', 2, 2);
+  check('Skipped capitals remain eligible; map selection revisits a country and shows its recalled country/capital pair');
   await context.close();
 
   context = await fresh({ width: 1366, height: 768 }, false, true);

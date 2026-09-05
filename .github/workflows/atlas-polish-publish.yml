@@ -54,3 +54,5 @@ jobs:
           for(const name of ['receiver.json','envelope.json']){const f=await api('contents/'+ops+'/'+name+'?ref='+branch);if(f)await api('contents/'+ops+'/'+name,'DELETE',{message:'Remove spent Atlas deployment session [skip ci]',branch,sha:f.sha});}
           JS
           node /tmp/atlas-deploy.mjs
+
+# Visual QA refinement: anchor labels to each country’s largest landmass.
