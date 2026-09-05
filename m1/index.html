@@ -933,7 +933,7 @@ body.admin-mode .container { max-width: 1120px; }
 }
 
 </style>
-<script src="./installation-profile.generated.js?v=2026-08-29-signin-sync-r2"></script>
+<script src="./installation-profile.generated.js?v=2026-09-05-richmond-sync-retry"></script>
 </head>
 <body>
 <div class="container">
@@ -1430,10 +1430,10 @@ import {
   requestAcknowledgements,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-29-signin-sync-r2';
+} from './sync-core.mjs?v=2026-09-05-richmond-sync-retry';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-08-29-signin-sync-r2';
+const OFFLINE_SHELL_REVISION = '2026-09-05-richmond-sync-retry';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -4096,6 +4096,30 @@ function refreshNameDatalist() {
     }
     return true;
   }
+  async function requestRichmondActivationStatus() {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 30_000);
+    try {
+      const response = await fetch('/api/m1-tablet-status', {
+        method: 'POST',
+        mode: 'same-origin',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        redirect: 'error',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        body: '{}'
+      });
+      // Keep the timeout active until the response body has also arrived.
+      const payload = await response.json();
+      return { ok: response.ok, status: response.status, json: async () => payload };
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
   let richmondActivationMigrationInFlight = null;
   function runRichmondActivationMigration() {
     if (richmondActivationMigrationInFlight) return richmondActivationMigrationInFlight;
@@ -4105,18 +4129,7 @@ function refreshNameDatalist() {
       storage: localStorage,
       autoSyncKey: SYNC_AUTO_KEY,
       markerKey: RICHMOND_ACTIVATION_MIGRATION_KEY,
-      statusRequest: () => fetch('/api/m1-tablet-status', {
-        method: 'POST',
-        mode: 'same-origin',
-        credentials: 'same-origin',
-        cache: 'no-store',
-        redirect: 'error',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json'
-        },
-        body: '{}'
-      }),
+      statusRequest: requestRichmondActivationStatus,
       readQueue: loadSyncQueue,
       triggerSync: syncNow,
       refreshSettings: loadSyncSettings,
@@ -4242,7 +4255,20 @@ function refreshNameDatalist() {
       !BACKEND_ENABLED
       || (IS_RICHMOND_PRODUCTION && !RICHMOND_WRITES_ENABLED)
       || navigator.onLine === false
-      || localStorage.getItem(SYNC_AUTO_KEY) !== 'true'
+    ) return false;
+    // A failed first authorization check leaves auto-sync OFF without its
+    // activation marker. Retry that check on the normal timer and wake-ups,
+    // even if Wi-Fi never emits another online event. A completed activation
+    // still preserves an operator's later choice to turn auto-sync OFF.
+    if (
+      IS_RICHMOND_PRODUCTION
+      && localStorage.getItem(RICHMOND_ACTIVATION_MIGRATION_KEY) === null
+    ) {
+      runRichmondActivationMigration();
+      return false;
+    }
+    if (
+      localStorage.getItem(SYNC_AUTO_KEY) !== 'true'
       || !loadSyncQueue().length
     ) return false;
     window.setTimeout(syncNow, 0);
@@ -4746,6 +4772,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-08-29-signin-sync-r2"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-09-05-richmond-sync-retry"></script>
 </body>
 </html>

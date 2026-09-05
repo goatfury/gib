@@ -7,7 +7,7 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-08-29-signin-sync-r2';
+} from './staff-clock-core.mjs?v=2026-09-05-richmond-sync-retry';
 
 const installationProfile = globalThis.M1_INSTALLATION_PROFILE;
 const STAFF_CLOCK_PAIRING_ENABLED = installationProfile?.featureFlags?.staffClockPairing === true;
