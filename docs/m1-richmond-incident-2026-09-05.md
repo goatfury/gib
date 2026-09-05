@@ -29,6 +29,15 @@ Do not close the incident on a successful page load, diagnostic, or test suite.
 - Sheet title, two tab names, and the eleven headers of each match the
   receiver's required schema in live Drive reads. The precise backend
   reason for the failed check is still unknown.
+- After diagnostic release r2 on September 5, Andrew reported the tablet's
+  diagnostic code as `CONFIRMED`. This establishes that the same authenticated
+  read-only server-to-sheet check and both write gates passed on that attempt
+  at home. The earlier failure is not currently reproduced; its cause is
+  still unknown. Reporting improvements did not change receiver credentials,
+  write settings, or the upstream ledger-status request.
+- A fresh `Signins!A1:K100` read after that report still contains 24 records:
+  23 OK and the one VOID installation row. There is no additional sign-in
+  attributable to the read-only diagnostic and no new-write test in this turn.
 
 ## Changes already released
 
@@ -42,6 +51,30 @@ Do not close the incident on a successful page load, diagnostic, or test suite.
   `108e735b0a175cad7b2e5a491bf6f9fc70f298bb`.
 - These changes were deployed only to Richmond. Revolution's last checked
   deploy was `6a95d82e6ea2ad000986b4ea` and was not changed here.
+- Diagnostic r2 GitHub commit: `072e602f3f4da5adc80f98419bef8c15b8042f28`.
+  Richmond deploy `6a9c70d796fffd63e00e47c3` was READY and published at
+  `2026-09-05T19:43:43.188Z`. Live diagnostic assets matched the tested files.
+  The full M1 suite passed 734 tests before this deployment. Coverage includes
+  startup failure with Wi-Fi remaining online, wake retry, stalled-response
+  timeout recovery, intentional-off preservation, and complete row
+  acknowledgments. These checks do not simulate the physical gym network.
+
+## Immediate next step and on-site completion
+
+Andrew should tap **Return to sign-in** on the connection page. This restores
+the normal kiosk, whose timers perform automatic retries; the read-only
+connection page itself does not send queued entries. No reset or extra test
+payroll entry is needed for this step.
+
+When the tablet is back at Richmond, verify that a normal instructor sign-in
+arrives in the production sheet. A dated Richmond row alone does not prove
+physical location: establish that the tablet has returned to the gym before
+calling this an on-site success. Do not diagnose failure from an empty Monday
+range unless actual attempted use is known. If delivery fails, use the same
+tablet's connection diagnostic on the gym network to select the next branch
+below and check its waiting count. Do not repeat the unsupported Wi-Fi claim.
+
+The incident remains open. No scheduled monitoring has been created yet.
 
 ## Active diagnostic route
 
