@@ -7,11 +7,11 @@
 <meta name="description" content="Recall 197 countries and their capitals. One field, a world map, and just the hints you ask for.">
 <title>Atlas Recall — Countries &amp; Capitals</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/styles.31281ffd278e.css">
+<link rel="stylesheet" href="/styles.5398752deec2.css">
 <script defer src="/countries.580e22042d00.js"></script>
-<script defer src="/game.4e2addd6d27a.js"></script>
+<script defer src="/game.42d0a30d2044.js"></script>
 </head>
-<body data-build="atlas-clean-be5bf450de8d">
+<body data-build="atlas-clean-035c75f38dde">
 <div class="app" id="app">
 <header class="topbar">
   <div class="brand"><span class="brand-symbol" aria-hidden="true">◎</span><h1>Atlas <span>Recall</span></h1></div>
@@ -23,7 +23,7 @@
 </header>
 <main class="map-card" aria-label="Country recall map">
   <div class="map-toolbar"><div class="world-controls"><button id="worldBtn">World view</button><span id="zoomReadout">100%</span></div><div class="map-actions"><button id="autoZoomBtn" aria-pressed="false">Auto zoom <span id="autoZoomState">Off</span></button><button id="zoomOutBtn" aria-label="Zoom out">−</button><button id="zoomInBtn" aria-label="Zoom in">+</button></div></div>
-  <div class="map-stage" id="mapStage"><svg id="worldMap" viewBox="0 0 1200 610" preserveAspectRatio="xMidYMid meet" aria-label="World map showing recalled countries" role="img">
+  <div class="map-stage" id="mapStage"><svg id="worldMap" viewBox="0 0 1200 610" preserveAspectRatio="xMidYMid meet" aria-label="World map showing recalled countries" role="group">
           <g id="mapGroup">
 <path class="country-shape" d="M663.1,196.1 L660.9,200.6 L658.4,198.3 L657.5,191.1 L658.6,189.3 L661.1,191.0 L661.8,195.2 L663.1,196.1Z" data-id="albania"></path>
 <path class="country-shape" d="M648.6,167.9 L648.7,171.0 L647.1,171.0 L646.5,174.8 L642.5,175.7 L635.9,174.5 L635.2,173.2 L632.0,174.5 L627.4,173.3 L628.6,171.5 L630.1,172.5 L630.4,171.6 L635.0,171.1 L637.3,171.9 L637.0,169.0 L638.9,166.8 L641.1,168.0 L643.6,166.3 L647.2,167.2 L648.6,167.9Z" data-id="austria"></path>
@@ -281,8 +281,8 @@
 <circle class="marker-halo" r="8.5"></circle><circle class="marker-core" r="4.0"></circle>
 </g>
 </g>
-        </svg></div>
-  <div class="map-footer"><div class="legend"><span><i class="recalled-dot"></i>Recalled</span><span><i class="hint-dot"></i>Hint</span></div><span id="roundStatus">Your first letter starts the clock.</span><span class="map-source">197-country set</span></div>
+        </svg><div id="mapLabel" class="map-label" hidden><strong id="mapLabelName"></strong><span id="mapLabelDetail"></span></div></div>
+  <div class="map-footer"><div class="legend"><span><i class="recalled-dot"></i>Country</span><span><i class="capital-dot"></i>Capital too</span><span><i class="hint-dot"></i>Hint</span></div><span id="roundStatus">Your first letter starts the clock.</span><span class="map-source">197-country set</span></div>
 </main>
 <section class="entry-panel" aria-label="Answer entry">
   <div class="entry-top"><label id="inputLabel" for="answerInput">Any country. Any capital.</label><div class="entry-context"><span id="hintBadge" hidden></span><button id="showBtn" hidden>Show</button></div></div>
@@ -305,7 +305,7 @@
     <footer class="dialog-actions"><span>Your first-round capital baseline and best result stay in this browser.</span><button id="newRoundBtn" class="primary">New round</button></footer>
   </div>
 </dialog>
-<dialog id="helpDialog" aria-labelledby="helpTitle"><div class="help-content"><h2 id="helpTitle">A world to remember.</h2><p>Type any country or capital. Your first letter starts a 15-minute round. Exact answers count automatically; press Enter to check a close spelling.</p><p>After a country, try its capital—or keep going with another country. Blank Enter, blank Tab, or <strong>Show</strong> reveals a pending capital without a point. A capital shown earlier can be practiced, but earns no point in that round.</p><p><strong>Hint</strong> reveals one letter. <strong>2nd letter</strong> reveals one more. For countries, the map also highlights the place. Neither hint counts as an answer.</p><p>Country and capital totals are independent. When a country and its capital share a name, that name counts for both. The map stays at the whole world unless you choose to zoom.</p><p class="source-note">The 197-country set and accepted spellings are retained from the original game. The reference shows one primary capital per country; established alternatives remain accepted. Map geometry: Natural Earth, public domain.</p><button id="closeHelpBtn" class="primary">Back to the map</button></div></dialog>
+<dialog id="helpDialog" aria-labelledby="helpTitle"><div class="help-content"><h2 id="helpTitle">A world to remember.</h2><p>Type any country or capital. Your first letter starts a 15-minute round. Exact answers count automatically; press Enter to check a close spelling.</p><p>After a country, try its capital—or keep going with another country. Press Enter on an empty answer to skip. Skipped capitals can be recalled later; click a green country to return to it. Only <strong>Show</strong> reveals a capital without a point. A capital shown earlier can be practiced, but earns no point in that round.</p><p><strong>Hint</strong> reveals one letter. <strong>2nd letter</strong> reveals one more. For countries, the map also highlights the place. Neither hint counts as an answer.</p><p>Country and capital totals are independent. When a country and its capital share a name, that name counts for both. The map stays at the whole world unless you choose to zoom.</p><p class="source-note">The 197-country set and accepted spellings are retained from the original game. The reference shows one primary capital per country; established alternatives remain accepted. A lavender outline marks a recalled capital. Map geometry: Natural Earth, public domain.</p><button id="closeHelpBtn" class="primary">Back to the map</button></div></dialog>
 <noscript>This game needs JavaScript enabled to count answers and highlight the map.</noscript>
 </body>
 </html>

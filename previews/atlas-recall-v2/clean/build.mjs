@@ -16,7 +16,8 @@ const hash = value => crypto.createHash('sha256').update(value).digest('hex').sl
 const data = 'window.ATLAS_COUNTRIES = ' + JSON.stringify(countries) + ';\n';
 const css = fs.readFileSync(path.join(here, 'styles.css'), 'utf8');
 const js = fs.readFileSync(path.join(here, 'game.js'), 'utf8');
-const buildId = 'atlas-clean-' + hash(data + css + js);
+const template = fs.readFileSync(path.join(here, 'index.html'), 'utf8');
+const buildId = 'atlas-clean-' + hash(data + css + js + template + map);
 const assets = { DATA: 'countries.' + hash(data) + '.js', STYLE: 'styles.' + hash(css) + '.css', GAME: 'game.' + hash(js) + '.js' };
 for (const [key, content] of [['DATA', data], ['STYLE', css], ['GAME', js]]) fs.writeFileSync(path.join(out, assets[key]), content);
 let html = fs.readFileSync(path.join(here, 'index.html'), 'utf8').replace('<!-- WORLD_MAP -->', map).replaceAll('__BUILD__', buildId);

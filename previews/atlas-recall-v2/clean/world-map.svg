@@ -1,4 +1,4 @@
-<svg id="worldMap" viewBox="0 0 1200 610" preserveAspectRatio="xMidYMid meet" aria-label="World map showing recalled countries" role="img">
+<svg id="worldMap" viewBox="0 0 1200 610" preserveAspectRatio="xMidYMid meet" aria-label="World map showing recalled countries" role="group">
           <g id="mapGroup">
 <path class="country-shape" d="M663.1,196.1 L660.9,200.6 L658.4,198.3 L657.5,191.1 L658.6,189.3 L661.1,191.0 L661.8,195.2 L663.1,196.1Z" data-id="albania"></path>
 <path class="country-shape" d="M648.6,167.9 L648.7,171.0 L647.1,171.0 L646.5,174.8 L642.5,175.7 L635.9,174.5 L635.2,173.2 L632.0,174.5 L627.4,173.3 L628.6,171.5 L630.1,172.5 L630.4,171.6 L635.0,171.1 L637.3,171.9 L637.0,169.0 L638.9,166.8 L641.1,168.0 L643.6,166.3 L647.2,167.2 L648.6,167.9Z" data-id="austria"></path>

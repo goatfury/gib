@@ -23,6 +23,8 @@
   }
   const state = { phase: 'ready', deadline: null, countries: new Set(), capitals: new Set(), revealedCapitals: new Set(), pending: null, hint: null, autoZoom: false, view: [...WORLD], records: loadRecords() };
   let autoTimer = null, teachingTimer = null, teachingQueue = [], teachingActive = false, composing = false, drag = null;
+  let spotlight = null, hoverCountry = null, movedMap = false;
+  const mapLabel = $('mapLabel'), mapLabelName = $('mapLabelName'), mapLabelDetail = $('mapLabelDetail');
 
   function loadRecords() {
     try {
@@ -43,14 +45,15 @@
     dom.feedback.classList.toggle('reveal', reveal);
   }
   function teach(lead, answer, meta, reveal = false) {
-    teachingQueue.push({ lead, answer, meta, reveal });
-    if (!teachingActive) nextTeaching();
+    // Feedback belongs to the answer just entered, never a backlog of old answers.
+    clearTeaching();
+    teachingQueue.push({ lead, answer, meta, reveal }); nextTeaching();
   }
   function nextTeaching() {
     clearTimeout(teachingTimer);
     const item = teachingQueue.shift();
     teachingActive = !!item;
-    if (!item) { if (state.phase !== 'ended') feedback(state.pending ? 'Try the capital, or keep moving.' : 'Keep going.', '', 'Countries and capitals count separately.'); return; }
+    if (!item) return;
     feedback(item.lead, item.answer, item.meta, item.reveal);
     teachingTimer = setTimeout(nextTeaching, 2250);
   }
@@ -58,7 +61,7 @@
   function startIfNeeded() {
     if (state.phase !== 'ready') return;
     state.phase = 'playing'; state.deadline = Date.now() + DURATION;
-    dom.roundStatus.textContent = 'Round live · name countries or capitals'; updateTimer();
+    dom.roundStatus.textContent = 'Click a green country to revisit its capital'; updateTimer();
   }
   function updateTimer() {
     let remaining = DURATION;
@@ -78,7 +81,7 @@
   function renderEntry() {
     const pending = state.pending && byId.get(state.pending);
     dom.inputLabel.textContent = pending ? 'Capital of ' + pending.quizName + '?' : 'Any country. Any capital.';
-    dom.answerInput.placeholder = pending ? 'Capital of ' + pending.quizName + '?' : state.phase === 'ready' ? 'Type a country or capital to begin' : 'Type any country or capital';
+    dom.answerInput.placeholder = pending ? 'Type its capital, or your next country' : state.phase === 'ready' ? 'Type a country or capital to begin' : 'Type any country or capital';
     dom.showBtn.hidden = !pending || state.phase === 'ended';
     dom.hintBtn.textContent = state.hint ? '2nd letter' : 'Hint';
     dom.hintBtn.disabled = state.phase === 'ended' || (!!state.hint && state.hint.letters >= 2) || (!pending && state.countries.size === TOTAL);
@@ -91,9 +94,51 @@
   function renderMap() {
     for (const [id, nodes] of mapNodes) for (const node of nodes) {
       node.classList.toggle('recalled', state.countries.has(id));
+      node.classList.toggle('capital-known', state.capitals.has(id));
+      node.classList.toggle('selected', id === (hoverCountry || spotlight));
       node.classList.toggle('hinted', !!state.hint && state.hint.kind === 'country' && state.hint.id === id);
       node.classList.toggle('missed', state.phase === 'ended' && !state.countries.has(id));
+      const known = state.countries.has(id) || state.phase === 'ended';
+      node.classList.toggle('explorable', known);
+      if (known) {
+        node.removeAttribute('aria-hidden'); node.setAttribute('role', 'button'); node.setAttribute('tabindex', '0');
+        node.setAttribute('aria-label', byId.get(id).quizName + (state.capitals.has(id) ? ', capital recalled' : ', try capital'));
+      } else { node.removeAttribute('role'); node.removeAttribute('tabindex'); node.removeAttribute('aria-label'); }
     }
+    renderMapLabel();
+  }
+  function renderMapLabel() {
+    const id = hoverCountry || spotlight, c = byId.get(id);
+    if (!c) { mapLabel.hidden = true; return; }
+    const known = state.countries.has(id) || state.phase === 'ended';
+    const capitalKnown = state.capitals.has(id) || state.revealedCapitals.has(id) || state.phase === 'ended';
+    mapLabelName.textContent = known ? c.quizName : capitalKnown ? c.capital : 'Country hint';
+    mapLabelDetail.textContent = known ? (capitalKnown ? c.capital : 'Capital still to recall') : capitalKnown ? 'Country still to recall' : $('hintBadge').textContent;
+    mapLabel.classList.toggle('complete', state.capitals.has(id));
+    mapLabel.hidden = false;
+    const node = mapNodes.get(id)?.[0]; if (!node) return;
+    const rect = node.getBoundingClientRect(), stage = dom.mapStage.getBoundingClientRect();
+    const x = rect.left + rect.width / 2 - stage.left, y = rect.top + rect.height / 2 - stage.top;
+    if (x < 0 || x > stage.width || y < 0 || y > stage.height) { mapLabel.hidden = true; return; }
+    const width = mapLabel.offsetWidth, height = mapLabel.offsetHeight;
+    mapLabel.style.left = Math.max(8, Math.min(stage.width - width - 8, x - width / 2)) + 'px';
+    mapLabel.style.top = Math.max(44, Math.min(stage.height - height - 8, y - height - 18)) + 'px';
+  }
+  function selectCountry(id) {
+    if (!byId.has(id) || (!state.countries.has(id) && state.phase !== 'ended')) return;
+    spotlight = id; hoverCountry = null;
+    if (state.phase !== 'ended') {
+      state.pending = state.capitals.has(id) || state.revealedCapitals.has(id) ? null : id;
+      clearHint(); renderEntry();
+      cue(state.pending ? 'Try its capital, or keep going.' : 'Enter checks a close spelling.');
+      dom.answerInput.focus({ preventScroll: true });
+    }
+    renderMap();
+  }
+  function skipPending() {
+    if (!state.pending) return;
+    state.pending = null; clearHint(); renderEntry();
+    cue('You can come back to that capital.');
   }
   function clearHint() { state.hint = null; renderMap(); }
   function applyView() {
@@ -103,6 +148,7 @@
     dom.autoZoomState.textContent = state.autoZoom ? 'On' : 'Off';
     dom.zoomOutBtn.disabled = state.view[2] >= WORLD[2];
     dom.zoomInBtn.disabled = state.view[2] <= WORLD[2] / 6;
+    renderMapLabel();
   }
   function clampView(view) {
     const w = Math.max(WORLD[2] / 6, Math.min(WORLD[2], view[2]));
@@ -193,23 +239,25 @@
     startIfNeeded();
     clearTimeout(autoTimer); dom.answerInput.value = '';
     const e = result.entry, c = byId.get(e.id);
+    spotlight = c.id; hoverCountry = null;
     if (e.kind === 'country') {
-      if (state.pending && state.pending !== c.id) revealPending();
+      // Moving on never gives away an answer. Only Show reveals a capital.
+      if (state.pending && state.pending !== c.id) state.pending = null;
       state.countries.add(c.id); clearHint();
       if (result.alsoCapital) acceptCapital(result.alsoCapital, raw, result.fuzzy);
       state.pending = state.capitals.has(c.id) || state.revealedCapitals.has(c.id) ? null : c.id;
-      if (!teachingActive) feedback(result.fuzzy ? 'Country spelling:' : 'Country counted:', c.quizName + '.', result.fuzzy ? 'You typed “' + raw + '”.' : '');
+      if (!result.alsoCapital) teach(result.fuzzy ? 'Country spelling:' : 'Recalled:', c.quizName, result.fuzzy ? 'You typed “' + raw + '”.' : '');
       follow(c.id);
     } else acceptCapital(e, raw, result.fuzzy);
     renderCounts(); renderMap(); renderEntry();
-    cue(state.pending ? 'Capital, next country, or blank Enter / Tab to show.' : 'Enter checks a close spelling.');
+    cue(state.pending ? 'Keep typing countries. Enter skips the capital.' : 'Enter checks a close spelling.');
     if (state.countries.size === TOTAL && state.capitals.size === TOTAL) finishRound('Every answer recalled');
   }
   function onInput() {
     clearTimeout(autoTimer);
     if (state.phase === 'ended' || composing) return;
     const raw = dom.answerInput.value.trim();
-    if (!raw) { cue(state.pending ? 'Blank Enter / Tab shows the capital without a point.' : 'Enter checks a close spelling.'); return; }
+    if (!raw) { cue(state.pending ? 'Enter skips. Show reveals.' : 'Enter checks a close spelling.'); return; }
     startIfNeeded();
     const result = match(raw);
     if (result.type === 'accept') {
@@ -225,7 +273,7 @@
     clearTimeout(autoTimer);
     if (state.phase === 'ended') return;
     const raw = dom.answerInput.value.trim();
-    if (!raw) { revealPending(); return; }
+    if (!raw) { skipPending(); return; }
     startIfNeeded();
     const result = match(raw);
     if (result.type === 'accept') accept(result, raw);
@@ -236,9 +284,11 @@
   }
   function requestHint() {
     if (state.phase === 'ended') return;
+    startIfNeeded();
     if (state.hint) { if (state.hint.letters < 2) state.hint.letters = 2; }
     else if (state.pending) state.hint = { kind: 'capital', id: state.pending, letters: 1 };
     else { const target = alphabetical.find(c => !state.countries.has(c.id)); if (target) state.hint = { kind: 'country', id: target.id, letters: 1 }; }
+    if (state.hint) { spotlight = state.hint.id; hoverCountry = null; }
     renderEntry(); renderMap();
     cue(state.hint?.letters === 1 ? 'One letter only. Use “2nd letter” for one more.' : 'Two letters shown. No answer has been counted.');
     dom.answerInput.focus({ preventScroll: true });
@@ -287,6 +337,7 @@
   }
   function newRound() {
     clearTimeout(autoTimer); clearTeaching();
+    spotlight = null; hoverCountry = null;
     if (dom.answerKey.open) dom.answerKey.close();
     state.phase = 'ready'; state.deadline = null; state.countries.clear(); state.capitals.clear(); state.revealedCapitals.clear(); state.pending = null; state.hint = null; state.autoZoom = false; state.view = [...WORLD];
     dom.answerInput.value = ''; dom.answerInput.disabled = false; dom.finishBtn.textContent = 'Finish';
@@ -302,7 +353,7 @@
   dom.answerInput.addEventListener('keydown', event => {
     if (event.isComposing || composing) return;
     if (event.key === 'Enter') { event.preventDefault(); submit(); }
-    else if (event.key === 'Tab' && !event.shiftKey && !dom.answerInput.value.trim() && state.pending) { event.preventDefault(); revealPending(); }
+    else if (event.key === 'Escape' && state.pending) { event.preventDefault(); skipPending(); }
   });
   dom.hintBtn.addEventListener('click', requestHint);
   dom.showBtn.addEventListener('click', () => { revealPending(); dom.answerInput.value = ''; clearTimeout(autoTimer); dom.answerInput.focus({ preventScroll: true }); });
@@ -314,9 +365,16 @@
   dom.worldBtn.addEventListener('click', () => { state.view = [...WORLD]; state.autoZoom = false; applyView(); dom.answerInput.focus({ preventScroll: true }); });
   dom.autoZoomBtn.addEventListener('click', () => { state.autoZoom = !state.autoZoom; applyView(); dom.answerInput.focus({ preventScroll: true }); });
   dom.zoomInBtn.addEventListener('click', () => zoom(.75)); dom.zoomOutBtn.addEventListener('click', () => zoom(1 / .75));
-  dom.mapStage.addEventListener('pointerdown', event => { if (state.view[2] >= 1200) return; drag = { x: event.clientX, y: event.clientY, view: [...state.view] }; dom.mapStage.setPointerCapture(event.pointerId); });
-  dom.mapStage.addEventListener('pointermove', event => { if (!drag) return; const rect = dom.worldMap.getBoundingClientRect(); const scale = Math.min(rect.width / drag.view[2], rect.height / drag.view[3]); state.view = clampView([drag.view[0] - (event.clientX - drag.x) / scale, drag.view[1] - (event.clientY - drag.y) / scale, drag.view[2], drag.view[3]]); applyView(); });
+  dom.mapStage.addEventListener('pointerdown', event => { movedMap = false; if (state.view[2] >= 1200) return; drag = { x: event.clientX, y: event.clientY, view: [...state.view] }; });
+  dom.mapStage.addEventListener('pointermove', event => { if (!drag) return; if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 5) return; movedMap = true; dom.mapStage.setPointerCapture(event.pointerId); const rect = dom.worldMap.getBoundingClientRect(); const scale = Math.min(rect.width / drag.view[2], rect.height / drag.view[3]); state.view = clampView([drag.view[0] - (event.clientX - drag.x) / scale, drag.view[1] - (event.clientY - drag.y) / scale, drag.view[2], drag.view[3]]); applyView(); });
   dom.mapStage.addEventListener('pointerup', () => { drag = null; }); dom.mapStage.addEventListener('pointercancel', () => { drag = null; });
+  dom.mapStage.addEventListener('click', event => { if (!movedMap) selectCountry(event.target.closest('[data-id]')?.dataset.id); });
+  dom.mapStage.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectCountry(event.target.closest('[data-id]')?.dataset.id); } });
+  dom.mapStage.addEventListener('pointerover', event => { const id = event.target.closest('[data-id]')?.dataset.id; if (id && (state.countries.has(id) || state.phase === 'ended')) { hoverCountry = id; renderMap(); } });
+  dom.mapStage.addEventListener('pointerout', event => { if (event.relatedTarget?.closest?.('[data-id]')?.dataset.id === hoverCountry) return; hoverCountry = null; renderMap(); });
+  dom.mapStage.addEventListener('focusin', event => { hoverCountry = event.target.closest('[data-id]')?.dataset.id || null; renderMap(); });
+  dom.mapStage.addEventListener('focusout', () => { hoverCountry = null; renderMap(); });
+  new ResizeObserver(renderMapLabel).observe(dom.mapStage);
   document.addEventListener('keydown', event => { if (event.key.length !== 1 || event.ctrlKey || event.metaKey || event.altKey || event.key === ' ' || document.querySelector('dialog[open]') || ['INPUT','BUTTON','SELECT','TEXTAREA'].includes(document.activeElement.tagName) || state.phase === 'ended') return; event.preventDefault(); dom.answerInput.focus({ preventScroll: true }); dom.answerInput.value += event.key; onInput(); });
   document.addEventListener('visibilitychange', updateTimer);
   setInterval(updateTimer, 250);

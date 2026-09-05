@@ -1,0 +1,56 @@
+name: Atlas focused refinement publish
+on:
+  push:
+    branches: [atlas-recall-v2-review]
+    paths: ['.github/workflows/atlas-polish-publish.yml']
+permissions:
+  contents: write
+concurrency:
+  group: atlas-clean-review-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish only the existing Atlas review site
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          cat > /tmp/atlas-deploy.mjs <<'JS'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          import { spawnSync } from 'node:child_process';
+          const repo='goatfury/gib',branch='atlas-recall-v2-review',siteId='d744facc-e06b-4809-8757-4e14ea0e8d9c';
+          const ops='previews/atlas-recall-v2/.polish-session';
+          const headers={Authorization:'Bearer '+process.env.GH_TOKEN,'X-GitHub-Api-Version':'2022-11-28','Content-Type':'application/json'};
+          async function api(endpoint,method='GET',body){const r=await fetch('https://api.github.com/repos/'+repo+'/'+endpoint,{method,headers,body:body?JSON.stringify(body):undefined});if(r.status===404)return null;if(!r.ok)throw Error('GitHub '+r.status+' '+endpoint);return r.status===204?{}:r.json();}
+          const {publicKey,privateKey}=crypto.generateKeyPairSync('rsa',{modulusLength:3072});
+          const receiver={runId:process.env.RUN_ID,publicKey:publicKey.export({type:'spki',format:'pem'}),createdAt:new Date().toISOString()};
+          const previous=await api('contents/'+ops+'/receiver.json?ref='+branch);
+          await api('contents/'+ops+'/receiver.json','PUT',{message:'Atlas temporary deployment receiver [skip ci]',branch,sha:previous?.sha,content:Buffer.from(JSON.stringify(receiver)).toString('base64')});
+          console.log('Atlas receiver ready: '+process.env.RUN_ID);
+          let envelope;
+          for(let i=0;i<100;i++){const f=await api('contents/'+ops+'/envelope.json?ref='+branch);if(f){const value=JSON.parse(Buffer.from(f.content,'base64').toString());if(value.runId===process.env.RUN_ID){envelope=value;break;}}await new Promise(r=>setTimeout(r,5000));}
+          if(!envelope)throw Error('Deployment authorization not received');
+          const key=crypto.privateDecrypt({key:privateKey,oaepHash:'sha256'},Buffer.from(envelope.key,'base64'));
+          const decipher=crypto.createDecipheriv('aes-256-gcm',key,Buffer.from(envelope.iv,'base64'));decipher.setAuthTag(Buffer.from(envelope.tag,'base64'));
+          const payload=JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.data,'base64')),decipher.final()]).toString());
+          if(payload.siteId!==siteId||!payload.proxy.startsWith('https://netlify-mcp.netlify.app/proxy/'))throw Error('Wrong target');
+          console.log('::add-mask::'+payload.proxy);
+          const run=(cmd,args,options={})=>{const r=spawnSync(cmd,args,{stdio:'inherit',...options});if(r.status!==0)throw Error(cmd+' failed');};
+          run('node',['--check','previews/atlas-recall-v2/clean/game.js']);
+          run('node',['previews/atlas-recall-v2/clean/build.mjs']);
+          const dist='previews/atlas-recall-v2/clean/dist';
+          const build=JSON.parse(fs.readFileSync(dist+'/build.json','utf8'));
+          if(build.buildId!==payload.expectedBuild)throw Error('Wrong build');
+          fs.cpSync(dist,'/tmp/atlas-publish',{recursive:true});
+          run('npx',['-y','@netlify/mcp@latest','--site-id',siteId,'--proxy-path',payload.proxy],{cwd:'/tmp/atlas-publish',timeout:300000});
+          const publicBuild=await (await fetch('https://atlas-recall-v2-review-019fb86e.netlify.app/build.json',{cache:'no-store'})).json();
+          if(publicBuild.buildId!==build.buildId)throw Error('Public build mismatch');
+          console.log('PUBLISHED '+build.buildId+' to Atlas review site only');
+          for(const name of ['receiver.json','envelope.json']){const f=await api('contents/'+ops+'/'+name+'?ref='+branch);if(f)await api('contents/'+ops+'/'+name,'DELETE',{message:'Remove spent Atlas deployment session [skip ci]',branch,sha:f.sha});}
+          JS
+          node /tmp/atlas-deploy.mjs
