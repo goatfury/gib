@@ -46,6 +46,33 @@ Do not close the incident on a successful page load, diagnostic, or test suite.
   not a new upload or a fresh check of the gym network.
 - When asking Andrew to verify a screen, state its exact expected wording
   first. He should not have to discover or describe UI that we created.
+- Andrew subsequently inspected the tablet's saved Wi-Fi networks and
+  reported **only his home network is saved; no Richmond Wi-Fi is saved**.
+  This is a user-observed device setting, not an inference from a website
+  loading or from the current home connection. No network name or credential
+  has been supplied or recorded here.
+
+## Current leading diagnosis: Richmond Wi-Fi is not saved
+
+The absent gym network is now the strongest practical lead. Missing or
+unretained gym Wi-Fi configuration fits the queued sign-ins at Richmond and
+their upload at home. It does not prove the tablet never joined that network:
+a saved entry could have been removed, or a different connection could have
+been used. Do not claim a confirmed historical root cause or blame Trey.
+
+Correct this concrete setup gap before prioritizing additional application
+changes or the blocked historical-log investigation. Establish whether Andrew
+already has the exact Richmond network name and password available. If so,
+help him save the network on the tablet while he has it, where the device's
+manual Add network option permits. He can enter the password directly on the
+tablet; there is no need to post it in chat or commit it. Saving a network
+outside its range cannot test the credentials or the gym internet connection.
+Do not ask Trey to perform more remote troubleshooting today.
+
+At Richmond, verify that the tablet actually joins the intended gym network
+and that a normal sign-in reaches the production sheet. This remains the
+completion proof. The earlier transient sheet-check failure at home remains
+an independent unexplained observation, not evidence against the new lead.
 
 ## Changes already released
 
@@ -75,6 +102,10 @@ complete. Leave the normal kiosk open; do not request another refresh or
 connection check without a new diagnostic reason. Its timers perform automatic
 retries; the read-only connection page itself does not send queued entries.
 
+The new immediate action is to configure the missing Richmond Wi-Fi entry,
+as described in Current leading diagnosis above. The prior instruction to
+leave the kiosk open does not prevent inspecting or fixing device networking.
+
 When the tablet is back at Richmond, verify that a normal instructor sign-in
 arrives in the production sheet. A dated Richmond row alone does not prove
 physical location: establish that the tablet has returned to the gym before
@@ -82,6 +113,8 @@ calling this an on-site success. Do not diagnose failure from an empty Monday
 range unless actual attempted use is known. If delivery fails, use the same
 tablet's connection diagnostic on the gym network to select the next branch
 below and check its waiting count. Do not repeat the unsupported Wi-Fi claim.
+The current missing-network observation supports a specific configuration
+lead; it still does not establish that Richmond's internet service is broken.
 
 The incident remains open. No scheduled monitoring has been created yet.
 
