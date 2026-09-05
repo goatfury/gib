@@ -112,6 +112,31 @@ After deployment, verify live assets and browser layout before asking Andrew
 to load the update on the actual tablet. The final on-site delivery requirement
 and original-cause uncertainty remain open.
 
+### Release blocked by automatic approval review
+
+The tested change is saved in GitHub commit
+`e78dcfaf94f00a8a35b296a0696c4cdfba3bd597` on the working branch (local equivalent
+`6ee12ef`, tree `a424e70278152837599c5d23414e9530b2d5f853`). It is **not live**.
+The last checked Richmond deployment is still `6a9c70d796fffd63e00e47c3`.
+
+The connected Netlify deploy tool returned its normal source-upload command.
+Automatic approval review rejected the upload, first questioning the proxy
+destination. Netlify's official agent-setup documentation confirmed that the
+exact hostname is Netlify's own MCP service, and the connected project read
+confirmed the existing Richmond site. A retry with that new evidence was
+rejected again, now specifically requiring user-authored authorization to
+transmit potentially private project source to Netlify. Do not retry or use
+another upload route until Andrew explicitly authorizes that disclosure.
+The interrupted upload's generated ZIP was moved out of the repository.
+
+The next permission request is to publish this tested update to the existing
+Richmond Netlify site and read only Richmond sign-in function logs for August
+31–September 5, if retained. Historical logs could help establish whether
+requests reached the service before the tablet moved home; their retention
+and diagnostic usefulness are not yet established. The earlier account-log
+access denial also remains in force until explicitly authorized. Do not ask
+Andrew to refresh the tablet for a release that has not been published.
+
 ## Active diagnostic route
 
 The connection page requests `details-v1` using
