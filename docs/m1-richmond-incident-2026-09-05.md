@@ -108,34 +108,55 @@ cover idempotency. The full suite passed 741 tests. No production rows were
 created by these tests. These are software fault simulations, not a test of
 the physical tablet or Richmond network.
 
-After deployment, verify live assets and browser layout before asking Andrew
-to load the update on the actual tablet. The final on-site delivery requirement
-and original-cause uncertainty remain open.
+The live assets and browser layout were verified after the authorized release
+below. The update still needs to be loaded in the physical tablet's usual
+browser. The final on-site delivery requirement and original-cause uncertainty
+remain open.
 
-### Release blocked by automatic approval review
+### Authorized release published; historical logs blocked by saved setting
 
 The tested change is saved in GitHub commit
 `e78dcfaf94f00a8a35b296a0696c4cdfba3bd597` on the working branch (local equivalent
-`6ee12ef`, tree `a424e70278152837599c5d23414e9530b2d5f853`). It is **not live**.
-The last checked Richmond deployment is still `6a9c70d796fffd63e00e47c3`.
+`6ee12ef`, tree `a424e70278152837599c5d23414e9530b2d5f853`). It is **live** in
+Richmond deployment `6a9c7a2fec9f71d5ff660a57`, state READY, published
+`2026-09-05T20:23:35.306Z` (4:23:35 PM America/New_York). It supersedes
+`6a9c70d796fffd63e00e47c3`. No Revolution deployment was requested.
 
-The connected Netlify deploy tool returned its normal source-upload command.
-Automatic approval review rejected the upload, first questioning the proxy
-destination. Netlify's official agent-setup documentation confirmed that the
-exact hostname is Netlify's own MCP service, and the connected project read
-confirmed the existing Richmond site. A retry with that new evidence was
-rejected again, now specifically requiring user-authored authorization to
-transmit potentially private project source to Netlify. Do not retry or use
-another upload route until Andrew explicitly authorizes that disclosure.
-The interrupted upload's generated ZIP was moved out of the repository.
+Earlier automatic approval review had rejected the source upload pending
+explicit user authorization. Andrew then answered **yes** to the concrete
+request to publish the tested source to the existing Richmond Netlify site
+and read only Richmond sign-in function logs for August 31–September 5.
+That authorization persists; do not ask him to approve those same actions
+again. The connected Netlify deployment command then completed successfully.
 
-The next permission request is to publish this tested update to the existing
-Richmond Netlify site and read only Richmond sign-in function logs for August
-31–September 5, if retained. Historical logs could help establish whether
-requests reached the service before the tablet moved home; their retention
-and diagnostic usefulness are not yet established. The earlier account-log
-access denial also remains in force until explicitly authorized. Do not ask
-Andrew to refresh the tablet for a release that has not been published.
+Verification after publication:
+
+- The live sync core, staff-clock client, connection page and connection module
+  match the tested local files byte for byte. The kiosk HTML differs only in
+  Netlify's pretty-URL rewrite of the connection link; the resulting
+  `/m1/connection` link was exercised successfully in the browser.
+- The normal kiosk shows the new delivery status and local-save confirmation
+  text. Connection check, expandable recent history, and Return to sign-in
+  work. No application JavaScript error was observed.
+- The cloud test browser is unpaired, so its automatic sending off and
+  TABLET_NOT_AUTHORIZED results are expected. They are not results from the
+  physical tablet. Its real activation attempt appeared in its local history.
+- No production sign-in or payroll row was created for verification.
+
+The authorized historical-log navigation was attempted once after Andrew's
+approval. The browser returned a **saved user permission setting** blocking
+`app.netlify.com`. It expressly prohibits alternate browser surfaces, indirect
+execution, or other workarounds. No historical logs were read. This is a
+separate saved access control, not missing conversational authorization or
+evidence of a Netlify or Richmond outage. The browser's documented API exposes
+no control to remove that saved setting; the connected Netlify tools expose
+no log reader. Do not repeat the navigation until the saved block is actually
+removed. Retention and diagnostic usefulness of those logs remain unknown.
+
+The next tablet action is to refresh the existing sign-in page in its usual
+browser and report the delivery-status line under Sign In. This loads the
+release just published, preserves saved entries, and starts the new history.
+An empty waiting count at home still cannot establish Richmond connectivity.
 
 ## Active diagnostic route
 
@@ -161,9 +182,9 @@ Use the actual tablet's reported code to select the next investigation:
 
 ## Access constraints
 
-Browser access to Netlify's account logs was denied, and a subsequent request
-was rejected by automatic approval review for repeating that denied access
-without explicit authorization. Do not retry or bypass that restriction.
+Andrew explicitly authorized the scoped historical-log read, but a saved
+browser-domain block still prevents it as described above. Do not ask for the
+same natural-language authorization again, and do not bypass the saved block.
 The app's narrowly scoped, authorized-device diagnostic is an independent
 route and does not read those account logs. Broad secret-variable reads were
 also rejected earlier; do not repeat them or disclose server credentials.
@@ -176,8 +197,9 @@ as part of this incident without the appropriate user instruction.
 
 1. Explain and resolve the failed server-to-sheet check, or demonstrate a
    transient failure with sufficient evidence rather than assuming one.
-2. Verify the exact live Richmond release and recovery behavior; preserve
-   local entries until complete acknowledgments arrive.
+2. The exact live Richmond release and simulated recovery behavior are
+   verified. Confirm the physical tablet has loaded the new release and
+   preserve its local entries until complete acknowledgments arrive.
 3. Confirm a normal sign-in from the actual tablet at Richmond arrives in
    the production sheet. Home tests cannot substitute for this.
 4. Only then report the Richmond operational outcome. Broader remote-customer
