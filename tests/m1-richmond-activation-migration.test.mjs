@@ -8,6 +8,9 @@ import {
   richmondProductionDeviceCookieHeader
 } from '../netlify/functions/_lib/m1-richmond-production-runtime.mjs';
 import {
+  CONNECTION_CHECK_HEADER,
+  CONNECTION_CODE_HEADER,
+  richmondLedgerCheckCode,
   TABLET_STATUS_PATH,
   handleTabletStatus
 } from '../netlify/functions/m1-tablet-status.mjs';
@@ -213,6 +216,47 @@ function ledgerStatus(overrides = {}) {
     ...overrides
   };
 }
+
+test('Richmond diagnostic exposes only fixed failure categories without changing startup or authorization', async () => {
+  const safeCategories = [
+    [{ readable: false, failureClass: 'UNREACHABLE' }, 'TIMEOUT_OR_NETWORK'],
+    [{ readable: false, failureClass: 'HTML' }, 'HTML_RESPONSE'],
+    [{ readable: false, failureClass: 'HTTP_FAILURE' }, 'HTTP_FAILURE'],
+    [{ readable: false, failureClass: 'READ_FAILED' }, 'INCOMPLETE_RESPONSE'],
+    [{ readable: false, failureClass: 'private-upstream-error' }, 'INVALID_RESPONSE'],
+    [{ readable: false, failureClass: 'constructor' }, 'INVALID_RESPONSE'],
+    [{ readable: true, value: { ok: false, result: 'rejected', message: 'PRIVATE RECEIVER DETAIL' } }, 'RECEIVER_REJECTED'],
+    [{ readable: true, value: ledgerStatus({ writesEnabled: false }) }, 'WRITES_DISABLED'],
+    [{ readable: true, value: ledgerStatus({ writesEnabled: 'true' }) }, 'CONTRACT_MISMATCH'],
+    [{ readable: true, value: ledgerStatus({ installation: 'other' }) }, 'CONTRACT_MISMATCH'],
+    [{ readable: true, value: ledgerStatus() }, 'CONFIRMED']
+  ];
+  for (const [input, expected] of safeCategories) assert.equal(richmondLedgerCheckCode(input), expected);
+
+  for (const authorized of [true, false]) {
+    for (const detailed of [true, false]) {
+      const request = richmondRequest(authorized ? deviceCookie() : '');
+      if (detailed) request.headers.set(CONNECTION_CHECK_HEADER, 'details-v1');
+      let upstreamCalls = 0;
+      const response = await handleTabletStatus(request, {
+        installationId: 'richmond', environment: 'production', activation: 'active',
+        env: ACTIVE_ENV, now: NOW_MS,
+        fetch: async (_url, init) => {
+          upstreamCalls += 1;
+          assert.equal(JSON.parse(init.body).action, 'ledgerStatus');
+          return new Response(JSON.stringify({ ok: false, result: 'rejected', message: 'PRIVATE RECEIVER DETAIL' }));
+        }
+      });
+      assert.equal(upstreamCalls, authorized ? 1 : 0);
+      assert.equal(response.status, authorized ? 503 : 200);
+      assert.equal(response.headers.get(CONNECTION_CODE_HEADER), authorized && detailed ? 'RECEIVER_REJECTED' : null);
+      const body = await response.text();
+      assert.deepEqual(Object.keys(JSON.parse(body)).sort(), ['activation', 'authorized', 'writesEnabled']);
+      assert.equal(body.includes('PRIVATE'), false);
+      assert.equal(JSON.stringify([...response.headers]).includes('PRIVATE'), false);
+    }
+  }
+});
 
 test('authorized active Richmond confirms both gates through read-only ledgerStatus', async () => {
   const upstream = [];

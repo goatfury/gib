@@ -13,6 +13,8 @@ import {
 import { deploymentInstallationProfile } from './_lib/m1-installation.mjs';
 
 export const TABLET_STATUS_PATH = '/api/m1-tablet-status';
+export const CONNECTION_CHECK_HEADER = 'X-GIB-M1-Connection-Check';
+export const CONNECTION_CODE_HEADER = 'X-GIB-M1-Check-Code';
 
 export const config = {
   // Netlify requires a literal route value during function extraction.
@@ -24,18 +26,34 @@ export const config = {
   }
 };
 
-function statusResponse(status, authorized = false, richmond = null) {
+function statusResponse(status, authorized = false, richmond = null, headers = {}) {
   return jsonResponse(status, richmond
     ? {
       authorized: authorized === true,
       writesEnabled: richmond.writesEnabled === true,
       activation: richmond.writesEnabled === true ? 'active' : 'pending'
     }
-    : { authorized: authorized === true });
+    : { authorized: authorized === true }, headers);
 }
 
-function richmondWriteGateConfirmed(google) {
+export function richmondLedgerCheckCode(google) {
+  // Only fixed, nonsecret categories leave the server. Never return an
+  // upstream body, URL, credential, exception, sheet ID, or row data.
+  if (google?.readable !== true) {
+    const codes = {
+      UNREACHABLE: 'TIMEOUT_OR_NETWORK',
+      HTML: 'HTML_RESPONSE',
+      HTTP_FAILURE: 'HTTP_FAILURE',
+      EMPTY: 'EMPTY_RESPONSE',
+      READ_FAILED: 'INCOMPLETE_RESPONSE'
+    };
+    return Object.hasOwn(codes, google?.failureClass)
+      ? codes[google.failureClass] : 'INVALID_RESPONSE';
+  }
   const value = google?.readable === true ? google.value : null;
+  if (value?.ok !== true) {
+    return value?.result === 'rejected' ? 'RECEIVER_REJECTED' : 'RECEIVER_FAILED';
+  }
   if (!exactObjectKeys(value, [
     'ok',
     'target',
@@ -45,7 +63,7 @@ function richmondWriteGateConfirmed(google) {
     'signinsRows',
     'auditRows',
     'writesEnabled'
-  ])) return false;
+  ])) return 'CONTRACT_MISMATCH';
   if (
     value.ok !== true
     || value.target !== 'production'
@@ -56,8 +74,9 @@ function richmondWriteGateConfirmed(google) {
     || !Number.isSafeInteger(value.auditRows)
     || value.auditRows < 0
     || value.empty !== (value.signinsRows === 0 && value.auditRows === 0)
-  ) return false;
-  return value.writesEnabled === true;
+  ) return 'CONTRACT_MISMATCH';
+  if (value.writesEnabled === true) return 'CONFIRMED';
+  return value.writesEnabled === false ? 'WRITES_DISABLED' : 'CONTRACT_MISMATCH';
 }
 
 async function readExactEmptyJson(request) {
@@ -117,6 +136,11 @@ export async function handleTabletStatus(request, dependencies = {}) {
     runtime,
     dependencies.now ?? Date.now()
     );
+  // The existing tablet authorization remains mandatory. Normal startup
+  // responses keep the exact same body and receive no diagnostic header.
+  const detailsRequested = richmondProduction && device.authorized
+    && request.headers.get(CONNECTION_CHECK_HEADER) === 'details-v1';
+  const details = code => detailsRequested ? { [CONNECTION_CODE_HEADER]: code } : {};
   if (richmondProduction && runtime.writesEnabled === true && device.authorized) {
     const google = await postGoogle(
       runtime,
@@ -124,11 +148,14 @@ export async function handleTabletStatus(request, dependencies = {}) {
       {},
       dependencies.fetch || fetch
     );
-    if (!richmondWriteGateConfirmed(google)) {
-      return statusResponse(503, true, { writesEnabled: false });
+    const code = richmondLedgerCheckCode(google);
+    if (code !== 'CONFIRMED') {
+      return statusResponse(503, true, { writesEnabled: false }, details(code));
     }
+    return statusResponse(200, true, runtime, details('CONFIRMED'));
   }
-  return statusResponse(200, device.authorized, richmondProduction ? runtime : null);
+  return statusResponse(200, device.authorized, richmondProduction ? runtime : null,
+    details('SERVER_WRITES_DISABLED'));
 }
 
 export default request => handleTabletStatus(request);

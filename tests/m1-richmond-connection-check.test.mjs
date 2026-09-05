@@ -93,3 +93,16 @@ test('a successful connection is never labeled as new sign-in delivery or gym re
   assert.match(html, /new sign-in appearing in the sheet is still the proof of delivery/);
   assert.match(html, /does not send sign-ins or change settings/);
 });
+
+test('the connection screen receives a safe failure code without accepting untrusted details', async () => {
+  const value = { authorized: true, writesEnabled: false, activation: 'pending' };
+  for (const [header, expected] of [['RECEIVER_REJECTED', 'RECEIVER_REJECTED'], ['PRIVATE ERROR', ''], ['constructor', ''], ['CONFIRMED', '']]) {
+    const result = await checkConnection({ origin, fetchImpl: async (_url, options) => {
+      assert.equal(options.headers['X-GIB-M1-Connection-Check'], 'details-v1');
+      return new Response(JSON.stringify(value), { status: 503, headers: { 'X-GIB-M1-Check-Code': header } });
+    } });
+    assert.equal(result.kind, 'sheet-unconfirmed');
+    assert.equal(result.code, expected);
+    assert.equal(resultText(result, { automatic: true, waiting: 0 }).tone, 'attention');
+  }
+});
