@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 import { installationProfile } from '../m1/installation-profile-core.mjs';
+import { activationFailureCode } from '../m1/sync-core.mjs';
 
 const html = readFileSync(new URL('../m1/index.html', import.meta.url), 'utf8');
 const AUTO = 'gib_m1_richmond_production_sync_auto_v1';
@@ -69,6 +70,8 @@ function harness({ initial = {}, fetchImpl, richmond = true, online = true } = {
     syncNow: () => { sends += 1; },
     loadSyncSettings() {},
     updateSyncStatus() {},
+    recordSyncEvent() {},
+    activationFailureCode,
     fetch: (url, options) => {
       requests.push({ url, options });
       return responder(url, options);

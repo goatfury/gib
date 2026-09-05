@@ -25,8 +25,12 @@
     button:disabled { opacity: .6; cursor: wait; }
     .actions a { background: #0369a1; }
     .note { font-size: .9rem; }
+    details { margin: 20px 0; padding: 16px; border: 1px solid #334155; border-radius: 10px; }
+    summary { cursor: pointer; }
+    #history { padding-left: 20px; }
+    #history li { margin: 14px 0; line-height: 1.5; overflow-wrap: anywhere; }
   </style>
-  <script type="module" src="./connection-check.mjs?v=2026-09-05-r2"></script>
+  <script type="module" src="./connection-check.mjs?v=2026-09-05-r3"></script>
 </head>
 <body>
   <main>
@@ -47,6 +51,11 @@
       <div><dt>Last confirmed upload</dt><dd id="last">Checking…</dd></div>
       <div><dt>Checked at</dt><dd id="checked">—</dd></div>
     </dl>
+    <details>
+      <summary>Recent sending history</summary>
+      <p class="note">Recorded on this tablet from this update onward. Earlier failures cannot be reconstructed. Times are Eastern; network location is not recorded. Successful uploads do not erase the preceding failure.</p>
+      <ol id="history"></ol>
+    </details>
     <p class="note">Use the sign-in tablet and its usual browser. This check reads its saved counts and checks access to the production sheet. It does not send sign-ins or change settings.</p>
     <p class="note">A successful check confirms access right now. A new sign-in appearing in the sheet is still the proof of delivery. This page pauses automatic sending if it replaces the sign-in page; return when finished.</p>
     <div class="actions"><a href="/m1/">Return to sign-in</a><button id="again" type="button">Check again</button></div>

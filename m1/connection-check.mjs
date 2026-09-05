@@ -1,3 +1,5 @@
+import { readRichmondSyncHistory, SYNC_EVENT_MESSAGES } from './sync-core.mjs?v=2026-09-05-richmond-delivery-history';
+
 const ORIGIN = 'https://gib-richmond-live.netlify.app';
 const PREFIX = 'gib_m1_richmond_production_';
 const ENDPOINT = '/api/m1-tablet-status';
@@ -116,6 +118,20 @@ if (typeof document !== 'undefined') {
       byId('waiting').textContent = local.waiting === null ? 'Unknown' : String(local.waiting);
       byId('saved').textContent = local.saved === null ? 'Unknown' : String(local.saved);
       byId('last').textContent = displayTime(local.last);
+      let history = [];
+      try { history = readRichmondSyncHistory(window.localStorage); } catch {}
+      const list = byId('history');
+      list.replaceChildren();
+      if (!history.length) {
+        const item = document.createElement('li');
+        item.textContent = 'No sending history recorded by this update yet.';
+        list.append(item);
+      }
+      for (const event of history.slice(-8).reverse()) {
+        const item = document.createElement('li');
+        item.textContent = `${displayTime(event.at)} — ${SYNC_EVENT_MESSAGES[event.code]}. ${event.waiting} waiting. Code: ${event.code}${event.attempts > 1 ? ` (${event.attempts} attempts since ${displayTime(event.firstAt)})` : ''}`;
+        list.append(item);
+      }
     };
     showLocal(getLocal());
     try {

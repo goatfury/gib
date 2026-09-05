@@ -337,7 +337,7 @@ test('Staff Clock is isolated from the inherited inline kiosk client', () => {
   const inlineModule = kioskHtml.match(/<script type="module">([\s\S]*?)<\/script>/u)?.[1] || '';
   assert.match(
     kioskHtml,
-    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-09-05-richmond-sync-retry"><\/script>/u
+    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-09-05-richmond-delivery-history"><\/script>/u
   );
   assert.doesNotMatch(inlineModule, /staff-clock-core|staffClockSyncPunch|syncStaffClockQueue|renderStaffTimeAdmin/u);
 });

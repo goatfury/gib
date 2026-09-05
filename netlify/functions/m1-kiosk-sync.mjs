@@ -28,6 +28,15 @@ import {
 export const KIOSK_SYNC_PATH = '/api/m1-kiosk-sync';
 export const MAX_KIOSK_SYNC_ROWS = 50;
 
+export function richmondUploadFailureCode(google) {
+  if (google?.readable !== true) {
+    const codes = { UNREACHABLE: 'SHEET_TIMEOUT_OR_NETWORK', HTML: 'SHEET_HTML_RESPONSE',
+      HTTP_FAILURE: 'SHEET_HTTP_FAILURE', EMPTY: 'SHEET_EMPTY_RESPONSE', READ_FAILED: 'SHEET_INCOMPLETE_RESPONSE' };
+    return Object.hasOwn(codes, google?.failureClass) ? codes[google.failureClass] : 'SHEET_INVALID_RESPONSE';
+  }
+  return google.value?.result === 'rejected' ? 'SHEET_RECEIVER_REJECTED' : 'SHEET_CONTRACT_MISMATCH';
+}
+
 export const config = {
   // Netlify extracts function routing metadata statically during the build.
   // Keep this value literal so the Deploy Preview route is actually emitted.
@@ -378,12 +387,17 @@ export async function handleKioskSync(request, dependencies = {}) {
   );
   const upstreamResults = sanitizeGoogleResults(google, forwardedRows, target);
   if (!upstreamResults) {
+    // Existing origin/configuration/device checks above remain mandatory.
+    // Only an opted-in authorized Richmond tablet gets this fixed category.
+    const details = target === 'production' && profile?.installationId === 'richmond'
+      && productionDeviceCredential && request.headers.get('X-GIB-M1-Sync-Diagnostic') === 'v1'
+      ? { 'X-GIB-M1-Sync-Code': richmondUploadFailureCode(google) } : {};
     return jsonResponse(google.status === 0 ? 504 : 502, {
       ok: false,
       message: google.status === 0
         ? `${target === 'test' ? 'TEST' : 'Production'} sync timed out or could not be reached.`
         : `${target === 'test' ? 'TEST' : 'Production'} sync did not return a complete readable acknowledgment.`
-    });
+    }, details);
   }
 
   const byRowId = new Map(upstreamResults.map(result => [result.rowId, result]));

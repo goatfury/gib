@@ -14,7 +14,7 @@ Do not close the incident on a successful page load, diagnostic, or test suite.
 - Richmond kiosk: https://gib-richmond-live.netlify.app/m1/
 - Read-only tablet check: https://gib-richmond-live.netlify.app/m1/connection.html
 - Richmond Netlify site: `9b7757a9-70f4-4977-9ca2-270b41e34007`.
-- Production sheet: https://docs.google.com/spreadsheets/d/1lGa-kmqqDiPGSg1Y1ZPyhDV3Wk_ZJ28p1pARRvV1iWc/edit
+- Production sheet: `Richmond BJJ M1 — PRODUCTION` in connected Google Drive.
 - On September 5, 23 active entries from August 31–September 5 reached the
   sheet after the tablet moved home. The old August 26 installation row is
   also present, marked VOID. This is not a payroll reconciliation.
@@ -75,6 +75,42 @@ tablet's connection diagnostic on the gym network to select the next branch
 below and check its waiting count. Do not repeat the unsupported Wi-Fi claim.
 
 The incident remains open. No scheduled monitoring has been created yet.
+
+## Pre-Monday recovery investigation continued
+
+Andrew rejected ending the work at a passing home access check. Further source
+inspection demonstrated an observability defect: uploads saved only a generic
+latest error, the next successful upload removed it, and delivery status was
+hidden in Admin. The old failure cannot be recovered from that missing history.
+
+The `2026-09-05-richmond-delivery-history` update adds:
+
+- Richmond-only delivery status on the normal kiosk: entries waiting to send,
+  automatic sending off, or all saved entries confirmed sent. Empty history is
+  not called successful delivery; the confirmation modal specifies local save.
+- A bounded, counts-only local history of upload and activation outcomes, with
+  timestamps and fixed error categories. Consecutive matching attempts coalesce.
+  A subsequent successful upload retains the preceding failure. No names,
+  RowIDs, credentials, upstream replies, or network-location claims are stored.
+- An optional fixed failure header on existing authorized Richmond upload
+  requests. It distinguishes tablet-to-service failures from service-to-Google
+  failures without relaxing origin, device, receiver, or acknowledgment checks.
+- History visible under **Recent sending history** on the existing connection
+  page. This does not provide unattended remote access to the tablet.
+
+The new integration tests execute the kiosk's actual sign-in, sync and wake
+functions through the real Netlify handler with injected network boundaries and
+synthetic data. They cover failed sends followed by reload and wake, a reply
+lost after server acceptance, a stalled response body followed by recovery,
+offline status, unauthorized requests, Google network and HTML failures,
+malformed replies, and rejected rows. Existing receiver tests independently
+cover idempotency. The full suite passed 741 tests. No production rows were
+created by these tests. These are software fault simulations, not a test of
+the physical tablet or Richmond network.
+
+After deployment, verify live assets and browser layout before asking Andrew
+to load the update on the actual tablet. The final on-site delivery requirement
+and original-cause uncertainty remain open.
 
 ## Active diagnostic route
 

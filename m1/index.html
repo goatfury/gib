@@ -905,6 +905,9 @@ body.admin-mode .container { max-width: 1120px; }
 #recentSignins { scroll-margin-top: 12px; }
 .week-day li { overflow-wrap: anywhere; }
 #scheduleStatus { min-width: 0; overflow-wrap: anywhere; }
+.kiosk-delivery { margin-top: 14px; color: #cbd5e1; font-size: 15px; line-height: 1.5; }
+.kiosk-delivery[data-waiting="true"] { color: #fcd34d; }
+.kiosk-delivery a { color: inherit; margin-left: 8px; white-space: nowrap; }
 
 @media (min-width: 720px) {
   .admin-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -933,7 +936,7 @@ body.admin-mode .container { max-width: 1120px; }
 }
 
 </style>
-<script src="./installation-profile.generated.js?v=2026-09-05-richmond-sync-retry"></script>
+<script src="./installation-profile.generated.js?v=2026-09-05-richmond-delivery-history"></script>
 </head>
 <body>
 <div class="container">
@@ -994,6 +997,10 @@ body.admin-mode .container { max-width: 1120px; }
       <button id="btnSignIn" class="btn brand" type="button">Sign In</button>
     </div>
     <div id="activationPending" class="statusRow" role="status" hidden></div>
+    <div id="kioskDelivery" class="kiosk-delivery" hidden>
+      <span id="kioskDeliveryText" role="status" aria-live="polite"></span>
+      <a href="/m1/connection.html">Connection check</a>
+    </div>
   </section>
 
   <section id="staffClock" class="card staff-clock" aria-labelledby="staffClockHeading">
@@ -1391,6 +1398,7 @@ body.admin-mode .container { max-width: 1120px; }
     <h2 id="signInModalTitle" class="signin-title">Signed in</h2>
     <div class="signin-name" id="signInModalName">Instructor</div>
     <div class="signin-classes" id="signInModalClasses"></div>
+    <div id="signinDeliveryNote" class="subtle" hidden>Saved on this tablet. Sending status appears on the sign-in screen.</div>
     <div class="subtle" style="margin-top: 10px;">Tap DONE to prepare the kiosk for the next instructor.</div>
     <div class="actions signin-actions">
       <button id="btnConfirmSignInDone" class="btn brand" type="button">DONE</button>
@@ -1420,20 +1428,24 @@ body.admin-mode .container { max-width: 1120px; }
 
 <script type="module">
 import {
+  activationFailureCode,
   appendBatchToState,
   applyAcknowledgements,
   createDayRolloverController,
   createPermanentRowId,
   formatDateInTimeZone,
   formatTimestampInTimeZone,
+  kioskDeliveryText,
+  recordRichmondSyncEvent,
   removeBatchFromState,
   requestAcknowledgements,
+  syncFailureCode,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-09-05-richmond-sync-retry';
+} from './sync-core.mjs?v=2026-09-05-richmond-delivery-history';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-09-05-richmond-sync-retry';
+const OFFLINE_SHELL_REVISION = '2026-09-05-richmond-delivery-history';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -4005,7 +4017,21 @@ function refreshNameDatalist() {
     }
     if (err) parts.push(`Latest attempt: ${err}`);
     $('#syncStatus').textContent = parts.join(' · ');
+    const delivery = $('#kioskDelivery');
+    if (delivery && IS_RICHMOND_PRODUCTION_ORIGIN) {
+      const automatic = localStorage.getItem(SYNC_AUTO_KEY) === 'true';
+      delivery.hidden = false;
+      delivery.dataset.waiting = String(q.length > 0 || !automatic);
+      $('#kioskDeliveryText').textContent = kioskDeliveryText({ waiting: q.length, last, automatic, error: err, sending: syncInFlight });
+      $('#signinDeliveryNote').hidden = false;
+    }
     renderAdminSummary();
+  }
+  function recordSyncEvent(stage, code) {
+    if (!IS_RICHMOND_PRODUCTION_ORIGIN) return;
+    try {
+      recordRichmondSyncEvent(localStorage, { stage, code, waiting: readAdminLocalStateSnapshot().queue.length });
+    } catch (error) { /* Diagnostics must never block sign-in or recovery. */ }
   }
   async function applyRichmondActivationMigration(options = {}) {
     const requiredOrigin = 'https://gib-richmond-live.netlify.app';
@@ -4109,13 +4135,21 @@ function refreshNameDatalist() {
         signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
-          Accept: 'application/json'
+          Accept: 'application/json',
+          'X-GIB-M1-Connection-Check': 'details-v1'
         },
         body: '{}'
       });
       // Keep the timeout active until the response body has also arrived.
       const payload = await response.json();
+      const confirmed = response.status === 200 && payload?.authorized === true
+        && payload.writesEnabled === true && payload.activation === 'active'
+        && Object.keys(payload).sort().join('|') === 'activation|authorized|writesEnabled';
+      recordSyncEvent('activation', confirmed ? 'ACTIVATION_CONFIRMED' : activationFailureCode(response, payload));
       return { ok: response.ok, status: response.status, json: async () => payload };
+    } catch (error) {
+      recordSyncEvent('activation', controller.signal.aborted ? 'TABLET_REQUEST_TIMEOUT' : 'ACTIVATION_UNCONFIRMED');
+      throw error;
     } finally {
       window.clearTimeout(timeout);
     }
@@ -4181,6 +4215,7 @@ function refreshNameDatalist() {
       return;
     }
     if (navigator.onLine === false) {
+      recordSyncEvent('upload', 'OFFLINE');
       localStorage.setItem(SYNC_ERROR_KEY, 'Offline; rows are still waiting.');
       updateSyncStatus();
       showToast('Offline — rows kept');
@@ -4192,9 +4227,11 @@ function refreshNameDatalist() {
     const timeout = window.setTimeout(() => controller.abort(), 30_000);
     let continueDrain = false;
     try {
+      updateSyncStatus();
       const payload = await requestAcknowledgements(submittedRows, {
         online: navigator.onLine !== false,
         signal: controller.signal,
+        richmondDiagnostics: IS_RICHMOND_PRODUCTION_ORIGIN,
         productionOrigin: IS_PRODUCTION_SYNC_ORIGIN
       });
       const acknowledgedAt = new Date().toISOString();
@@ -4216,11 +4253,13 @@ function refreshNameDatalist() {
         acknowledgedAt,
         { productionOrigin: IS_PRODUCTION_SYNC_ORIGIN }
       );
-      persistLocalState(latestApplied.state);
+      try { persistLocalState(latestApplied.state); }
+      catch (error) { error.syncCode = 'LOCAL_SAVE_FAILED'; throw error; }
       if (latestApplied.confirmedRowIds.length) {
         localStorage.setItem(SYNC_LAST_KEY, acknowledgedAt);
       }
       localStorage.removeItem(SYNC_ERROR_KEY);
+      recordSyncEvent('upload', latestApplied.confirmedRowIds.length === submittedRows.length ? 'UPLOAD_CONFIRMED' : 'ROWS_UNCONFIRMED');
       updateSyncStatus();
       const waiting = loadSyncQueue().length;
       continueDrain = latestApplied.confirmedRowIds.length > 0 && waiting > 0;
@@ -4228,12 +4267,14 @@ function refreshNameDatalist() {
         ? `${latestApplied.confirmedRowIds.length} confirmed; ${waiting} waiting`
         : `${latestApplied.confirmedRowIds.length} confirmed`);
     } catch (error) {
+      recordSyncEvent('upload', syncFailureCode(error));
       localStorage.setItem(SYNC_ERROR_KEY, 'No readable confirmation; rows are still waiting.');
       updateSyncStatus();
       showToast('Not confirmed — rows kept');
     } finally {
       window.clearTimeout(timeout);
       syncInFlight = false;
+      updateSyncStatus();
       // Re-read the preference after the in-flight request finishes. An
       // operator may have switched Auto-sync OFF while awaiting its response;
       // that completed batch stays confirmed, but no automatic continuation is
@@ -4772,6 +4813,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-09-05-richmond-sync-retry"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-09-05-richmond-delivery-history"></script>
 </body>
 </html>
