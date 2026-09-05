@@ -38,6 +38,14 @@ Do not close the incident on a successful page load, diagnostic, or test suite.
 - A fresh `Signins!A1:K100` read after that report still contains 24 records:
   23 OK and the one VOID installation row. There is no additional sign-in
   attributable to the read-only diagnostic and no new-write test in this turn.
+- After the delivery-history release, Andrew reported **All saved sign-ins
+  sent to the sheet** beneath Sign In, followed by the underlined **Connection
+  check** link. This is the expected UI. It establishes that the physical
+  tablet loaded the release; its local pending count is zero, automatic
+  sending is on, and a previous confirmed-upload timestamp is present. It is
+  not a new upload or a fresh check of the gym network.
+- When asking Andrew to verify a screen, state its exact expected wording
+  first. He should not have to discover or describe UI that we created.
 
 ## Changes already released
 
@@ -61,10 +69,11 @@ Do not close the incident on a successful page load, diagnostic, or test suite.
 
 ## Immediate next step and on-site completion
 
-Andrew should tap **Return to sign-in** on the connection page. This restores
-the normal kiosk, whose timers perform automatic retries; the read-only
-connection page itself does not send queued entries. No reset or extra test
-payroll entry is needed for this step.
+The physical tablet is now on the updated normal sign-in page, and Andrew
+has confirmed its expected delivery-status text. This verification is
+complete. Leave the normal kiosk open; do not request another refresh or
+connection check without a new diagnostic reason. Its timers perform automatic
+retries; the read-only connection page itself does not send queued entries.
 
 When the tablet is back at Richmond, verify that a normal instructor sign-in
 arrives in the production sheet. A dated Richmond row alone does not prove
@@ -109,8 +118,8 @@ created by these tests. These are software fault simulations, not a test of
 the physical tablet or Richmond network.
 
 The live assets and browser layout were verified after the authorized release
-below. The update still needs to be loaded in the physical tablet's usual
-browser. The final on-site delivery requirement and original-cause uncertainty
+below. Andrew subsequently confirmed the new status text on the physical
+tablet. The final on-site delivery requirement and original-cause uncertainty
 remain open.
 
 ### Authorized release published; historical logs blocked by saved setting
@@ -153,10 +162,12 @@ no control to remove that saved setting; the connected Netlify tools expose
 no log reader. Do not repeat the navigation until the saved block is actually
 removed. Retention and diagnostic usefulness of those logs remain unknown.
 
-The next tablet action is to refresh the existing sign-in page in its usual
-browser and report the delivery-status line under Sign In. This loads the
-release just published, preserves saved entries, and starts the new history.
-An empty waiting count at home still cannot establish Richmond connectivity.
+The tablet refresh and delivery-status verification are complete, as recorded
+under Verified facts. An empty waiting count at home still cannot establish
+Richmond connectivity. The historical-log route is blocked pending removal
+of the saved browser restriction. The next operational proof remains actual
+delivery from the tablet at Richmond; do not silently treat the incident as
+closed or promise that Monday will succeed.
 
 ## Active diagnostic route
 
@@ -197,9 +208,9 @@ as part of this incident without the appropriate user instruction.
 
 1. Explain and resolve the failed server-to-sheet check, or demonstrate a
    transient failure with sufficient evidence rather than assuming one.
-2. The exact live Richmond release and simulated recovery behavior are
-   verified. Confirm the physical tablet has loaded the new release and
-   preserve its local entries until complete acknowledgments arrive.
+2. The exact live Richmond release, simulated recovery behavior, and physical
+   tablet loading the new release are verified. Preserve local entries until
+   complete acknowledgments arrive.
 3. Confirm a normal sign-in from the actual tablet at Richmond arrives in
    the production sheet. Home tests cannot substitute for this.
 4. Only then report the Richmond operational outcome. Broader remote-customer
