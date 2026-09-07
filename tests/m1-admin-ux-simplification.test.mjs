@@ -201,6 +201,28 @@ test('mode controls support keyboard and Fire-sized touch interaction', () => {
   assert.match(fireStyles, /\.staff-time-panel \.mode-panel-head \.btn\s*\{\s*width:\s*100%/u);
 });
 
+test('Saved toast is invisible until an explicit result and returns to its hidden state', () => {
+  const defaultStyles = sourceBetween(adminHtml, '    .toast {', '    .toast.show');
+  assert.match(defaultStyles, /visibility:\s*hidden/u);
+  assert.match(defaultStyles, /opacity:\s*0/u);
+  assert.match(defaultStyles, /pointer-events:\s*none/u);
+  assert.match(adminHtml, /\.toast\.show\s*\{[^}]*visibility:\s*visible;[^}]*opacity:\s*1;/u);
+  assert.doesNotMatch(openingTag('toast'), /class="[^"]*\bshow\b/u);
+  const classes = new Set();
+  let hideToast;
+  const node = { textContent: '', classList: { add: name => classes.add(name), remove: name => classes.delete(name) } };
+  const context = vm.createContext({
+    $: () => node,
+    window: { setTimeout(callback, duration) { assert.equal(duration, 2600); hideToast = callback; } }
+  });
+  const source = sourceBetween(adminHtml, 'function toast(', 'function createDiagnosticRunId(');
+  new vm.Script(`${source}\ntoast('Confirmed result');`).runInContext(context);
+  assert.equal(node.textContent, 'Confirmed result');
+  assert.equal(classes.has('show'), true);
+  hideToast();
+  assert.equal(classes.has('show'), false);
+});
+
 test('Richmond hides the Staff Clock mode and panel through the installation profile', () => {
   assert.match(adminHtml, /const STAFF_CLOCK_ENABLED = INSTALLATION\.featureFlags\.staffClock === true;/u);
   assert.match(adminHtml, /\$\('#staffModeControl'\)\.hidden = !STAFF_CLOCK_ENABLED;/u);
