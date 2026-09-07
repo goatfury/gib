@@ -182,6 +182,61 @@ test('a today correction supersedes a future API definition while keeping every 
   for (const date of ['2026-09-07', '2026-09-14', '2026-09-21', '2026-09-28']) assert.deepEqual(core.classesForDate({}, doc, date), ['6:00 PM TEST Corrected Name']);
   assert.ok(core.validateDocument(doc, 'rev'));
 });
+test('single-date cancellations retain an independent future definition until its original effective date', async () => {
+  const store = new StrongStore();
+  const original = series({ days: ['Tuesday', 'Thursday', 'Friday'], startDate: '2026-09-29', endDate: '2026-10-08' });
+  const created = await create(store, { series: original });
+  const seriesId = created.seriesIds[0];
+  const planned = await mutateAddedClasses(store, 'rev', {
+    action: 'update', requestId: 'api-future-oct06-definition', expectedVersion: created.value.version,
+    seriesId, effectiveDate: '2026-10-06', series: { ...original, label: 'TEST Future Name', time: '19:00' }
+  }, NOW, 'Stuart Turner');
+  const immutableHistory = structuredClone(planned.value.history);
+  const cancelled = await mutateAddedClasses(store, 'rev', {
+    action: 'cancel', requestId: 'api-single-cancel-oct01', expectedVersion: planned.value.version,
+    seriesId, date: '2026-10-01'
+  }, NOW, 'Stuart Turner');
+  const doc = publicAddedClasses(cancelled.value, NOW);
+  assert.deepEqual(cancelled.value.history.slice(0, immutableHistory.length), immutableHistory);
+  assert.equal(cancelled.value.history.at(-1).fromDate, '2026-10-01');
+  assert.equal(cancelled.value.history.at(-1).toDate, '2026-10-01');
+  assert.deepEqual(core.classesForDate({}, doc, '2026-09-29'), ['6:00 PM TEST Intro']);
+  assert.deepEqual(core.classesForDate({}, doc, '2026-10-01'), []);
+  assert.deepEqual(core.classesForDate({}, doc, '2026-10-02'), ['6:00 PM TEST Intro']);
+  assert.deepEqual(core.classesForDate({}, doc, '2026-10-06'), ['7:00 PM TEST Future Name']);
+  assert.ok(core.validateDocument(doc, 'rev'));
+
+  const twice = await mutateAddedClasses(store, 'rev', {
+    action: 'cancel', requestId: 'api-single-cancel-oct02', expectedVersion: cancelled.value.version,
+    seriesId, date: '2026-10-02'
+  }, NOW, 'Stuart Turner');
+  const twiceDoc = publicAddedClasses(twice.value, NOW);
+  assert.deepEqual(twice.value.series[0].cancelledDates, ['2026-10-01', '2026-10-02']);
+  assert.deepEqual(twice.value.history.slice(0, cancelled.value.history.length), cancelled.value.history);
+  assert.deepEqual(core.classesForDate({}, twiceDoc, '2026-09-29'), ['6:00 PM TEST Intro']);
+  for (const date of ['2026-10-01', '2026-10-02']) assert.deepEqual(core.classesForDate({}, twiceDoc, date), []);
+  assert.deepEqual(core.classesForDate({}, twiceDoc, '2026-10-06'), ['7:00 PM TEST Future Name']);
+
+  const changed = await mutateAddedClasses(store, 'rev', {
+    action: 'update', requestId: 'api-today-after-two-cancels', expectedVersion: twice.value.version,
+    seriesId, effectiveDate: '2026-09-07', series: { ...original, label: 'TEST Corrected Name' }
+  }, NOW, 'Stuart Turner');
+  const changedDoc = publicAddedClasses(changed.value, NOW);
+  assert.deepEqual(changed.value.history.slice(0, twice.value.history.length), twice.value.history);
+  assert.deepEqual(core.classesForDate({}, changedDoc, '2026-09-29'), ['6:00 PM TEST Corrected Name']);
+  for (const date of ['2026-10-01', '2026-10-02']) assert.deepEqual(core.classesForDate({}, changedDoc, date), []);
+  assert.deepEqual(core.classesForDate({}, changedDoc, '2026-10-06'), ['6:00 PM TEST Corrected Name']);
+
+  const all = await mutateAddedClasses(store, 'rev', {
+    action: 'cancel', requestId: 'api-cancel-all-after-two', expectedVersion: changed.value.version,
+    seriesId, effectiveDate: '2026-09-07'
+  }, NOW, 'Stuart Turner');
+  const allDoc = publicAddedClasses(all.value, NOW);
+  assert.deepEqual(all.value.history.slice(0, changed.value.history.length), changed.value.history);
+  assert.deepEqual(all.value.series[0].cancelledDates, ['2026-10-01', '2026-10-02']);
+  for (const date of ['2026-09-29', '2026-10-01', '2026-10-02', '2026-10-06', '2026-10-08']) assert.deepEqual(core.classesForDate({}, allDoc, date), []);
+  assert.ok(core.validateDocument(allDoc, 'rev'));
+});
 test('upcoming original series can be cancelled today and past mutations are rejected', async () => {
   const store = new StrongStore();
   const created = await create(store, { series: series({ startDate: '2026-09-14' }) });

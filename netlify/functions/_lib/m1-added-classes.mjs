@@ -70,9 +70,9 @@ function normalizeMutation(input, today) {
   }
   return result;
 }
-function appendRevision(document, series, fromDate) {
+function appendRevision(document, series, fromDate, toDate = null) {
   document.version += 1;
-  document.history.push({ seriesId: series.id, revision: document.version, fromDate, toDate: null, series: structuredClone(series) });
+  document.history.push({ seriesId: series.id, revision: document.version, fromDate, toDate, series: structuredClone(series) });
   const index = document.series.findIndex(item => item.id === series.id);
   if (index < 0) document.series.push(series);
   else document.series[index] = series;
@@ -134,7 +134,9 @@ function planMutation(existing, mutation, now, adminName) {
       series = { ...existingSeries, enabled: false };
       result = 'cancelled';
     }
-    appendRevision(next, series, mutation.effectiveDate);
+    // Cancelling one date overrides only that occurrence. It cannot move an
+    // independently planned name/time change onto earlier or later dates.
+    appendRevision(next, series, mutation.effectiveDate, mutation.date || null);
     seriesIds.push(series.id);
   }
   if (next.version === existing.version) next.version += 1;
