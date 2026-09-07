@@ -110,11 +110,9 @@ function planMutation(existing, mutation, now, adminName) {
   } else {
     const existingSeries = next.series.find(item => item.id === mutation.seriesId);
     if (!existingSeries) fail(404, 'This added class was not found.');
-    const revisions = next.history.filter(item => item.seriesId === mutation.seriesId);
-    const latestRevision = revisions.at(-1);
-    // Do not allow a later edit to supersede an already scheduled future edit
-    // from an earlier date; the manager can edit that same future boundary.
-    if (revisions.length > 1 && latestRevision.fromDate > mutation.effectiveDate && latestRevision.fromDate > core.todayInGym(now)) fail(409, 'This class already has a future change. Use that change date or a later date.');
+    // A newer revision may replace already planned future changes from today
+    // (or its explicit future cutoff). The resolver chooses the newest eligible
+    // revision; snapshots and date choices before that cutoff stay unchanged.
     let series;
     if (mutation.action === 'update') {
       series = { ...mutation.series, id: mutation.seriesId };

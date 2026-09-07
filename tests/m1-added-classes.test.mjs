@@ -119,6 +119,69 @@ test('editing an upcoming series cannot silently restore a cancelled occurrence'
   assert.deepEqual(core.classesForDate({}, doc, '2026-09-14'), []);
   assert.deepEqual(core.classesForDate({}, doc, '2026-09-21'), ['7:00 PM TEST Intro']);
 });
+test('a future occurrence cancellation does not block a today rename of its remaining series', async () => {
+  const store = new StrongStore();
+  const original = series({ days: ['Tuesday', 'Thursday'], startDate: '2026-09-29', endDate: '2026-10-08' });
+  const created = await create(store, { series: original });
+  const cancelled = await mutateAddedClasses(store, 'rev', {
+    action: 'cancel', requestId: 'future-series-cancel-oct01', expectedVersion: created.value.version,
+    seriesId: created.seriesIds[0], date: '2026-10-01'
+  }, NOW, 'Stuart Turner');
+  const immutableHistory = structuredClone(cancelled.value.history);
+  const renamed = await mutateAddedClasses(store, 'rev', {
+    action: 'update', requestId: 'future-series-rename-today', expectedVersion: cancelled.value.version,
+    seriesId: created.seriesIds[0], effectiveDate: '2026-09-07', series: { ...original, label: 'TEST Updated Month Series' }
+  }, NOW, 'Stuart Turner');
+  assert.equal(renamed.result, 'updated');
+  assert.deepEqual(renamed.value.history.slice(0, immutableHistory.length), immutableHistory);
+  assert.deepEqual(core.datesForSeries(renamed.value.series[0]), ['2026-09-29', '2026-10-06', '2026-10-08']);
+  const doc = publicAddedClasses(renamed.value, NOW);
+  for (const date of ['2026-09-29', '2026-10-06', '2026-10-08']) assert.deepEqual(core.classesForDate({}, doc, date), ['6:00 PM TEST Updated Month Series']);
+  for (const date of ['2026-09-28', '2026-09-30', '2026-10-01', '2026-10-09']) assert.deepEqual(core.classesForDate({}, doc, date), []);
+  assert.ok(core.validateDocument(doc, 'rev'));
+});
+test('cancel all remaining dates today works after cancelling one future occurrence', async () => {
+  const store = new StrongStore();
+  const original = series({ days: ['Tuesday', 'Thursday'], startDate: '2026-09-29', endDate: '2026-10-08' });
+  const created = await create(store, { series: original });
+  const single = await mutateAddedClasses(store, 'rev', {
+    action: 'cancel', requestId: 'future-series-single-oct01', expectedVersion: created.value.version,
+    seriesId: created.seriesIds[0], date: '2026-10-01'
+  }, NOW, 'Stuart Turner');
+  const immutableHistory = structuredClone(single.value.history);
+  const cancelled = await mutateAddedClasses(store, 'rev', {
+    action: 'cancel', requestId: 'future-series-cancel-all-now', expectedVersion: single.value.version,
+    seriesId: created.seriesIds[0], effectiveDate: '2026-09-07'
+  }, NOW, 'Stuart Turner');
+  assert.equal(cancelled.result, 'cancelled');
+  assert.deepEqual(cancelled.value.history.slice(0, immutableHistory.length), immutableHistory);
+  assert.deepEqual(cancelled.value.series[0].cancelledDates, ['2026-10-01']);
+  const doc = publicAddedClasses(cancelled.value, NOW);
+  for (const date of ['2026-09-29', '2026-10-01', '2026-10-06', '2026-10-08']) assert.deepEqual(core.classesForDate({}, doc, date), []);
+  assert.ok(core.validateDocument(doc, 'rev'));
+});
+test('a today correction supersedes a future API definition while keeping every past date and snapshot intact', async () => {
+  const store = new StrongStore();
+  const original = series({ startDate: '2026-08-31' });
+  const created = await create(store, { series: original });
+  const planned = await mutateAddedClasses(store, 'rev', {
+    action: 'update', requestId: 'planned-future-name-change', expectedVersion: created.value.version,
+    seriesId: created.seriesIds[0], effectiveDate: '2026-09-21', series: { ...original, label: 'TEST Planned Name' }
+  }, NOW, 'Stuart Turner');
+  const plannedDoc = publicAddedClasses(planned.value, NOW);
+  assert.deepEqual(core.classesForDate({}, plannedDoc, '2026-09-14'), ['6:00 PM TEST Intro']);
+  assert.deepEqual(core.classesForDate({}, plannedDoc, '2026-09-21'), ['6:00 PM TEST Planned Name']);
+  const immutableHistory = structuredClone(planned.value.history);
+  const changed = await mutateAddedClasses(store, 'rev', {
+    action: 'update', requestId: 'today-replaces-future-name', expectedVersion: planned.value.version,
+    seriesId: created.seriesIds[0], effectiveDate: '2026-09-07', series: { ...original, label: 'TEST Corrected Name' }
+  }, NOW, 'Stuart Turner');
+  const doc = publicAddedClasses(changed.value, NOW);
+  assert.deepEqual(changed.value.history.slice(0, immutableHistory.length), immutableHistory);
+  assert.deepEqual(core.classesForDate({}, doc, '2026-08-31'), ['6:00 PM TEST Intro']);
+  for (const date of ['2026-09-07', '2026-09-14', '2026-09-21', '2026-09-28']) assert.deepEqual(core.classesForDate({}, doc, date), ['6:00 PM TEST Corrected Name']);
+  assert.ok(core.validateDocument(doc, 'rev'));
+});
 test('upcoming original series can be cancelled today and past mutations are rejected', async () => {
   const store = new StrongStore();
   const created = await create(store, { series: series({ startDate: '2026-09-14' }) });
