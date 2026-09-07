@@ -335,9 +335,11 @@ function createPairingHarness(responses, options = {}) {
 
 test('Staff Clock is isolated from the inherited inline kiosk client', () => {
   const inlineModule = kioskHtml.match(/<script type="module">([\s\S]*?)<\/script>/u)?.[1] || '';
+  const revision = kioskHtml.match(/const OFFLINE_SHELL_REVISION = '([a-z0-9._-]{1,64})';/u)?.[1];
+  assert.ok(revision, 'Staff Clock must use the declared kiosk offline-shell revision.');
   assert.match(
     kioskHtml,
-    /<script type="module" src="\.\/staff-clock-client\.mjs\?v=2026-08-29-signin-sync-r2"><\/script>/u
+    new RegExp(`<script type="module" src="\\./staff-clock-client\\.mjs\\?v=${revision}"></script>`, 'u')
   );
   assert.doesNotMatch(inlineModule, /staff-clock-core|staffClockSyncPunch|syncStaffClockQueue|renderStaffTimeAdmin/u);
 });

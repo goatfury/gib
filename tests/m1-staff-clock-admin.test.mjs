@@ -1378,6 +1378,8 @@ test('TEST Admin entry preserves the direct Staff Clock hash and activates only 
     location: { hash: '#staff-time' },
     calls: [],
     events: [],
+    addedClasses: null,
+    openWorkspaceTask() {},
     window: { requestAnimationFrame(callback) { callback(); } }
   });
   new vm.Script(`
@@ -1477,7 +1479,7 @@ test('repeated Arrow, Home, and End navigation keeps focus on the manager mode t
       if (type === 'hashchange') hashChange = handler;
     }
   };
-  const context = vm.createContext({ document, location, nodes, window });
+  const context = vm.createContext({ document, location, nodes, window, openWorkspaceTask() {} });
   new vm.Script(`
     const STAFF_CLOCK_ENABLED = true;
     function $(selector) { return nodes[selector]; }
@@ -1508,7 +1510,7 @@ test('repeated Arrow, Home, and End navigation keeps focus on the manager mode t
 
 test('#staff-time starts Staff Clock loading without waiting for Daily sign-ins', async () => {
   const loginSource = sourceBetween(adminHtml, 'async function login(', 'async function logout(');
-  const context = vm.createContext({ events: [], releaseDaily: null });
+  const context = vm.createContext({ events: [], releaseDaily: null, addedClasses: null, openWorkspaceTask() {} });
   new vm.Script(`
     const API = { login: '/login' };
     const IS_RICHMOND_PRODUCTION = false;

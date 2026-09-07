@@ -154,7 +154,7 @@ class FakeNode {
   }
 }
 
-test('default Admin document is status-first with the required calm disclosures', () => {
+test('device maintenance keeps status and recovery disclosures behind the main Admin workspace', () => {
   const admin = sourceBetween(kiosk, '<!-- ADMIN -->', '<div id="toast"');
   const orderedIds = [
     'adminStatusHeading',
@@ -170,14 +170,15 @@ test('default Admin document is status-first with the required calm disclosures'
   assert.equal(positions.every(position => position >= 0), true);
   assert.deepEqual([...positions].sort((left, right) => left - right), positions);
 
-  assert.match(admin, /<h2 id="adminHeading"[^>]*>M1 Admin<\/h2>/u);
+  assert.match(admin, /<h2 id="adminHeading"[^>]*>Device maintenance<\/h2>/u);
   assert.match(admin, /id="btnKiosk"[^>]*>Return to Instructor Sign-In<\/button>/u);
-  assert.match(admin, /id="dailyReviewLink"[^>]*>Forgotten sign-in \/ Daily Review<\/a>/u);
+  assert.match(admin, /id="dailyReviewLink"[^>]*>Open Admin workspace<\/a>/u);
+  assert.match(openingTag('managerWorkspaceLink'), /href="\/m1\/admin\/"/u);
   assert.match(openingTag('dailyReviewLink'), /href="\/m1\/admin\/"/u);
   assert.doesNotMatch(openingTag('dailyReviewLink'), /\btarget\s*=/iu);
   assert.doesNotMatch(kiosk, /window\.open\s*\(/u);
 
-  assert.match(openingTag('recentSignins'), /\sopen(?:\s|=|>)/u);
+  assert.doesNotMatch(openingTag('recentSignins'), /\sopen(?:\s|=|>)/u);
   assert.match(openingTag('staffTimeSection'), /\sopen(?:\s|=|>)/u);
   for (const id of [
     'temporaryClassesSection',

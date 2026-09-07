@@ -31,7 +31,7 @@ test('Admin exposes exactly two top-level modes and keeps secondary tools under 
   assert.match(header, /<h1 id="appHeading">M1 Admin<\/h1>/u);
   assert.match(header, />Instructor Sign-In<\/a>/u);
   assert.match(header, />Log Out<\/button>/u);
-  assert.match(header, /<details id="adminMore"[\s\S]*Local M1 Admin[\s\S]*tabletDiagnosticButton/u);
+  assert.match(header, /<details id="adminMore"[\s\S]*Device maintenance[\s\S]*tabletDiagnosticButton/u);
   assert.doesNotMatch(openingTag('adminMore'), /\bopen\b/u);
 });
 
@@ -89,7 +89,7 @@ test('Daily review is decision-first: counts, missing rows, then collapsed compl
   const completed = daily.indexOf('id="completedClasses"');
   assert.ok(scheduled >= 0 && signed > scheduled && missingCount > signed);
   assert.ok(missingRows > missingCount && completed > missingRows);
-  assert.match(daily, /Missing scheduled classes/u);
+  assert.match(daily, /Classes needing a sign-in/u);
   assert.match(
     sourceBetween(adminHtml, 'function classRow(', 'function renderReview('),
     /Add forgotten instructor/u
@@ -98,7 +98,9 @@ test('Daily review is decision-first: counts, missing rows, then collapsed compl
   assert.doesNotMatch(openingTag('completedClasses'), /\bopen\b/u);
 
   const render = sourceBetween(adminHtml, 'function renderReview()', 'async function loadReview(');
-  assert.match(render, /missingRows = scheduled\.filter\(item => item\.matches\.length === 0\)/u);
+  assert.match(render, /missingRows = scheduled\.filter\(item => item\.matches\.length === 0 && item\.timing !== 'upcoming'\)/u);
+  assert.match(render, /upcomingRows = scheduled\.filter\(item => item\.matches\.length === 0 && item\.timing === 'upcoming'\)/u);
+  assert.match(render, /!reviewLoaded \|\| !schedule/u);
   assert.match(render, /completedRows = scheduled\.filter\(item => item\.matches\.length > 0\)/u);
   assert.ok(render.indexOf("$('#classList')") < render.indexOf("$('#completedClassList')"));
 });

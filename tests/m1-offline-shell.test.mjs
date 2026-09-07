@@ -208,6 +208,8 @@ test('install atomically precaches only the revision-matched shell and activatio
       `${ORIGIN}/m1/kiosk-enhancements.css?v=${harness.revision}`,
       `${ORIGIN}/m1/kiosk-enhancements.mjs?v=${harness.revision}`,
       `${ORIGIN}/m1/kiosk-enhancements-core.mjs`,
+      `${ORIGIN}/m1/temporary-classes-core.js?v=${harness.revision}`,
+      `${ORIGIN}/m1/added-classes-kiosk.js?v=${harness.revision}`,
       `${ORIGIN}/m1/assets/revolution-bjj-logo.webp`,
       `${ORIGIN}/m1/assets/richmond-bjj-logo.webp`
     ]

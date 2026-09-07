@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" href="data:," />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-08-29 M1B TEST sign-in-sync-recovery-candidate)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-09-07 M1 TEST elegant-admin-classes)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -905,6 +905,9 @@ body.admin-mode .container { max-width: 1120px; }
 #recentSignins { scroll-margin-top: 12px; }
 .week-day li { overflow-wrap: anywhere; }
 #scheduleStatus { min-width: 0; overflow-wrap: anywhere; }
+.kiosk-delivery { margin-top: 14px; color: #cbd5e1; font-size: 15px; line-height: 1.5; }
+.kiosk-delivery[data-waiting="true"] { color: #fcd34d; }
+.kiosk-delivery a { color: inherit; margin-left: 8px; white-space: nowrap; }
 
 @media (min-width: 720px) {
   .admin-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -932,8 +935,14 @@ body.admin-mode .container { max-width: 1120px; }
   .series-row { grid-template-columns: minmax(0, 1fr); }
 }
 
+  .device-tools-menu { position: relative; font-size: .86rem; }
+  .device-tools-menu > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; padding: 8px 12px; }
+  .device-tools-menu[open] > button { position: absolute; right: 0; top: 100%; z-index: 8; min-width: 200px; box-shadow: 0 8px 24px #0008; }
+  #managerWorkspaceLink { min-height: 44px; text-decoration: none; }
 </style>
-<script src="./installation-profile.generated.js?v=2026-08-29-signin-sync-r2"></script>
+<script src="./installation-profile.generated.js?v=2026-09-07-elegant-classes"></script>
+<script src="./temporary-classes-core.js?v=2026-09-07-elegant-classes"></script>
+<script src="./added-classes-kiosk.js?v=2026-09-07-elegant-classes"></script>
 </head>
 <body>
 <div class="container">
@@ -942,7 +951,7 @@ body.admin-mode .container { max-width: 1120px; }
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-08-29 M1B TEST sign-in-sync-recovery-candidate</span>
+        Build <span class="kbd" id="buildId">2026-09-07 M1 TEST elegant-admin-classes</span>
       </div>
     </div>
 
@@ -954,7 +963,7 @@ body.admin-mode .container { max-width: 1120px; }
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-08-29 M1B TEST sign-in-sync-recovery-candidate
+      Build 2026-09-07 M1 TEST elegant-admin-classes
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -962,7 +971,8 @@ body.admin-mode .container { max-width: 1120px; }
     </div>
 
     <nav>
-      <button id="btnAdmin" class="btn" type="button">Admin View</button>
+      <a id="managerWorkspaceLink" class="btn admin-link-button" href="/m1/admin/">Admin</a>
+      <details class="device-tools-menu"><summary>Device tools</summary><button id="btnAdmin" class="btn" type="button">Open device maintenance</button></details>
     </nav>
   </header>
 
@@ -982,6 +992,7 @@ body.admin-mode .container { max-width: 1120px; }
         <div id="classListWrap" style="display:none;"></div>
         <div class="hint" id="classesHint">Select one or more classes.</div>
         <div class="schedule-source-status" id="kioskScheduleStatus" role="status">Website schedule checking for updates</div>
+        <div class="schedule-source-status" id="addedClassesStatus" role="status" aria-live="polite">Checking added classes…</div>
       </div>
     </div>
 
@@ -994,6 +1005,10 @@ body.admin-mode .container { max-width: 1120px; }
       <button id="btnSignIn" class="btn brand" type="button">Sign In</button>
     </div>
     <div id="activationPending" class="statusRow" role="status" hidden></div>
+    <div id="kioskDelivery" class="kiosk-delivery" hidden>
+      <span id="kioskDeliveryText" role="status" aria-live="polite"></span>
+      <a href='/m1/connection'>Connection check</a>
+    </div>
   </section>
 
   <section id="staffClock" class="card staff-clock" aria-labelledby="staffClockHeading">
@@ -1044,8 +1059,8 @@ body.admin-mode .container { max-width: 1120px; }
     <div class="admin-panel">
       <div class="admin-header">
         <div>
-          <h2 id="adminHeading" tabindex="-1">M1 Admin</h2>
-          <div class="subtle">Current device status and everyday sign-in tools.</div>
+          <h2 id="adminHeading" tabindex="-1">Device maintenance</h2>
+          <div class="subtle">Connection, backups, and recovery for this browser.</div>
         </div>
         <div class="admin-header-actions">
           <button id="btnKiosk" class="btn brand" type="button">Return to Instructor Sign-In</button>
@@ -1083,14 +1098,14 @@ body.admin-mode .container { max-width: 1120px; }
       <section class="admin-actions-block" aria-labelledby="adminActionsHeading">
         <h3 id="adminActionsHeading" class="admin-section-title">Ordinary actions</h3>
         <div id="adminPrimaryActions" class="admin-primary-actions">
-          <a id="dailyReviewLink" class="btn brand admin-link-button admin-daily-review" href="/m1/admin/">Forgotten sign-in / Daily Review</a>
+          <a id="dailyReviewLink" class="btn brand admin-link-button admin-daily-review" href="/m1/admin/">Open Admin workspace</a>
           <a id="recentSigninsLink" class="btn admin-link-button" href="#recentSignins">View recent sign-ins</a>
         </div>
         <div id="syncStatus" class="statusRow" role="status" aria-live="polite"></div>
       </section>
     </div>
 
-    <details id="recentSignins" class="admin-disclosure" open>
+    <details id="recentSignins" class="admin-disclosure">
       <summary>Recent sign-ins</summary>
       <div id="recentSigninsSlot" class="admin-disclosure-body"></div>
     </details>
@@ -1286,7 +1301,10 @@ body.admin-mode .container { max-width: 1120px; }
     </div>
 
     <div id="temporaryClassesCard" class="card admin-organizable" style="background: var(--panel);">
-      <div class="subtle">Add a recurring class for a limited number of weeks. It appears in Classes Today only during that date range.</div>
+      <a class="btn brand admin-link-button" href="/m1/admin/#add-class">Add or manage shared classes</a>
+      <p class="subtle">Use Admin to save classes centrally for this gym. Existing classes saved only on this browser are preserved below.</p>
+      <details class="admin-subdisclosure"><summary>Local-only recovery</summary>
+      <div class="subtle">These recovery controls affect this browser only. Share saved classes from Admin → Add a class when connected.</div>
       <div class="grid twoEq" style="margin-top: 12px;">
         <div>
           <label for="seriesLabel">Class name</label>
@@ -1328,6 +1346,7 @@ body.admin-mode .container { max-width: 1120px; }
       </div>
       <div class="hint" id="seriesHint"></div>
       <div id="seriesList" class="series-list" style="margin-top: 12px;"></div>
+      </details>
     </div>
 
     <div id="durationRulesCard" class="card admin-organizable" style="background: var(--panel);">
@@ -1391,6 +1410,7 @@ body.admin-mode .container { max-width: 1120px; }
     <h2 id="signInModalTitle" class="signin-title">Signed in</h2>
     <div class="signin-name" id="signInModalName">Instructor</div>
     <div class="signin-classes" id="signInModalClasses"></div>
+    <div id="signinDeliveryNote" class="subtle" hidden>Saved on this tablet. Sending status appears on the sign-in screen.</div>
     <div class="subtle" style="margin-top: 10px;">Tap DONE to prepare the kiosk for the next instructor.</div>
     <div class="actions signin-actions">
       <button id="btnConfirmSignInDone" class="btn brand" type="button">DONE</button>
@@ -1420,20 +1440,24 @@ body.admin-mode .container { max-width: 1120px; }
 
 <script type="module">
 import {
+  activationFailureCode,
   appendBatchToState,
   applyAcknowledgements,
   createDayRolloverController,
   createPermanentRowId,
   formatDateInTimeZone,
   formatTimestampInTimeZone,
+  kioskDeliveryText,
+  recordRichmondSyncEvent,
   removeBatchFromState,
   requestAcknowledgements,
+  syncFailureCode,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-08-29-signin-sync-r2';
+} from './sync-core.mjs?v=2026-09-07-elegant-classes';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-08-29-signin-sync-r2';
+const OFFLINE_SHELL_REVISION = '2026-09-07-elegant-classes';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -1501,8 +1525,8 @@ if ('serviceWorker' in navigator) {
   const IS_PRODUCTION_SYNC_ORIGIN = IS_REVOLUTION_PRODUCTION_ORIGIN
     || IS_RICHMOND_PRODUCTION_ORIGIN;
   const TEST_BUILD = IS_RICHMOND
-    ? '2026-08-29 RICHMOND M1 TEST sign-in-sync-recovery-candidate'
-    : '2026-08-29 M1B TEST sign-in-sync-recovery-candidate';
+    ? '2026-09-07 RICHMOND M1 TEST elegant-admin-classes'
+    : '2026-09-07 M1 TEST elegant-admin-classes';
   const RICHMOND_PRODUCTION_BUILD = RICHMOND_PRODUCTION_COPY.build;
   const PRODUCTION_BUILD = '2026-08-29 M1B PRODUCTION sign-in-sync-recovery';
   const BUILD = IS_RICHMOND
@@ -1611,6 +1635,7 @@ function refreshNameDatalist() {
   const ADMIN_PIN_KEY = installationStorageKey('gib_m1_admin_pin_v1');
   const DURATION_RULES_KEY = installationStorageKey('gib_m1_duration_rules_v1');
   const SERIES_KEY = installationStorageKey('gib_m1_series_v1');
+  let addedClassesClient = null;
   // Existing local schedule keys are overrides. The shared website cache stays
   // separate so an old manual, URL, or disabled override is never overwritten.
   const SCHEDULE_URL_KEY  = installationStorageKey('gib_m1_schedule_url_v1');
@@ -2693,6 +2718,9 @@ function refreshNameDatalist() {
   }
 
   function seriesClassesForDate(dayName, dateStr) {
+    if (typeof addedClassesClient !== 'undefined' && addedClassesClient) {
+      return addedClassesClient.classesForDate(dateStr);
+    }
     return loadSeries()
       .filter(series => seriesIsActiveForDate(series, dayName, dateStr))
       .map(seriesLabel)
@@ -3679,6 +3707,9 @@ function refreshNameDatalist() {
   }
 
   function renderAdminTable() {
+    const tableText = value => String(value ?? '').replace(/[&<>"']/gu, character => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[character]);
     const rows = readAdminLocalStateSnapshot().ledger;
     if (!rows.length) {
       $('#adminTableWrap').innerHTML = '<div class="subtle">No sign-ins yet.</div>';
@@ -3697,14 +3728,14 @@ function refreshNameDatalist() {
       ].filter(Boolean).join(' · ');
       html += `<tr class="${isVoid ? 'void-row' : ''}">` +
         `<td>${i+1}</td>` +
-        `<td title="${isVoid ? voidDetails : ''}">${status}</td>` +
-        `<td style="font-family:ui-monospace,monospace;">${r.Timestamp || ''}</td>` +
-        `<td style="font-family:ui-monospace,monospace;">${r.Date || ''}</td>` +
-        `<td>${(r['Class Label'] || '')}</td>` +
-        `<td>${(r['Duration (hr)'] ?? '')}</td>` +
-        `<td>${r.Instructor || ''}</td>` +
-        `<td>${r.Site || ''}</td>` +
-        `<td>${r.Notes || ''}</td>` +
+        `<td title="${tableText(isVoid ? voidDetails : '')}">${tableText(status)}</td>` +
+        `<td style="font-family:ui-monospace,monospace;">${tableText(r.Timestamp)}</td>` +
+        `<td style="font-family:ui-monospace,monospace;">${tableText(r.Date)}</td>` +
+        `<td>${tableText(r['Class Label'])}</td>` +
+        `<td>${tableText(r['Duration (hr)'])}</td>` +
+        `<td>${tableText(r.Instructor)}</td>` +
+        `<td>${tableText(r.Site)}</td>` +
+        `<td>${tableText(r.Notes)}</td>` +
       '</tr>';
     });
     html += '</tbody></table></div>';
@@ -4005,7 +4036,21 @@ function refreshNameDatalist() {
     }
     if (err) parts.push(`Latest attempt: ${err}`);
     $('#syncStatus').textContent = parts.join(' · ');
+    const delivery = $('#kioskDelivery');
+    if (delivery && IS_RICHMOND_PRODUCTION_ORIGIN) {
+      const automatic = localStorage.getItem(SYNC_AUTO_KEY) === 'true';
+      delivery.hidden = false;
+      delivery.dataset.waiting = String(q.length > 0 || !automatic);
+      $('#kioskDeliveryText').textContent = kioskDeliveryText({ waiting: q.length, last, automatic, error: err, sending: syncInFlight });
+      $('#signinDeliveryNote').hidden = false;
+    }
     renderAdminSummary();
+  }
+  function recordSyncEvent(stage, code) {
+    if (!IS_RICHMOND_PRODUCTION_ORIGIN) return;
+    try {
+      recordRichmondSyncEvent(localStorage, { stage, code, waiting: readAdminLocalStateSnapshot().queue.length });
+    } catch (error) { /* Diagnostics must never block sign-in or recovery. */ }
   }
   async function applyRichmondActivationMigration(options = {}) {
     const requiredOrigin = 'https://gib-richmond-live.netlify.app';
@@ -4096,6 +4141,38 @@ function refreshNameDatalist() {
     }
     return true;
   }
+  async function requestRichmondActivationStatus() {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 30_000);
+    try {
+      const response = await fetch('/api/m1-tablet-status', {
+        method: 'POST',
+        mode: 'same-origin',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        redirect: 'error',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-GIB-M1-Connection-Check': 'details-v1'
+        },
+        body: '{}'
+      });
+      // Keep the timeout active until the response body has also arrived.
+      const payload = await response.json();
+      const confirmed = response.status === 200 && payload?.authorized === true
+        && payload.writesEnabled === true && payload.activation === 'active'
+        && Object.keys(payload).sort().join('|') === 'activation|authorized|writesEnabled';
+      recordSyncEvent('activation', confirmed ? 'ACTIVATION_CONFIRMED' : activationFailureCode(response, payload));
+      return { ok: response.ok, status: response.status, json: async () => payload };
+    } catch (error) {
+      recordSyncEvent('activation', controller.signal.aborted ? 'TABLET_REQUEST_TIMEOUT' : 'ACTIVATION_UNCONFIRMED');
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
   let richmondActivationMigrationInFlight = null;
   function runRichmondActivationMigration() {
     if (richmondActivationMigrationInFlight) return richmondActivationMigrationInFlight;
@@ -4105,18 +4182,7 @@ function refreshNameDatalist() {
       storage: localStorage,
       autoSyncKey: SYNC_AUTO_KEY,
       markerKey: RICHMOND_ACTIVATION_MIGRATION_KEY,
-      statusRequest: () => fetch('/api/m1-tablet-status', {
-        method: 'POST',
-        mode: 'same-origin',
-        credentials: 'same-origin',
-        cache: 'no-store',
-        redirect: 'error',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json'
-        },
-        body: '{}'
-      }),
+      statusRequest: requestRichmondActivationStatus,
       readQueue: loadSyncQueue,
       triggerSync: syncNow,
       refreshSettings: loadSyncSettings,
@@ -4168,6 +4234,7 @@ function refreshNameDatalist() {
       return;
     }
     if (navigator.onLine === false) {
+      recordSyncEvent('upload', 'OFFLINE');
       localStorage.setItem(SYNC_ERROR_KEY, 'Offline; rows are still waiting.');
       updateSyncStatus();
       showToast('Offline — rows kept');
@@ -4179,9 +4246,11 @@ function refreshNameDatalist() {
     const timeout = window.setTimeout(() => controller.abort(), 30_000);
     let continueDrain = false;
     try {
+      updateSyncStatus();
       const payload = await requestAcknowledgements(submittedRows, {
         online: navigator.onLine !== false,
         signal: controller.signal,
+        richmondDiagnostics: IS_RICHMOND_PRODUCTION_ORIGIN,
         productionOrigin: IS_PRODUCTION_SYNC_ORIGIN
       });
       const acknowledgedAt = new Date().toISOString();
@@ -4203,11 +4272,13 @@ function refreshNameDatalist() {
         acknowledgedAt,
         { productionOrigin: IS_PRODUCTION_SYNC_ORIGIN }
       );
-      persistLocalState(latestApplied.state);
+      try { persistLocalState(latestApplied.state); }
+      catch (error) { error.syncCode = 'LOCAL_SAVE_FAILED'; throw error; }
       if (latestApplied.confirmedRowIds.length) {
         localStorage.setItem(SYNC_LAST_KEY, acknowledgedAt);
       }
       localStorage.removeItem(SYNC_ERROR_KEY);
+      recordSyncEvent('upload', latestApplied.confirmedRowIds.length === submittedRows.length ? 'UPLOAD_CONFIRMED' : 'ROWS_UNCONFIRMED');
       updateSyncStatus();
       const waiting = loadSyncQueue().length;
       continueDrain = latestApplied.confirmedRowIds.length > 0 && waiting > 0;
@@ -4215,12 +4286,14 @@ function refreshNameDatalist() {
         ? `${latestApplied.confirmedRowIds.length} confirmed; ${waiting} waiting`
         : `${latestApplied.confirmedRowIds.length} confirmed`);
     } catch (error) {
+      recordSyncEvent('upload', syncFailureCode(error));
       localStorage.setItem(SYNC_ERROR_KEY, 'No readable confirmation; rows are still waiting.');
       updateSyncStatus();
       showToast('Not confirmed — rows kept');
     } finally {
       window.clearTimeout(timeout);
       syncInFlight = false;
+      updateSyncStatus();
       // Re-read the preference after the in-flight request finishes. An
       // operator may have switched Auto-sync OFF while awaiting its response;
       // that completed batch stays confirmed, but no automatic continuation is
@@ -4242,7 +4315,20 @@ function refreshNameDatalist() {
       !BACKEND_ENABLED
       || (IS_RICHMOND_PRODUCTION && !RICHMOND_WRITES_ENABLED)
       || navigator.onLine === false
-      || localStorage.getItem(SYNC_AUTO_KEY) !== 'true'
+    ) return false;
+    // A failed first authorization check leaves auto-sync OFF without its
+    // activation marker. Retry that check on the normal timer and wake-ups,
+    // even if Wi-Fi never emits another online event. A completed activation
+    // still preserves an operator's later choice to turn auto-sync OFF.
+    if (
+      IS_RICHMOND_PRODUCTION
+      && localStorage.getItem(RICHMOND_ACTIVATION_MIGRATION_KEY) === null
+    ) {
+      runRichmondActivationMigration();
+      return false;
+    }
+    if (
+      localStorage.getItem(SYNC_AUTO_KEY) !== 'true'
       || !loadSyncQueue().length
     ) return false;
     window.setTimeout(syncNow, 0);
@@ -4660,7 +4746,7 @@ function refreshNameDatalist() {
   // Init
   if (IS_RICHMOND) {
     $('#dailyReviewLink').href = '/m1/admin/';
-    $('#dailyReviewLink').textContent = 'Forgotten Sign-In / Daily Review';
+    $('#dailyReviewLink').textContent = 'Open Admin workspace';
     $('#richmondLocalReviewSection').hidden = true;
     $('#scheduleEditorCard').hidden = true;
     $('#manualScheduleSettings').hidden = true;
@@ -4740,12 +4826,28 @@ function refreshNameDatalist() {
     }
   }
   refreshNameDatalist();
+  addedClassesClient = globalThis.GIBM1AddedClassesKiosk?.create({
+    profile: INSTALLATION,
+    legacySeries: loadSeries,
+    legacyActive: seriesIsActiveForDate,
+    legacyLabel: seriesLabel,
+    onChange(state) {
+      const status = $('#addedClassesStatus');
+      if (status) {
+        status.textContent = state.message;
+        status.classList.toggle('warn', state.phase !== 'ready' || state.localCount > 0);
+      }
+      // The existing rollover controller preserves a sign-in already in progress.
+      refreshScheduleViews();
+    }
+  });
+  addedClassesClient?.start();
   startCanonicalScheduleRefresh();
   const requestedInitialView = new URLSearchParams(window.location.search).get('view');
   if (requestedInitialView === 'admin') openAdminWithGate();
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-08-29-signin-sync-r2"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-09-07-elegant-classes"></script>
 </body>
 </html>
