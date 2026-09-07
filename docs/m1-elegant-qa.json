@@ -1,0 +1,402 @@
+{
+  "schema": "m1-elegant-qa/v1",
+  "candidate": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
+  "revolutionOrigin": "https://6a9f47b1a3ba58000842fb26--gib-live.netlify.app",
+  "richmond": {
+    "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
+    "origin": "https://6a9f4818343c6eb16fd0d45f--gib-richmond-test.netlify.app",
+    "deploy": {
+      "id": "6a9f4818343c6eb16fd0d45f",
+      "siteId": "42736c77-e3c8-40aa-ba97-4f935d0999ad",
+      "state": "ready",
+      "context": "deploy-preview",
+      "publishedAt": null,
+      "deploySource": "cli",
+      "title": "M1 final cancellation fixes - Richmond TEST - c34cf62ab8742167dbac06a7b4a66843a4638efc"
+    },
+    "publishedDeployChecks": [
+      {
+        "gym": "Richmond TEST",
+        "siteId": "42736c77-e3c8-40aa-ba97-4f935d0999ad",
+        "publishedDeploy": "6a89d9b82eadf535cb568857",
+        "unchanged": true
+      },
+      {
+        "gym": "Revolution production",
+        "siteId": "f748e737-11e3-4fab-8e8c-bf185eab29ff",
+        "publishedDeploy": "6a95d82e6ea2ad000986b4ea",
+        "unchanged": true
+      },
+      {
+        "gym": "Richmond production",
+        "siteId": "9b7757a9-70f4-4977-9ca2-270b41e34007",
+        "publishedDeploy": "6a9c7a2fec9f71d5ff660a57",
+        "unchanged": true
+      }
+    ],
+    "assets": [
+      {
+        "path": "m1/index.html",
+        "sha256": "4306e42b713c6241d7d61a106f4ebe8c4ddc78ca11545fabf2fe49efbc86b8b1",
+        "exact": true
+      },
+      {
+        "path": "m1/admin/index.html",
+        "sha256": "94aefbbcebbb59ac13d4764df4b0aaaf02fbd2d12c669db100210c8e4a725221",
+        "exact": true
+      },
+      {
+        "path": "m1/installation-profile.generated.js",
+        "sha256": "c0c38f726a718fc6651802c4fc455686fda01c2973854de9424ae71d07babe2f",
+        "exact": true
+      },
+      {
+        "path": "netlify/functions/_lib/m1-installation.generated.mjs",
+        "sha256": "5248492b66ac3247a5efe68cba443ddde08ec17eb43ed2f3d03b8f3c11edf199",
+        "exact": true
+      },
+      {
+        "path": "netlify/functions/m1-added-classes.mjs",
+        "sha256": "6f43f01320a88d2accdf2b713fe095c4c48150c987ca385b04a33825027eb81e",
+        "exact": true
+      },
+      {
+        "path": "netlify/functions/_lib/m1-added-classes.mjs",
+        "sha256": "25f00c68ecd1545774cecab8b2eb90adef911b9c3a39e5245508a76e995d5812",
+        "exact": true
+      }
+    ],
+    "profile": {
+      "installationId": "richmond",
+      "environment": "test",
+      "allowedOrigin": "https://gib-richmond-test.netlify.app"
+    },
+    "classes": {
+      "httpStatus": 200,
+      "ok": true,
+      "target": "test",
+      "gymId": "richmond",
+      "version": 0,
+      "seriesCount": 0,
+      "historyCount": 0
+    },
+    "login": {
+      "httpStatus": 503,
+      "ok": false,
+      "test": false,
+      "message": "Admin service is not configured for this environment."
+    }
+  },
+  "automated": {
+    "passed": 783,
+    "failed": 0,
+    "skipped": 0,
+    "inlineScripts": "Covered by full suite"
+  },
+  "browserChecks": [
+    {
+      "name": "real central same-day late one-off create",
+      "pass": true,
+      "version": 1,
+      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+    },
+    {
+      "name": "independent kiosk receives centrally created class after reload",
+      "pass": true,
+      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+    },
+    {
+      "name": "central class persists through Admin reload and creates no attendance",
+      "pass": true,
+      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+    },
+    {
+      "name": "real limited Tue/Thu month boundary series and backwards-range rejection",
+      "pass": true,
+      "dates": [
+        "2026-09-29",
+        "2026-10-01",
+        "2026-10-06",
+        "2026-10-08"
+      ],
+      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+    },
+    {
+      "name": "test setup",
+      "note": "Fresh isolated kiosk automatic sending enabled as a local configuration fixture; no real device settings or credentials.",
+      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+    },
+    {
+      "name": "real two instructor kiosk sign-ins and central acknowledgment",
+      "pass": true,
+      "instructors": [
+        "QA TEST M1 Instructor Alpha",
+        "QA TEST M1 Instructor Beta"
+      ],
+      "hours": [
+        1,
+        1
+      ],
+      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+    },
+    {
+      "name": "real Admin missed instructor with explicit half-hour duration",
+      "pass": true,
+      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+    },
+    {
+      "name": "meaningful TEST record confirmation",
+      "message": "Add Clock In for QA Test Staff at Sep 7, 4:00 AM EDT?\n\nReason: Synthetic TEST missed punch; do not pay.",
+      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+    },
+    {
+      "name": "meaningful TEST record confirmation",
+      "message": "Add Clock Out for QA Test Staff at Sep 7, 5:00 AM EDT?\n\nReason: Synthetic TEST missed clock-out; do not pay.",
+      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+    },
+    {
+      "name": "real offline reload, cached added class, durable queue, recovery, exact acknowledged RowID replay",
+      "pass": true,
+      "retry": "already exists",
+      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+    },
+    {
+      "name": "final exact candidate real UI same-day create, separate kiosk receipt, two instructors and Daily Review readback",
+      "pass": true,
+      "revision": "f1b385f55a61b209290410497ea5891deb339f39"
+    },
+    {
+      "name": "real offline reload, cached added class, durable queue, recovery, exact acknowledged RowID replay",
+      "pass": true,
+      "revision": "f1b385f55a61b209290410497ea5891deb339f39",
+      "retry": "already exists"
+    },
+    {
+      "name": "layout phone",
+      "pass": true,
+      "height": 44,
+      "unobstructed": true,
+      "revision": "f1b385f55a61b209290410497ea5891deb339f39"
+    },
+    {
+      "name": "layout tablet-portrait",
+      "pass": true,
+      "height": 44,
+      "unobstructed": true,
+      "revision": "f1b385f55a61b209290410497ea5891deb339f39"
+    },
+    {
+      "name": "layout tablet-landscape",
+      "pass": true,
+      "height": 44,
+      "unobstructed": true,
+      "revision": "f1b385f55a61b209290410497ea5891deb339f39"
+    },
+    {
+      "name": "layout desktop",
+      "pass": true,
+      "height": 44,
+      "unobstructed": true,
+      "revision": "f1b385f55a61b209290410497ea5891deb339f39"
+    },
+    {
+      "name": "final hosted edit after future-date cancellation",
+      "pass": true,
+      "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
+      "version": 5
+    },
+    {
+      "name": "final hosted explicit legacy import, repeat dedupe, byte-preserved local original, past-date Daily Review, expiry on independent kiosk",
+      "pass": true,
+      "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc"
+    },
+    {
+      "name": "frozen candidate real same-day create, independent kiosk, two distinct teaching records, missed-signin half-hour correction and Daily Review readback",
+      "pass": true,
+      "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc"
+    },
+    {
+      "name": "real offline reload, cached added class, durable queue, recovery, exact acknowledged RowID replay",
+      "pass": true,
+      "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
+      "retry": "already exists"
+    },
+    {
+      "name": "frozen hosted cancel remaining dates removes kiosk choice and preserves all four exact teaching records/identities/hours",
+      "pass": true,
+      "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
+      "recordCount": 4
+    }
+  ],
+  "calendarChecks": {
+    "origin": "https://6a9f47b1a3ba58000842fb26--gib-live.netlify.app",
+    "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
+    "startedAt": "2026-09-07T23:28:12.276Z",
+    "dates": [
+      {
+        "date": "2026-09-29",
+        "expectedPresent": true,
+        "actualPresent": true,
+        "matchingChoices": [
+          "9:15 AM QA TEST M1 Month Series Corrected"
+        ],
+        "totalChoices": 12,
+        "oldSeriesLabelAbsent": true,
+        "noHorizontalOverflow": true,
+        "screenshot": "final-kiosk-calendar-2026-09-29.png"
+      },
+      {
+        "date": "2026-10-01",
+        "expectedPresent": false,
+        "actualPresent": false,
+        "matchingChoices": [],
+        "totalChoices": 11,
+        "oldSeriesLabelAbsent": true,
+        "noHorizontalOverflow": true,
+        "screenshot": "final-kiosk-calendar-2026-10-01.png"
+      },
+      {
+        "date": "2026-10-06",
+        "expectedPresent": true,
+        "actualPresent": true,
+        "matchingChoices": [
+          "9:15 AM QA TEST M1 Month Series Corrected"
+        ],
+        "totalChoices": 12,
+        "oldSeriesLabelAbsent": true,
+        "noHorizontalOverflow": true,
+        "screenshot": "final-kiosk-calendar-2026-10-06.png"
+      },
+      {
+        "date": "2026-10-08",
+        "expectedPresent": true,
+        "actualPresent": true,
+        "matchingChoices": [
+          "9:15 AM QA TEST M1 Month Series Corrected"
+        ],
+        "totalChoices": 12,
+        "oldSeriesLabelAbsent": true,
+        "noHorizontalOverflow": true,
+        "screenshot": "final-kiosk-calendar-2026-10-08.png"
+      },
+      {
+        "date": "2026-10-09",
+        "expectedPresent": false,
+        "actualPresent": false,
+        "matchingChoices": [],
+        "totalChoices": 5,
+        "oldSeriesLabelAbsent": true,
+        "noHorizontalOverflow": true,
+        "screenshot": "final-kiosk-calendar-2026-10-09.png"
+      }
+    ],
+    "toast": [
+      {
+        "viewport": 390,
+        "width": 390,
+        "height": 844,
+        "className": "toast",
+        "visibility": "hidden",
+        "opacity": "0",
+        "pointerEvents": "none",
+        "hitTestIsToast": false,
+        "pageWidth": 390,
+        "screenshot": "final-admin-login-phone.png"
+      },
+      {
+        "viewport": 1440,
+        "width": 1440,
+        "height": 1000,
+        "className": "toast",
+        "visibility": "hidden",
+        "opacity": "0",
+        "pointerEvents": "none",
+        "hitTestIsToast": false,
+        "pageWidth": 1440,
+        "screenshot": "final-admin-login-desktop.png"
+      }
+    ],
+    "errors": [],
+    "blockedWrites": [
+      {
+        "date": "2026-09-29",
+        "method": "POST",
+        "path": "/api/m1-staff-clock"
+      },
+      {
+        "date": "2026-09-29",
+        "method": "POST",
+        "path": "/api/m1-staff-clock"
+      },
+      {
+        "date": "2026-10-01",
+        "method": "POST",
+        "path": "/api/m1-staff-clock"
+      },
+      {
+        "date": "2026-10-01",
+        "method": "POST",
+        "path": "/api/m1-staff-clock"
+      },
+      {
+        "date": "2026-10-06",
+        "method": "POST",
+        "path": "/api/m1-staff-clock"
+      },
+      {
+        "date": "2026-10-06",
+        "method": "POST",
+        "path": "/api/m1-staff-clock"
+      },
+      {
+        "date": "2026-10-08",
+        "method": "POST",
+        "path": "/api/m1-staff-clock"
+      },
+      {
+        "date": "2026-10-08",
+        "method": "POST",
+        "path": "/api/m1-staff-clock"
+      },
+      {
+        "date": "2026-10-09",
+        "method": "POST",
+        "path": "/api/m1-staff-clock"
+      },
+      {
+        "date": "2026-10-09",
+        "method": "POST",
+        "path": "/api/m1-staff-clock"
+      }
+    ],
+    "scope": "Actual immutable hosted kiosk with browser Date fixed before page load; real GET responses and existing centrally saved TEST classes. Simulated calendar/browser test, not actual future end-to-end use or physical hardware. Admin login page reads only. No record, configuration or authentication writes.",
+    "centralSeries": {
+      "target": "test",
+      "gymId": "rev",
+      "version": 8,
+      "label": "QA TEST M1 Month Series Corrected",
+      "time": "09:15",
+      "startDate": "2026-09-29",
+      "endDate": "2026-10-08",
+      "days": [
+        "Tuesday",
+        "Thursday"
+      ],
+      "cancelledDates": [
+        "2026-10-01"
+      ]
+    },
+    "status": "PASS",
+    "finishedAt": "2026-09-07T23:28:24.536Z",
+    "visualInspection": "All five simulated-date kiosk screenshots visually inspected: corrected class appears only on requested eligible dates; cancelled and expired dates omit it; controls fit without horizontal overflow. Staff Clock availability is outside this calendar check because all POST requests, including its read-only roster request, were blocked by the requested harness boundary."
+  },
+  "pageErrors": [],
+  "limits": [
+    "Richmond authenticated end-to-end blocked by TEST credential scope; no secret values accessed or configuration changed.",
+    "Phone/tablet viewports and future dates use browser emulation; no physical tablet tested.",
+    "CSV/export contract executed in automated tests; maintenance export button was not exercised through PIN-protected UI.",
+    "Staff Clock synthetic missed punches and audited adjustment exercised on42eabbe; these browser and backend files are unchanged in finalc34cf62.",
+    "Static browser layouts passed onf1b385f; browser HTML/JS/CSS byte-identical inc34cf62."
+  ],
+  "syntheticData": "Only clearly fake TEST names and records. Test data intentionally retained, no resets or deletions."
+}
