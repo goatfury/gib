@@ -6,20 +6,22 @@
   function create(options) {
     const core = options.core || root.GIBM1TemporaryClasses;
     const profile = options.profile;
+    const target = core.resolveAddedClassesTarget(profile, root.location?.href || '');
     const storage = options.storage || root.localStorage;
     const fetcher = options.fetch || root.fetch.bind(root);
     const clock = options.now || (() => new Date());
     const cacheKey = `${profile.storagePrefix}added_classes_cache_v1`;
     let document = null;
-    let phase = 'loading';
+    let phase = target ? 'loading' : 'failed';
     let cachedAt = '';
     let cacheFailed = false;
     let inFlight = null;
     let lastAttempt = 0;
     const readCache = () => {
+      if (!target) return;
       try {
         const cached = JSON.parse(storage.getItem(cacheKey) || 'null');
-        const validated = core.validateDocument(cached?.document, profile.installationId);
+        const validated = core.validateDocument(cached?.document, profile.installationId, target);
         if (validated) {
           document = validated;
           cachedAt = typeof cached.receivedAt === 'string' ? cached.receivedAt : '';
@@ -66,6 +68,7 @@
 
     function changed() { options.onChange?.(state()); }
     async function refreshNow() {
+      if (!target) return false;
       lastAttempt = clock().getTime();
       phase = 'loading';
       changed();
@@ -81,7 +84,7 @@
         }
         const raw = await response.text();
         if (raw.length > 2000000) throw new Error('Added classes response too large');
-        const validated = core.validateDocument(JSON.parse(raw), profile.installationId);
+        const validated = core.validateDocument(JSON.parse(raw), profile.installationId, target);
         if (!validated || validated.current !== true || (document && validated.version < document.version)) {
           throw new Error('Added classes response invalid or older');
         }
@@ -114,6 +117,7 @@
     }
     function start() {
       changed();
+      if (!target) return;
       refresh();
       root.setInterval(refreshIfDue, 30000);
       ['online', 'focus', 'pageshow'].forEach(event => root.addEventListener(event, refreshIfDue));

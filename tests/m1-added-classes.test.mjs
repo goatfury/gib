@@ -17,7 +17,7 @@ const ENV = {
   GIB_RICHMOND_TEST_ADMIN_ACTION_TOKEN: 'synthetic-richmond-test-admin-action-0123456789abcdef'
 };
 const TOKEN = 'synthetic_admin_request_token_0123456789';
-const context = { site: { id: 'synthetic-rev-site', name: 'gib-live' }, deploy: { context: 'deploy-preview', published: false } };
+const context = { site: { id: 'f748e737-11e3-4fab-8e8c-bf185eab29ff', name: 'gib-live' }, deploy: { context: 'deploy-preview', published: false } };
 const series = (extra = {}) => ({ id: '', label: 'TEST Intro', time: '18:00', days: ['Monday'], startDate: '2026-09-07', endDate: '2026-09-28', enabled: true, ...extra });
 const mutation = (extra = {}) => ({ action: 'create', requestId: 'synthetic-create-0001', expectedVersion: 0, series: series(), ...extra });
 class StrongStore {
@@ -324,7 +324,7 @@ test('invalid action and request ID types reject before any class storage read/w
     assert.equal(store.calls.length, 0);
   }
 });
-test('production host, published production context, unknown site and unproven contexts never open storage', async () => {
+test('mismatched host/context, unknown site and unproven contexts never open storage', async () => {
   const store = new StrongStore();
   for (const overrides of [
     { request: request(null, { origin: 'https://gib-live.netlify.app' }) },
@@ -338,9 +338,9 @@ test('production host, published production context, unknown site and unproven c
   }
   assert.equal(store.calls.length, 0);
 });
-test('Richmond TEST profile works; Richmond production profile cannot open the class store', async () => {
+test('Richmond TEST profile works; a production profile cannot open storage on its TEST site', async () => {
   const store = new StrongStore();
-  const richContext = { site: { id: 'synthetic-rich-site', name: 'gib-richmond-test' }, deploy: { context: 'production', published: true } };
+  const richContext = { site: { id: '42736c77-e3c8-40aa-ba97-4f935d0999ad', name: 'gib-richmond-test' }, deploy: { context: 'production', published: true } };
   const options = { origin: 'https://gib-richmond-test.netlify.app', installationId: 'richmond', environment: 'test' };
   const response = await handleM1AddedClasses(request(mutation(), options), { ...deps(store), context: richContext, installationId: 'richmond', environment: 'test' });
   assert.equal(response.status, 200);

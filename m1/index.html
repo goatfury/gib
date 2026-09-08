@@ -940,9 +940,9 @@ body.admin-mode .container { max-width: 1120px; }
   .device-tools-menu[open] > button { position: absolute; right: 0; top: 100%; z-index: 8; min-width: 200px; box-shadow: 0 8px 24px #0008; }
   #managerWorkspaceLink { min-height: 44px; text-decoration: none; }
 </style>
-<script src="./installation-profile.generated.js?v=2026-09-07-elegant-classes"></script>
-<script src="./temporary-classes-core.js?v=2026-09-07-elegant-classes"></script>
-<script src="./added-classes-kiosk.js?v=2026-09-07-elegant-classes"></script>
+<script src="./installation-profile.generated.js?v=2026-09-08-elegant-release"></script>
+<script src="./temporary-classes-core.js?v=2026-09-08-elegant-release"></script>
+<script src="./added-classes-kiosk.js?v=2026-09-08-elegant-release"></script>
 </head>
 <body>
 <div class="container">
@@ -1454,10 +1454,10 @@ import {
   syncFailureCode,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-09-07-elegant-classes';
+} from './sync-core.mjs?v=2026-09-08-elegant-release';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-09-07-elegant-classes';
+const OFFLINE_SHELL_REVISION = '2026-09-08-elegant-release';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -4848,6 +4848,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-09-07-elegant-classes"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-09-08-elegant-release"></script>
 </body>
 </html>

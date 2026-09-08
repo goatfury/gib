@@ -25,6 +25,9 @@
   function create(options) {
     const { document, profile, request, onChange, onUnauthorized } = options;
     const core = root.GIBM1TemporaryClasses;
+    const target = core.resolveAddedClassesTarget(profile, root.location?.href);
+    const profileAllowsWrites = profile.installationId !== 'richmond' || target !== 'production'
+      || (profile.activation === 'active' && profile.writesEnabled === true);
     const $ = selector => document.querySelector(selector);
     let shared = null;
     let current = false;
@@ -49,9 +52,9 @@
       node.style.display = message ? 'block' : 'none';
     }
     function validResponse(data) {
-      return Boolean(core.validateDocument(data, profile.installationId)) && data.current === true;
+      return Boolean(core.validateDocument(data, profile.installationId, target)) && data.current === true;
     }
-    function canWrite() { return active && current && shared?.target === 'test' && !busy; }
+    function canWrite() { return Boolean(target) && profileAllowsWrites && active && current && shared?.target === target && !busy; }
     function datesList(dates, seriesId = '') {
       const list = el('ul', 'added-date-list');
       dates.forEach(date => {
@@ -186,6 +189,11 @@
       preview();
     }
     async function refresh({ quiet = false } = {}) {
+      if (!target) {
+        current = false;
+        status('Shared classes are unavailable at this address. Use this gym’s Admin page.');
+        render(); onChange(); return false;
+      }
       if (loadPromise) return loadPromise;
       const loadGeneration = generation;
       if (!quiet) status('Loading shared classes…', 'working');

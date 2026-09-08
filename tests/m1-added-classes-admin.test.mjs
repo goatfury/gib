@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 import vm from 'node:vm';
+import { installationProfile } from '../m1/installation-profile-core.mjs';
 
 const require = createRequire(import.meta.url);
 const core = require('../m1/temporary-classes-core.js');
@@ -43,7 +44,8 @@ function oneOff(overrides = {}) {
 function persisted(series, version = 1, fromDate = series.startDate) {
   return documentValue([series], [{ seriesId: series.id, revision: version, fromDate, toDate: null, series }], 'rev', version);
 }
-function harness({ data = documentValue(), mutate = null, local = [] } = {}) {
+function harness({ data = documentValue(), mutate = null, local = [],
+  profile = installationProfile('rev'), href = 'https://deploy-preview-83--gib-live.netlify.app/m1/admin/' } = {}) {
   const nodes = new Map();
   for (const match of html.matchAll(/id="(added[^" ]+|add-class)"/gu)) nodes.set(`#${match[1]}`, new Node());
   const form = nodes.get('#addedClassForm');
@@ -67,12 +69,15 @@ function harness({ data = documentValue(), mutate = null, local = [] } = {}) {
   let sequence = 0;
   let changes = 0;
   const requests = [];
+  const reads = [];
   const context = vm.createContext({
     Intl, Date, AbortSignal,
+    location: { href },
     GIBM1TemporaryClasses: { ...core, todayInGym: () => TODAY },
     crypto: { randomUUID: () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}` },
     localStorage: { getItem: () => JSON.stringify(local) },
-    fetch: async () => {
+    fetch: async url => {
+      reads.push(url);
       if (fetchFailure) throw new Error('offline');
       return { ok: true, json: async () => clone(currentData) };
     }
@@ -80,7 +85,7 @@ function harness({ data = documentValue(), mutate = null, local = [] } = {}) {
   new vm.Script(source).runInContext(context);
   const controller = context.GIBM1AddedClassesAdmin.create({
     document,
-    profile: { installationId: 'rev', gymName: 'Revolution BJJ', storagePrefix: 'gib_m1_' },
+    profile,
     request: async (url, body) => {
       requests.push({ url, body: clone(body) });
       if (mutate) return mutate(clone(body), requests.length);
@@ -95,10 +100,69 @@ function harness({ data = documentValue(), mutate = null, local = [] } = {}) {
     for (const [name, value] of Object.entries({ ...defaults, ...values })) elements[name].value = value;
     return form.fire('input');
   }
-  return { controller, nodes, elements, form, weekdays, requests, draft,
+  return { controller, nodes, elements, form, weekdays, requests, reads, draft,
     timings: context.GIBM1AddedClassesAdmin.classTiming,
     offline: () => { fetchFailure = true; }, setData(value) { currentData = clone(value); }, get changes() { return changes; } };
 }
+
+for (const gymId of ['rev', 'richmond']) {
+  test(`${gymId}: canonical production Admin accepts only production read and save confirmations`, async () => {
+    const profile = installationProfile(gymId, 'production', 'active');
+    const href = profile.allowedOrigin + '/m1/admin/';
+    const empty = { ...documentValue([], [], gymId), target: 'production' };
+    const saved = oneOff();
+    const confirmation = { ...documentValue([saved], [{ seriesId: saved.id, revision: 1,
+      fromDate: saved.startDate, toDate: null, series: saved }], gymId, 1), target: 'production' };
+    const ui = harness({ profile, href, data: empty, mutate: () => confirmation });
+    assert.equal(await ui.controller.refresh(), true);
+    await ui.draft(); await ui.form.fire('submit');
+    assert.equal(ui.requests.length, 1);
+    assert.deepEqual(ui.controller.classesForDate({}, TODAY), [core.classLabel(saved)]);
+    assert.equal(ui.controller.isCurrent(), true);
+
+    const wrongRead = harness({ profile, href, data: { ...empty, target: 'test' } });
+    assert.equal(await wrongRead.controller.refresh(), false);
+    await wrongRead.draft(); await wrongRead.form.fire('submit');
+    assert.equal(wrongRead.requests.length, 0);
+    assert.equal(wrongRead.nodes.get('#addedClassSave').disabled, true);
+
+    const wrongAck = harness({ profile, href, data: empty, mutate: () => ({ ...confirmation, target: 'test' }) });
+    await wrongAck.controller.refresh(); await wrongAck.draft(); await wrongAck.form.fire('submit');
+    assert.equal(wrongAck.requests.length, 1);
+    assert.deepEqual(wrongAck.controller.classesForDate({}, TODAY), []);
+    assert.match(wrongAck.nodes.get('#addedClassStatus').textContent, /could not be confirmed/i);
+  });
+}
+
+test('Richmond production reads do not authorize writes until both activation and write permission are active', async () => {
+  const active = installationProfile('richmond', 'production', 'active');
+  for (const profile of [installationProfile('richmond', 'production', 'pending'),
+    { ...active, writesEnabled: false }, { ...active, activation: 'pending' }]) {
+    const ui = harness({ profile, href: active.allowedOrigin + '/m1/admin/',
+      data: { ...documentValue([], [], 'richmond'), target: 'production' }, local: [oneOff()] });
+    assert.equal(await ui.controller.refresh(), true);
+    await ui.draft(); await ui.form.fire('submit');
+    await ui.nodes.get('#addedClassImport').fire('click');
+    assert.equal(ui.requests.length, 0);
+    assert.equal(ui.nodes.get('#addedClassSave').disabled, true);
+    assert.equal(ui.nodes.get('#addedClassImport').disabled, true);
+  }
+});
+
+test('TEST Admin rejects production data and unknown addresses never read or write shared classes', async () => {
+  const crossed = harness({ data: { ...documentValue(), target: 'production' } });
+  assert.equal(await crossed.controller.refresh(), false);
+  await crossed.draft(); await crossed.form.fire('submit');
+  assert.equal(crossed.requests.length, 0);
+  for (const href of ['https://foreign.example/m1/admin/', 'http://gib-live.netlify.app/m1/admin/',
+    'https://gib-richmond-live.netlify.app/m1/admin/']) {
+    const ui = harness({ href });
+    assert.equal(await ui.controller.refresh(), false);
+    await ui.draft(); await ui.form.fire('submit');
+    assert.equal(ui.reads.length, 0);
+    assert.equal(ui.requests.length, 0);
+  }
+});
 
 test('Admin defaults to one date, previews the exact date, and saves same-day late classes centrally without teaching records', async () => {
   const ui = harness();

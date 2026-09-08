@@ -1,4 +1,4 @@
-/* Shared by the kiosk, Daily Review, and the TEST class service. No local-time date arithmetic. */
+/* Shared by the kiosk, Daily Review, and the class service. No local-time date arithmetic. */
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -9,6 +9,23 @@
   const TIME_ZONE = 'America/New_York';
   const DAYS = Object.freeze(['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']);
   const DAY_MS = 86400000;
+  function resolveAddedClassesTarget(profile, href) {
+    try {
+      const url = new URL(href);
+      if (url.protocol !== 'https:' || url.port || url.username || url.password) return '';
+      if (profile?.installationId === 'rev') {
+        if (url.hostname === 'gib-live.netlify.app') return 'production';
+        return /^(?:deploy-preview-\d+|[0-9a-f]{24})--gib-live\.netlify\.app$/u.test(url.hostname) ? 'test' : '';
+      }
+      if (profile?.installationId !== 'richmond') return '';
+      if (profile.environment === 'production') {
+        return url.hostname === 'gib-richmond-live.netlify.app' ? 'production' : '';
+      }
+      if (profile.environment !== 'test') return '';
+      return url.hostname === 'gib-richmond-test.netlify.app'
+        || /^[0-9a-f]{24}--gib-richmond-test\.netlify\.app$/u.test(url.hostname) ? 'test' : '';
+    } catch { return ''; }
+  }
   function text(value) { return typeof value === 'string' ? value.normalize('NFKC').trim().replace(/\s+/gu, ' ') : ''; }
   function validDate(value) {
     if (typeof value !== 'string' || !/^20\d{2}-\d{2}-\d{2}$/u.test(value)) return false;
@@ -26,12 +43,15 @@
   }
   function normalizeSeries(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-    const label = text(raw.label);
+    // Display labels also select existing lesson-duration rules. Preserve their
+    // internal spacing and characters; normalize only for safety validation.
+    const label = typeof raw.label === 'string' ? raw.label.trim() : '';
+    const safeLabel = text(raw.label);
     const time = text(raw.time);
     const startDate = text(raw.startDate);
     const endDate = text(raw.endDate);
     const id = text(raw.id);
-    if (!label || label.length > 120 || /^[=+@-]/u.test(label) || /[<>]/u.test(label) || /[\u0000-\u001f\u007f]/u.test(raw.label)
+    if (!safeLabel || label.length > 120 || safeLabel.length > 120 || /^[=+@-]/u.test(safeLabel) || /[<>]/u.test(safeLabel) || /[\u0000-\u001f\u007f]/u.test(raw.label)
       || !/^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(time) || !validDate(startDate) || !validDate(endDate)
       || endDate < startDate || Date.parse(endDate) - Date.parse(startDate) > 365 * DAY_MS
       || id.length > 160 || (id && !/^[a-zA-Z0-9_-]+$/u.test(id))) return null;
@@ -91,9 +111,10 @@
     const extra = resolvedSeriesForDate(seriesOrDocument, date).filter(series => datesForSeries(series, { from: date, to: date }).length).map(classLabel);
     return [...new Set([...regular, ...extra].filter(value => typeof value === 'string' && value.trim()))].sort((a, b) => labelMinutes(a) - labelMinutes(b) || a.localeCompare(b));
   }
-  function validateDocument(value, gymId) {
+  function validateDocument(value, gymId, expectedTarget = 'test') {
     if (!value || typeof value !== 'object' || Array.isArray(value) || value.schema !== SCHEMA || value.ok !== true
-      || value.target !== 'test' || !['rev', 'richmond'].includes(value.gymId) || (gymId && value.gymId !== gymId)
+      || !['test', 'production'].includes(expectedTarget) || value.target !== expectedTarget
+      || !['rev', 'richmond'].includes(value.gymId) || (gymId && value.gymId !== gymId)
       || value.timezone !== TIME_ZONE || !Number.isInteger(value.version) || value.version < 0
       || !Array.isArray(value.series) || value.series.length > 500 || !Array.isArray(value.history) || value.history.length > 5000
       || !Array.isArray(value.importedIdentities) || value.importedIdentities.some(id => typeof id !== 'string' || !id.startsWith('m1-series-v1:') || id.length > 600)
@@ -119,5 +140,5 @@
     if (value.series.some(series => JSON.stringify(latest.get(series.id)?.series) !== JSON.stringify(series))) return null;
     return value;
   }
-  return Object.freeze({ SCHEMA, TIME_ZONE, DAYS, validDate, normalizeSeries, datesForSeries, seriesIdentity, classesForDate, resolvedSeriesForDate, todayInGym, classLabel, dayNameForDate, validateDocument });
+  return Object.freeze({ SCHEMA, TIME_ZONE, DAYS, resolveAddedClassesTarget, validDate, normalizeSeries, datesForSeries, seriesIdentity, classesForDate, resolvedSeriesForDate, todayInGym, classLabel, dayNameForDate, validateDocument });
 });

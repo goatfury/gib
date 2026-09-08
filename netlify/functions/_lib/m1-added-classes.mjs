@@ -2,40 +2,47 @@ import { createHash } from 'node:crypto';
 import core from '../../../m1/temporary-classes-core.js';
 
 export const ADDED_CLASSES_STORE = 'gib-m1-added-classes-test-v1';
-export const addedClassesKey = gymId => {
+export const ADDED_CLASSES_PRODUCTION_STORE = 'gib-m1-added-classes-production-v1';
+export function addedClassesStoreName(target = 'test') {
+  if (!['test', 'production'].includes(target)) throw new Error('Invalid class storage target.');
+  return target === 'production' ? ADDED_CLASSES_PRODUCTION_STORE : ADDED_CLASSES_STORE;
+}
+export const addedClassesKey = (gymId, target = 'test') => {
+  addedClassesStoreName(target);
   if (!['rev', 'richmond'].includes(gymId)) throw new Error('Invalid gym.');
-  return `test/${gymId}/classes-v1`;
+  return `${target}/${gymId}/classes-v1`;
 };
 export class AddedClassesError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 const fail = (status, message) => { throw new AddedClassesError(status, message); };
 const hash = value => createHash('sha256').update(value).digest('hex');
-export async function defaultAddedClassesStore() {
+export async function defaultAddedClassesStore(target = 'test') {
+  const name = addedClassesStoreName(target);
   const { getStore } = await import('@netlify/blobs');
-  // Site-scoped storage persists across TEST previews. Both the store name and
-  // key are TEST-only, and gym identity comes from the deployed profile.
-  return getStore({ name: ADDED_CLASSES_STORE, consistency: 'strong' });
+  // TEST previews and production share a Netlify site for Revolution. Separate
+  // both store and key; the verified runtime scope supplies target and gym.
+  return getStore({ name, consistency: 'strong' });
 }
-export function emptyAddedClasses(gymId) {
-  addedClassesKey(gymId);
-  return { schema: core.SCHEMA, target: 'test', gymId, timezone: core.TIME_ZONE, version: 0, updatedAt: null, series: [], history: [], aliases: {}, audit: [] };
+export function emptyAddedClasses(gymId, target = 'test') {
+  addedClassesKey(gymId, target);
+  return { schema: core.SCHEMA, target, gymId, timezone: core.TIME_ZONE, version: 0, updatedAt: null, series: [], history: [], aliases: {}, audit: [] };
 }
 export function publicAddedClasses(value, now) {
   return {
-    ok: true, schema: core.SCHEMA, target: 'test', gymId: value.gymId,
+    ok: true, schema: core.SCHEMA, target: value.target, gymId: value.gymId,
     timezone: core.TIME_ZONE, version: value.version, updatedAt: value.updatedAt,
     servedAt: new Date(now).toISOString(), current: true,
     series: value.series, history: value.history,
     importedIdentities: Object.keys(value.aliases).sort()
   };
 }
-export async function readAddedClasses(store, gymId, now) {
-  const result = await store.getWithMetadata(addedClassesKey(gymId), { type: 'json', consistency: 'strong' });
-  if (!result) return { value: emptyAddedClasses(gymId), etag: null };
+export async function readAddedClasses(store, gymId, now, target = 'test') {
+  const result = await store.getWithMetadata(addedClassesKey(gymId, target), { type: 'json', consistency: 'strong' });
+  if (!result) return { value: emptyAddedClasses(gymId, target), etag: null };
   const value = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
-  if (!result.etag || !value || value.schema !== core.SCHEMA || value.target !== 'test' || value.timezone !== core.TIME_ZONE || !value.aliases || Array.isArray(value.aliases) || !Array.isArray(value.audit)
-    || value.audit.length > 5000 || !core.validateDocument(publicAddedClasses(value, now), gymId)
+  if (!result.etag || !value || value.schema !== core.SCHEMA || value.target !== target || value.timezone !== core.TIME_ZONE || !value.aliases || Array.isArray(value.aliases) || !Array.isArray(value.audit)
+    || value.audit.length > 5000 || !core.validateDocument(publicAddedClasses(value, now), gymId, target)
     || Object.values(value.aliases).some(id => !value.series.some(series => series.id === id))) {
     throw new Error('The centrally saved classes could not be validated.');
   }
@@ -90,7 +97,7 @@ function planMutation(existing, mutation, now, adminName) {
   }
   if (existing.version !== expectedVersion) fail(409, 'Classes changed in another browser. Refresh before saving again.');
   if (mutation.effectiveDate && mutation.effectiveDate < core.todayInGym(now)) fail(400, 'Changes can begin today or on a future date. Past class history is preserved.');
-  if (existing.audit.length >= 5000) fail(409, 'The TEST class history is full. No saved history was removed.');
+  if (existing.audit.length >= 5000) fail(409, 'The class history is full. No saved history was removed.');
   const next = structuredClone(existing);
   let result;
   const seriesIds = [];
@@ -145,16 +152,16 @@ function planMutation(existing, mutation, now, adminName) {
   // Do not acknowledge a mutation that would make the shared snapshot too large
   // for its existing browser cache/read contract. Never prune past occurrences.
   if (next.series.length > 500 || next.history.length > 5000
-    || Buffer.byteLength(JSON.stringify(publicAddedClasses(next, now)), 'utf8') > 1800000) fail(409, 'The TEST class history is full. No saved history was removed.');
+    || Buffer.byteLength(JSON.stringify(publicAddedClasses(next, now)), 'utf8') > 1800000) fail(409, 'The class history is full. No saved history was removed.');
   return { value: next, result, seriesIds, retry: false };
 }
-export async function mutateAddedClasses(store, gymId, input, now, adminName) {
+export async function mutateAddedClasses(store, gymId, input, now, adminName, target = 'test') {
   const mutation = normalizeMutation(input, core.todayInGym(now));
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const previous = await readAddedClasses(store, gymId, now);
+    const previous = await readAddedClasses(store, gymId, now, target);
     const planned = planMutation(previous.value, mutation, now, adminName);
     if (planned.retry) return planned;
-    const saved = await store.set(addedClassesKey(gymId), JSON.stringify(planned.value), previous.etag ? { onlyIfMatch: previous.etag } : { onlyIfNew: true });
+    const saved = await store.set(addedClassesKey(gymId, target), JSON.stringify(planned.value), previous.etag ? { onlyIfMatch: previous.etag } : { onlyIfNew: true });
     if (saved?.modified === true) return planned;
     if (saved?.modified !== false) throw new Error('The central class save was not confirmed.');
   }
