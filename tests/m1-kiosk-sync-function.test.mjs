@@ -290,6 +290,55 @@ test('invalid, non-permanent, and non-obviously-fake rows are rejected locally',
   ]);
 });
 
+test('kiosk Notes preserve plain LF and CRLF text through a successful sync', async () => {
+  for (const Notes of [
+    'QA TEST first line\nSecond line, with a comma and "quotes"',
+    'QA TEST first line\r\n\r\nSecond line',
+    `${'n'.repeat(199)}\n${'n'.repeat(200)}`
+  ]) {
+    const input = row({ Notes });
+    let forwarded;
+    const response = await handleKioskSync(request({ body: { rows: [input] } }), {
+      env: TEST_ENV,
+      dateNow: DATE_NOW,
+      fetch: async (_url, options) => {
+        forwarded = JSON.parse(options.body).rows;
+        return googleResponse([acknowledged(input)]);
+      }
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await json(response)).results, [acknowledged(input)]);
+    assert.deepEqual(forwarded, [input]);
+  }
+});
+
+test('the Notes line-break exception retains length, formula and other control safeguards', async () => {
+  const invalidNotes = [
+    'QA TEST\tTabbed', 'QA TEST\rLone carriage return', 'QA TEST\u0000NUL',
+    'QA TEST\u000bVertical tab', 'QA TEST\u000cForm feed',
+    'QA TEST\u007fDEL', 'QA TEST\u0085NEL',
+    '\n=1+1', '\r\n+1', '\n-1', '\n@SUM(1)', '\n＝1+1',
+    `${'n'.repeat(200)}\n${'n'.repeat(200)}`
+  ];
+  const invalidRows = [
+    ...invalidNotes.map(Notes => row({ Notes })),
+    ...['Instructor', 'Class Label', 'Device', 'Build', 'Site'].map(key =>
+      row({ [key]: `${row()[key]}\nSecond line` })
+    )
+  ];
+  for (const input of invalidRows) {
+    let calls = 0;
+    const response = await handleKioskSync(request({ body: { rows: [input] } }), {
+      env: TEST_ENV,
+      dateNow: DATE_NOW,
+      fetch: async () => { calls += 1; return googleResponse([]); }
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await json(response)).results, [acknowledged(input, 'rejected', '')]);
+    assert.equal(calls, 0);
+  }
+});
+
 test('duplicate input RowIDs fail closed before Google', async () => {
   const input = row();
   let calls = 0;

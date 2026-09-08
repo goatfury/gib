@@ -79,8 +79,12 @@ function exactObjectKeys(value, expected) {
     && keys.every((key, index) => key === expected[index]);
 }
 
-function exactText(value, maxLength, allowBlank = false) {
-  if (typeof value !== 'string' || CONTROL_CHARACTER_PATTERN.test(value)) return null;
+function exactText(value, maxLength, allowBlank = false, allowLineBreaks = false) {
+  if (typeof value !== 'string') return null;
+  // Only Notes opts into textarea LF/CRLF. Keep the original text, and still
+  // reject tabs, lone carriage returns and every other control character.
+  const controlText = allowLineBreaks ? value.replace(/\r?\n/gu, '') : value;
+  if (CONTROL_CHARACTER_PATTERN.test(controlText)) return null;
   const text = value.normalize('NFKC').trim();
   if (
     (!allowBlank && !text)
@@ -125,7 +129,7 @@ function validateRow(input, now, requireObviousTestValue = true, profile = null)
   const site = exactText(input.Site, 80);
   const device = Object.hasOwn(input, 'Device') ? cleanText(input.Device, 120, true) : '';
   const build = Object.hasOwn(input, 'Build') ? cleanText(input.Build, 120, true) : '';
-  const notes = Object.hasOwn(input, 'Notes') ? exactText(input.Notes, 400, true) : '';
+  const notes = Object.hasOwn(input, 'Notes') ? exactText(input.Notes, 400, true, true) : '';
 
   if (
     !rowId

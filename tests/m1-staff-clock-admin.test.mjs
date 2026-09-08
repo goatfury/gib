@@ -28,6 +28,89 @@ const REQUEST_ONE = 'gib-m1-staff-request-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const REQUEST_TWO = 'gib-m1-staff-request-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const VIEW_TOKEN = 'a'.repeat(64);
 
+function olderShiftEventRuntime() {
+  const finderEvents = sourceBetween(adminHtml,
+    "$('#staffOlderShiftForm').addEventListener('input'",
+    "$('#staffOlderShiftRetry').addEventListener('click'");
+  const adjustmentEvents = sourceBetween(adminHtml,
+    "['#staffRecentShifts', '#staffOlderShiftResults', '#staffTimeRecords'].forEach(selector => {",
+    "$('#reviewSection').addEventListener('click'");
+  const nodes = new Map();
+  function node(selector) {
+    if (!nodes.has(selector)) nodes.set(selector, {
+      listeners: {}, addEventListener(type, handler) { this.listeners[type] = handler; }
+    });
+    return nodes.get(selector);
+  }
+  const calls = { render: 0, lookup: 0, adjustment: 0, clearReview: 0, prevented: 0 };
+  const lookup = { items: [{ clockIn: { punchId: PUNCH_ONE }, clockOut: { punchId: PUNCH_TWO } }] };
+  const query = { staffId: 'qa-test-staff', date: '2026-08-26' };
+  const context = vm.createContext({ $, calls, lookup, query });
+  function $(selector) { return node(selector); }
+  new vm.Script(`
+    let staffOlderShiftLoading = false;
+    let staffOlderShiftLoadGeneration = 7;
+    let currentStaffOlderShiftQuery = query;
+    let currentStaffOlderShiftLookup = lookup;
+    let staffOlderShiftError = '';
+    function renderStaffOlderShiftLookup() { calls.render += 1; }
+    function submitStaffOlderShiftLookup() { calls.lookup += 1; }
+    function clearStaffAdjustmentReview() { calls.clearReview += 1; }
+    function showMessage() {}
+    function submitStaffAdjustment() { calls.adjustment += 1; }
+    function submitStaffVoid() { throw new Error('Unexpected void'); }
+    ${finderEvents}
+    ${adjustmentEvents}
+    globalThis.state = () => ({ query: currentStaffOlderShiftQuery,
+      lookup: currentStaffOlderShiftLookup, generation: staffOlderShiftLoadGeneration });
+  `, { filename: 'staff-older-shift-events.js' }).runInContext(context);
+  function bubble(type, target, selectors) {
+    const event = { target, preventDefault() { calls.prevented += 1; } };
+    for (const selector of selectors) {
+      event.currentTarget = node(selector);
+      node(selector).listeners[type]?.(event);
+    }
+  }
+  return { node, calls, lookup, query, state: context.state, bubble };
+}
+
+test('editing a found shift preserves its result while clearing only the adjustment review', () => {
+  const runtime = olderShiftEventRuntime();
+  const form = { getAttribute() { return 'false'; }, querySelector() { return {}; } };
+  for (const name of ['correctedClockIn', 'correctedClockOut', 'correctedClockInOffset', 'reason']) {
+    const input = { name, closest(selector) { return selector === '[data-staff-adjust-form]' ? form : null; } };
+    runtime.bubble('input', input, ['#staffOlderShiftResults', '#staffOlderShiftForm']);
+  }
+  assert.equal(runtime.calls.clearReview, 4);
+  assert.equal(runtime.calls.render, 0, 'Nested edits must not erase the visible shift');
+  assert.equal(runtime.state().query, runtime.query);
+  assert.equal(runtime.state().lookup, runtime.lookup);
+  assert.equal(runtime.state().generation, 7);
+
+  for (const selector of ['#staffOlderShiftStaff', '#staffOlderShiftDate']) {
+    const fresh = olderShiftEventRuntime();
+    fresh.bubble('input', fresh.node(selector), ['#staffOlderShiftForm']);
+    assert.equal(fresh.calls.render, 1, 'Changing the actual search invalidates old results');
+    assert.equal(fresh.state().query, null);
+    assert.equal(fresh.state().lookup, null);
+    assert.equal(fresh.state().generation, 8);
+  }
+});
+
+test('a found shift review or confirmation submit never submits the enclosing search form', () => {
+  const runtime = olderShiftEventRuntime();
+  const form = { closest(selector) { return selector === '[data-staff-adjust-form]' ? this : null; } };
+  for (let submit = 0; submit < 2; submit += 1) {
+    runtime.bubble('submit', form, ['#staffOlderShiftResults', '#staffOlderShiftForm']);
+  }
+  assert.equal(runtime.calls.adjustment, 2, 'Each review/confirm goes to the adjustment handler once');
+  assert.equal(runtime.calls.lookup, 0, 'No unrelated search may replace the pending adjustment');
+  assert.equal(runtime.calls.prevented, 2);
+  runtime.bubble('submit', runtime.node('#staffOlderShiftForm'), ['#staffOlderShiftForm']);
+  assert.equal(runtime.calls.lookup, 1, 'The real Find shift submit still works');
+  assert.equal(runtime.calls.prevented, 3);
+});
+
 function validatorRuntime() {
   const functions = sourceBetween(
     adminHtml,
