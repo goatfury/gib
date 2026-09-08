@@ -247,6 +247,25 @@ test('Rev, production, unknown, wrong-device, and Staff requests are rejected be
   });
 });
 
+test('Richmond TEST receiver preserves multiline Notes without duplicating a replay', () => {
+  for (const Notes of ['QA TEST first line\nSecond line, with "quotes"', 'QA TEST first line\r\n\r\nSecond line']) {
+    const harness = createHarness();
+    const row = kioskRow({ Notes });
+    const body = kioskRequest({ rows: [row] });
+    const first = harness.post(body);
+    assert.equal(first.target, 'test');
+    assert.equal(first.results[0].result, 'added');
+    assert.equal(harness.signins.values[1][0], row.RowID);
+    assert.equal(harness.signins.values[1][9], Notes);
+    const replay = harness.post(body);
+    assert.equal(replay.results[0].result, 'already exists');
+    const changed = harness.post(kioskRequest({ rows: [{ ...row, Notes: Notes.replace(/\r?\n/gu, ' ') }] }));
+    assert.equal(changed.results[0].result, 'rejected');
+    assert.equal(harness.signins.values.length, 2);
+    assert.equal(harness.signins.values[1][9], Notes);
+  }
+});
+
 test('one-time provisioning binds exactly one empty Richmond Sheet and permanently closes', () => {
   const harness = createHarness({ provisioned: false });
   const request = {

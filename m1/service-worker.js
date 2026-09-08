@@ -43,6 +43,8 @@ const KIOSK_ENHANCEMENTS_URL = new URL(
   SCOPE_URL
 ).href;
 const KIOSK_ENHANCEMENTS_CORE_URL = new URL('kiosk-enhancements-core.mjs', SCOPE_URL).href;
+const TEMPORARY_CLASSES_CORE_URL = new URL(`temporary-classes-core.js?v=${encodeURIComponent(SHELL_REVISION)}`, SCOPE_URL).href;
+const ADDED_CLASSES_KIOSK_URL = new URL(`added-classes-kiosk.js?v=${encodeURIComponent(SHELL_REVISION)}`, SCOPE_URL).href;
 const REVOLUTION_LOGO_URL = new URL('assets/revolution-bjj-logo.webp', SCOPE_URL).href;
 const RICHMOND_LOGO_URL = new URL('assets/richmond-bjj-logo.webp', SCOPE_URL).href;
 const SHELL_URLS = Object.freeze([
@@ -54,6 +56,8 @@ const SHELL_URLS = Object.freeze([
   KIOSK_ENHANCEMENTS_CSS_URL,
   KIOSK_ENHANCEMENTS_URL,
   KIOSK_ENHANCEMENTS_CORE_URL,
+  TEMPORARY_CLASSES_CORE_URL,
+  ADDED_CLASSES_KIOSK_URL,
   REVOLUTION_LOGO_URL,
   RICHMOND_LOGO_URL
 ]);

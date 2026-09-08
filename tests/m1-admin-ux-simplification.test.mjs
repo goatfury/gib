@@ -31,7 +31,7 @@ test('Admin exposes exactly two top-level modes and keeps secondary tools under 
   assert.match(header, /<h1 id="appHeading">M1 Admin<\/h1>/u);
   assert.match(header, />Instructor Sign-In<\/a>/u);
   assert.match(header, />Log Out<\/button>/u);
-  assert.match(header, /<details id="adminMore"[\s\S]*Local M1 Admin[\s\S]*tabletDiagnosticButton/u);
+  assert.match(header, /<details id="adminMore"[\s\S]*Device maintenance[\s\S]*tabletDiagnosticButton/u);
   assert.doesNotMatch(openingTag('adminMore'), /\bopen\b/u);
 });
 
@@ -89,7 +89,7 @@ test('Daily review is decision-first: counts, missing rows, then collapsed compl
   const completed = daily.indexOf('id="completedClasses"');
   assert.ok(scheduled >= 0 && signed > scheduled && missingCount > signed);
   assert.ok(missingRows > missingCount && completed > missingRows);
-  assert.match(daily, /Missing scheduled classes/u);
+  assert.match(daily, /Classes needing a sign-in/u);
   assert.match(
     sourceBetween(adminHtml, 'function classRow(', 'function renderReview('),
     /Add forgotten instructor/u
@@ -98,7 +98,9 @@ test('Daily review is decision-first: counts, missing rows, then collapsed compl
   assert.doesNotMatch(openingTag('completedClasses'), /\bopen\b/u);
 
   const render = sourceBetween(adminHtml, 'function renderReview()', 'async function loadReview(');
-  assert.match(render, /missingRows = scheduled\.filter\(item => item\.matches\.length === 0\)/u);
+  assert.match(render, /missingRows = scheduled\.filter\(item => item\.matches\.length === 0 && item\.timing !== 'upcoming'\)/u);
+  assert.match(render, /upcomingRows = scheduled\.filter\(item => item\.matches\.length === 0 && item\.timing === 'upcoming'\)/u);
+  assert.match(render, /!reviewLoaded \|\| !schedule/u);
   assert.match(render, /completedRows = scheduled\.filter\(item => item\.matches\.length > 0\)/u);
   assert.ok(render.indexOf("$('#classList')") < render.indexOf("$('#completedClassList')"));
 });
@@ -197,6 +199,28 @@ test('mode controls support keyboard and Fire-sized touch interaction', () => {
   assert.match(fireStyles, /\.staff-time-panel \.mode-panel-head[\s\S]*flex-direction:\s*column/u);
   assert.match(fireStyles, /\.staff-time-panel \.mode-panel-head \.staff-section-actions[\s\S]*grid-template-columns:\s*1fr/u);
   assert.match(fireStyles, /\.staff-time-panel \.mode-panel-head \.btn\s*\{\s*width:\s*100%/u);
+});
+
+test('Saved toast is invisible until an explicit result and returns to its hidden state', () => {
+  const defaultStyles = sourceBetween(adminHtml, '    .toast {', '    .toast.show');
+  assert.match(defaultStyles, /visibility:\s*hidden/u);
+  assert.match(defaultStyles, /opacity:\s*0/u);
+  assert.match(defaultStyles, /pointer-events:\s*none/u);
+  assert.match(adminHtml, /\.toast\.show\s*\{[^}]*visibility:\s*visible;[^}]*opacity:\s*1;/u);
+  assert.doesNotMatch(openingTag('toast'), /class="[^"]*\bshow\b/u);
+  const classes = new Set();
+  let hideToast;
+  const node = { textContent: '', classList: { add: name => classes.add(name), remove: name => classes.delete(name) } };
+  const context = vm.createContext({
+    $: () => node,
+    window: { setTimeout(callback, duration) { assert.equal(duration, 2600); hideToast = callback; } }
+  });
+  const source = sourceBetween(adminHtml, 'function toast(', 'function createDiagnosticRunId(');
+  new vm.Script(`${source}\ntoast('Confirmed result');`).runInContext(context);
+  assert.equal(node.textContent, 'Confirmed result');
+  assert.equal(classes.has('show'), true);
+  hideToast();
+  assert.equal(classes.has('show'), false);
 });
 
 test('Richmond hides the Staff Clock mode and panel through the installation profile', () => {

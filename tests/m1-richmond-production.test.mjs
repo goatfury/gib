@@ -569,7 +569,7 @@ test('browser, service-worker, schedule, and build sources keep Richmond product
   assert.match(adminHtml, /Today’s production Daily Review is empty — no sign-ins or audit actions for today/u);
   assert.doesNotMatch(adminHtml, /readOnlyPending|no passphrase is required/u);
   assert.match(adminHtml, /Changes unavailable while Richmond production activation is pending/u);
-  assert.match(adminHtml, /if \(mutationsEnabled\) row\.append\(buildAddForm/u);
+  assert.match(adminHtml, /if \(mutationsEnabled && timing !== 'upcoming'\) row\.append\(buildAddForm/u);
   assert.match(serviceWorker, /gib-m1-richmond-production-shell-/u);
   assert.notEqual(RICHMOND_PRODUCTION_LAST_KNOWN_GOOD_STORE, RICHMOND_LAST_KNOWN_GOOD_STORE);
   assert.notEqual(RICHMOND_PRODUCTION_LAST_KNOWN_GOOD_KEY, RICHMOND_LAST_KNOWN_GOOD_KEY);

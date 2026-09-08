@@ -25,6 +25,7 @@ function headerSection(pathname) {
 
 function createWorkerHarness(options = {}) {
   const revision = options.revision || declaredRevision();
+  const origin = options.origin || ORIGIN;
   const listeners = new Map();
   const deleted = [];
   const cacheRecords = new Map();
@@ -83,10 +84,10 @@ function createWorkerHarness(options = {}) {
 
   const self = {
     location: {
-      href: `${ORIGIN}/m1/service-worker.js?v=${encodeURIComponent(revision)}`,
-      origin: ORIGIN
+      href: `${origin}/m1/service-worker.js?v=${encodeURIComponent(revision)}`,
+      origin
     },
-    registration: { scope: `${ORIGIN}/m1/` },
+    registration: { scope: `${origin}/m1/` },
     clients: {
       async claim() {
         claimCalls += 1;
@@ -168,6 +169,9 @@ test('kiosk import, worker registration, scope, and no-store header share one re
     kioskHtml,
     new RegExp(`<script src="\\./installation-profile\\.generated\\.js\\?v=${revision}"></script>`, 'u')
   );
+  for (const asset of ['temporary-classes-core', 'added-classes-kiosk']) {
+    assert.ok(kioskHtml.includes(`<script src="./${asset}.js?v=${revision}"></script>`));
+  }
   assert.match(
     kioskHtml,
     new RegExp(`<script type="module" src="\\./staff-clock-client\\.mjs\\?v=${revision}"></script>`, 'u')
@@ -208,6 +212,8 @@ test('install atomically precaches only the revision-matched shell and activatio
       `${ORIGIN}/m1/kiosk-enhancements.css?v=${harness.revision}`,
       `${ORIGIN}/m1/kiosk-enhancements.mjs?v=${harness.revision}`,
       `${ORIGIN}/m1/kiosk-enhancements-core.mjs`,
+      `${ORIGIN}/m1/temporary-classes-core.js?v=${harness.revision}`,
+      `${ORIGIN}/m1/added-classes-kiosk.js?v=${harness.revision}`,
       `${ORIGIN}/m1/assets/revolution-bjj-logo.webp`,
       `${ORIGIN}/m1/assets/richmond-bjj-logo.webp`
     ]
@@ -230,6 +236,42 @@ test('failed atomic precache does not advance the worker to skipWaiting', async 
   const harness = createWorkerHarness({ addAllError: expected });
   await assert.rejects(harness.dispatchLifecycle('install'), expected);
   assert.equal(harness.skipWaitingCalls, 0);
+});
+
+test('release replaces each prior deployed shell only after precache and serves the new shell offline', async t => {
+  const cases = [
+    { origin: 'https://gib-live.netlify.app', previous: '2026-08-29-signin-sync-r2', prefix: 'gib-m1-shell-' },
+    { origin: 'https://gib-richmond-live.netlify.app', previous: '2026-09-05-richmond-delivery-history', prefix: 'gib-m1-richmond-production-shell-' },
+    { origin: 'https://gib-richmond-test.netlify.app', previous: '2026-09-07-elegant-classes', prefix: 'gib-m1-shell-' }
+  ];
+  for (const { origin, previous, prefix } of cases) {
+    await t.test(origin, async () => {
+      assert.notEqual(declaredRevision(), previous, 'A changed release needs a new offline-shell revision.');
+      const oldCache = `${prefix}${previous}`;
+      const unrelatedCache = 'unrelated-application-cache';
+      const harness = createWorkerHarness({ origin, initialCaches: [oldCache, unrelatedCache] });
+      const indexUrl = `${origin}/m1/index.html`;
+      harness.cacheRecords.get(oldCache).entries.set(indexUrl, { kind: 'previous-release', revision: previous });
+
+      await harness.dispatchLifecycle('install');
+      assert.equal(harness.cacheRecords.has(oldCache), true, 'Installation must retain the previous shell until activation.');
+      await harness.dispatchLifecycle('activate');
+      assert.deepEqual(harness.deleted, [oldCache]);
+      assert.equal(harness.cacheRecords.has(unrelatedCache), true);
+
+      harness.setFetch(async () => { throw new TypeError('offline'); });
+      const offlineIndex = await harness.dispatchFetch(request(`${origin}/m1/`, { mode: 'navigate' }));
+      assert.equal(offlineIndex.cacheName, `${prefix}${harness.revision}`);
+      assert.equal(offlineIndex.url, indexUrl);
+      for (const asset of ['temporary-classes-core', 'added-classes-kiosk']) {
+        const url = `${origin}/m1/${asset}.js?v=${harness.revision}`;
+        const offlineAsset = await harness.dispatchFetch(request(url));
+        assert.equal(offlineAsset.cacheName, `${prefix}${harness.revision}`);
+        assert.equal(offlineAsset.url, url);
+      }
+      assert.equal(await harness.dispatchFetch(request(`${origin}/m1/sync-core.mjs?v=${previous}`)), undefined);
+    });
+  }
 });
 
 test('network wins online while current-revision navigation and module reload from cache offline', async () => {

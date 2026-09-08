@@ -1846,7 +1846,7 @@ test('Daily Review workflow is yesterday-first, date-selectable, complete, and e
   assert.match(adminHtml, /Today/);
   assert.match(adminHtml, /Next day/);
   assert.match(adminHtml, /No sign-in recorded/);
-  assert.match(adminHtml, /Missing scheduled classes/);
+  assert.match(adminHtml, /Classes needing a sign-in/);
   assert.match(adminHtml, /Sign-ins not matched to this schedule/);
   assert.match(adminHtml, /Find an instructor/);
   assert.match(adminHtml, /Five recent active sign-ins/);
@@ -1899,7 +1899,7 @@ test('Admin addition UX binds fixed identity, requires duration, starts immediat
 });
 
 test('Daily Review keeps every correction path visible and renders strict manual, warning, and audit contracts', () => {
-  assert.match(adminHtml, /href="\/m1\/\?view=admin"[^>]*>Local M1 Admin<\/a>/);
+  assert.match(adminHtml, /href="\/m1\/\?view=admin"[^>]*>Device maintenance<\/a>/);
   assert.match(adminHtml, /href="\/m1\/"[^>]*>Instructor Sign-In<\/a>/);
   assert.doesNotMatch(adminHtml, /href="\/m1\/(?:\?view=admin)?"[^>]*(?:target=|onclick=)/);
 

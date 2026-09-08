@@ -469,6 +469,23 @@ test('TEST fake-name enforcement is per row in a mixed batch', () => {
   assert.equal(harness.signins.values[1][0], 'test-row-fake');
 });
 
+test('TEST receiver preserves multiline Notes in one cell and on replay', () => {
+  for (const Notes of ['QA TEST first line\nSecond line, with "quotes"', 'QA TEST first line\r\n\r\nSecond line']) {
+    const harness = createHarness();
+    const row = kioskRow({ Notes });
+    const first = harness.post(receiverRequest([row]));
+    assert.equal(first.target, 'test');
+    assert.equal(first.results[0].result, 'added');
+    assert.deepEqual(harness.signins.values[1], sheetRow(row));
+    const replay = harness.post(receiverRequest([row]));
+    assert.equal(replay.results[0].result, 'already exists');
+    const changed = harness.post(receiverRequest([{ ...row, Notes: Notes.replace(/\r?\n/gu, ' ') }]));
+    assert.equal(changed.results[0].result, 'rejected');
+    assert.equal(harness.signins.values.length, 2);
+    assert.equal(harness.signins.values[1][9], Notes);
+  }
+});
+
 test('exact replay is idempotent and changed content under one RowID is rejected', () => {
   const harness = createHarness();
   const row = kioskRow({ RowID: 'test-row-replay' });

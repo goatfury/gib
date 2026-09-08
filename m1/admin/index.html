@@ -6,6 +6,7 @@
   <meta name="robots" content="noindex,nofollow">
   <link rel="icon" href="data:,">
   <title>Admin — Daily Sign-in Review</title>
+  <link rel="stylesheet" href="./added-classes.css">
   <style>
     :root {
       color-scheme: dark;
@@ -623,6 +624,9 @@
     .staff-adjustment-evidence { color: #c8fae8; }
     .loading { opacity: .62; pointer-events: none; }
     .toast {
+      visibility: hidden;
+      opacity: 0;
+      pointer-events: none;
       position: fixed;
       left: 50%;
       bottom: 24px;
@@ -635,9 +639,9 @@
       box-shadow: var(--shadow);
       padding: 11px 16px;
       font-weight: 800;
-      transition: transform .2s ease;
+      transition: transform .2s ease, opacity .2s ease;
     }
-    .toast.show { transform: translate(-50%, 0); }
+    .toast.show { visibility: visible; opacity: 1; transform: translate(-50%, 0); }
     [hidden] { display: none !important; }
     @media (max-width: 820px) {
       .topbar { align-items: flex-start; }
@@ -703,7 +707,7 @@
       <div class="login-actions">
         <button id="loginButton" class="btn primary" type="button">Open Daily Review</button>
         <div class="return-links">
-          <a id="localAdminLink" class="btn ghost" href="/m1/?view=admin" style="text-decoration:none">Local M1 Admin</a>
+          <a id="localAdminLink" class="btn ghost" href="/m1/?view=admin" style="text-decoration:none">Device maintenance</a>
           <a class="btn ghost" href="/m1/" style="text-decoration:none">Instructor Sign-In</a>
         </div>
       </div>
@@ -723,7 +727,7 @@
             <summary>More</summary>
             <div class="header-more-menu">
               <div class="header-more-links">
-                <a class="btn ghost" href="/m1/?view=admin" style="text-decoration:none">Local M1 Admin</a>
+                <a class="btn ghost" href="/m1/?view=admin" style="text-decoration:none">Device maintenance</a>
                 <button id="installSyncSettingsButton" class="btn warn" type="button" hidden disabled aria-hidden="true">Legacy browser credential installer removed</button>
                 <button id="tabletDiagnosticButton" class="btn ghost" type="button" hidden>Open tablet diagnostic</button>
               </div>
@@ -770,6 +774,11 @@
       </nav>
 
       <section id="sign-ins" class="mode-panel" role="tabpanel" aria-labelledby="dailyModeControl" tabindex="-1">
+        <nav class="workspace-actions" aria-label="Everyday administration">
+          <a class="btn workspace-action" href="#attention"><strong>What needs attention</strong><span>Review the selected day</span></a>
+          <a class="btn workspace-action" href="#fix-record"><strong>Fix a record</strong><span>Find an instructor or missed sign-in</span></a>
+          <a class="btn primary workspace-action" href="#add-class"><strong>Add a class</strong><span>One date or a limited series</span></a>
+        </nav>
         <section class="panel toolbar" aria-label="Date controls">
           <div class="date-actions">
             <button id="previousDay" class="btn small" type="button">Previous day</button>
@@ -788,7 +797,7 @@
           <section id="reviewSection" class="panel section" aria-labelledby="scheduledClassesHeading">
             <div class="section-head">
               <div class="schedule-heading">
-                <h2 id="scheduledClassesHeading">Daily sign-ins</h2>
+                <h2 id="scheduledClassesHeading">What needs attention</h2>
                 <p id="scheduleProblem" class="schedule-source fallback" role="alert" hidden></p>
               </div>
               <span id="classCount" class="count"></span>
@@ -796,13 +805,17 @@
             <div class="daily-counts" aria-label="Daily sign-in counts">
               <div class="daily-count"><strong id="dailyScheduledCount">—</strong><span>Scheduled</span></div>
               <div class="daily-count"><strong id="dailySignedCount">—</strong><span>Signed in</span></div>
-              <div class="daily-count missing"><strong id="dailyMissingCount">—</strong><span>Missing</span></div>
+              <div class="daily-count missing"><strong id="dailyMissingCount">—</strong><span>Needs attention</span></div>
             </div>
             <div id="reviewMessage" class="message" role="alert"></div>
             <button id="dailyReviewRetry" class="btn ghost small" type="button" hidden>Retry Daily sign-ins</button>
-            <h3 class="daily-subhead">Missing scheduled classes</h3>
+            <h3 class="daily-subhead">Classes needing a sign-in</h3>
             <div id="classList" class="class-list" aria-live="polite" aria-busy="false">
               <div class="empty">Loading Daily sign-ins…</div>
+            </div>
+            <div id="upcomingClasses" class="upcoming-classes" hidden>
+              <h3>Coming up today</h3>
+              <div id="upcomingClassList" class="class-list"></div>
             </div>
             <details id="completedClasses" class="completed-classes">
               <summary><span>Show completed classes</span><span id="completedClassCount" class="count"></span></summary>
@@ -812,9 +825,10 @@
               <h3>Sheet rows needing attention</h3>
               <div id="warningList" class="warning-list"></div>
             </div>
-            <details id="instructorFinder" class="daily-secondary">
-              <summary>Find an instructor</summary>
+            <details id="instructorFinder" class="daily-secondary manager-task">
+              <summary>Fix a record</summary>
               <div class="secondary-body">
+                <p class="muted">Find the person and date, then open the matching class. For a missing sign-in, use the action beside the class above.</p>
                 <div class="search-form">
                   <div class="field">
                     <label for="searchInstructor">Instructor</label>
@@ -840,7 +854,7 @@
               </div>
             </details>
             <details id="dailyAdvanced" class="daily-secondary">
-              <summary>Advanced and history</summary>
+              <summary>History and audit</summary>
               <div class="secondary-body">
                 <div id="unmatchedSection" class="unmatched" hidden>
                   <h3>Sign-ins not matched to this schedule</h3>
@@ -856,6 +870,48 @@
               </div>
             </details>
           </section>
+          <details id="add-class" class="panel manager-task added-manager">
+            <summary>Add a class</summary>
+            <div class="secondary-body">
+              <p class="muted">Add one date or a short run of classes alongside the regular website timetable.</p>
+              <div id="addedClassStatus" class="message added-status" role="status" aria-live="polite"></div>
+              <button id="addedClassRetry" class="btn small ghost" type="button">Refresh shared classes</button>
+              <form id="addedClassForm" class="added-form">
+                <h3 id="addedClassFormHeading">Add a class</h3>
+                <div class="added-grid">
+                  <div class="field"><label for="addedClassName">Class name</label><input id="addedClassName" name="className" maxlength="120" required placeholder="e.g. Intro to Judo" autocomplete="off"></div>
+                  <div class="field"><label for="addedClassTime">Start time</label><input id="addedClassTime" name="startTime" type="time" required></div>
+                </div>
+                <div class="field"><label for="addedClassRepeat">When does it run?</label><select id="addedClassRepeat" name="repeatMode"><option value="one">One date</option><option value="series">Limited repeating series</option></select></div>
+                <div id="addedSingleDate" class="field"><label for="addedClassDate">Class date</label><input id="addedClassDate" name="singleDate" type="date"></div>
+                <div id="addedRepeatingDates" hidden>
+                  <fieldset class="added-weekdays"><legend>Repeat on</legend>
+                    <label><input type="checkbox" name="weekday" value="Monday">Mon</label>
+                    <label><input type="checkbox" name="weekday" value="Tuesday">Tue</label>
+                    <label><input type="checkbox" name="weekday" value="Wednesday">Wed</label>
+                    <label><input type="checkbox" name="weekday" value="Thursday">Thu</label>
+                    <label><input type="checkbox" name="weekday" value="Friday">Fri</label>
+                    <label><input type="checkbox" name="weekday" value="Saturday">Sat</label>
+                    <label><input type="checkbox" name="weekday" value="Sunday">Sun</label>
+                  </fieldset>
+                  <div class="added-grid">
+                    <div class="field"><label for="addedClassStartDate">First possible date (included)</label><input id="addedClassStartDate" name="startDate" type="date"></div>
+                    <div class="field"><label for="addedClassEndDate">Last possible date (included)</label><input id="addedClassEndDate" name="endDate" type="date"></div>
+                  </div>
+                </div>
+                <div id="addedClassPreview" class="added-preview" aria-live="polite"></div>
+                <div class="form-actions"><button id="addedClassSave" class="btn primary" type="submit" disabled>Save class centrally</button><button id="addedClassEditCancel" class="btn ghost" type="button" hidden>Cancel edit</button></div>
+              </form>
+              <h3 style="margin-top:22px">Upcoming added classes</h3>
+              <div id="addedClassList" class="result-list"></div>
+              <div id="addedClassCancelReview" class="added-preview" style="margin-top:12px" hidden>
+                <div id="addedClassCancelCopy"></div>
+                <div class="form-actions"><button id="addedClassCancelConfirm" class="btn warn" type="button">Confirm cancellation</button><button id="addedClassCancelClose" class="btn ghost" type="button">Keep these dates</button></div>
+              </div>
+              <details id="addedClassHistory" class="daily-secondary"><summary>Past added classes</summary><div id="addedClassHistoryList" class="secondary-body result-list"></div></details>
+              <details id="addedClassLocal" class="daily-secondary" hidden><summary>Classes saved only on this browser</summary><div class="secondary-body"><p id="addedClassLocalCount" class="record-detail"></p><button id="addedClassImport" class="btn small" style="margin-top:10px" type="button" disabled>Save these classes centrally</button></div></details>
+            </div>
+          </details>
         </div>
       </section>
 
@@ -999,6 +1055,8 @@
   <div id="toast" class="toast" role="status">Saved</div>
 
   <script src="../installation-profile.generated.js"></script>
+  <script src="../temporary-classes-core.js"></script>
+  <script src="./added-classes.js"></script>
   <script>
     (() => {
       'use strict';
@@ -1151,6 +1209,8 @@
       let scheduleRefreshPromise = null;
       let scheduleLastAttemptAt = 0;
       let scheduleRenderPending = false;
+      let reviewLoaded = false;
+      let addedClasses = null;
       let currentDate = '';
       let currentRecords = [];
       let currentWarnings = [];
@@ -1509,7 +1569,7 @@
 
       function applyScheduleToReviewWhenSafe() {
         renderScheduleSource();
-        if (!currentDate || $('#appPanel').hidden) return;
+        if (!currentDate || $('#appPanel').hidden || !reviewLoaded) return;
         if (reviewFormInProgress()) {
           scheduleRenderPending = true;
           return;
@@ -3631,6 +3691,8 @@
       }
 
       function setLoggedOut(message = '') {
+        reviewLoaded = false;
+        if (addedClasses) addedClasses.setActive(false);
         clearDiagnosticRun(true);
         clearTabletPairingReview({ clearCode: true });
         clearStaffPrimarySlowNotice();
@@ -3672,6 +3734,8 @@
         $('#loginPanel').hidden = false;
         $('#classList').replaceChildren();
         $('#completedClassList').replaceChildren();
+        $('#upcomingClassList').replaceChildren();
+        $('#upcomingClasses').hidden = true;
         $('#completedClasses').open = false;
         $('#instructorFinder').open = false;
         $('#dailyAdvanced').open = false;
@@ -3749,13 +3813,14 @@
       }
 
       async function login(testShortcut) {
+        const button = testShortcut ? $('#testLoginButton') : $('#loginButton');
+        if (button.disabled) return;
         showMessage($('#loginMessage'), '');
         const adminName = $('#loginAdminName').value;
         if (!adminName) {
           showMessage($('#loginMessage'), 'Choose Andrew Smith or Stuart Turner.');
           return;
         }
-        const button = testShortcut ? $('#testLoginButton') : $('#loginButton');
         button.disabled = true;
         try {
           const data = await requestJson(API.login, {
@@ -3772,6 +3837,10 @@
           adminRequestToken = data.requestToken;
           $('#loginPassphrase').value = '';
           setLoggedIn(data);
+          if (addedClasses) {
+            addedClasses.setActive(true);
+            void addedClasses.refresh();
+          }
           if (requestedManagerMode() === 'staff-time') {
             const staffLoad = loadStaffTime();
             const dailyLoad = loadReview(defaultYesterday());
@@ -3782,6 +3851,7 @@
             await loadReview(defaultYesterday());
             if (STAFF_CLOCK_ENABLED) await loadStaffTime();
           }
+          openWorkspaceTask();
         } catch (error) {
           showMessage($('#loginMessage'), error.message);
         } finally {
@@ -4819,6 +4889,14 @@
         if (options.allowSigninVoid === true && signinVoidEligible(record)) {
           wrapper.append(buildSigninVoidForm(record));
         }
+        if (options.allowRecordFix === true) {
+          const action = makeElement('button', 'btn small record-action', 'Open this class');
+          action.type = 'button';
+          action.dataset.fixRecordDate = record.date;
+          action.dataset.fixRecordClass = record.classLabel;
+          action.dataset.fixRecordInstructor = record.instructor;
+          wrapper.append(action);
+        }
         return wrapper;
       }
 
@@ -4894,6 +4972,7 @@
         instructorInput.maxLength = 100;
         instructorInput.required = true;
         instructorInput.placeholder = testMode ? 'QA Test Instructor' : 'Instructor name';
+        instructorInput.value = clean($('#searchInstructor').value);
 
         const durationSelect = document.createElement('select');
         durationSelect.name = 'duration';
@@ -4945,7 +5024,7 @@
         return form;
       }
 
-      function classRow(label, index, matches) {
+      function classRow(label, index, matches, timing = 'past') {
         const mutationsEnabled = typeof ADMIN_MUTATIONS_ENABLED === 'undefined'
           || ADMIN_MUTATIONS_ENABLED;
         const instructors = [...new Set(matches.map(record => clean(record.instructor)).filter(Boolean))];
@@ -4969,21 +5048,21 @@
           }
           summary.append(status);
         } else {
-          summary.append(makeElement('div', 'blank', 'No sign-in recorded'));
+          summary.append(makeElement('div', 'blank', timing === 'upcoming' ? 'Upcoming · sign-in is not due yet' : timing === 'unknown' ? 'Start time needs checking · no sign-in recorded' : 'No sign-in recorded'));
         }
 
-        if (mutationsEnabled) {
+        if (mutationsEnabled && timing !== 'upcoming') {
           const toggle = makeElement('button', 'btn add-toggle forgotten-action', 'Add forgotten instructor');
           toggle.type = 'button';
           toggle.dataset.classIndex = String(index);
           main.append(summary, toggle);
-        } else {
+        } else if (!mutationsEnabled) {
           main.append(summary, makeElement(
             'div',
             'blank',
             'Changes unavailable while Richmond production activation is pending.'
           ));
-        }
+        } else main.append(summary);
         row.append(main);
         if (
           matches.length
@@ -5017,13 +5096,16 @@
           outcome.append(makeElement('strong', '', title), makeElement('span', '', detail));
           row.append(outcome);
         }
-        if (mutationsEnabled) row.append(buildAddForm(label, index));
+        if (mutationsEnabled && timing !== 'upcoming') row.append(buildAddForm(label, index));
         return row;
       }
 
       function renderReview() {
+        if (!reviewLoaded || !schedule) return;
         scheduleRenderPending = false;
-        const labels = schedule.days[dayName(currentDate)] || [];
+        const labels = addedClasses
+          ? addedClasses.classesForDate(schedule.days, currentDate)
+          : schedule.days[dayName(currentDate)] || [];
         const matchedDisplayIds = new Set();
         const scheduled = labels.map((label, index) => {
           const matches = currentRecords.filter(record =>
@@ -5031,18 +5113,25 @@
             && normalize(record.site) === normalize(SITE)
           );
           matches.forEach(record => matchedDisplayIds.add(record.displayId));
-          return { label, matches, row: classRow(label, index, matches) };
+          const timing = globalThis.GIBM1AddedClassesAdmin.classTiming(label, currentDate);
+          return { label, matches, timing, row: classRow(label, index, matches, timing) };
         });
-        const missingRows = scheduled.filter(item => item.matches.length === 0).map(item => item.row);
+        const missingRows = scheduled.filter(item => item.matches.length === 0 && item.timing !== 'upcoming').map(item => item.row);
+        const upcomingRows = scheduled.filter(item => item.matches.length === 0 && item.timing === 'upcoming').map(item => item.row);
         const completedRows = scheduled.filter(item => item.matches.length > 0).map(item => item.row);
         const missingList = $('#classList');
         missingList.setAttribute('aria-busy', 'false');
         missingList.replaceChildren(...missingRows);
         if (!missingRows.length) {
-          missingList.appendChild(staffEmpty(labels.length
-            ? 'Every scheduled class has a recorded instructor sign-in.'
-            : 'No classes are scheduled for this date.'));
+          const completeSchedule = schedule.current && addedClasses && addedClasses.isCurrent();
+          missingList.appendChild(staffEmpty(!completeSchedule
+            ? 'The complete schedule could not be verified. No missing sign-ins are shown in the available data; this is not an all-clear.'
+            : upcomingRows.length ? 'No earlier classes need a sign-in. Upcoming classes are below.'
+              : labels.length ? 'Every scheduled class has a recorded instructor sign-in.'
+                : 'No classes are scheduled for this date.'));
         }
+        $('#upcomingClasses').hidden = upcomingRows.length === 0;
+        $('#upcomingClassList').replaceChildren(...upcomingRows);
         $('#completedClassList').replaceChildren(...completedRows);
         if (!completedRows.length) {
           $('#completedClassList').appendChild(staffEmpty('No completed scheduled classes yet.'));
@@ -5081,6 +5170,7 @@
         refreshInstructorOptions(currentRecords);
         const reviewCount = currentRecords.filter(record => record.reviewRequired).length;
         const notices = [];
+        if (addedClasses && !addedClasses.isCurrent()) notices.push('Added classes could not be verified. Refresh shared classes in Add a class; the available timetable may be incomplete.');
         if (reviewCount) {
           notices.push(`${reviewCount} possible Admin/kiosk duplicate${reviewCount === 1 ? '' : 's'} must be reviewed before payroll.`);
         }
@@ -5096,6 +5186,7 @@
         const expectedAdditionInteraction = options.additionInteractionGeneration;
         if (options.preserveOutcome !== true) persistentReviewOutcome = null;
         const generation = ++reviewLoadGeneration;
+        if (!preserveOnFailure) reviewLoaded = false;
         currentDate = dateString;
         const today = nyDate();
         $('#calendarDate').value = dateString;
@@ -5111,6 +5202,8 @@
           $('#classList').setAttribute('aria-busy', 'true');
           $('#classList').replaceChildren(staffEmpty('Loading Daily sign-ins…'));
           $('#completedClassList').replaceChildren();
+          $('#upcomingClassList').replaceChildren();
+          $('#upcomingClasses').hidden = true;
           $('#dailyScheduledCount').textContent = '…';
           $('#dailySignedCount').textContent = '…';
           $('#dailyMissingCount').textContent = '…';
@@ -5137,6 +5230,7 @@
           currentRecords = data.records;
           currentWarnings = data.warnings;
           currentAuditHistory = data.auditHistory;
+          reviewLoaded = true;
           showMessage($('#reviewMessage'), '');
           renderReview();
           return true;
@@ -5147,6 +5241,7 @@
             return false;
           }
           if (!preserveOnFailure) {
+            reviewLoaded = false;
             currentRecords = [];
             currentWarnings = [];
             currentAuditHistory = [];
@@ -6342,12 +6437,14 @@
           renderRecordList(
             $('#selectedDateResults'),
             data.selectedDateRecords,
-            'No active sign-ins for this instructor on the selected date.'
+            'No active sign-ins for this instructor on the selected date. Use the matching class above to add a missed sign-in.',
+            record => recordElement(record, { allowRecordFix: true })
           );
           renderRecordList(
             $('#recentResults'),
             data.recentRecords,
-            'No recent active sign-ins found.'
+            'No recent active sign-ins found.',
+            record => recordElement(record, { allowRecordFix: true })
           );
           $('#searchResults').hidden = false;
           $('#searchRetry').hidden = true;
@@ -6411,6 +6508,10 @@
       }
 
       async function initialize() {
+        const loginControls = ['#loginAdminName', '#loginPassphrase', '#loginButton', '#testLoginButton']
+          .map(selector => $(selector));
+        loginControls.forEach(control => { control.disabled = true; });
+        showMessage($('#loginMessage'), 'Checking the class schedule…', 'working');
         if (IS_RICHMOND) {
           const pendingProduction = IS_RICHMOND_PRODUCTION && !ADMIN_MUTATIONS_ENABLED;
           document.title = IS_RICHMOND_PRODUCTION
@@ -6428,7 +6529,7 @@
           $('#appHeading').textContent = IS_RICHMOND_PRODUCTION
             ? 'Richmond M1 Admin'
             : 'Richmond TEST Admin';
-          $('#scheduledClassesHeading').textContent = 'Daily sign-ins';
+          $('#scheduledClassesHeading').textContent = 'What needs attention';
           $('#scheduleLimitation').textContent = 'Daily Review uses the current regular weekly schedule from the Richmond BJJ website. Recorded sign-ins with older or special-event labels remain visible as unmatched.';
           $('#testEntryHeading').textContent = IS_RICHMOND_PRODUCTION
             ? 'RICHMOND PRODUCTION'
@@ -6473,6 +6574,8 @@
           $('#scheduleProblem').hidden = false;
           $('#scheduleProblem').textContent = 'The class schedule could not be loaded.';
           setLoggedOut(`The ${INSTALLATION.gymName} schedule could not be loaded.`);
+        } finally {
+          loginControls.forEach(control => { control.disabled = false; });
         }
       }
 
@@ -6559,7 +6662,11 @@
       $('#staffTimeRetry').addEventListener('click', retryStaffTime);
       $('#staffNeedsAttentionRetry').addEventListener('click', retryStaffAttention);
       $('#staffClockedInRetry').addEventListener('click', retryStaffTime);
-      $('#staffOlderShiftForm').addEventListener('input', () => {
+      $('#staffOlderShiftForm').addEventListener('input', event => {
+        if (
+          event.target !== $('#staffOlderShiftStaff')
+          && event.target !== $('#staffOlderShiftDate')
+        ) return;
         if (staffOlderShiftLoading) return;
         staffOlderShiftLoadGeneration += 1;
         currentStaffOlderShiftQuery = null;
@@ -6568,6 +6675,7 @@
         renderStaffOlderShiftLookup();
       });
       $('#staffOlderShiftForm').addEventListener('submit', event => {
+        if (event.target !== event.currentTarget) return;
         event.preventDefault();
         submitStaffOlderShiftLookup(event.currentTarget);
       });
@@ -6656,11 +6764,57 @@
       window.addEventListener('hashchange', () => {
         const modeControlHasFocus = $('#managerModes').contains(document.activeElement);
         applyManagerMode({ focus: !modeControlHasFocus });
+        openWorkspaceTask();
       });
       window.addEventListener('message', receiveSyncInstallationReady);
       window.addEventListener('message', receiveTabletDiagnosticProofs);
       window.addEventListener('message', receiveSyncInstallationResult);
 
+      function openWorkspaceTask() {
+        if ($('#appPanel').hidden) return;
+        if (location.hash === '#add-class') {
+          addedClasses.open();
+          $('#add-class').scrollIntoView({ block: 'start' });
+        } else if (location.hash === '#fix-record') {
+          $('#instructorFinder').open = true;
+          $('#instructorFinder').scrollIntoView({ block: 'start' });
+          $('#searchInstructor').focus({ preventScroll: true });
+        } else if (location.hash === '#attention') {
+          $('#reviewSection').scrollIntoView({ block: 'start' });
+        }
+      }
+      $('#instructorFinder').addEventListener('click', async event => {
+        const action = event.target.closest('[data-fix-record-date]');
+        if (!action) return;
+        const instructor = action.dataset.fixRecordInstructor;
+        const classLabel = action.dataset.fixRecordClass;
+        if (!await loadReview(action.dataset.fixRecordDate)) return;
+        $('#searchInstructor').value = instructor;
+        const form = Array.from(document.querySelectorAll('.add-form')).find(item => normalize(item.dataset.classLabel) === normalize(classLabel));
+        if (form) {
+          form.elements.instructor.value = instructor;
+          const row = form.closest('.class-row');
+          const details = row.closest('details');
+          if (details) details.open = true;
+          row.scrollIntoView({ block: 'center' });
+          row.focus({ preventScroll: true });
+        } else {
+          $('#dailyAdvanced').open = true;
+          $('#unmatchedSection').scrollIntoView({ block: 'center' });
+          showMessage($('#searchMessage'), 'The record is in History and audit under sign-ins not matched to this schedule. Its original person, date and class are preserved.');
+        }
+      });
+      addedClasses = globalThis.GIBM1AddedClassesAdmin.create({
+        document,
+        profile: INSTALLATION,
+        request: requestJson,
+        onChange: applyScheduleToReviewWhenSafe,
+        onUnauthorized: () => setLoggedOut('Admin login required.'),
+        onReviewDate: async date => {
+          location.hash = '#attention';
+          await loadReview(date);
+        }
+      });
       initialize();
     })();
   </script>
