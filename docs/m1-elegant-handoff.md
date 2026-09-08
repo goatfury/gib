@@ -1,48 +1,60 @@
 # M1 Elegant Admin and Temporary Classes — TEST handoff
 
-Status: frozen TEST candidate with Revolution flows verified. Full two-gym acceptance remains blocked by Richmond TEST Admin access. This is not a production release.
+Status: **TEST-ready for usability review; not production-ready.** The authorized Richmond hosted tests and final-candidate browser gaps are closed. No merge or production release occurred.
 
-## Source and review deployments
+## Exact source and review target
 
-- Source: `c34cf62ab8742167dbac06a7b4a66843a4638efc`, including the status display fix and final server cancellation fixes. Browser files are byte-identical to `f1b385f`.
+- Final tested source: `75c10e2eface27cbe044e319ae4c91addd01a092`.
 - Branch: `feature/m1-elegant-admin-classes-20260907`, pushed for isolated review.
-- Draft PR #83: [https://github.com/goatfury/gib/pull/83](https://github.com/goatfury/gib/pull/83). Nothing merged into main.
-- Revolution: [https://6a9f47b1a3ba58000842fb26--gib-live.netlify.app/m1/admin/](https://6a9f47b1a3ba58000842fb26--gib-live.netlify.app/m1/admin/).
-- Richmond: [https://6a9f4818343c6eb16fd0d45f--gib-richmond-test.netlify.app/m1/admin/](https://6a9f4818343c6eb16fd0d45f--gib-richmond-test.netlify.app/m1/admin/).
+- Draft PR: [https://github.com/goatfury/gib/pull/83](https://github.com/goatfury/gib/pull/83).
+- Primary working review: [https://gib-richmond-test.netlify.app/m1/admin/](https://gib-richmond-test.netlify.app/m1/admin/).
+- Immutable Richmond: [https://6a9f67af1d87dea4f042ecf5--gib-richmond-test.netlify.app/m1/admin/](https://6a9f67af1d87dea4f042ecf5--gib-richmond-test.netlify.app/m1/admin/).
+- Immutable Revolution: [https://6a9f670c5231ee000863f6f7--gib-live.netlify.app/m1/admin/](https://6a9f670c5231ee000863f6f7--gib-live.netlify.app/m1/admin/).
 
-Both final immutable deployments were verified as `ready`, `context: deploy-preview`, and `published_at: null`. Revolution reports the exact source commit above. Richmond was created from an archive of that commit, built separately with matching `richmond/test` browser and server profiles; the deployed browser and changed server source fingerprints match the local artifact. The published Richmond TEST release remains `6a89d9b82eadf535cb568857`.
+Use the existing TEST Admin entry with Andrew Smith or Stuart Turner. No private production secret is required. Later documentation-only branch commits do not replace these exact tested artifacts.
 
-## Verified at this checkpoint
+Andrew explicitly authorized publishing the candidate and in-scope fixes to the **existing Richmond TEST site only**. The original c34cf62 candidate was published first; actual hosted checks then found three defects, all fixed in the final source above. No credential values were exposed, copied into evidence or broadened in scope.
 
-- Final automated suite: **783/783 passed**, no skips.
-- HTML/inline-script validation: six HTML files checked; five inline scripts passed.
-- Exact-final Revolution browser flow: a fake one-off class for today at `00:03` saved successfully despite its past start time. A separate kiosk received it, completed two fake instructor sign-ins with confirmed acknowledgments, and Daily Review displayed both. The website schedule remained present.
-- Exact-final regression flows: a missed instructor sign-in saved 0.5 hours; a cached class worked offline; the waiting queue survived reload; recovery and replay safely returned `already exists`.
-- Exact-final class history: an edit after a cancelled occurrence preserved the `1 October` cancellation. Legacy import preserved the original saved bytes, repeated import avoided duplicates, past `1 September` review remained available, and an expired class stayed out of today's kiosk.
-- Read-only kiosk checks with the browser date simulated to five dates showed the class present on `29 September`, `6 October`, and `8 October`, absent on the cancelled `1 October`, and absent after expiry on `9 October`. These were simulated-date checks.
-- The unchanged browser files retain the phone/laptop visual checks completed on `f1b385f`. Earlier real-browser Staff Clock checks on `42eabbe` saved missed in/out entries and read back an audited `4:00` to `4:05` adjustment; those Staff Clock paths remain unchanged.
-- Richmond's new shared-class GET endpoint returned HTTP 200 with `target: test`, `gymId: richmond`, version 0, and empty series/history. This was a read-only check; no Richmond class data was written.
+## What changed for Stu
 
-- Exact-final cancellation: cancelling the remaining dates removed the kiosk choice; a fresh Daily Review response retained all four synthetic teaching records byte-for-byte, including their identities and hours. No page JavaScript errors occurred during the final Revolution flows.
+Daily Review is the main workspace, with What needs attention, Fix a record and Add a class. A one-off defaults to one date; choosing a limited series reveals weekdays and an inclusive range, with the exact dates shown before saving. The existing temporary-class date model is reused. Changes persist centrally for that gym and reach separate kiosks alongside the regular website timetable. Device maintenance and local-only recovery remain secondary.
 
-Detailed sanitized results are retained in [m1-elegant-qa.json](m1-elegant-qa.json). Earlier draft checks are labeled with their own revisions. The immutable links above remain the review artifacts even if a later documentation-only commit creates another automatic draft.
+The final hosted fixes prevent early login from racing initialization, keep older Staff Clock correction forms open while editing, and let plain multiline Notes sync without relaxing formula, length or other control-character safeguards. No payroll split, compensation rule or unrelated feature was added.
 
-### Remaining limitations
+## Completed verification
 
-Payroll/export behavior is covered by automated contract tests. The browser export/PIN flow was not exercised. Richmond Admin end-to-end testing remains blocked as described below.
+- Full final automated suite: **791/791 passed**, zero failures or skips, including inline-script checks. New regression tests failed before their fixes and passed afterward.
+- Richmond identity: verified site `42736c77-e3c8-40aa-ba97-4f935d0999ad`, generated `richmond/test` browser and server profiles, actual `test/richmond` class responses and `test:true` login. The existing TEST receiver destination hash stayed unchanged. The site uses Netlify's published context for its existing TEST credentials; it is still a separate TEST application.
+- Exact final Richmond artifact: seven relevant served files on stable and immutable hosts matched the archived source/build fingerprints. Revolution's immutable deployment reports the exact final commit and remains an unpublished deploy preview.
+- Richmond real hosted flow, independent Admin and kiosk sessions: a same-day late one-off saved from the phone layout, survived reload and reached the already-open kiosk by polling. A Tuesday/Thursday series previewed exactly September 29, October 1, October 6 and October 8; invalid reversed dates were rejected. Creating classes created no attendance.
+- Two synthetic instructors signed into the same Richmond class with separate permanent IDs and real backend acknowledgments. A forgotten instructor correction saved and read back 0.5 hours. Multiline quoted Notes survived real sync and review.
+- Offline Richmond kiosk: cached choices and queued sign-in survived reload; a newly saved central class stayed absent until reconnection. Recovery received the new choice and acknowledgment. Replaying the exact confirmed row returned already exists.
+- Canceling October 1 then correcting the future series kept the cancellation and prior revisions. Explicit local-only import preserved the original bytes, suppressed duplicate classes and remained idempotent. An expired September 1 occurrence remained available in Daily Review, where a real missing-instructor correction saved and read back 0.5 hours.
+- Canceling the remaining one-off dates removed its kiosk choice while all four existing teaching records stayed byte-for-byte identical, including IDs and hours. They remained visibly accessible under History and audit.
+- Gym separation: live TEST reads returned only the appropriate gym's class namespace; Revolution's actual Daily Review contained none of the Richmond synthetic instructor prefix. Richmond Staff Clock stayed hidden/disabled in kiosk and Admin.
+- Final Revolution Staff correction: actual Find a shift → Adjust → Review → Confirm changed the retained synthetic shift from 02:11–03:17 (1.1 hours) to 02:15–03:15 (1 hour). Fresh backend lookup preserved source IDs and original timestamps; the permanent audit contained both originals and corrections. Immediate login waited for initialization and remained active.
+- Both profiles' actual PIN setup, mismatch prevention, logout, wrong-PIN denial and correct-PIN entry passed. Real Export clicks downloaded CSVs whose **complete seven-column contents** matched the source rows, including commas, quotes and multiline Notes. Ledger, queue and permanent IDs were unchanged. Revolution covered 1 and 0.5 hours; Richmond used existing 1-hour rules.
+- Supplemental actual-hosted calendar checks used browser date emulation with real GET responses: correct series present September 29/October 6/October 8, absent canceledOctober 1 and expiredOctober 9. Twelve New York midnight/daylight-saving boundary checks passed. These are simulated-date checks, not claims of actual future use.
+- Phone 390×844, desktop 1440×1000, tablet portrait 768×1024 and landscape 1024×768 layouts were visually inspected. Controls were reachable, no horizontal overflow or obstructed controls were found, and the final flows produced no page JavaScript errors.
 
-## Richmond blocker
+Detailed sanitized receipts, synthetic record identities, before/after audits, deployment fingerprints, parsed verification and the actual downloaded CSV contents are preserved in [m1-elegant-qa.json](m1-elegant-qa.json). Earlier evidence is explicitly labeled as a prior checkpoint. Working screenshots and raw test receipts remain under the task's work directory.
 
-Richmond TEST Admin login returns HTTP 503: `Admin service is not configured for this environment.` The existing TEST webhook and Admin action credential variables are scoped only to Netlify's `production` context, so an unpublished preview does not receive them. Installation/environment settings already cover all contexts; changing those nonsecret build settings alone cannot resolve the login failure.
+## Genuine limitations and remaining release work
 
-Only variable names, scopes, and context labels were inspected. No credential values were accessed or exposed, and no settings were changed. Richmond's Admin save and reload flows remain blocked until its TEST preview configuration is addressed through an approved path. The existing published TEST release's successful login does not establish preview readiness.
+The browser export test exercised the unchanged hosted kiosk in a secure cross-origin frame, where the browser genuinely denies native file picking and the existing download fallback runs. There were no app/API shims, mocked responses or weakened headers. The standalone operating-system Save dialog was not exercised. A proposed Richmond QA duration-rule change was rejected before execution; the successful export test used existing rules instead. No Richmond setting changed.
 
-Proposed continuation, **not yet approved**: publish the frozen candidate only to the existing `gib-richmond-test` site, which already has working TEST credentials, then complete Richmond's browser flows. This would change the published TEST site only. Neither gym's production site or production data would be part of that action.
+No physical tablets were touched. Phone/tablet sizes and future dates were browser emulation. Before a separately authorized live release, review the native Save path and the real target devices, agree on the production added-class storage/write route and rollout/rollback plan, recheck the latest live baseline, and obtain explicit merge/deployment approval. The shared-class endpoint deliberately has no production write path today. Do not simply promote this TEST artifact or broaden TEST credentials into production.
 
-## Release and rollback considerations
+The recovered Richmond delivery/connection hotfix remains preserved; provenance is in [m1-elegant-baseline.md](m1-elegant-baseline.md). No real business records, September 5 payment issue, payroll calculations, production receivers/settings or protected branches were changed. Synthetic TEST examples and history remain intentionally retained.
 
-- Shared added-class reads and writes are restricted by the deployed TEST profile, permitted TEST host/site, deployment context, and request checks. Writes also require the existing TEST Admin session. Revolution requires an unpublished preview or branch deployment; Richmond is restricted to its separate TEST site/profile. No production shared-class write path was added.
-- The separately uploaded Richmond delivery/connection hotfix was recovered and preserved before this candidate. Its provenance is recorded in [m1-elegant-baseline.md](m1-elegant-baseline.md).
-- Main, the production sites, production receivers, business records, and production settings remain unchanged. No merge or production promotion has occurred. A production release requires separate authorization after the remaining QA and configuration decisions are complete.
-- The final read-only deployment check confirmed the production IDs remain Revolution `6a95d82e6ea2ad000986b4ea` and Richmond `6a9c7a2fec9f71d5ff660a57`.
-- No live-system rollback is needed. To pause review, stop using these isolated previews. Fake shared TEST classes persist across previews and can be cancelled through the TEST manager while retaining their history; no production record restoration is involved.
+## Live status and TEST rollback
+
+Final read-only check at 2026-09-08 01:52:24 UTC also confirmed remote main remains `3b85fe4a6a93695d2dea95a1b5e41354e24f9ac6`; PR #83 is open, draft and unmerged.
+
+- Revolution production remains `6a95d82e6ea2ad000986b4ea`.
+- Richmond production remains `6a9c7a2fec9f71d5ff660a57`.
+- Richmond TEST is published as `6a9f67af1d87dea4f042ecf5` only under the user's TEST authorization.
+- Original Richmond TEST rollback retained: `6a89d9b82eadf535cb568857`; interim c34cf62 deployment also retained: `6a9f6361e51d8ab53db794f6`.
+- If TEST rollback is requested, republish the retained original deployment on **gib-richmond-test only**. This restores TEST code and leaves shared TEST records/history intact. Neither live gym needs rollback.
+
+Next owner decision: whether this single workspace makes routine administration straightforward enough for Stu. That usability decision does not authorize production release.

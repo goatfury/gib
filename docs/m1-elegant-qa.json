@@ -1,25 +1,30 @@
 {
   "schema": "m1-elegant-qa/v1",
-  "candidate": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
-  "revolutionOrigin": "https://6a9f47b1a3ba58000842fb26--gib-live.netlify.app",
+  "candidate": "75c10e2eface27cbe044e319ae4c91addd01a092",
+  "status": "TEST-ready; not production-ready",
+  "updatedAt": "2026-09-08T01:51:09.542Z",
+  "revolutionOrigin": "https://6a9f670c5231ee000863f6f7--gib-live.netlify.app",
   "richmond": {
-    "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
-    "origin": "https://6a9f4818343c6eb16fd0d45f--gib-richmond-test.netlify.app",
+    "revision": "75c10e2eface27cbe044e319ae4c91addd01a092",
+    "origin": "https://6a9f67af1d87dea4f042ecf5--gib-richmond-test.netlify.app",
+    "stableUrl": "https://gib-richmond-test.netlify.app",
     "deploy": {
-      "id": "6a9f4818343c6eb16fd0d45f",
+      "id": "6a9f67af1d87dea4f042ecf5",
       "siteId": "42736c77-e3c8-40aa-ba97-4f935d0999ad",
       "state": "ready",
-      "context": "deploy-preview",
-      "publishedAt": null,
+      "context": "production",
+      "publishedAt": "2026-09-08T01:41:14.214Z",
       "deploySource": "cli",
-      "title": "M1 final cancellation fixes - Richmond TEST - c34cf62ab8742167dbac06a7b4a66843a4638efc"
+      "title": "Approved corrected Richmond TEST only - 75c10e2eface27cbe044e319ae4c91addd01a092"
     },
+    "originalRollbackDeploy": "6a89d9b82eadf535cb568857",
+    "interimDeploy": "6a9f6361e51d8ab53db794f6",
     "publishedDeployChecks": [
       {
         "gym": "Richmond TEST",
         "siteId": "42736c77-e3c8-40aa-ba97-4f935d0999ad",
-        "publishedDeploy": "6a89d9b82eadf535cb568857",
-        "unchanged": true
+        "publishedDeploy": "6a9f67af1d87dea4f042ecf5",
+        "unchanged": false
       },
       {
         "gym": "Revolution production",
@@ -34,34 +39,99 @@
         "unchanged": true
       }
     ],
+    "testReceiver": {
+      "key": "GIB_RICHMOND_TEST_WEBHOOK_URL",
+      "urlSha256": "2338ba9250cfbc95bac3b2bbe023f64859a457ac24f4589c9a7a8ad9eb0e1070",
+      "unchanged": true
+    },
+    "archive": {
+      "sourceFilesExact": 138,
+      "generatedProfileFiles": 2
+    },
     "assets": [
       {
         "path": "m1/index.html",
+        "httpStatus": 200,
         "sha256": "4306e42b713c6241d7d61a106f4ebe8c4ddc78ca11545fabf2fe49efbc86b8b1",
         "exact": true
       },
       {
         "path": "m1/admin/index.html",
-        "sha256": "94aefbbcebbb59ac13d4764df4b0aaaf02fbd2d12c669db100210c8e4a725221",
+        "httpStatus": 200,
+        "sha256": "b53238d36a6d484c593d481ade5ed3046940e681e1974cd26e4502005d123bbe",
         "exact": true
       },
       {
         "path": "m1/installation-profile.generated.js",
+        "httpStatus": 200,
         "sha256": "c0c38f726a718fc6651802c4fc455686fda01c2973854de9424ae71d07babe2f",
         "exact": true
       },
       {
         "path": "netlify/functions/_lib/m1-installation.generated.mjs",
+        "httpStatus": 200,
         "sha256": "5248492b66ac3247a5efe68cba443ddde08ec17eb43ed2f3d03b8f3c11edf199",
         "exact": true
       },
       {
+        "path": "netlify/functions/m1-kiosk-sync.mjs",
+        "httpStatus": 200,
+        "sha256": "48a4bba52822866898d0df1f3431b4ad4f0f9401848a8276509596f55194059e",
+        "exact": true
+      },
+      {
         "path": "netlify/functions/m1-added-classes.mjs",
+        "httpStatus": 200,
         "sha256": "6f43f01320a88d2accdf2b713fe095c4c48150c987ca385b04a33825027eb81e",
         "exact": true
       },
       {
         "path": "netlify/functions/_lib/m1-added-classes.mjs",
+        "httpStatus": 200,
+        "sha256": "25f00c68ecd1545774cecab8b2eb90adef911b9c3a39e5245508a76e995d5812",
+        "exact": true
+      }
+    ],
+    "stableAssets": [
+      {
+        "path": "m1/index.html",
+        "httpStatus": 200,
+        "sha256": "4306e42b713c6241d7d61a106f4ebe8c4ddc78ca11545fabf2fe49efbc86b8b1",
+        "exact": true
+      },
+      {
+        "path": "m1/admin/index.html",
+        "httpStatus": 200,
+        "sha256": "b53238d36a6d484c593d481ade5ed3046940e681e1974cd26e4502005d123bbe",
+        "exact": true
+      },
+      {
+        "path": "m1/installation-profile.generated.js",
+        "httpStatus": 200,
+        "sha256": "c0c38f726a718fc6651802c4fc455686fda01c2973854de9424ae71d07babe2f",
+        "exact": true
+      },
+      {
+        "path": "netlify/functions/_lib/m1-installation.generated.mjs",
+        "httpStatus": 200,
+        "sha256": "5248492b66ac3247a5efe68cba443ddde08ec17eb43ed2f3d03b8f3c11edf199",
+        "exact": true
+      },
+      {
+        "path": "netlify/functions/m1-kiosk-sync.mjs",
+        "httpStatus": 200,
+        "sha256": "48a4bba52822866898d0df1f3431b4ad4f0f9401848a8276509596f55194059e",
+        "exact": true
+      },
+      {
+        "path": "netlify/functions/m1-added-classes.mjs",
+        "httpStatus": 200,
+        "sha256": "6f43f01320a88d2accdf2b713fe095c4c48150c987ca385b04a33825027eb81e",
+        "exact": true
+      },
+      {
+        "path": "netlify/functions/_lib/m1-added-classes.mjs",
+        "httpStatus": 200,
         "sha256": "25f00c68ecd1545774cecab8b2eb90adef911b9c3a39e5245508a76e995d5812",
         "exact": true
       }
@@ -71,310 +141,817 @@
       "environment": "test",
       "allowedOrigin": "https://gib-richmond-test.netlify.app"
     },
-    "classes": {
-      "httpStatus": 200,
-      "ok": true,
-      "target": "test",
-      "gymId": "richmond",
-      "version": 0,
-      "seriesCount": 0,
-      "historyCount": 0
-    },
-    "login": {
-      "httpStatus": 503,
-      "ok": false,
-      "test": false,
-      "message": "Admin service is not configured for this environment."
-    }
+    "classes": [
+      {
+        "origin": "https://6a9f67af1d87dea4f042ecf5--gib-richmond-test.netlify.app",
+        "httpStatus": 200,
+        "ok": true,
+        "target": "test",
+        "gymId": "richmond",
+        "version": 5,
+        "seriesCount": 5,
+        "historyCount": 5
+      },
+      {
+        "origin": "https://gib-richmond-test.netlify.app",
+        "httpStatus": 200,
+        "ok": true,
+        "target": "test",
+        "gymId": "richmond",
+        "version": 5,
+        "seriesCount": 5,
+        "historyCount": 5
+      }
+    ],
+    "login": [
+      {
+        "origin": "https://6a9f67af1d87dea4f042ecf5--gib-richmond-test.netlify.app",
+        "httpStatus": 200,
+        "ok": true,
+        "test": true,
+        "readOnly": false
+      },
+      {
+        "origin": "https://gib-richmond-test.netlify.app",
+        "httpStatus": 200,
+        "ok": true,
+        "test": true,
+        "readOnly": false
+      }
+    ],
+    "businessWrites": 0
   },
   "automated": {
-    "passed": 783,
+    "passed": 791,
     "failed": 0,
     "skipped": 0,
-    "inlineScripts": "Covered by full suite"
+    "inlineScripts": "Covered by full suite",
+    "log": "work/final-tests-pr83-fixes.log"
   },
-  "browserChecks": [
+  "fixes": [
     {
-      "name": "real central same-day late one-off create",
-      "pass": true,
-      "version": 1,
-      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+      "issue": "An early Admin login could be invalidated when asynchronous schedule initialization finished.",
+      "resolution": "Initialization disables login controls; the login handler also guards keyboard entry. Real immediate login and full workflows passed."
     },
     {
-      "name": "independent kiosk receives centrally created class after reload",
-      "pass": true,
-      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+      "issue": "Older Staff shift correction inputs bubbled into the outer search form and removed the active correction.",
+      "resolution": "Search input and submit handlers accept only their own controls/events. Actual correction, original source IDs and permanent audit verified."
     },
     {
-      "name": "central class persists through Admin reload and creates no attendance",
-      "pass": true,
-      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
-    },
-    {
-      "name": "real limited Tue/Thu month boundary series and backwards-range rejection",
-      "pass": true,
-      "dates": [
-        "2026-09-29",
-        "2026-10-01",
-        "2026-10-06",
-        "2026-10-08"
-      ],
-      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
-    },
-    {
-      "name": "test setup",
-      "note": "Fresh isolated kiosk automatic sending enabled as a local configuration fixture; no real device settings or credentials.",
-      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
-    },
-    {
-      "name": "real two instructor kiosk sign-ins and central acknowledgment",
-      "pass": true,
-      "instructors": [
-        "QA TEST M1 Instructor Alpha",
-        "QA TEST M1 Instructor Beta"
-      ],
-      "hours": [
-        1,
-        1
-      ],
-      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
-    },
-    {
-      "name": "real Admin missed instructor with explicit half-hour duration",
-      "pass": true,
-      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
-    },
-    {
-      "name": "meaningful TEST record confirmation",
-      "message": "Add Clock In for QA Test Staff at Sep 7, 4:00 AM EDT?\n\nReason: Synthetic TEST missed punch; do not pay.",
-      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
-    },
-    {
-      "name": "meaningful TEST record confirmation",
-      "message": "Add Clock Out for QA Test Staff at Sep 7, 5:00 AM EDT?\n\nReason: Synthetic TEST missed clock-out; do not pay.",
-      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
-    },
-    {
-      "name": "real offline reload, cached added class, durable queue, recovery, exact acknowledged RowID replay",
-      "pass": true,
-      "retry": "already exists",
-      "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
-    },
-    {
-      "name": "final exact candidate real UI same-day create, separate kiosk receipt, two instructors and Daily Review readback",
-      "pass": true,
-      "revision": "f1b385f55a61b209290410497ea5891deb339f39"
-    },
-    {
-      "name": "real offline reload, cached added class, durable queue, recovery, exact acknowledged RowID replay",
-      "pass": true,
-      "revision": "f1b385f55a61b209290410497ea5891deb339f39",
-      "retry": "already exists"
-    },
-    {
-      "name": "layout phone",
-      "pass": true,
-      "height": 44,
-      "unobstructed": true,
-      "revision": "f1b385f55a61b209290410497ea5891deb339f39"
-    },
-    {
-      "name": "layout tablet-portrait",
-      "pass": true,
-      "height": 44,
-      "unobstructed": true,
-      "revision": "f1b385f55a61b209290410497ea5891deb339f39"
-    },
-    {
-      "name": "layout tablet-landscape",
-      "pass": true,
-      "height": 44,
-      "unobstructed": true,
-      "revision": "f1b385f55a61b209290410497ea5891deb339f39"
-    },
-    {
-      "name": "layout desktop",
-      "pass": true,
-      "height": 44,
-      "unobstructed": true,
-      "revision": "f1b385f55a61b209290410497ea5891deb339f39"
-    },
-    {
-      "name": "final hosted edit after future-date cancellation",
-      "pass": true,
-      "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
-      "version": 5
-    },
-    {
-      "name": "final hosted explicit legacy import, repeat dedupe, byte-preserved local original, past-date Daily Review, expiry on independent kiosk",
-      "pass": true,
-      "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc"
-    },
-    {
-      "name": "frozen candidate real same-day create, independent kiosk, two distinct teaching records, missed-signin half-hour correction and Daily Review readback",
-      "pass": true,
-      "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc"
-    },
-    {
-      "name": "real offline reload, cached added class, durable queue, recovery, exact acknowledged RowID replay",
-      "pass": true,
-      "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
-      "retry": "already exists"
-    },
-    {
-      "name": "frozen hosted cancel remaining dates removes kiosk choice and preserves all four exact teaching records/identities/hours",
-      "pass": true,
-      "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
-      "recordCount": 4
+      "issue": "Kiosk textarea allowed multiline Notes but sync rejected them.",
+      "resolution": "Permit LF/CRLF only within Notes; retain other control, length and formula guards. Actual backend sync, review and CSV contents preserve the text."
     }
   ],
+  "richmondBrowser": {
+    "candidate": "75c10e2eface27cbe044e319ae4c91addd01a092",
+    "origin": "https://gib-richmond-test.netlify.app",
+    "checks": [
+      {
+        "name": "real central late one-off created in Admin and delivered by poll to separate existing kiosk",
+        "pass": true
+      },
+      {
+        "name": "real limited Tuesday/Thursday series and backwards-range rejection",
+        "dates": [
+          "2026-09-29",
+          "2026-10-01",
+          "2026-10-06",
+          "2026-10-08"
+        ],
+        "pass": true
+      },
+      {
+        "name": "central reload persistence, Daily Review agreement, no attendance created by scheduling, Richmond Staff Clock disabled",
+        "pass": true
+      },
+      {
+        "name": "two real kiosk instructor sign-ins with separate permanent IDs acknowledged; Daily Review agrees; explicit half-hour forgotten instructor correction saved",
+        "pass": true
+      },
+      {
+        "name": "real offline cached choice and reload, offline new class stays absent, durable queued sign-in, reconnect receives both acknowledgment and new class, exact network retry already exists",
+        "pass": true
+      },
+      {
+        "name": "future single-date cancellation and subsequent name correction preserve canceled date and immutable original history",
+        "pass": true
+      },
+      {
+        "name": "real explicit legacy import with preserved original bytes, duplicate suppression, historical Daily Review and expiry from today kiosk",
+        "pass": true
+      },
+      {
+        "name": "cancel-all removes kiosk choice but preserves exact four teaching records/identities/hours; live reads prove gym-specific added-class separation; Richmond Staff Clock remains disabled",
+        "pass": true
+      },
+      {
+        "name": "admin phone layout",
+        "geometry": {
+          "width": 390,
+          "page": 390
+        },
+        "pass": true
+      },
+      {
+        "name": "kiosk phone layout",
+        "geometry": {
+          "width": 390,
+          "page": 390
+        },
+        "pass": true
+      },
+      {
+        "name": "admin desktop layout",
+        "geometry": {
+          "width": 1440,
+          "page": 1440
+        },
+        "pass": true
+      },
+      {
+        "name": "kiosk desktop layout",
+        "geometry": {
+          "width": 1440,
+          "page": 1440
+        },
+        "pass": true
+      },
+      {
+        "name": "admin tablet-portrait layout",
+        "geometry": {
+          "width": 768,
+          "page": 768
+        },
+        "pass": true
+      },
+      {
+        "name": "kiosk tablet-portrait layout",
+        "geometry": {
+          "width": 768,
+          "page": 768
+        },
+        "pass": true
+      },
+      {
+        "name": "admin tablet-landscape layout",
+        "geometry": {
+          "width": 1024,
+          "page": 1024
+        },
+        "pass": true
+      },
+      {
+        "name": "kiosk tablet-landscape layout",
+        "geometry": {
+          "width": 1024,
+          "page": 1024
+        },
+        "pass": true
+      },
+      {
+        "name": "cancelled-class teaching records remain visibly accessible in History and audit",
+        "pass": true
+      },
+      {
+        "name": "expired September1 added-class history supports actual half-hour missed-instructor correction through existing Daily Review form",
+        "pass": true
+      }
+    ],
+    "errors": [],
+    "started": "2026-09-08T01:41:15.104Z",
+    "deployment": "6a9f67af1d87dea4f042ecf5",
+    "records": [
+      {
+        "displayId": "sheet-row-5",
+        "recordId": "gib-m1-cedddffb-0055-4192-af6e-81851c6db0d3",
+        "timestamp": "2026-09-07 21:42:28",
+        "date": "2026-09-07",
+        "classLabel": "12:04 AM QA TEST Richmond One-off R83F",
+        "duration": 1,
+        "instructor": "QA TEST R83F Richmond Alpha",
+        "site": "Richmond",
+        "notes": "Synthetic TEST, \"Richmond\" verification\nDo not pay.",
+        "source": "Kiosk",
+        "reviewRequired": false,
+        "reviewMessage": ""
+      },
+      {
+        "displayId": "sheet-row-6",
+        "recordId": "gib-m1-6e8c4b64-fbfb-4589-82cf-276ea6546344",
+        "timestamp": "2026-09-07 21:42:28",
+        "date": "2026-09-07",
+        "classLabel": "12:04 AM QA TEST Richmond One-off R83F",
+        "duration": 1,
+        "instructor": "QA TEST R83F Richmond Beta",
+        "site": "Richmond",
+        "notes": "Synthetic Richmond TEST verification; do not pay.",
+        "source": "Kiosk",
+        "reviewRequired": false,
+        "reviewMessage": ""
+      },
+      {
+        "displayId": "sheet-row-7",
+        "recordId": "gib-admin-m1-2026-09-07-bdc89e1ddabdc65c38402523",
+        "timestamp": "2026-09-07 21:42:50",
+        "date": "2026-09-07",
+        "classLabel": "12:04 AM QA TEST Richmond One-off R83F",
+        "duration": 0.5,
+        "instructor": "QA TEST R83F Richmond Forgotten",
+        "site": "Richmond",
+        "notes": "Admin-added | Admin: Andrew Smith | Reason: Synthetic TEST forgotten instructor correction; do not pay.",
+        "source": "Admin-added",
+        "reviewRequired": false,
+        "reviewMessage": ""
+      },
+      {
+        "displayId": "sheet-row-8",
+        "recordId": "gib-m1-8d08bba7-639b-47b2-8986-b3bd951a105f",
+        "timestamp": "2026-09-07 21:43:10",
+        "date": "2026-09-07",
+        "classLabel": "12:04 AM QA TEST Richmond One-off R83F",
+        "duration": 1,
+        "instructor": "QA TEST R83F Richmond Offline",
+        "site": "Richmond",
+        "notes": "Synthetic TEST offline recovery; do not pay.",
+        "source": "Kiosk",
+        "reviewRequired": false,
+        "reviewMessage": ""
+      }
+    ],
+    "recordCount": 4,
+    "historicalRecords": [
+      {
+        "displayId": "sheet-row-11",
+        "recordId": "gib-admin-m1-2026-09-01-ec2345ef96ccb9f9f3285ea5",
+        "timestamp": "2026-09-07 21:47:56",
+        "date": "2026-09-01",
+        "classLabel": "8:45 AM QA TEST Richmond Legacy R83F",
+        "duration": 0.5,
+        "instructor": "QA TEST R83F Richmond Historical",
+        "site": "Richmond",
+        "notes": "Admin-added | Admin: Andrew Smith | Reason: Synthetic TEST historical correction after expiry; do not pay.",
+        "source": "Admin-added",
+        "reviewRequired": false,
+        "reviewMessage": ""
+      }
+    ],
+    "visualSanity": {
+      "pass": true,
+      "viewports": [
+        "390x844",
+        "1440x1000",
+        "768x1024",
+        "1024x768"
+      ],
+      "reviewed": "Root inspected Admin phone, desktop and tablet form/dashboard; kiosk phone and tablet screenshots; touch controls fit, no overflow or obstruction.",
+      "physicalDevices": false
+    },
+    "finished": "2026-09-08T01:49:07.280Z"
+  },
+  "revolutionStaff": {
+    "origin": "https://6a9f670c5231ee000863f6f7--gib-live.netlify.app",
+    "revision": "75c10e2eface27cbe044e319ae4c91addd01a092",
+    "scope": "Real hosted TEST Admin UI; actual date, real requests and fake staff only. No mocks, private secrets, production writes, or physical-hardware claim.",
+    "startedAt": "2026-09-08T01:41:49.389Z",
+    "fixture": {
+      "staffId": "qa-test-staff",
+      "staffName": "QA Test Staff",
+      "date": "2026-08-26",
+      "marker": "QA TEST PR83 Staff 1788830674857"
+    },
+    "steps": [
+      {
+        "name": "TEST target verified",
+        "target": "test",
+        "gymId": "rev"
+      },
+      {
+        "name": "Immediate normal TEST login waited for initialization and remained active",
+        "initiallyDisabled": true
+      },
+      {
+        "name": "TEST Admin login and fake roster loaded"
+      },
+      {
+        "name": "Resumed only the two recorded synthetic source IDs"
+      },
+      {
+        "name": "Both original punches read back in completed shift",
+        "clockIn": "2026-08-26T02:11:00-04:00",
+        "clockOut": "2026-08-26T03:17:00-04:00"
+      },
+      {
+        "name": "Exact adjustment review shown before any save"
+      },
+      {
+        "name": "Reviewed adjustment confirmed",
+        "auditActionNumber": 7
+      },
+      {
+        "name": "Corrected times and unchanged original source identities read back",
+        "originalClockIn": "2026-08-26T02:11:00-04:00",
+        "originalClockOut": "2026-08-26T03:17:00-04:00",
+        "currentClockIn": "2026-08-26T02:15:00-04:00",
+        "currentClockOut": "2026-08-26T03:15:00-04:00"
+      },
+      {
+        "name": "Permanent audit matches before and after times"
+      },
+      {
+        "name": "Final actual Daily Review excludes Richmond synthetic namespace and session remains active",
+        "date": "2026-09-07",
+        "test": true,
+        "totalRecords": 12,
+        "foreignSyntheticPrefix": "QA TEST R83F Richmond ",
+        "foreignMatches": 0
+      }
+    ],
+    "api": [
+      {
+        "operation": "review",
+        "status": 200,
+        "test": true
+      },
+      {
+        "operation": "reviewPage",
+        "stream": "attention",
+        "status": 200,
+        "test": true
+      },
+      {
+        "operation": "shiftLookup",
+        "status": 200,
+        "test": true
+      },
+      {
+        "operation": "reviewPage",
+        "stream": "records",
+        "status": 200,
+        "test": true
+      },
+      {
+        "operation": "reviewPage",
+        "stream": "audit",
+        "status": 200,
+        "test": true
+      },
+      {
+        "operation": "shiftLookup",
+        "status": 200,
+        "test": true
+      },
+      {
+        "operation": "shiftLookup",
+        "status": 200,
+        "test": true
+      },
+      {
+        "operation": "adjust",
+        "status": 200,
+        "test": true,
+        "result": "adjusted"
+      },
+      {
+        "operation": "review",
+        "status": 200,
+        "test": true
+      },
+      {
+        "operation": "reviewPage",
+        "stream": "attention",
+        "status": 200,
+        "test": true
+      },
+      {
+        "operation": "shiftLookup",
+        "status": 200,
+        "test": true
+      },
+      {
+        "operation": "reviewPage",
+        "stream": "records",
+        "status": 200,
+        "test": true
+      },
+      {
+        "operation": "shiftLookup",
+        "status": 200,
+        "test": true
+      },
+      {
+        "operation": "reviewPage",
+        "stream": "audit",
+        "status": 200,
+        "test": true
+      }
+    ],
+    "errors": [],
+    "additions": [
+      {
+        "linkedPunchId": "gib-m1-staff-170c31b2-b72c-4eff-9822-801c53d7a5c1",
+        "auditActionNumber": 10,
+        "confirmation": {
+          "adminName": "Andrew Smith",
+          "punchId": "gib-m1-staff-170c31b2-b72c-4eff-9822-801c53d7a5c1",
+          "staffId": "qa-test-staff",
+          "staffName": "QA Test Staff",
+          "timestamp": "2026-08-26T02:11:00-04:00",
+          "date": "2026-08-26",
+          "punchAction": "clockIn",
+          "reason": "QA TEST PR83 Staff 1788830674857 synthetic missed clockIn; DO NOT PAY",
+          "site": "Rev",
+          "device": "Admin Staff Time",
+          "build": "m1b-staff-clock"
+        }
+      },
+      {
+        "linkedPunchId": "gib-m1-staff-4f72d022-b374-4a28-bdab-95f6aaffbadf",
+        "auditActionNumber": 11,
+        "confirmation": {
+          "adminName": "Andrew Smith",
+          "punchId": "gib-m1-staff-4f72d022-b374-4a28-bdab-95f6aaffbadf",
+          "staffId": "qa-test-staff",
+          "staffName": "QA Test Staff",
+          "timestamp": "2026-08-26T03:17:00-04:00",
+          "date": "2026-08-26",
+          "punchAction": "clockOut",
+          "reason": "QA TEST PR83 Staff 1788830674857 synthetic missed clockOut; DO NOT PAY",
+          "site": "Rev",
+          "device": "Admin Staff Time",
+          "build": "m1b-staff-clock"
+        }
+      }
+    ],
+    "priorEvidence": "pr83-staff-real-receipt.json",
+    "deploy": {
+      "id": "6a9f670c5231ee000863f6f7",
+      "state": "ready",
+      "context": "deploy-preview",
+      "publishedAt": null,
+      "reviewId": 83
+    },
+    "initialLoginDisabled": true,
+    "bootstrapEvents": [
+      {
+        "kind": "schedule-response",
+        "at": 1788831712412,
+        "status": 200
+      },
+      {
+        "kind": "login-request",
+        "at": 1788831712510
+      }
+    ],
+    "originalShift": {
+      "clockIn": {
+        "punchId": "gib-m1-staff-170c31b2-b72c-4eff-9822-801c53d7a5c1",
+        "timestamp": "2026-08-26T02:11:00-04:00",
+        "date": "2026-08-26",
+        "staffId": "qa-test-staff",
+        "staffName": "QA Test Staff",
+        "punchAction": "clockIn",
+        "site": "Rev",
+        "device": "Admin Staff Time",
+        "build": "m1b-staff-clock",
+        "note": "Admin correction | Request: gib-m1-staff-request-d056a7be-af1e-440a-98d7-abd86b16cb91 | Reason: QA TEST PR83 Staff 1788830674857 synthetic missed clockIn; DO NOT PAY",
+        "status": "ACTIVE",
+        "source": "Admin-added",
+        "adminName": "Andrew Smith"
+      },
+      "clockOut": {
+        "punchId": "gib-m1-staff-4f72d022-b374-4a28-bdab-95f6aaffbadf",
+        "timestamp": "2026-08-26T03:17:00-04:00",
+        "date": "2026-08-26",
+        "staffId": "qa-test-staff",
+        "staffName": "QA Test Staff",
+        "punchAction": "clockOut",
+        "site": "Rev",
+        "device": "Admin Staff Time",
+        "build": "m1b-staff-clock",
+        "note": "Admin correction | Request: gib-m1-staff-request-00d30179-d1e1-4bad-95de-38f7abbc55ee | Reason: QA TEST PR83 Staff 1788830674857 synthetic missed clockOut; DO NOT PAY",
+        "status": "ACTIVE",
+        "source": "Admin-added",
+        "adminName": "Andrew Smith"
+      },
+      "latestAdjustment": null
+    },
+    "reviewText": "Review this punch adjustment\nStaff: QA Test Staff\nCurrent clock-in: Aug 26, 2:11 AM EDT\nCurrent clock-out: Aug 26, 3:17 AM EDT\nProposed clock-in: Aug 26, 2:15 AM EDT\nProposed clock-out: Aug 26, 3:15 AM EDT\nReason: QA TEST PR83 Staff 1788830674857 corrected synthetic one-hour interval; DO NOT PAY\nThe source punches will remain unchanged and this action will be permanently audited.",
+    "layout": [
+      {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "pageWidth": 390,
+        "screenshot": "pr83-final-staff-review-390.png"
+      },
+      {
+        "viewport": {
+          "width": 1440,
+          "height": 1000
+        },
+        "pageWidth": 1440,
+        "screenshot": "pr83-final-staff-review-1440.png"
+      }
+    ],
+    "adjustment": {
+      "requestId": "gib-m1-staff-request-f13cf574-d5db-4d06-bf38-37d2f56c3c39",
+      "result": "adjusted",
+      "linkedPunchIds": [
+        "gib-m1-staff-170c31b2-b72c-4eff-9822-801c53d7a5c1",
+        "gib-m1-staff-4f72d022-b374-4a28-bdab-95f6aaffbadf"
+      ],
+      "auditActionNumber": 7,
+      "confirmation": {
+        "actionTime": "2026-09-07T21:42:37-04:00",
+        "adminName": "Andrew Smith",
+        "staffId": "qa-test-staff",
+        "staffName": "QA Test Staff",
+        "changed": "both",
+        "clockInPunchId": "gib-m1-staff-170c31b2-b72c-4eff-9822-801c53d7a5c1",
+        "clockOutPunchId": "gib-m1-staff-4f72d022-b374-4a28-bdab-95f6aaffbadf",
+        "originalClockInAt": "2026-08-26T02:11:00-04:00",
+        "originalClockOutAt": "2026-08-26T03:17:00-04:00",
+        "correctedClockInAt": "2026-08-26T02:15:00-04:00",
+        "correctedClockOutAt": "2026-08-26T03:15:00-04:00",
+        "reason": "QA TEST PR83 Staff 1788830674857 corrected synthetic one-hour interval; DO NOT PAY"
+      }
+    },
+    "correctedShift": {
+      "clockIn": {
+        "punchId": "gib-m1-staff-170c31b2-b72c-4eff-9822-801c53d7a5c1",
+        "timestamp": "2026-08-26T02:15:00-04:00",
+        "date": "2026-08-26",
+        "staffId": "qa-test-staff",
+        "staffName": "QA Test Staff",
+        "punchAction": "clockIn",
+        "site": "Rev",
+        "device": "Admin Staff Time",
+        "build": "m1b-staff-clock",
+        "note": "Admin correction | Request: gib-m1-staff-request-d056a7be-af1e-440a-98d7-abd86b16cb91 | Reason: QA TEST PR83 Staff 1788830674857 synthetic missed clockIn; DO NOT PAY",
+        "status": "ACTIVE",
+        "source": "Admin-added",
+        "adminName": "Andrew Smith",
+        "originalTimestamp": "2026-08-26T02:11:00-04:00",
+        "originalDate": "2026-08-26",
+        "adjustmentRequestId": "gib-m1-staff-request-f13cf574-d5db-4d06-bf38-37d2f56c3c39"
+      },
+      "clockOut": {
+        "punchId": "gib-m1-staff-4f72d022-b374-4a28-bdab-95f6aaffbadf",
+        "timestamp": "2026-08-26T03:15:00-04:00",
+        "date": "2026-08-26",
+        "staffId": "qa-test-staff",
+        "staffName": "QA Test Staff",
+        "punchAction": "clockOut",
+        "site": "Rev",
+        "device": "Admin Staff Time",
+        "build": "m1b-staff-clock",
+        "note": "Admin correction | Request: gib-m1-staff-request-00d30179-d1e1-4bad-95de-38f7abbc55ee | Reason: QA TEST PR83 Staff 1788830674857 synthetic missed clockOut; DO NOT PAY",
+        "status": "ACTIVE",
+        "source": "Admin-added",
+        "adminName": "Andrew Smith",
+        "originalTimestamp": "2026-08-26T03:17:00-04:00",
+        "originalDate": "2026-08-26",
+        "adjustmentRequestId": "gib-m1-staff-request-f13cf574-d5db-4d06-bf38-37d2f56c3c39"
+      },
+      "latestAdjustment": {
+        "requestId": "gib-m1-staff-request-f13cf574-d5db-4d06-bf38-37d2f56c3c39",
+        "actionTime": "2026-09-07T21:42:37-04:00",
+        "adminName": "Andrew Smith",
+        "operation": "adjust",
+        "staffId": "qa-test-staff",
+        "staffName": "QA Test Staff",
+        "clockInPunchId": "gib-m1-staff-170c31b2-b72c-4eff-9822-801c53d7a5c1",
+        "clockOutPunchId": "gib-m1-staff-4f72d022-b374-4a28-bdab-95f6aaffbadf",
+        "originalClockInAt": "2026-08-26T02:11:00-04:00",
+        "originalClockOutAt": "2026-08-26T03:17:00-04:00",
+        "correctedClockInAt": "2026-08-26T02:15:00-04:00",
+        "correctedClockOutAt": "2026-08-26T03:15:00-04:00",
+        "changed": "both",
+        "reason": "QA TEST PR83 Staff 1788830674857 corrected synthetic one-hour interval; DO NOT PAY",
+        "result": "adjusted"
+      }
+    },
+    "adjustmentAudit": {
+      "requestId": "gib-m1-staff-request-f13cf574-d5db-4d06-bf38-37d2f56c3c39",
+      "actionTime": "2026-09-07T21:42:37-04:00",
+      "adminName": "Andrew Smith",
+      "operation": "adjust",
+      "staffId": "qa-test-staff",
+      "staffName": "QA Test Staff",
+      "clockInPunchId": "gib-m1-staff-170c31b2-b72c-4eff-9822-801c53d7a5c1",
+      "clockOutPunchId": "gib-m1-staff-4f72d022-b374-4a28-bdab-95f6aaffbadf",
+      "originalClockInAt": "2026-08-26T02:11:00-04:00",
+      "originalClockOutAt": "2026-08-26T03:17:00-04:00",
+      "correctedClockInAt": "2026-08-26T02:15:00-04:00",
+      "correctedClockOutAt": "2026-08-26T03:15:00-04:00",
+      "changed": "both",
+      "reason": "QA TEST PR83 Staff 1788830674857 corrected synthetic one-hour interval; DO NOT PAY",
+      "result": "adjusted"
+    },
+    "hours": {
+      "before": 1.1,
+      "after": 1
+    },
+    "dailyIsolation": {
+      "date": "2026-09-07",
+      "test": true,
+      "totalRecords": 12,
+      "foreignSyntheticPrefix": "QA TEST R83F Richmond ",
+      "foreignMatches": 0
+    },
+    "pass": true,
+    "finishedAt": "2026-09-08T01:43:10.932Z",
+    "visualInspection": "PASS: phone390 and desktop1440 exact adjustment review, corrected readback and permanent audit screenshots inspected; controls legible and reachable, no horizontal page overflow."
+  },
   "calendarChecks": {
-    "origin": "https://6a9f47b1a3ba58000842fb26--gib-live.netlify.app",
-    "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
-    "startedAt": "2026-09-07T23:28:12.276Z",
+    "origin": "https://gib-richmond-test.netlify.app",
+    "immutableDeploy": "6a9f67af1d87dea4f042ecf5",
+    "revision": "75c10e2eface27cbe044e319ae4c91addd01a092",
+    "startedAt": "2026-09-08T01:48:02.449Z",
     "dates": [
       {
         "date": "2026-09-29",
         "expectedPresent": true,
         "actualPresent": true,
         "matchingChoices": [
-          "9:15 AM QA TEST M1 Month Series Corrected"
+          "9:15 AM QA TEST Richmond Limited Corrected R83F"
         ],
-        "totalChoices": 12,
-        "oldSeriesLabelAbsent": true,
-        "noHorizontalOverflow": true,
-        "screenshot": "final-kiosk-calendar-2026-09-29.png"
+        "totalChoices": 6,
+        "staffClockHidden": true,
+        "emptyLedgerAndQueue": true,
+        "screenshot": "richmond-75c10e2-calendar-2026-09-29.png",
+        "simulatedDate": true
       },
       {
         "date": "2026-10-01",
-        "expectedPresent": false,
-        "actualPresent": false,
-        "matchingChoices": [],
-        "totalChoices": 11,
-        "oldSeriesLabelAbsent": true,
-        "noHorizontalOverflow": true,
-        "screenshot": "final-kiosk-calendar-2026-10-01.png"
-      },
-      {
-        "date": "2026-10-06",
-        "expectedPresent": true,
-        "actualPresent": true,
-        "matchingChoices": [
-          "9:15 AM QA TEST M1 Month Series Corrected"
-        ],
-        "totalChoices": 12,
-        "oldSeriesLabelAbsent": true,
-        "noHorizontalOverflow": true,
-        "screenshot": "final-kiosk-calendar-2026-10-06.png"
-      },
-      {
-        "date": "2026-10-08",
-        "expectedPresent": true,
-        "actualPresent": true,
-        "matchingChoices": [
-          "9:15 AM QA TEST M1 Month Series Corrected"
-        ],
-        "totalChoices": 12,
-        "oldSeriesLabelAbsent": true,
-        "noHorizontalOverflow": true,
-        "screenshot": "final-kiosk-calendar-2026-10-08.png"
-      },
-      {
-        "date": "2026-10-09",
         "expectedPresent": false,
         "actualPresent": false,
         "matchingChoices": [],
         "totalChoices": 5,
-        "oldSeriesLabelAbsent": true,
-        "noHorizontalOverflow": true,
-        "screenshot": "final-kiosk-calendar-2026-10-09.png"
-      }
-    ],
-    "toast": [
-      {
-        "viewport": 390,
-        "width": 390,
-        "height": 844,
-        "className": "toast",
-        "visibility": "hidden",
-        "opacity": "0",
-        "pointerEvents": "none",
-        "hitTestIsToast": false,
-        "pageWidth": 390,
-        "screenshot": "final-admin-login-phone.png"
+        "staffClockHidden": true,
+        "emptyLedgerAndQueue": true,
+        "screenshot": "richmond-75c10e2-calendar-2026-10-01.png",
+        "simulatedDate": true
       },
       {
-        "viewport": 1440,
+        "date": "2026-10-06",
+        "expectedPresent": true,
+        "actualPresent": true,
+        "matchingChoices": [
+          "9:15 AM QA TEST Richmond Limited Corrected R83F"
+        ],
+        "totalChoices": 6,
+        "staffClockHidden": true,
+        "emptyLedgerAndQueue": true,
+        "screenshot": "richmond-75c10e2-calendar-2026-10-06.png",
+        "simulatedDate": true
+      },
+      {
+        "date": "2026-10-08",
+        "expectedPresent": true,
+        "actualPresent": true,
+        "matchingChoices": [
+          "9:15 AM QA TEST Richmond Limited Corrected R83F"
+        ],
+        "totalChoices": 6,
+        "staffClockHidden": true,
+        "emptyLedgerAndQueue": true,
+        "screenshot": "richmond-75c10e2-calendar-2026-10-08.png",
+        "simulatedDate": true
+      },
+      {
+        "date": "2026-10-09",
+        "expectedPresent": false,
+        "actualPresent": false,
+        "matchingChoices": [],
+        "totalChoices": 4,
+        "staffClockHidden": true,
+        "emptyLedgerAndQueue": true,
+        "screenshot": "richmond-75c10e2-calendar-2026-10-09.png",
+        "simulatedDate": true
+      }
+    ],
+    "layouts": [
+      {
+        "name": "phone",
+        "width": 390,
+        "height": 844,
+        "noHorizontalOverflow": true,
+        "staffClockHidden": true,
+        "screenshot": "richmond-75c10e2-kiosk-phone.png",
+        "simulatedDate": false
+      },
+      {
+        "name": "tablet-portrait",
+        "width": 768,
+        "height": 1024,
+        "noHorizontalOverflow": true,
+        "staffClockHidden": true,
+        "screenshot": "richmond-75c10e2-kiosk-tablet-portrait.png",
+        "simulatedDate": false
+      },
+      {
+        "name": "tablet-landscape",
+        "width": 1024,
+        "height": 768,
+        "noHorizontalOverflow": true,
+        "staffClockHidden": true,
+        "screenshot": "richmond-75c10e2-kiosk-tablet-landscape.png",
+        "simulatedDate": false
+      },
+      {
+        "name": "desktop",
         "width": 1440,
         "height": 1000,
-        "className": "toast",
-        "visibility": "hidden",
-        "opacity": "0",
-        "pointerEvents": "none",
-        "hitTestIsToast": false,
-        "pageWidth": 1440,
-        "screenshot": "final-admin-login-desktop.png"
+        "noHorizontalOverflow": true,
+        "staffClockHidden": true,
+        "screenshot": "richmond-75c10e2-kiosk-desktop.png",
+        "simulatedDate": false
+      }
+    ],
+    "dateBoundaries": [
+      {
+        "instant": "2026-03-08T04:59:59Z",
+        "expectedNewYorkDate": "2026-03-07",
+        "actualNewYorkDate": "2026-03-07",
+        "simulatedClock": true
+      },
+      {
+        "instant": "2026-03-08T05:00:00Z",
+        "expectedNewYorkDate": "2026-03-08",
+        "actualNewYorkDate": "2026-03-08",
+        "simulatedClock": true
+      },
+      {
+        "instant": "2026-03-08T06:59:59Z",
+        "expectedNewYorkDate": "2026-03-08",
+        "actualNewYorkDate": "2026-03-08",
+        "simulatedClock": true
+      },
+      {
+        "instant": "2026-03-08T07:00:00Z",
+        "expectedNewYorkDate": "2026-03-08",
+        "actualNewYorkDate": "2026-03-08",
+        "simulatedClock": true
+      },
+      {
+        "instant": "2026-03-09T03:59:59Z",
+        "expectedNewYorkDate": "2026-03-08",
+        "actualNewYorkDate": "2026-03-08",
+        "simulatedClock": true
+      },
+      {
+        "instant": "2026-03-09T04:00:00Z",
+        "expectedNewYorkDate": "2026-03-09",
+        "actualNewYorkDate": "2026-03-09",
+        "simulatedClock": true
+      },
+      {
+        "instant": "2026-11-01T03:59:59Z",
+        "expectedNewYorkDate": "2026-10-31",
+        "actualNewYorkDate": "2026-10-31",
+        "simulatedClock": true
+      },
+      {
+        "instant": "2026-11-01T04:00:00Z",
+        "expectedNewYorkDate": "2026-11-01",
+        "actualNewYorkDate": "2026-11-01",
+        "simulatedClock": true
+      },
+      {
+        "instant": "2026-11-01T05:59:59Z",
+        "expectedNewYorkDate": "2026-11-01",
+        "actualNewYorkDate": "2026-11-01",
+        "simulatedClock": true
+      },
+      {
+        "instant": "2026-11-01T06:00:00Z",
+        "expectedNewYorkDate": "2026-11-01",
+        "actualNewYorkDate": "2026-11-01",
+        "simulatedClock": true
+      },
+      {
+        "instant": "2026-11-02T04:59:59Z",
+        "expectedNewYorkDate": "2026-11-01",
+        "actualNewYorkDate": "2026-11-01",
+        "simulatedClock": true
+      },
+      {
+        "instant": "2026-11-02T05:00:00Z",
+        "expectedNewYorkDate": "2026-11-02",
+        "actualNewYorkDate": "2026-11-02",
+        "simulatedClock": true
       }
     ],
     "errors": [],
-    "blockedWrites": [
-      {
-        "date": "2026-09-29",
-        "method": "POST",
-        "path": "/api/m1-staff-clock"
-      },
-      {
-        "date": "2026-09-29",
-        "method": "POST",
-        "path": "/api/m1-staff-clock"
-      },
-      {
-        "date": "2026-10-01",
-        "method": "POST",
-        "path": "/api/m1-staff-clock"
-      },
-      {
-        "date": "2026-10-01",
-        "method": "POST",
-        "path": "/api/m1-staff-clock"
-      },
-      {
-        "date": "2026-10-06",
-        "method": "POST",
-        "path": "/api/m1-staff-clock"
-      },
-      {
-        "date": "2026-10-06",
-        "method": "POST",
-        "path": "/api/m1-staff-clock"
-      },
-      {
-        "date": "2026-10-08",
-        "method": "POST",
-        "path": "/api/m1-staff-clock"
-      },
-      {
-        "date": "2026-10-08",
-        "method": "POST",
-        "path": "/api/m1-staff-clock"
-      },
-      {
-        "date": "2026-10-09",
-        "method": "POST",
-        "path": "/api/m1-staff-clock"
-      },
-      {
-        "date": "2026-10-09",
-        "method": "POST",
-        "path": "/api/m1-staff-clock"
-      }
-    ],
-    "scope": "Actual immutable hosted kiosk with browser Date fixed before page load; real GET responses and existing centrally saved TEST classes. Simulated calendar/browser test, not actual future end-to-end use or physical hardware. Admin login page reads only. No record, configuration or authentication writes.",
+    "businessPosts": [],
+    "scope": "Read-only hosted Richmond TEST kiosk with actual GET responses and existing centrally saved classes. Calendar and DST checks use browser clock emulation and are supplemental, not actual future end-to-end use or physical hardware. Layout screenshots use the actual current date. No mocks, route interception, response overrides, login or business writes.",
     "centralSeries": {
       "target": "test",
-      "gymId": "rev",
-      "version": 8,
-      "label": "QA TEST M1 Month Series Corrected",
+      "gymId": "richmond",
+      "version": 10,
+      "label": "QA TEST Richmond Limited Corrected R83F",
       "time": "09:15",
       "startDate": "2026-09-29",
       "endDate": "2026-10-08",
@@ -386,17 +963,666 @@
         "2026-10-01"
       ]
     },
+    "layoutDate": "2026-09-07",
     "status": "PASS",
-    "finishedAt": "2026-09-07T23:28:24.536Z",
-    "visualInspection": "All five simulated-date kiosk screenshots visually inspected: corrected class appears only on requested eligible dates; cancelled and expired dates omit it; controls fit without horizontal overflow. Staff Clock availability is outside this calendar check because all POST requests, including its read-only roster request, were blocked by the requested harness boundary."
+    "finishedAt": "2026-09-08T01:48:12.665Z",
+    "visualReview": {
+      "status": "PASS",
+      "viewports": [
+        "phone",
+        "tablet-portrait",
+        "tablet-landscape",
+        "desktop"
+      ],
+      "findings": "Legible controls and class labels, no overlap or horizontal clipping, responsive stacking/columns, Staff Clock absent. Phone class picker uses its scrollable list.",
+      "reviewedFromActualCurrentDateScreenshots": true
+    }
   },
-  "pageErrors": [],
-  "limits": [
-    "Richmond authenticated end-to-end blocked by TEST credential scope; no secret values accessed or configuration changed.",
-    "Phone/tablet viewports and future dates use browser emulation; no physical tablet tested.",
-    "CSV/export contract executed in automated tests; maintenance export button was not exercised through PIN-protected UI.",
-    "Staff Clock synthetic missed punches and audited adjustment exercised on42eabbe; these browser and backend files are unchanged in finalc34cf62.",
-    "Static browser layouts passed onf1b385f; browser HTML/JS/CSS byte-identical inc34cf62."
+  "exports": [
+    {
+      "source": "75c10e2eface27cbe044e319ae4c91addd01a092",
+      "url": "https://6a9f670c5231ee000863f6f7--gib-live.netlify.app/m1/",
+      "started": "2026-09-08T01:44:15.295Z",
+      "checks": [
+        "Verified final candidate TEST gym before writes",
+        "Standalone PIN test begins with empty ledger",
+        "PIN mismatch cannot save",
+        "New synthetic PIN opens device maintenance",
+        "Logout locks maintenance",
+        "Wrong PIN is denied",
+        "Correct PIN opens maintenance",
+        "Actual hosted kiosk loaded securely in cross-origin browser frame",
+        "Embedded flow independently verifies TEST gym",
+        "Embedded device starts with an empty ledger",
+        "Real 1-hour sign-in confirmation contains synthetic instructor",
+        "Real 0.5-hour sign-in confirmation contains synthetic instructor",
+        "Two real form submissions produce unique permanent row IDs",
+        "Exact source fields saved for 1 hours",
+        "Exact source fields saved for 0.5 hours",
+        "Both actual source rows confirmed by TEST backend",
+        "Real Export button downloads exact seven-column header",
+        "Downloaded file contains exactly the two synthetic records",
+        "All downloaded fields match source including quotes commas newline and 1/0.5 hours",
+        "Displayed CSV exactly matches downloaded bytes",
+        "Export preserves ledger queue and permanent row IDs exactly",
+        "No browser execution errors"
+      ],
+      "errors": [],
+      "limitations": [
+        "The standalone operating-system Save dialog was not exercised; export is tested through the genuine browser restriction on native file picking from a cross-origin frame."
+      ],
+      "target": {
+        "target": "test",
+        "gymId": "rev",
+        "version": 9
+      },
+      "wrongPinDenied": true,
+      "browserContext": {
+        "crossOriginFrame": true,
+        "secure": true,
+        "pickerType": "function",
+        "origin": "https://6a9f670c5231ee000863f6f7--gib-live.netlify.app"
+      },
+      "fixture": "QA TEST PR83 Final CSV rev mts0auzg",
+      "sync": "Both actual source rows confirmed by TEST backend",
+      "rows": [
+        {
+          "RowID": "gib-m1-aac2e36c-4769-4621-8a23-669cb2f3fba9",
+          "Timestamp": "2026-09-07 21:44:17",
+          "Date": "2026-09-07",
+          "Class Label": "6:00 AM BJJ (Level 2)",
+          "Duration (hr)": 1,
+          "Instructor": "QA TEST PR83 Final CSV rev mts0auzg Full, \"One\"",
+          "Site": "Rev",
+          "Notes": "DO NOT PAY — synthetic TEST, \"quoted\"\nsecond line",
+          "__batchId": "gib-m1-9b6f6a45-cf21-4d6f-a91f-e9fc20019656",
+          "Status": "OK",
+          "__syncResult": "added",
+          "__syncedAt": "2026-09-08T01:44:23.073Z"
+        },
+        {
+          "RowID": "gib-m1-08cc0e20-bc2c-41e2-82dc-7d9aac5b8e4d",
+          "Timestamp": "2026-09-07 21:44:17",
+          "Date": "2026-09-07",
+          "Class Label": "4:30 PM Kids’ BJJ",
+          "Duration (hr)": 0.5,
+          "Instructor": "QA TEST PR83 Final CSV rev mts0auzg Half",
+          "Site": "Rev",
+          "Notes": "DO NOT PAY — synthetic TEST half hour",
+          "__batchId": "gib-m1-b8380eaa-f263-4cdb-af2e-534cf3b53929",
+          "Status": "OK",
+          "__syncResult": "added",
+          "__syncedAt": "2026-09-08T01:44:23.073Z"
+        }
+      ],
+      "ledgerHashBefore": "9111d277d0c3c0ade5da2f36c46b64d929203744fb6a1db776be39ead72f741b",
+      "queueCount": 0,
+      "download": {
+        "name": "GiB_M1_SignIns.csv",
+        "path": "C:\\Users\\bjjne\\Documents\\Codex\\2026-09-07\\files-pasted-by-the-user-m1\\work\\browser-qa\\final-pin-csv-rev.csv",
+        "sha256": "66dc48fcc12b39766f71a3ccbf188054179f3a02c2930a5b649e219a48d75cdb"
+      },
+      "ledgerHashAfter": "9111d277d0c3c0ade5da2f36c46b64d929203744fb6a1db776be39ead72f741b",
+      "status": "PASS",
+      "finished": "2026-09-08T01:44:23.535Z",
+      "visualInspection": "Inspected the actual 1440px desktop and 390px phone screenshots. Device maintenance heading, status cards, Export and navigation buttons are readable and fit the viewport; zero waiting rows and two active synthetic sign-ins are visible. Phone image covers the initial screen inside the real hosted iframe.",
+      "exportMechanismEvidence": "Unchanged hosted kiosk was loaded as an HTTPS cross-origin frame; browser native showSaveFilePicker remained exposed. Clicking the actual Export button produced a real downloaded Blob CSV via the application fallback. No network mocks, header removal, DOM API replacements, or app source overrides were used. The caught exception name was not instrumented.",
+      "downloadedCsv": "Timestamp,Date,Class Label,Duration (hr),Instructor,Site,Notes\n2026-09-07 21:44:17,2026-09-07,6:00 AM BJJ (Level 2),1,\"QA TEST PR83 Final CSV rev mts0auzg Full, \"\"One\"\"\",Rev,\"DO NOT PAY — synthetic TEST, \"\"quoted\"\"\nsecond line\"\n2026-09-07 21:44:17,2026-09-07,4:30 PM Kids’ BJJ,0.5,QA TEST PR83 Final CSV rev mts0auzg Half,Rev,DO NOT PAY — synthetic TEST half hour"
+    },
+    {
+      "source": "75c10e2eface27cbe044e319ae4c91addd01a092",
+      "url": "https://gib-richmond-test.netlify.app/m1/",
+      "started": "2026-09-08T01:46:54.606Z",
+      "checks": [
+        "Verified final candidate TEST gym before writes",
+        "Standalone PIN test begins with empty ledger",
+        "PIN mismatch cannot save",
+        "New synthetic PIN opens device maintenance",
+        "Logout locks maintenance",
+        "Wrong PIN is denied",
+        "Correct PIN opens maintenance",
+        "Actual hosted kiosk loaded securely in cross-origin browser frame",
+        "Embedded flow independently verifies TEST gym",
+        "Embedded device starts with an empty ledger",
+        "Real 1-hour sign-in confirmation contains synthetic instructor",
+        "Real 1-hour sign-in confirmation contains synthetic instructor",
+        "Two real form submissions produce unique permanent row IDs",
+        "Exact source fields saved for 1 hours",
+        "Exact source fields saved for 1 hours",
+        "Both actual source rows confirmed by TEST backend",
+        "Real Export button downloads exact seven-column header",
+        "Downloaded file contains exactly the two synthetic records",
+        "All downloaded fields match source including quotes commas newline and exact durations",
+        "Displayed CSV exactly matches downloaded bytes",
+        "Export preserves ledger queue and permanent row IDs exactly",
+        "No browser execution errors"
+      ],
+      "errors": [],
+      "limitations": [
+        "The standalone operating-system Save dialog was not exercised; export is tested through the genuine browser restriction on native file picking from a cross-origin frame.",
+        "Richmond CSV uses existing 1-hour rules. Exact 0.5-hour CSV coverage is provided by the Revolution final-candidate test."
+      ],
+      "target": {
+        "target": "test",
+        "gymId": "richmond",
+        "version": 10
+      },
+      "wrongPinDenied": true,
+      "browserContext": {
+        "crossOriginFrame": true,
+        "secure": true,
+        "pickerType": "function",
+        "origin": "https://gib-richmond-test.netlify.app"
+      },
+      "fixture": "QA TEST PR83 Final CSV richmond mts0e9qr",
+      "sync": "Both actual source rows confirmed by TEST backend",
+      "rows": [
+        {
+          "RowID": "gib-m1-41c8133f-ee56-4548-81a0-a7f71a9bfcbf",
+          "Timestamp": "2026-09-07 21:46:56",
+          "Date": "2026-09-07",
+          "Class Label": "6:00 AM–7:00 AM Muay Thai Fundamentals",
+          "Duration (hr)": 1,
+          "Instructor": "QA TEST PR83 Final CSV richmond mts0e9qr Full, \"One\"",
+          "Site": "Richmond",
+          "Notes": "DO NOT PAY — synthetic TEST, \"quoted\"\nsecond line",
+          "__batchId": "gib-m1-4d6b62db-16e9-486c-acb4-ecf13f0dd57c",
+          "Status": "OK",
+          "__syncResult": "added",
+          "__syncedAt": "2026-09-08T01:47:01.405Z"
+        },
+        {
+          "RowID": "gib-m1-12a8930e-ba45-479d-8097-0ee9379741fd",
+          "Timestamp": "2026-09-07 21:46:56",
+          "Date": "2026-09-07",
+          "Class Label": "7:00 AM–8:00 AM Brazilian Jiu-Jitsu No-Gi",
+          "Duration (hr)": 1,
+          "Instructor": "QA TEST PR83 Final CSV richmond mts0e9qr Half",
+          "Site": "Richmond",
+          "Notes": "DO NOT PAY — synthetic TEST existing duration",
+          "__batchId": "gib-m1-d13f31c7-1523-4b30-a0ef-52e3ab7a8e60",
+          "Status": "OK",
+          "__syncResult": "added",
+          "__syncedAt": "2026-09-08T01:47:01.405Z"
+        }
+      ],
+      "ledgerHashBefore": "b541dd1d6145e0b7732699f4f4cdd740606f876f56b68ec6219a03228deeff49",
+      "queueCount": 0,
+      "download": {
+        "name": "GiB_M1_SignIns.csv",
+        "path": "C:\\Users\\bjjne\\Documents\\Codex\\2026-09-07\\files-pasted-by-the-user-m1\\work\\browser-qa\\final-pin-csv-richmond.csv",
+        "sha256": "71c49059aebfad989aa0d7c30c32049f4e02c8fc7467f5b8081f7646eeae0da7"
+      },
+      "ledgerHashAfter": "b541dd1d6145e0b7732699f4f4cdd740606f876f56b68ec6219a03228deeff49",
+      "status": "PASS",
+      "finished": "2026-09-08T01:47:01.739Z",
+      "visualInspection": "Inspected the actual 1440px desktop and 390px phone screenshots. Device maintenance heading, status cards, Export and navigation buttons are readable and fit the viewport; zero waiting rows and two active synthetic sign-ins are visible. Phone image covers the initial screen inside the real hosted iframe.",
+      "exportMechanismEvidence": "Unchanged hosted kiosk was loaded as an HTTPS cross-origin frame; browser native showSaveFilePicker remained exposed. Clicking the actual Export button produced a real downloaded Blob CSV via the application fallback. No network mocks, header removal, DOM API replacements, or app source overrides were used. The caught exception name was not instrumented.",
+      "approvalReview": {
+        "attempt": "Set temporary 0.5-hour duration rule via UI in fresh QA browser",
+        "outcome": "Automatic approval review rejected command before execution as unauthorized persistent device setting. No duration setting or synthetic record was changed by that command.",
+        "safeAlternative": "Used existing 1-hour classes. Both records and CSV passed. Revolution receipt supplies independent final-candidate 0.5-hour CSV coverage."
+      },
+      "downloadedCsv": "Timestamp,Date,Class Label,Duration (hr),Instructor,Site,Notes\n2026-09-07 21:46:56,2026-09-07,6:00 AM–7:00 AM Muay Thai Fundamentals,1,\"QA TEST PR83 Final CSV richmond mts0e9qr Full, \"\"One\"\"\",Richmond,\"DO NOT PAY — synthetic TEST, \"\"quoted\"\"\nsecond line\"\n2026-09-07 21:46:56,2026-09-07,7:00 AM–8:00 AM Brazilian Jiu-Jitsu No-Gi,1,QA TEST PR83 Final CSV richmond mts0e9qr Half,Richmond,DO NOT PAY — synthetic TEST existing duration"
+    }
   ],
-  "syntheticData": "Only clearly fake TEST names and records. Test data intentionally retained, no resets or deletions."
+  "limits": [
+    "TEST-ready only: shared added-class writes remain unavailable on both production installations; production enablement and rollout need separate review and authorization.",
+    "Phone/tablet layouts and future calendar dates are browser emulation. No physical tablets were touched or tested.",
+    "Actual secure hosted kiosk in a cross-origin browser frame exercised its genuine native-picker restriction and downloaded CSV fallback. The standalone operating-system Save dialog remains untested; no app/API shims or mocked network responses were used.",
+    "Richmond export used existing one-hour rules. Revolution verified one-hour and half-hour exports; Richmond half-hour Admin corrections were separately saved and read back.",
+    "Synthetic TEST fixtures and their history are intentionally retained, including earlier candidate examples. No real records, payment issue, payroll rules or production settings were changed."
+  ],
+  "rollback": {
+    "site": "gib-richmond-test",
+    "siteId": "42736c77-e3c8-40aa-ba97-4f935d0999ad",
+    "originalDeployment": "6a89d9b82eadf535cb568857",
+    "interimC34Deployment": "6a9f6361e51d8ab53db794f6",
+    "finalDeployment": "6a9f67af1d87dea4f042ecf5",
+    "instruction": "Republish retained original deployment on the existing Richmond TEST site only if requested. This restores TEST code; shared TEST records/history are retained. No production rollback is needed."
+  },
+  "syntheticData": "Only clearly fake TEST instructors, classes and staff; no resets or deletions.",
+  "priorCheckpoint": {
+    "label": "Historical checkpoint before the explicit Richmond TEST publication authorization; its former blockers were resolved by the final continuation above.",
+    "evidence": {
+      "schema": "m1-elegant-qa/v1",
+      "candidate": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
+      "revolutionOrigin": "https://6a9f47b1a3ba58000842fb26--gib-live.netlify.app",
+      "richmond": {
+        "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
+        "origin": "https://6a9f4818343c6eb16fd0d45f--gib-richmond-test.netlify.app",
+        "deploy": {
+          "id": "6a9f4818343c6eb16fd0d45f",
+          "siteId": "42736c77-e3c8-40aa-ba97-4f935d0999ad",
+          "state": "ready",
+          "context": "deploy-preview",
+          "publishedAt": null,
+          "deploySource": "cli",
+          "title": "M1 final cancellation fixes - Richmond TEST - c34cf62ab8742167dbac06a7b4a66843a4638efc"
+        },
+        "publishedDeployChecks": [
+          {
+            "gym": "Richmond TEST",
+            "siteId": "42736c77-e3c8-40aa-ba97-4f935d0999ad",
+            "publishedDeploy": "6a89d9b82eadf535cb568857",
+            "unchanged": true
+          },
+          {
+            "gym": "Revolution production",
+            "siteId": "f748e737-11e3-4fab-8e8c-bf185eab29ff",
+            "publishedDeploy": "6a95d82e6ea2ad000986b4ea",
+            "unchanged": true
+          },
+          {
+            "gym": "Richmond production",
+            "siteId": "9b7757a9-70f4-4977-9ca2-270b41e34007",
+            "publishedDeploy": "6a9c7a2fec9f71d5ff660a57",
+            "unchanged": true
+          }
+        ],
+        "assets": [
+          {
+            "path": "m1/index.html",
+            "sha256": "4306e42b713c6241d7d61a106f4ebe8c4ddc78ca11545fabf2fe49efbc86b8b1",
+            "exact": true
+          },
+          {
+            "path": "m1/admin/index.html",
+            "sha256": "94aefbbcebbb59ac13d4764df4b0aaaf02fbd2d12c669db100210c8e4a725221",
+            "exact": true
+          },
+          {
+            "path": "m1/installation-profile.generated.js",
+            "sha256": "c0c38f726a718fc6651802c4fc455686fda01c2973854de9424ae71d07babe2f",
+            "exact": true
+          },
+          {
+            "path": "netlify/functions/_lib/m1-installation.generated.mjs",
+            "sha256": "5248492b66ac3247a5efe68cba443ddde08ec17eb43ed2f3d03b8f3c11edf199",
+            "exact": true
+          },
+          {
+            "path": "netlify/functions/m1-added-classes.mjs",
+            "sha256": "6f43f01320a88d2accdf2b713fe095c4c48150c987ca385b04a33825027eb81e",
+            "exact": true
+          },
+          {
+            "path": "netlify/functions/_lib/m1-added-classes.mjs",
+            "sha256": "25f00c68ecd1545774cecab8b2eb90adef911b9c3a39e5245508a76e995d5812",
+            "exact": true
+          }
+        ],
+        "profile": {
+          "installationId": "richmond",
+          "environment": "test",
+          "allowedOrigin": "https://gib-richmond-test.netlify.app"
+        },
+        "classes": {
+          "httpStatus": 200,
+          "ok": true,
+          "target": "test",
+          "gymId": "richmond",
+          "version": 0,
+          "seriesCount": 0,
+          "historyCount": 0
+        },
+        "login": {
+          "httpStatus": 503,
+          "ok": false,
+          "test": false,
+          "message": "Admin service is not configured for this environment."
+        }
+      },
+      "automated": {
+        "passed": 783,
+        "failed": 0,
+        "skipped": 0,
+        "inlineScripts": "Covered by full suite"
+      },
+      "browserChecks": [
+        {
+          "name": "real central same-day late one-off create",
+          "pass": true,
+          "version": 1,
+          "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+        },
+        {
+          "name": "independent kiosk receives centrally created class after reload",
+          "pass": true,
+          "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+        },
+        {
+          "name": "central class persists through Admin reload and creates no attendance",
+          "pass": true,
+          "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+        },
+        {
+          "name": "real limited Tue/Thu month boundary series and backwards-range rejection",
+          "pass": true,
+          "dates": [
+            "2026-09-29",
+            "2026-10-01",
+            "2026-10-06",
+            "2026-10-08"
+          ],
+          "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+        },
+        {
+          "name": "test setup",
+          "note": "Fresh isolated kiosk automatic sending enabled as a local configuration fixture; no real device settings or credentials.",
+          "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+        },
+        {
+          "name": "real two instructor kiosk sign-ins and central acknowledgment",
+          "pass": true,
+          "instructors": [
+            "QA TEST M1 Instructor Alpha",
+            "QA TEST M1 Instructor Beta"
+          ],
+          "hours": [
+            1,
+            1
+          ],
+          "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+        },
+        {
+          "name": "real Admin missed instructor with explicit half-hour duration",
+          "pass": true,
+          "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+        },
+        {
+          "name": "meaningful TEST record confirmation",
+          "message": "Add Clock In for QA Test Staff at Sep 7, 4:00 AM EDT?\n\nReason: Synthetic TEST missed punch; do not pay.",
+          "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+        },
+        {
+          "name": "meaningful TEST record confirmation",
+          "message": "Add Clock Out for QA Test Staff at Sep 7, 5:00 AM EDT?\n\nReason: Synthetic TEST missed clock-out; do not pay.",
+          "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+        },
+        {
+          "name": "real offline reload, cached added class, durable queue, recovery, exact acknowledged RowID replay",
+          "pass": true,
+          "retry": "already exists",
+          "revision": "42eabbee11bf55e662ecfa809cc0f990c6fd704b"
+        },
+        {
+          "name": "final exact candidate real UI same-day create, separate kiosk receipt, two instructors and Daily Review readback",
+          "pass": true,
+          "revision": "f1b385f55a61b209290410497ea5891deb339f39"
+        },
+        {
+          "name": "real offline reload, cached added class, durable queue, recovery, exact acknowledged RowID replay",
+          "pass": true,
+          "revision": "f1b385f55a61b209290410497ea5891deb339f39",
+          "retry": "already exists"
+        },
+        {
+          "name": "layout phone",
+          "pass": true,
+          "height": 44,
+          "unobstructed": true,
+          "revision": "f1b385f55a61b209290410497ea5891deb339f39"
+        },
+        {
+          "name": "layout tablet-portrait",
+          "pass": true,
+          "height": 44,
+          "unobstructed": true,
+          "revision": "f1b385f55a61b209290410497ea5891deb339f39"
+        },
+        {
+          "name": "layout tablet-landscape",
+          "pass": true,
+          "height": 44,
+          "unobstructed": true,
+          "revision": "f1b385f55a61b209290410497ea5891deb339f39"
+        },
+        {
+          "name": "layout desktop",
+          "pass": true,
+          "height": 44,
+          "unobstructed": true,
+          "revision": "f1b385f55a61b209290410497ea5891deb339f39"
+        },
+        {
+          "name": "final hosted edit after future-date cancellation",
+          "pass": true,
+          "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
+          "version": 5
+        },
+        {
+          "name": "final hosted explicit legacy import, repeat dedupe, byte-preserved local original, past-date Daily Review, expiry on independent kiosk",
+          "pass": true,
+          "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc"
+        },
+        {
+          "name": "frozen candidate real same-day create, independent kiosk, two distinct teaching records, missed-signin half-hour correction and Daily Review readback",
+          "pass": true,
+          "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc"
+        },
+        {
+          "name": "real offline reload, cached added class, durable queue, recovery, exact acknowledged RowID replay",
+          "pass": true,
+          "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
+          "retry": "already exists"
+        },
+        {
+          "name": "frozen hosted cancel remaining dates removes kiosk choice and preserves all four exact teaching records/identities/hours",
+          "pass": true,
+          "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
+          "recordCount": 4
+        }
+      ],
+      "calendarChecks": {
+        "origin": "https://6a9f47b1a3ba58000842fb26--gib-live.netlify.app",
+        "revision": "c34cf62ab8742167dbac06a7b4a66843a4638efc",
+        "startedAt": "2026-09-07T23:28:12.276Z",
+        "dates": [
+          {
+            "date": "2026-09-29",
+            "expectedPresent": true,
+            "actualPresent": true,
+            "matchingChoices": [
+              "9:15 AM QA TEST M1 Month Series Corrected"
+            ],
+            "totalChoices": 12,
+            "oldSeriesLabelAbsent": true,
+            "noHorizontalOverflow": true,
+            "screenshot": "final-kiosk-calendar-2026-09-29.png"
+          },
+          {
+            "date": "2026-10-01",
+            "expectedPresent": false,
+            "actualPresent": false,
+            "matchingChoices": [],
+            "totalChoices": 11,
+            "oldSeriesLabelAbsent": true,
+            "noHorizontalOverflow": true,
+            "screenshot": "final-kiosk-calendar-2026-10-01.png"
+          },
+          {
+            "date": "2026-10-06",
+            "expectedPresent": true,
+            "actualPresent": true,
+            "matchingChoices": [
+              "9:15 AM QA TEST M1 Month Series Corrected"
+            ],
+            "totalChoices": 12,
+            "oldSeriesLabelAbsent": true,
+            "noHorizontalOverflow": true,
+            "screenshot": "final-kiosk-calendar-2026-10-06.png"
+          },
+          {
+            "date": "2026-10-08",
+            "expectedPresent": true,
+            "actualPresent": true,
+            "matchingChoices": [
+              "9:15 AM QA TEST M1 Month Series Corrected"
+            ],
+            "totalChoices": 12,
+            "oldSeriesLabelAbsent": true,
+            "noHorizontalOverflow": true,
+            "screenshot": "final-kiosk-calendar-2026-10-08.png"
+          },
+          {
+            "date": "2026-10-09",
+            "expectedPresent": false,
+            "actualPresent": false,
+            "matchingChoices": [],
+            "totalChoices": 5,
+            "oldSeriesLabelAbsent": true,
+            "noHorizontalOverflow": true,
+            "screenshot": "final-kiosk-calendar-2026-10-09.png"
+          }
+        ],
+        "toast": [
+          {
+            "viewport": 390,
+            "width": 390,
+            "height": 844,
+            "className": "toast",
+            "visibility": "hidden",
+            "opacity": "0",
+            "pointerEvents": "none",
+            "hitTestIsToast": false,
+            "pageWidth": 390,
+            "screenshot": "final-admin-login-phone.png"
+          },
+          {
+            "viewport": 1440,
+            "width": 1440,
+            "height": 1000,
+            "className": "toast",
+            "visibility": "hidden",
+            "opacity": "0",
+            "pointerEvents": "none",
+            "hitTestIsToast": false,
+            "pageWidth": 1440,
+            "screenshot": "final-admin-login-desktop.png"
+          }
+        ],
+        "errors": [],
+        "blockedWrites": [
+          {
+            "date": "2026-09-29",
+            "method": "POST",
+            "path": "/api/m1-staff-clock"
+          },
+          {
+            "date": "2026-09-29",
+            "method": "POST",
+            "path": "/api/m1-staff-clock"
+          },
+          {
+            "date": "2026-10-01",
+            "method": "POST",
+            "path": "/api/m1-staff-clock"
+          },
+          {
+            "date": "2026-10-01",
+            "method": "POST",
+            "path": "/api/m1-staff-clock"
+          },
+          {
+            "date": "2026-10-06",
+            "method": "POST",
+            "path": "/api/m1-staff-clock"
+          },
+          {
+            "date": "2026-10-06",
+            "method": "POST",
+            "path": "/api/m1-staff-clock"
+          },
+          {
+            "date": "2026-10-08",
+            "method": "POST",
+            "path": "/api/m1-staff-clock"
+          },
+          {
+            "date": "2026-10-08",
+            "method": "POST",
+            "path": "/api/m1-staff-clock"
+          },
+          {
+            "date": "2026-10-09",
+            "method": "POST",
+            "path": "/api/m1-staff-clock"
+          },
+          {
+            "date": "2026-10-09",
+            "method": "POST",
+            "path": "/api/m1-staff-clock"
+          }
+        ],
+        "scope": "Actual immutable hosted kiosk with browser Date fixed before page load; real GET responses and existing centrally saved TEST classes. Simulated calendar/browser test, not actual future end-to-end use or physical hardware. Admin login page reads only. No record, configuration or authentication writes.",
+        "centralSeries": {
+          "target": "test",
+          "gymId": "rev",
+          "version": 8,
+          "label": "QA TEST M1 Month Series Corrected",
+          "time": "09:15",
+          "startDate": "2026-09-29",
+          "endDate": "2026-10-08",
+          "days": [
+            "Tuesday",
+            "Thursday"
+          ],
+          "cancelledDates": [
+            "2026-10-01"
+          ]
+        },
+        "status": "PASS",
+        "finishedAt": "2026-09-07T23:28:24.536Z",
+        "visualInspection": "All five simulated-date kiosk screenshots visually inspected: corrected class appears only on requested eligible dates; cancelled and expired dates omit it; controls fit without horizontal overflow. Staff Clock availability is outside this calendar check because all POST requests, including its read-only roster request, were blocked by the requested harness boundary."
+      },
+      "pageErrors": [],
+      "limits": [
+        "Richmond authenticated end-to-end blocked by TEST credential scope; no secret values accessed or configuration changed.",
+        "Phone/tablet viewports and future dates use browser emulation; no physical tablet tested.",
+        "CSV/export contract executed in automated tests; maintenance export button was not exercised through PIN-protected UI.",
+        "Staff Clock synthetic missed punches and audited adjustment exercised on42eabbe; these browser and backend files are unchanged in finalc34cf62.",
+        "Static browser layouts passed onf1b385f; browser HTML/JS/CSS byte-identical inc34cf62."
+      ],
+      "syntheticData": "Only clearly fake TEST names and records. Test data intentionally retained, no resets or deletions."
+    }
+  },
+  "liveCloseout": {
+    "checkedAt": "2026-09-08T01:52:24.0996006Z",
+    "scope": "Read-only final live deployment and pull request status; no mutations",
+    "production": [
+      {
+        "siteId": "f748e737-11e3-4fab-8e8c-bf185eab29ff",
+        "name": "gib-live",
+        "publishedDeployId": "6a95d82e6ea2ad000986b4ea",
+        "publishedAt": "2026-08-31T23:01:10.66Z"
+      },
+      {
+        "siteId": "9b7757a9-70f4-4977-9ca2-270b41e34007",
+        "name": "gib-richmond-live",
+        "publishedDeployId": "6a9c7a2fec9f71d5ff660a57",
+        "publishedAt": "2026-09-05T20:23:35.306Z"
+      }
+    ],
+    "pullRequest": {
+      "baseRefName": "main",
+      "headRefName": "feature/m1-elegant-admin-classes-20260907",
+      "headRefOid": "75c10e2eface27cbe044e319ae4c91addd01a092",
+      "isDraft": true,
+      "mergedAt": null,
+      "state": "OPEN"
+    },
+    "remoteMainHead": "3b85fe4a6a93695d2dea95a1b5e41354e24f9ac6",
+    "baselineMainHead": "3b85fe4a6a93695d2dea95a1b5e41354e24f9ac6",
+    "checks": {
+      "revolutionLiveUnchanged": true,
+      "richmondLiveUnchanged": true,
+      "prOpen": true,
+      "prDraft": true,
+      "prUnmerged": true,
+      "expectedHead": true,
+      "mainUnchanged": true
+    },
+    "pass": true
+  }
 }
