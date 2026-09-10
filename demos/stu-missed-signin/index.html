@@ -1,0 +1,1181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow">
+  <title>TEST ONLY — Daily Sign-in Review</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #5e6a7d;
+      --line: #d7deea;
+      --panel: #ffffff;
+      --page: #f3f6fb;
+      --blue: #1759d2;
+      --blue-dark: #0f43a2;
+      --green: #17623c;
+      --green-bg: #edf9f2;
+      --amber: #744000;
+      --amber-bg: #fff4d9;
+      --red: #8d2424;
+      --red-bg: #fff0f0;
+      --shadow: 0 8px 28px rgba(29, 48, 82, 0.08);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--page); color: var(--ink); }
+    button, input, textarea, select { font: inherit; }
+    button { touch-action: manipulation; }
+    [hidden] { display: none !important; }
+
+    main {
+      width: min(100%, 74rem);
+      margin: 0 auto;
+      padding: max(14px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+    }
+
+    .test-banner {
+      margin-bottom: 18px;
+      padding: 15px 18px;
+      border: 3px solid #721818;
+      border-radius: 14px;
+      background: #a52a2a;
+      color: #fff;
+      text-align: center;
+      font-size: clamp(1.05rem, 4vw, 1.55rem);
+      font-weight: 900;
+      letter-spacing: .03em;
+    }
+
+    h1 { margin: 0; font-size: clamp(1.8rem, 6vw, 2.75rem); line-height: 1.08; }
+    h2 { margin: 0 0 7px; font-size: clamp(1.25rem, 4vw, 1.65rem); }
+    h3 { margin: 0 0 9px; font-size: 1.05rem; }
+    p { line-height: 1.5; }
+    .subtitle { margin: 8px 0 0; color: var(--muted); }
+    .muted { color: var(--muted); }
+    .small { font-size: .92rem; }
+
+    .card {
+      margin-top: 17px;
+      padding: clamp(16px, 4vw, 23px);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .top-actions,
+    .button-row,
+    .date-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    .top-actions { margin-top: 16px; }
+    .button-row { margin-top: 18px; }
+    .date-actions { margin: 14px 0 10px; }
+
+    .notice, .warning, .success, .error {
+      margin: 14px 0;
+      padding: 13px 15px;
+      border-radius: 11px;
+      line-height: 1.45;
+    }
+    .notice { border: 1px solid #d3a244; background: var(--amber-bg); color: var(--amber); }
+    .warning { border: 2px solid #b7671d; background: #fff5e9; color: #663400; }
+    .success { border: 2px solid #3f815e; background: var(--green-bg); color: var(--green); }
+    .error { border: 1px solid #bd5c5c; background: var(--red-bg); color: #701f1f; }
+    .notice p, .warning p, .success p, .error p { margin: 0; }
+
+    label { display: block; margin: 14px 0 7px; font-weight: 800; }
+    input, textarea, select {
+      width: 100%;
+      min-height: 50px;
+      padding: 12px 13px;
+      border: 1px solid #8c99ae;
+      border-radius: 10px;
+      background: #fff;
+      color: var(--ink);
+    }
+    input[readonly] { background: #f1f4f8; color: #344158; }
+    textarea { min-height: 92px; resize: vertical; }
+    input:focus, textarea:focus, select:focus, button:focus-visible, summary:focus-visible {
+      outline: 3px solid rgba(23, 89, 210, .24);
+      outline-offset: 2px;
+    }
+
+    button {
+      min-height: 48px;
+      padding: 11px 16px;
+      border: 0;
+      border-radius: 10px;
+      font-weight: 850;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .primary { background: var(--blue); color: #fff; }
+    .primary:hover:not(:disabled) { background: var(--blue-dark); }
+    .secondary { background: #e7edf5; color: var(--ink); }
+    .quiet { background: transparent; color: var(--blue-dark); border: 1px solid #b8c6dd; }
+    .danger { background: #8f2828; color: #fff; }
+    .small-button { min-height: 40px; padding: 8px 12px; font-size: .92rem; }
+
+    .date-picker-wrap {
+      display: grid;
+      grid-template-columns: minmax(11rem, 16rem);
+      align-items: end;
+    }
+    .date-picker-wrap label { margin-top: 0; }
+
+    .day-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px 16px;
+      margin: 20px 0 12px;
+    }
+    .day-heading h3 { margin: 0; font-size: clamp(1.18rem, 3vw, 1.45rem); }
+    .summary-count { color: var(--muted); font-weight: 700; }
+
+    .class-list {
+      display: grid;
+      gap: 10px;
+    }
+    .class-row {
+      display: grid;
+      grid-template-columns: minmax(15rem, 1.4fr) minmax(12rem, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcfe;
+    }
+    .class-row.missing {
+      border-color: #d6a04b;
+      background: #fffaf0;
+    }
+    .class-name { font-weight: 850; line-height: 1.35; }
+    .class-time {
+      display: block;
+      margin-bottom: 3px;
+      color: var(--blue-dark);
+      font-size: .86rem;
+      font-weight: 900;
+      letter-spacing: .02em;
+      text-transform: uppercase;
+    }
+    .signin-status { min-width: 0; }
+    .missing-label { color: var(--amber); font-weight: 900; }
+    .coach-list { display: grid; gap: 6px; }
+    .coach-entry { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .coach-name { font-weight: 850; overflow-wrap: anywhere; }
+    .source-label {
+      display: inline-block;
+      width: fit-content;
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: #e4eaf3;
+      color: #2b3850;
+      font-size: .75rem;
+      font-weight: 850;
+    }
+    .source-label.admin { background: #f6d994; color: #563600; }
+
+    .grid-two {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(12rem, .55fr);
+      gap: 0 16px;
+    }
+
+    .confirmation {
+      padding: 14px;
+      border: 2px solid #4b6ca8;
+      border-radius: 12px;
+      background: #f4f7fd;
+    }
+
+    dl {
+      display: grid;
+      grid-template-columns: minmax(7rem, 34%) minmax(0, 1fr);
+      gap: 7px 12px;
+      margin: 0;
+    }
+    dt { font-weight: 800; }
+    dd { margin: 0; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+    details.card { padding: 0; }
+    details.card > summary {
+      padding: clamp(16px, 4vw, 23px);
+      cursor: pointer;
+      font-size: 1.15rem;
+      font-weight: 900;
+      list-style-position: inside;
+    }
+    details.card[open] > summary { border-bottom: 1px solid var(--line); }
+    .details-body { padding: 0 clamp(16px, 4vw, 23px) clamp(16px, 4vw, 23px); }
+
+    .search-results { display: grid; gap: 14px; margin-top: 16px; }
+    .result-block {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcfe;
+    }
+    .result-list, .history-list {
+      display: grid;
+      gap: 8px;
+      margin: 10px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+    .result-item, .history-item {
+      display: grid;
+      grid-template-columns: minmax(8rem, .6fr) minmax(0, 1.5fr) minmax(7rem, .6fr) auto;
+      gap: 9px;
+      align-items: center;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    .summary-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 18px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: max(22px, env(safe-area-inset-bottom));
+      z-index: 20;
+      max-width: min(92vw, 34rem);
+      transform: translateX(-50%) translateY(12px);
+      padding: 11px 15px;
+      border-radius: 999px;
+      background: #10233f;
+      color: #fff;
+      box-shadow: 0 10px 30px rgba(0,0,0,.22);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .2s ease, transform .2s ease;
+      text-align: center;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    @media (max-width: 820px) {
+      .class-row { grid-template-columns: minmax(0, 1fr) auto; }
+      .signin-status { grid-column: 1; }
+      .class-row > button { grid-column: 2; grid-row: 1 / span 2; }
+      .result-item, .history-item { grid-template-columns: minmax(7rem, .45fr) minmax(0, 1fr); }
+      .result-item .site, .result-item .source-label,
+      .history-item .site, .history-item .source-label { grid-column: 2; }
+    }
+
+    @media (max-width: 560px) {
+      .grid-two { grid-template-columns: 1fr; }
+      .date-picker-wrap { grid-template-columns: 1fr; width: 100%; }
+      .date-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .date-actions button { width: 100%; }
+      .date-actions .date-picker-wrap { grid-column: 1 / -1; }
+      .class-row { grid-template-columns: 1fr; align-items: stretch; }
+      .signin-status, .class-row > button { grid-column: 1; grid-row: auto; }
+      .class-row > button { width: 100%; }
+      .button-row, .top-actions { display: grid; grid-template-columns: 1fr; }
+      .button-row button, .top-actions button { width: 100%; }
+      dl { grid-template-columns: 1fr; gap: 2px; }
+      dd { margin-bottom: 8px; }
+      .result-item, .history-item { grid-template-columns: 1fr; gap: 4px; }
+      .result-item .site, .result-item .source-label,
+      .history-item .site, .history-item .source-label { grid-column: 1; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <div class="test-banner">TEST DEMO — FAKE DATA ONLY</div>
+
+  <header>
+    <h1>Admin — Daily Sign-in Review</h1>
+    <p class="subtitle">Review the day’s class list, spot blanks, and add a missed instructor only when needed.</p>
+    <div class="notice">
+      <p><strong>This is only a clickable demo.</strong> It does not touch Revolution BJJ, payroll, Google Sheets, or the live M1 site. Anything you add stays in this browser.</p>
+    </div>
+    <div class="top-actions">
+      <button id="scenarioButton" class="primary" type="button">Load a Bruno-type scenario</button>
+      <button id="resetButton" class="secondary" type="button">Reset demo data</button>
+    </div>
+  </header>
+
+  <section class="card" aria-labelledby="dailyReviewTitle">
+    <h2 id="dailyReviewTitle">Review a day</h2>
+    <p class="muted">Yesterday opens first. Choose any earlier date when someone reports a missed sign-in later.</p>
+
+    <div class="date-actions" aria-label="Choose review date">
+      <button id="previousButton" class="secondary" type="button">Previous day</button>
+      <button id="yesterdayButton" class="secondary" type="button">Yesterday</button>
+      <button id="todayButton" class="secondary" type="button">Today</button>
+      <button id="nextButton" class="secondary" type="button">Next day</button>
+      <div class="date-picker-wrap">
+        <div>
+          <label for="datePicker">Choose another date</label>
+          <input id="datePicker" type="date">
+        </div>
+      </div>
+    </div>
+
+    <div class="notice">
+      <p>This shows the sign-ins recorded for the selected date. A blank does not confirm whether the class occurred.</p>
+    </div>
+
+    <div id="scenarioNotice" class="success" hidden></div>
+    <div id="dayHeading" class="day-heading"></div>
+    <div id="classList" class="class-list"></div>
+  </section>
+
+  <section id="addPanel" class="card" aria-labelledby="addPanelTitle" hidden></section>
+
+  <details id="instructorSearchDetails" class="card">
+    <summary>Find an Instructor</summary>
+    <div class="details-body">
+      <p class="muted">Use this when someone names a particular instructor or when you want to review their recent history.</p>
+      <form id="instructorSearchForm" novalidate>
+        <div class="grid-two">
+          <div>
+            <label for="searchInstructor">Instructor</label>
+            <input id="searchInstructor" list="instructorSuggestions" autocomplete="off" required>
+          </div>
+          <div>
+            <label for="searchDate">Date</label>
+            <input id="searchDate" type="date" required>
+          </div>
+        </div>
+        <div class="button-row">
+          <button class="primary" type="submit">Find sign-ins</button>
+        </div>
+      </form>
+      <div id="instructorResults" class="search-results" hidden></div>
+    </div>
+  </details>
+
+  <details id="historyDetails" class="card">
+    <summary>Demo Admin history</summary>
+    <div class="details-body">
+      <p class="muted">Every demo addition appears here so the action remains traceable.</p>
+      <div id="historyResults"></div>
+    </div>
+  </details>
+
+  <datalist id="instructorSuggestions"></datalist>
+
+  <div class="summary-bar">
+    <span><strong>Demo goal:</strong> decide whether this would replace a text to Andrew.</span>
+    <span class="muted small">No live systems are connected.</span>
+  </div>
+</main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const STORAGE_KEY = 'gib_stu_daily_review_demo_v2';
+  const TZ = 'America/New_York';
+  const SITE = 'Rev';
+  const SCENARIO_INSTRUCTOR = 'TEST COACH A';
+  const COACHES = ['TEST COACH A', 'TEST COACH B', 'TEST COACH C', 'TEST COACH D'];
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  const SCHEDULE = {
+    Monday: [
+      '6:00 AM BJJ (Level 2)', '12:00 PM BJJ (Level 2)', '4:30 PM Yoga (Core)', '4:30 PM Kids’ BJJ',
+      '4:30 PM BJJ (Level 1)', '5:30 PM BJJ (Level 2)', '5:30 PM Lapel Guard Class (Level 4)',
+      '6:30 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)',
+      '6:30 PM Muay Thai (Fundamentals/Intermediate, and intros when scheduled)',
+      '6:30 PM Leglock Fundamentals (No-Gi, Level 3)', '7:00 PM BJJ (Level 2)',
+      '7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ'
+    ],
+    Tuesday: [
+      '6:00 AM BJJ (Level 4) / Gi BJJ Intro Class', '6:00 AM No-Gi BJJ (Level 2)', '7:15 AM Conditioning',
+      '12:00 PM BJJ (Level 2)', '4:30 PM Yoga (Flow)', '4:30 PM Kids’ BJJ', '5:30 PM BJJ (Level 2)',
+      '5:30 PM Gi BJJ Intro Class / Level 1', '5:30 PM BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)',
+      '6:30 PM Guard Passing Class (Level 3)', '6:30 PM Judo', '7:00 PM BJJ Competition Class (Level 2, gi)'
+    ],
+    Wednesday: [
+      '6:00 AM BJJ (Level 2)', '12:00 PM No-Gi BJJ (Level 2)', '4:30 PM Kids’ BJJ', '4:30 PM BJJ (Level 1)',
+      '5:30 PM BJJ (Level 2)', '5:30 PM BJJ (Level 4)',
+      '6:30 PM Muay Thai (Fundamentals/Intermediate, and intros when scheduled)',
+      '6:30 PM BJJ Drills (Level 3)', '7:00 PM BJJ (Level 4)', '7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ'
+    ],
+    Thursday: [
+      '6:00 AM No-Gi BJJ (Level 4)', '6:00 AM No-Gi BJJ (Level 2) / Gi BJJ Intro Class', '7:15 AM Conditioning',
+      '12:00 PM BJJ (Level 2)', '4:30 PM Kids’ BJJ', '5:00 PM Get Warm', '5:30 PM BJJ (Level 2)',
+      '5:30 PM Gi BJJ Intro Class / Level 1', '5:30 PM No-Gi BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)',
+      '6:30 PM Advanced Leglocks (No-Gi, Level 3)', '6:30 PM Judo', '7:00 PM BJJ Competition Class (Level 2, no-gi)'
+    ],
+    Friday: [
+      '6:00 AM Drill/Roll Class – BJJ', '12:00 PM Drill/Roll Class – BJJ', '4:30 PM Yoga (Flow)',
+      '5:00 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)', '5:30 PM BJJ (Level 2)',
+      '6:00 PM Muay Thai (Fundamentals/Intermediate)'
+    ],
+    Saturday: [
+      '10:00 AM Kids’ BJJ', '10:00 AM Wrestling', '11:00 AM BJJ (Level 2)', '12:00 PM Conditioning'
+    ],
+    Sunday: [
+      '12:00 PM BJJ Competition Class (Level 4, gi and no-gi)', '12:30 PM Get Warm', '1:00 PM BJJ Open Mat'
+    ]
+  };
+
+  const byId = id => document.getElementById(id);
+
+  function clean(value) {
+    return String(value == null ? '' : value).trim().replace(/\s+/g, ' ');
+  }
+
+  function norm(value) {
+    return clean(value)
+      .toLocaleLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .replace(/\s+/g, ' ');
+  }
+
+  function makeId(prefix = 'demo') {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return `${prefix}-${window.crypto.randomUUID()}`;
+    }
+    return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function nyToday() {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: TZ,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date());
+    const values = {};
+    parts.forEach(part => {
+      if (part.type !== 'literal') values[part.type] = part.value;
+    });
+    return `${values.year}-${values.month}-${values.day}`;
+  }
+
+  function shiftDate(dateString, days) {
+    const [year, month, day] = dateString.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+  }
+
+  function dayNameForDate(dateString) {
+    const [year, month, day] = dateString.split('-').map(Number);
+    return DAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+  }
+
+  function formatDate(dateString) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) return dateString;
+    const [year, month, day] = dateString.split('-').map(Number);
+    return new Intl.DateTimeFormat('en-US', {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      timeZone: 'UTC'
+    }).format(new Date(Date.UTC(year, month - 1, day)));
+  }
+
+  function displayClassName(label) {
+    return clean(label).replace(/^\d{1,2}:\d{2}\s*(AM|PM)\s*/i, '');
+  }
+
+  function leadingTime(label) {
+    const match = clean(label).match(/^(\d{1,2}):(\d{2})\s*(AM|PM)\b/i);
+    return match ? `${match[1]}:${match[2]} ${match[3].toUpperCase()}` : 'Time not listed';
+  }
+
+  function startMinutes(label) {
+    const match = clean(label).match(/^(\d{1,2}):(\d{2})\s*(AM|PM)\b/i);
+    if (!match) return Number.POSITIVE_INFINITY;
+    let hour = Number(match[1]) % 12;
+    if (match[3].toUpperCase() === 'PM') hour += 12;
+    return hour * 60 + Number(match[2]);
+  }
+
+  function scheduleForDate(dateString) {
+    return (SCHEDULE[dayNameForDate(dateString)] || [])
+      .map((label, index) => ({ label, index, minutes: startMinutes(label) }))
+      .sort((a, b) => a.minutes - b.minutes || a.index - b.index)
+      .map(item => item.label);
+  }
+
+  function durationForClass(label) {
+    return /Kids/i.test(label) ? 0.5 : 1;
+  }
+
+  function recordedTimeFor(dateString, classIndex, offset) {
+    const hour = String(8 + (classIndex % 10)).padStart(2, '0');
+    const minute = String((classIndex * 7 + offset * 3) % 60).padStart(2, '0');
+    return `${dateString}T${hour}:${minute}:00.000Z`;
+  }
+
+  function seedState() {
+    const today = nyToday();
+    const scenarioDate = shiftDate(today, -3);
+    const yesterday = shiftDate(today, -1);
+    const rows = [];
+
+    for (let offset = 0; offset <= 7; offset += 1) {
+      const date = shiftDate(today, -offset);
+      const classes = scheduleForDate(date);
+      const blankIndexes = new Set();
+      if (date === yesterday && classes.length) blankIndexes.add(Math.min(1, classes.length - 1));
+      if (date === scenarioDate && classes.length) blankIndexes.add(Math.min(2, classes.length - 1));
+
+      classes.forEach((className, classIndex) => {
+        if (blankIndexes.has(classIndex)) return;
+        const instructor = classIndex === 0
+          ? SCENARIO_INSTRUCTOR
+          : COACHES[(classIndex + offset) % COACHES.length];
+        rows.push({
+          id: makeId('row'),
+          date,
+          className,
+          site: SITE,
+          duration: durationForClass(className),
+          instructor,
+          notes: '',
+          source: 'Front desk',
+          status: 'ACTIVE',
+          recordedAt: recordedTimeFor(date, classIndex, offset),
+          override: false,
+          requestId: ''
+        });
+
+        if (offset === 2 && classIndex === 0) {
+          rows.push({
+            id: makeId('row'),
+            date,
+            className,
+            site: SITE,
+            duration: durationForClass(className),
+            instructor: 'TEST COACH C',
+            notes: 'Fake co-teaching example.',
+            source: 'Front desk',
+            status: 'ACTIVE',
+            recordedAt: recordedTimeFor(date, classIndex + 1, offset),
+            override: false,
+            requestId: ''
+          });
+        }
+      });
+    }
+
+    const scenarioClasses = scheduleForDate(scenarioDate);
+    return {
+      version: 2,
+      rows,
+      audit: [],
+      selectedDate: yesterday,
+      scenario: {
+        date: scenarioDate,
+        className: scenarioClasses[Math.min(2, Math.max(0, scenarioClasses.length - 1))] || '',
+        instructor: SCENARIO_INSTRUCTOR
+      }
+    };
+  }
+
+  function saveState() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
+  }
+
+  function loadState() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+      if (
+        parsed &&
+        parsed.version === 2 &&
+        Array.isArray(parsed.rows) &&
+        Array.isArray(parsed.audit) &&
+        parsed.scenario
+      ) return parsed;
+    } catch (error) {}
+    const seeded = seedState();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
+    return seeded;
+  }
+
+  let appState = loadState();
+  let pendingDraft = null;
+  let submissionLocked = false;
+  let toastTimer = null;
+
+  function element(tag, className, content) {
+    const item = document.createElement(tag);
+    if (className) item.className = className;
+    if (content !== undefined) item.textContent = String(content);
+    return item;
+  }
+
+  function showToast(message) {
+    const toast = byId('toast');
+    toast.textContent = message;
+    toast.classList.add('show');
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => toast.classList.remove('show'), 2400);
+  }
+
+  function activeRowsForClass(date, className) {
+    return appState.rows
+      .filter(row => row.status === 'ACTIVE' && row.date === date && norm(row.className) === norm(className))
+      .sort((a, b) => String(a.recordedAt).localeCompare(String(b.recordedAt)));
+  }
+
+  function activeRowsForInstructor(instructor) {
+    return appState.rows
+      .filter(row => row.status === 'ACTIVE' && norm(row.instructor) === norm(instructor))
+      .sort((a, b) => b.date.localeCompare(a.date) || String(b.recordedAt).localeCompare(String(a.recordedAt)));
+  }
+
+  function populateInstructorSuggestions() {
+    const list = byId('instructorSuggestions');
+    list.replaceChildren();
+    const names = [...new Set(appState.rows.map(row => clean(row.instructor)).filter(Boolean))].sort();
+    names.forEach(name => {
+      const option = document.createElement('option');
+      option.value = name;
+      list.append(option);
+    });
+  }
+
+  function setSelectedDate(dateString, options = {}) {
+    const today = nyToday();
+    const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(dateString) && dateString <= today
+      ? dateString
+      : today;
+    appState.selectedDate = safeDate;
+    saveState();
+    byId('datePicker').value = safeDate;
+    byId('nextButton').disabled = safeDate >= today;
+    closeAddPanel();
+    renderDailyReview();
+    if (options.scroll) {
+      byId('dayHeading').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
+  function renderDailyReview(successMessage = '') {
+    const date = appState.selectedDate;
+    const classes = scheduleForDate(date);
+    const classList = byId('classList');
+    const heading = byId('dayHeading');
+    const scenarioNotice = byId('scenarioNotice');
+    classList.replaceChildren();
+    heading.replaceChildren();
+
+    const filledCount = classes.filter(className => activeRowsForClass(date, className).length > 0).length;
+    heading.append(
+      element('h3', '', formatDate(date)),
+      element('span', 'summary-count', `${filledCount} of ${classes.length} classes have recorded sign-ins`)
+    );
+
+    const isScenario = date === appState.scenario.date;
+    scenarioNotice.hidden = !isScenario;
+    scenarioNotice.replaceChildren();
+    if (isScenario) {
+      const message = successMessage ||
+        `${appState.scenario.instructor} says they may have taught “${appState.scenario.className}.” That class currently has no recorded sign-in.`;
+      scenarioNotice.append(element('p', '', message));
+    }
+
+    if (!classes.length) {
+      const empty = element('div', 'notice');
+      empty.append(element('p', '', 'No scheduled classes are stored for this day of the week.'));
+      classList.append(empty);
+      return;
+    }
+
+    classes.forEach(className => {
+      const rows = activeRowsForClass(date, className);
+      const row = element('article', `class-row ${rows.length ? '' : 'missing'}`.trim());
+      row.dataset.className = className;
+
+      const classInfo = element('div');
+      classInfo.append(
+        element('span', 'class-time', leadingTime(className)),
+        element('div', 'class-name', displayClassName(className))
+      );
+
+      const status = element('div', 'signin-status');
+      if (!rows.length) {
+        status.append(element('span', 'missing-label', 'No sign-in recorded'));
+      } else {
+        const coaches = element('div', 'coach-list');
+        rows.forEach(signin => {
+          const coach = element('div', 'coach-entry');
+          coach.append(element('span', 'coach-name', signin.instructor));
+          coach.append(element(
+            'span',
+            `source-label ${signin.source === 'Admin-added' ? 'admin' : ''}`,
+            signin.source === 'Admin-added' ? 'Admin-added' : 'Front-desk sign-in'
+          ));
+          coaches.append(coach);
+        });
+        status.append(coaches);
+      }
+
+      const addButton = element(
+        'button',
+        rows.length ? 'quiet small-button' : 'primary small-button',
+        rows.length ? 'Add another instructor' : 'Add instructor'
+      );
+      addButton.type = 'button';
+      addButton.addEventListener('click', () => openAddForm(date, className, rows.length > 0));
+
+      row.append(classInfo, status, addButton);
+      classList.append(row);
+    });
+  }
+
+  function closeAddPanel() {
+    pendingDraft = null;
+    submissionLocked = false;
+    const panel = byId('addPanel');
+    panel.hidden = true;
+    panel.replaceChildren();
+  }
+
+  function field(labelText, input) {
+    const wrap = element('div');
+    const label = element('label', '', labelText);
+    label.htmlFor = input.id;
+    wrap.append(label, input);
+    return wrap;
+  }
+
+  function readOnlyInput(id, value, type = 'text') {
+    const input = document.createElement('input');
+    input.id = id;
+    input.type = type;
+    input.value = value;
+    input.readOnly = true;
+    return input;
+  }
+
+  function openAddForm(date, className, anotherInstructor, previousDraft = null) {
+    pendingDraft = null;
+    submissionLocked = false;
+    const panel = byId('addPanel');
+    panel.replaceChildren();
+    panel.hidden = false;
+
+    const title = element('h2', '', anotherInstructor ? 'Add another instructor' : 'Add a missed instructor');
+    title.id = 'addPanelTitle';
+    panel.append(title);
+    panel.append(element(
+      'p',
+      'muted',
+      anotherInstructor
+        ? 'Use this only when a second instructor genuinely taught the same class.'
+        : 'The date and class are already filled from the daily review.'
+    ));
+
+    const form = document.createElement('form');
+    form.noValidate = true;
+
+    const readonlyGrid = element('div', 'grid-two');
+    readonlyGrid.append(
+      field('Class date', readOnlyInput('addDate', date, 'date')),
+      field('Site', readOnlyInput('addSite', SITE))
+    );
+
+    const classInput = readOnlyInput('addClass', className);
+    const durationInput = readOnlyInput('addDuration', String(durationForClass(className)), 'number');
+    const classGrid = element('div', 'grid-two');
+    classGrid.append(field('Class', classInput), field('Duration in hours', durationInput));
+
+    const instructor = document.createElement('input');
+    instructor.id = 'addInstructor';
+    instructor.setAttribute('list', 'instructorSuggestions');
+    instructor.autocomplete = 'off';
+    instructor.required = true;
+    instructor.maxLength = 160;
+    instructor.value = previousDraft?.instructor || (
+      date === appState.scenario.date && norm(className) === norm(appState.scenario.className)
+        ? appState.scenario.instructor
+        : ''
+    );
+
+    const notes = document.createElement('textarea');
+    notes.id = 'addNotes';
+    notes.maxLength = 500;
+    notes.value = previousDraft?.notes || '';
+
+    const reason = document.createElement('textarea');
+    reason.id = 'addReason';
+    reason.required = true;
+    reason.maxLength = 500;
+    reason.value = previousDraft?.reason || 'Instructor was not sure whether the class was recorded.';
+
+    const buttons = element('div', 'button-row');
+    const cancel = element('button', 'secondary', 'Cancel');
+    cancel.type = 'button';
+    cancel.addEventListener('click', closeAddPanel);
+    const review = element('button', 'primary', 'Review addition');
+    review.type = 'submit';
+    buttons.append(cancel, review);
+
+    form.append(
+      readonlyGrid,
+      classGrid,
+      field('Instructor', instructor),
+      field('Notes, optional', notes),
+      field('Reason for adding the sign-in', reason),
+      buttons
+    );
+
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      if (!form.reportValidity()) return;
+      const draft = {
+        requestId: previousDraft?.requestId || makeId('request'),
+        date,
+        className,
+        site: SITE,
+        duration: durationForClass(className),
+        instructor: clean(instructor.value),
+        notes: clean(notes.value),
+        reason: clean(reason.value),
+        anotherInstructor: Boolean(anotherInstructor)
+      };
+      if (!draft.instructor || !draft.reason) return;
+      pendingDraft = draft;
+      renderConfirmation();
+    });
+
+    panel.append(form);
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    instructor.focus();
+  }
+
+  function addDefinition(list, label, value) {
+    list.append(element('dt', '', label), element('dd', '', value || '—'));
+  }
+
+  function draftDetails() {
+    const details = element('dl');
+    addDefinition(details, 'Instructor', pendingDraft.instructor);
+    addDefinition(details, 'Date', formatDate(pendingDraft.date));
+    addDefinition(details, 'Class', pendingDraft.className);
+    addDefinition(details, 'Site', pendingDraft.site);
+    addDefinition(details, 'Duration', `${pendingDraft.duration} hr`);
+    addDefinition(details, 'Notes', pendingDraft.notes);
+    addDefinition(details, 'Reason', pendingDraft.reason);
+    return details;
+  }
+
+  function renderConfirmation() {
+    const panel = byId('addPanel');
+    panel.replaceChildren();
+    const title = element('h2', '', 'Confirm the sign-in');
+    title.id = 'addPanelTitle';
+    panel.append(title);
+    const box = element('div', 'confirmation');
+    box.append(element('p', '', 'You are adding this instructor to the demo sign-in record.'));
+    box.append(draftDetails());
+    panel.append(box);
+
+    const buttons = element('div', 'button-row');
+    const back = element('button', 'secondary', 'Go back');
+    back.type = 'button';
+    back.addEventListener('click', () => {
+      const draft = pendingDraft;
+      openAddForm(draft.date, draft.className, draft.anotherInstructor, draft);
+    });
+    const add = element('button', 'primary', 'Add instructor');
+    add.type = 'button';
+    add.dataset.finalAdd = 'true';
+    add.addEventListener('click', () => attemptAdd(false));
+    buttons.append(back, add);
+    panel.append(buttons);
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function isDuplicate(draft) {
+    return appState.rows.some(row =>
+      row.status === 'ACTIVE' &&
+      row.date === draft.date &&
+      norm(row.className) === norm(draft.className) &&
+      norm(row.site) === norm(draft.site) &&
+      norm(row.instructor) === norm(draft.instructor)
+    );
+  }
+
+  function renderDuplicateWarning() {
+    const panel = byId('addPanel');
+    panel.replaceChildren();
+    const title = element('h2', '', 'Possible duplicate');
+    title.id = 'addPanelTitle';
+    panel.append(title);
+    const warning = element('div', 'warning');
+    warning.append(element('p', '', 'This instructor already has an active sign-in for the same date, class, and site. Nothing has been added.'));
+    panel.append(warning, draftDetails());
+
+    const buttons = element('div', 'button-row');
+    const cancel = element('button', 'secondary', 'Cancel');
+    cancel.type = 'button';
+    cancel.addEventListener('click', closeAddPanel);
+    const continueButton = element('button', 'danger', 'Review deliberate duplicate');
+    continueButton.type = 'button';
+    continueButton.addEventListener('click', renderOverrideConfirmation);
+    buttons.append(cancel, continueButton);
+    panel.append(buttons);
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function renderOverrideConfirmation() {
+    const panel = byId('addPanel');
+    panel.replaceChildren();
+    const title = element('h2', '', 'Second confirmation');
+    title.id = 'addPanelTitle';
+    panel.append(title);
+    const warning = element('div', 'warning');
+    warning.append(element('p', '', 'This appears to be a duplicate. Add it anyway and record that the warning was deliberately overridden?'));
+    panel.append(warning, draftDetails());
+
+    const buttons = element('div', 'button-row');
+    const back = element('button', 'secondary', 'Go back');
+    back.type = 'button';
+    back.addEventListener('click', renderDuplicateWarning);
+    const add = element('button', 'danger', 'Add duplicate anyway');
+    add.type = 'button';
+    add.dataset.finalAdd = 'true';
+    add.addEventListener('click', () => attemptAdd(true));
+    buttons.append(back, add);
+    panel.append(buttons);
+  }
+
+  function attemptAdd(overrideDuplicate) {
+    if (!pendingDraft || submissionLocked) return;
+    submissionLocked = true;
+    const buttons = byId('addPanel').querySelectorAll('button');
+    buttons.forEach(button => { button.disabled = true; });
+
+    const existingAudit = appState.audit.find(entry => entry.requestId === pendingDraft.requestId && entry.result === 'COMPLETED');
+    if (existingAudit) {
+      renderAddSuccess(existingAudit.recordId, 'This request was already completed once. No second record was created.');
+      return;
+    }
+
+    const duplicate = isDuplicate(pendingDraft);
+    if (duplicate && !overrideDuplicate) {
+      submissionLocked = false;
+      renderDuplicateWarning();
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const recordId = makeId('record');
+    appState.rows.push({
+      id: recordId,
+      date: pendingDraft.date,
+      className: pendingDraft.className,
+      site: pendingDraft.site,
+      duration: pendingDraft.duration,
+      instructor: pendingDraft.instructor,
+      notes: pendingDraft.notes,
+      source: 'Admin-added',
+      status: 'ACTIVE',
+      recordedAt: now,
+      override: Boolean(duplicate && overrideDuplicate),
+      requestId: pendingDraft.requestId
+    });
+    appState.audit.unshift({
+      id: makeId('audit'),
+      requestId: pendingDraft.requestId,
+      recordId,
+      action: 'ADD_MISSED_SIGNIN',
+      date: pendingDraft.date,
+      className: pendingDraft.className,
+      instructor: pendingDraft.instructor,
+      site: pendingDraft.site,
+      reason: pendingDraft.reason,
+      duplicateWarning: duplicate,
+      duplicateOverride: Boolean(duplicate && overrideDuplicate),
+      result: 'COMPLETED',
+      recordedAt: now
+    });
+    saveState();
+    populateInstructorSuggestions();
+    renderDailyReview(`Demo sign-in added for ${pendingDraft.instructor}.`);
+    renderHistory();
+    renderAddSuccess(recordId, 'One demo sign-in and one matching Admin-history entry were added.');
+  }
+
+  function renderAddSuccess(recordId, message) {
+    const panel = byId('addPanel');
+    panel.replaceChildren();
+    const title = element('h2', '', 'Added');
+    title.id = 'addPanelTitle';
+    const success = element('div', 'success');
+    success.append(element('p', '', message));
+    panel.append(title, success, element('p', 'muted small', `Demo record: ${recordId}`));
+    const done = element('button', 'primary', 'Done');
+    done.type = 'button';
+    done.addEventListener('click', closeAddPanel);
+    panel.append(done);
+    showToast('Demo sign-in added');
+  }
+
+  function renderInstructorResults(instructor, date) {
+    const container = byId('instructorResults');
+    container.replaceChildren();
+    const selectedRows = appState.rows
+      .filter(row => row.status === 'ACTIVE' && row.date === date && norm(row.instructor) === norm(instructor))
+      .sort((a, b) => startMinutes(a.className) - startMinutes(b.className));
+    const recentRows = activeRowsForInstructor(instructor).slice(0, 5);
+
+    const selected = element('section', 'result-block');
+    selected.append(element('h3', '', `${instructor} — ${formatDate(date)}`));
+    if (!selectedRows.length) {
+      selected.append(element('p', 'warning', `No active sign-in was found in this demo for ${instructor} on ${formatDate(date)}.`));
+    } else {
+      const list = element('ul', 'result-list');
+      selectedRows.forEach(row => {
+        const item = element('li', 'result-item');
+        item.append(
+          element('strong', '', leadingTime(row.className)),
+          element('span', '', displayClassName(row.className)),
+          element('span', 'site muted', row.site),
+          element('span', `source-label ${row.source === 'Admin-added' ? 'admin' : ''}`, row.source === 'Admin-added' ? 'Admin-added' : 'Front-desk sign-in')
+        );
+        list.append(item);
+      });
+      selected.append(list);
+    }
+
+    const recent = element('section', 'result-block');
+    recent.append(element('h3', '', 'Five most recent active sign-ins'));
+    if (!recentRows.length) {
+      recent.append(element('p', 'muted', 'No recent sign-ins were found for this fake instructor.'));
+    } else {
+      const list = element('ol', 'result-list');
+      recentRows.forEach(row => {
+        const item = element('li', 'result-item');
+        item.append(
+          element('strong', '', formatDate(row.date)),
+          element('span', '', displayClassName(row.className)),
+          element('span', 'site muted', row.site),
+          element('span', `source-label ${row.source === 'Admin-added' ? 'admin' : ''}`, row.source === 'Admin-added' ? 'Admin-added' : 'Front-desk sign-in')
+        );
+        list.append(item);
+      });
+      recent.append(list);
+    }
+
+    container.append(selected, recent);
+    container.hidden = false;
+  }
+
+  function renderHistory() {
+    const container = byId('historyResults');
+    container.replaceChildren();
+    if (!appState.audit.length) {
+      container.append(element('p', 'muted', 'No Admin additions have been made in this demo yet.'));
+      return;
+    }
+    const list = element('ol', 'history-list');
+    appState.audit.slice(0, 12).forEach(entry => {
+      const item = element('li', 'history-item');
+      item.append(
+        element('strong', '', formatDate(entry.date)),
+        element('span', '', `${entry.className} — ${entry.instructor}`),
+        element('span', 'site muted', entry.site),
+        element('span', 'source-label admin', entry.duplicateOverride ? 'Admin-added · duplicate override' : 'Admin-added')
+      );
+      list.append(item);
+    });
+    container.append(list);
+  }
+
+  function resetDemo(loadScenario = false) {
+    localStorage.removeItem(STORAGE_KEY);
+    appState = seedState();
+    saveState();
+    populateInstructorSuggestions();
+    renderHistory();
+    byId('instructorResults').hidden = true;
+    byId('instructorResults').replaceChildren();
+    if (loadScenario) {
+      byId('searchInstructor').value = appState.scenario.instructor;
+      byId('searchDate').value = appState.scenario.date;
+      setSelectedDate(appState.scenario.date, { scroll: true });
+      showToast('Bruno-type scenario loaded');
+    } else {
+      byId('searchInstructor').value = '';
+      byId('searchDate').value = appState.selectedDate;
+      setSelectedDate(appState.selectedDate);
+      showToast('Demo data reset');
+    }
+  }
+
+  byId('previousButton').addEventListener('click', () => {
+    setSelectedDate(shiftDate(appState.selectedDate, -1));
+  });
+  byId('nextButton').addEventListener('click', () => {
+    setSelectedDate(shiftDate(appState.selectedDate, 1));
+  });
+  byId('yesterdayButton').addEventListener('click', () => {
+    setSelectedDate(shiftDate(nyToday(), -1));
+  });
+  byId('todayButton').addEventListener('click', () => {
+    setSelectedDate(nyToday());
+  });
+  byId('datePicker').addEventListener('change', event => {
+    setSelectedDate(event.target.value);
+  });
+  byId('scenarioButton').addEventListener('click', () => resetDemo(true));
+  byId('resetButton').addEventListener('click', () => resetDemo(false));
+
+  byId('instructorSearchForm').addEventListener('submit', event => {
+    event.preventDefault();
+    const instructor = clean(byId('searchInstructor').value);
+    const date = byId('searchDate').value;
+    if (!instructor || !date || date > nyToday()) {
+      byId('instructorSearchForm').reportValidity();
+      return;
+    }
+    renderInstructorResults(instructor, date);
+  });
+
+  const today = nyToday();
+  byId('datePicker').max = today;
+  byId('searchDate').max = today;
+  if (!appState.selectedDate || appState.selectedDate > today) {
+    appState.selectedDate = shiftDate(today, -1);
+  }
+  byId('searchDate').value = appState.selectedDate;
+  populateInstructorSuggestions();
+  renderHistory();
+  setSelectedDate(appState.selectedDate);
+})();
+</script>
+</body>
+</html>
