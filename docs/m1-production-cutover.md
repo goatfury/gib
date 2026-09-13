@@ -2,6 +2,8 @@
 
 This checklist is prepared for a later, explicitly authorized cutover. Do not use it during production-candidate preparation. Keep auto-sync off until step 10, and stop at the first unexpected result.
 
+Before a kiosk release, complete the [reusable M1 release checklist](m1-release-checklist.md), including the hosted next-person walk-away gate. This cutover checklist governs the separately authorized data cutoff; it is not a substitute for release QA.
+
 - [ ] 1. Export and preserve the old tablet CSV.
 - [ ] 2. Record the exact cutoff time.
 - [ ] 3. Old CSV owns records before the cutoff.
