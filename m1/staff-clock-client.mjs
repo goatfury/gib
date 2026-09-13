@@ -7,7 +7,7 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-09-08-elegant-release';
+} from './staff-clock-core.mjs?v=2026-09-13-kiosk-walk-away';
 
 const installationProfile = globalThis.M1_INSTALLATION_PROFILE;
 const STAFF_CLOCK_PAIRING_ENABLED = installationProfile?.featureFlags?.staffClockPairing === true;
@@ -86,6 +86,7 @@ function fmtDate(value) {
   let staffClockConfirmationActive = false;
   let staffClockConfirmationContext = null;
   let staffClockDoneTimer = null;
+  let staffClockConfirmationTimer = null;
   let staffClockSyncPromise = null;
   let staffClockSyncRequested = false;
   let staffClockSnapshotPromise = null;
@@ -796,8 +797,10 @@ function fmtDate(value) {
     staffClockConfirmationContext = {
       person,
       punch,
-      clockInTimestamp: options.clockInTimestamp || null
+      clockInTimestamp: options.clockInTimestamp || null,
+      expiresAt: Date.now() + 5_000
     };
+    const context = staffClockConfirmationContext;
     $('#staffClockControls').hidden = true;
     const confirmation = $('#staffClockConfirmation');
     confirmation.hidden = false;
@@ -818,25 +821,59 @@ function fmtDate(value) {
     done.disabled = true;
     if (staffClockDoneTimer) window.clearTimeout(staffClockDoneTimer);
     staffClockDoneTimer = window.setTimeout(() => {
+      if (staffClockConfirmationContext !== context) return;
       staffClockDoneTimer = null;
-      done.disabled = false;
-      done.focus();
+      if (!checkStaffClockConfirmationDeadline()) done.disabled = false;
     }, 800);
+    scheduleStaffClockConfirmationDeadline(context);
+    updateStaffClockDelivery();
+  }
+
+  function scheduleStaffClockConfirmationDeadline(context) {
+    if (staffClockConfirmationTimer) window.clearTimeout(staffClockConfirmationTimer);
+    staffClockConfirmationTimer = window.setTimeout(() => {
+      if (staffClockConfirmationContext !== context) return;
+      staffClockConfirmationTimer = null;
+      if (!checkStaffClockConfirmationDeadline()) {
+        scheduleStaffClockConfirmationDeadline(context);
+      }
+    }, Math.max(0, context.expiresAt - Date.now()));
+  }
+
+  function checkStaffClockConfirmationDeadline() {
+    const context = staffClockConfirmationContext;
+    if (!context || Date.now() < context.expiresAt) return false;
+    clearStaffClockConfirmation(context);
+    return true;
+  }
+
+  function updateStaffClockDelivery() {
+    const delivery = $('#staffClockDelivery');
+    if (!delivery) return;
+    const waiting = loadStaffClockState().queue.length;
+    delivery.hidden = waiting === 0;
+    delivery.textContent = waiting
+      ? `${waiting} staff punch${waiting === 1 ? '' : 'es'} saved on this tablet — waiting to sync.`
+      : '';
   }
 
   function markStaffClockConfirmationConfirmed(punchId) {
+    checkStaffClockConfirmationDeadline();
     if (
       !staffClockConfirmationActive
       || staffClockConfirmationContext?.punch?.punchId !== punchId
     ) return;
-    const { person, punch, clockInTimestamp } = staffClockConfirmationContext;
-    showStaffClockConfirmation(person, punch, {
-      waiting: false,
-      clockInTimestamp
-    });
+    // Delivery only updates this still-visible confirmation. It must never
+    // restart its original deadline or move focus into an earlier interaction.
+    const { punch } = staffClockConfirmationContext;
+    $('#staffClockConfirmation').classList.remove('waiting');
+    $('#staffClockConfirmationTitle').textContent = punch.punchAction === 'clockIn'
+      ? 'Clocked in'
+      : 'Clocked out';
   }
 
   function renderStaffClock() {
+    updateStaffClockDelivery();
     if (staffClockConfirmationActive) return;
     if (staffClockAvailability !== 'ready') {
       $('#btnStaffClockAction').disabled = true;
@@ -947,19 +984,29 @@ function fmtDate(value) {
 
   function resetStaffClockCard() {
     const done = $('#btnStaffClockDone');
-    if (done.disabled) return;
+    if (done.disabled || !staffClockConfirmationActive) return;
+    clearStaffClockConfirmation(staffClockConfirmationContext);
+  }
+
+  function clearStaffClockConfirmation(context) {
+    if (!context || staffClockConfirmationContext !== context) return;
     if (staffClockDoneTimer) window.clearTimeout(staffClockDoneTimer);
+    if (staffClockConfirmationTimer) window.clearTimeout(staffClockConfirmationTimer);
     staffClockDoneTimer = null;
+    staffClockConfirmationTimer = null;
     staffClockConfirmationActive = false;
     staffClockConfirmationContext = null;
     staffClockActionLocked = false;
     $('#staffClockConfirmation').hidden = true;
     $('#staffClockConfirmation').classList.remove('waiting');
+    $('#staffClockConfirmationTitle').textContent = '';
+    $('#staffClockConfirmationDetail').textContent = '';
     $('#staffClockControls').hidden = staffClockAvailability !== 'ready';
     $('#staffClockName').value = '';
-    done.disabled = false;
+    $('#staffClockStatus').textContent = 'Select your name to see your status.';
+    $('#staffClockStatus').classList.remove('warn');
+    $('#btnStaffClockDone').disabled = false;
     renderStaffClock();
-    $('#staffClockName').focus();
   }
 
   async function postStaffClock(body) {
@@ -2324,8 +2371,9 @@ function initializeStaffClockClient() {
     void refreshStaffClockSnapshot();
     void syncStaffClockQueue();
   });
-  ['focus', 'pageshow'].forEach(eventName => {
+  ['focus', 'pageshow', 'popstate'].forEach(eventName => {
     window.addEventListener(eventName, () => {
+      checkStaffClockConfirmationDeadline();
       if (staffClockAvailability === 'authorization-required') {
         resumeStaffClockPairing();
         return;
@@ -2336,6 +2384,7 @@ function initializeStaffClockClient() {
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
+      checkStaffClockConfirmationDeadline();
       if (staffClockAvailability === 'authorization-required') {
         resumeStaffClockPairing();
         return;
@@ -2344,6 +2393,7 @@ function initializeStaffClockClient() {
       void syncStaffClockQueue();
     }
   });
+  document.addEventListener('resume', checkStaffClockConfirmationDeadline);
   refreshStaffAdminWhenVisible();
 }
 

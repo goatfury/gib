@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" href="data:," />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-09-07 M1 TEST elegant-admin-classes)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-09-13 M1 TEST kiosk-walk-away)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -940,9 +940,9 @@ body.admin-mode .container { max-width: 1120px; }
   .device-tools-menu[open] > button { position: absolute; right: 0; top: 100%; z-index: 8; min-width: 200px; box-shadow: 0 8px 24px #0008; }
   #managerWorkspaceLink { min-height: 44px; text-decoration: none; }
 </style>
-<script src="./installation-profile.generated.js?v=2026-09-08-elegant-release"></script>
-<script src="./temporary-classes-core.js?v=2026-09-08-elegant-release"></script>
-<script src="./added-classes-kiosk.js?v=2026-09-08-elegant-release"></script>
+<script src="./installation-profile.generated.js?v=2026-09-13-kiosk-walk-away"></script>
+<script src="./temporary-classes-core.js?v=2026-09-13-kiosk-walk-away"></script>
+<script src="./added-classes-kiosk.js?v=2026-09-13-kiosk-walk-away"></script>
 </head>
 <body>
 <div class="container">
@@ -951,7 +951,7 @@ body.admin-mode .container { max-width: 1120px; }
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-09-07 M1 TEST elegant-admin-classes</span>
+        Build <span class="kbd" id="buildId">2026-09-13 M1 TEST kiosk-walk-away</span>
       </div>
     </div>
 
@@ -963,7 +963,7 @@ body.admin-mode .container { max-width: 1120px; }
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-09-07 M1 TEST elegant-admin-classes
+      Build 2026-09-13 M1 TEST kiosk-walk-away
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -1052,6 +1052,7 @@ body.admin-mode .container { max-width: 1120px; }
       </div>
       <button id="btnStaffClockDone" class="btn" type="button">Done</button>
     </div>
+    <div id="staffClockDelivery" class="subtle warn" role="status" aria-live="polite" hidden></div>
   </section>
 
   <!-- ADMIN -->
@@ -1410,8 +1411,8 @@ body.admin-mode .container { max-width: 1120px; }
     <h2 id="signInModalTitle" class="signin-title">Signed in</h2>
     <div class="signin-name" id="signInModalName">Instructor</div>
     <div class="signin-classes" id="signInModalClasses"></div>
-    <div id="signinDeliveryNote" class="subtle" hidden>Saved on this tablet. Sending status appears on the sign-in screen.</div>
-    <div class="subtle" style="margin-top: 10px;">Tap DONE to prepare the kiosk for the next instructor.</div>
+    <div id="signinDeliveryNote" class="subtle">Saved on this tablet. Sending status appears on the sign-in screen.</div>
+    <div class="subtle" style="margin-top: 10px;">This clears after 15 seconds. Tap DONE to finish sooner.</div>
     <div class="actions signin-actions">
       <button id="btnConfirmSignInDone" class="btn brand" type="button">DONE</button>
       <button id="btnConfirmSignInUndo" class="btn secondary" type="button">UNDO (15s)</button>
@@ -1454,10 +1455,10 @@ import {
   syncFailureCode,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-09-08-elegant-release';
+} from './sync-core.mjs?v=2026-09-13-kiosk-walk-away';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-09-08-elegant-release';
+const OFFLINE_SHELL_REVISION = '2026-09-13-kiosk-walk-away';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -1525,8 +1526,8 @@ if ('serviceWorker' in navigator) {
   const IS_PRODUCTION_SYNC_ORIGIN = IS_REVOLUTION_PRODUCTION_ORIGIN
     || IS_RICHMOND_PRODUCTION_ORIGIN;
   const TEST_BUILD = IS_RICHMOND
-    ? '2026-09-07 RICHMOND M1 TEST elegant-admin-classes'
-    : '2026-09-07 M1 TEST elegant-admin-classes';
+    ? '2026-09-13 RICHMOND M1 TEST kiosk-walk-away'
+    : '2026-09-13 M1 TEST kiosk-walk-away';
   const RICHMOND_PRODUCTION_BUILD = RICHMOND_PRODUCTION_COPY.build;
   const PRODUCTION_BUILD = '2026-08-29 M1B PRODUCTION sign-in-sync-recovery';
   const BUILD = IS_RICHMOND
@@ -3492,6 +3493,7 @@ function refreshNameDatalist() {
   let lastSigninBatchId = null;
   let signInCountdownId = null;
   let signInSecondsRemaining = 0;
+  let signInConfirmationDeadline = 0;
   let lastSigninFormSnapshot = null;
   let signInLocked = false;
   let dayRolloverController = null;
@@ -3515,6 +3517,15 @@ function refreshNameDatalist() {
     const btn = $('#btnConfirmSignInUndo');
     if (!btn) return;
     btn.textContent = `UNDO (${signInSecondsRemaining}s)`;
+  }
+
+  function checkSignInConfirmationDeadline() {
+    if (!lastSigninBatchId || !signInConfirmationDeadline) return false;
+    signInSecondsRemaining = Math.max(0, Math.ceil((signInConfirmationDeadline - Date.now()) / 1_000));
+    updateSignInUndoLabel();
+    if (signInSecondsRemaining > 0) return false;
+    confirmSigninDone();
+    return true;
   }
 
   function toggleSignInModal(show) {
@@ -3567,22 +3578,14 @@ function refreshNameDatalist() {
     });
     classesWrap.appendChild(list);
 
+    signInConfirmationDeadline = Date.now() + 15_000;
     signInSecondsRemaining = 15;
     const undoBtn = $('#btnConfirmSignInUndo');
     undoBtn.disabled = false;
     updateSignInUndoLabel();
     clearSignInCountdown();
     signInCountdownId = setInterval(() => {
-      signInSecondsRemaining -= 1;
-      if (signInSecondsRemaining <= 0) {
-        signInSecondsRemaining = 0;
-        updateSignInUndoLabel();
-        undoBtn.disabled = true;
-        clearSignInCountdown();
-        lastSigninBatchId = null;
-        return;
-      }
-      updateSignInUndoLabel();
+      if (lastSigninBatchId === batchId) checkSignInConfirmationDeadline();
     }, 1000);
     toggleSignInModal(true);
   }
@@ -3590,27 +3593,48 @@ function refreshNameDatalist() {
   function closeSignInModal() {
     clearSignInCountdown();
     signInSecondsRemaining = 0;
+    signInConfirmationDeadline = 0;
     signInLocked = false;
+    lastSigninBatchId = null;
+    lastSigninFormSnapshot = null;
+    $('#signInModalName').textContent = '';
+    $('#signInModalClasses').replaceChildren();
+    $('#btnConfirmSignInUndo').disabled = true;
+    updateSignInUndoLabel();
     toggleSignInModal(false);
   }
 
   function undoLastSigninBatch() {
+    if (checkSignInConfirmationDeadline()) return;
     if (!lastSigninBatchId || signInSecondsRemaining <= 0) return;
     const state = loadLocalState();
     const nextState = removeBatchFromState(state, lastSigninBatchId);
-    if (nextState !== state) persistLocalState(nextState);
+    try {
+      if (nextState !== state) persistLocalState(nextState);
+    } catch {
+      alert('Undo could not be saved on this tablet. The sign-in is still saved. Please try Undo again before the countdown ends.');
+      return;
+    }
+    const snapshot = lastSigninFormSnapshot;
     renderAdminTable();
     closeSignInModal();
-    restoreKioskForm(lastSigninFormSnapshot);
-    lastSigninBatchId = null;
+    restoreKioskForm(snapshot);
+    updateSyncStatus();
   }
 
   function confirmSigninDone() {
+    if (!lastSigninBatchId) return;
     closeSignInModal();
     resetKioskForm();
-    lastSigninBatchId = null;
-    lastSigninFormSnapshot = null;
   }
+
+  ['focus', 'pageshow', 'popstate'].forEach(eventName => {
+    window.addEventListener(eventName, checkSignInConfirmationDeadline);
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') checkSignInConfirmationDeadline();
+  });
+  document.addEventListener('resume', checkSignInConfirmationDeadline);
 
   // Admin PIN
   let adminAuthenticated = false;
@@ -4037,11 +4061,13 @@ function refreshNameDatalist() {
     if (err) parts.push(`Latest attempt: ${err}`);
     $('#syncStatus').textContent = parts.join(' · ');
     const delivery = $('#kioskDelivery');
-    if (delivery && IS_RICHMOND_PRODUCTION_ORIGIN) {
-      const automatic = localStorage.getItem(SYNC_AUTO_KEY) === 'true';
-      delivery.hidden = false;
+    if (delivery) {
+      const automatic = BACKEND_ENABLED && localStorage.getItem(SYNC_AUTO_KEY) === 'true';
+      delivery.hidden = !IS_RICHMOND_PRODUCTION_ORIGIN && q.length === 0;
       delivery.dataset.waiting = String(q.length > 0 || !automatic);
       $('#kioskDeliveryText').textContent = kioskDeliveryText({ waiting: q.length, last, automatic, error: err, sending: syncInFlight });
+      const connectionLink = delivery.querySelector('a');
+      if (connectionLink) connectionLink.hidden = !IS_RICHMOND_PRODUCTION_ORIGIN;
       $('#signinDeliveryNote').hidden = false;
     }
     renderAdminSummary();
@@ -4223,6 +4249,7 @@ function refreshNameDatalist() {
       showToast('Local only — rows kept');
       return;
     }
+    checkSignInConfirmationDeadline();
     if (lastSigninBatchId && signInSecondsRemaining > 0) {
       showToast('Sync waits until the undo window closes');
       return;
@@ -4848,6 +4875,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-09-08-elegant-release"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-09-13-kiosk-walk-away"></script>
 </body>
 </html>
