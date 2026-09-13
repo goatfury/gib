@@ -41,7 +41,7 @@ function promotionRequest(request) {
     const intent = validatePromotionRequest_(request);
     const workbook = verifiedPromotionWorkbook_();
     lock = LockService.getScriptLock();
-    locked = lock.tryLock(10_000);
+    locked = lock.tryLock(10000);
     if (!locked) failPromotion_('BUSY', 'Another save is finishing. Please retry this same request.', true);
     const state = readPromotionHistory_(workbook);
     if (intent.operation === 'bootstrap') {
