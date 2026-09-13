@@ -2,8 +2,8 @@
   "name": "gib-production-candidate",
   "private": true,
   "scripts": {
-    "build": "node tools/build-m1-installation-profile.mjs",
-    "test": "node --test tests/m1-*.test.mjs"
+    "build": "node tools/build-m1-installation-profile.mjs && node tools/build-public.mjs",
+    "test": "node --test tests/m1-*.test.mjs tests/promotions*.test.mjs"
   },
   "dependencies": {
     "@netlify/blobs": "10.7.12"

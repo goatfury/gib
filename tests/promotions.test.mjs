@@ -1,0 +1,1351 @@
+import assert from 'node:assert/strict';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+import vm from 'node:vm';
+
+// Run the actual Apps Script receiver against controlled Session, LockService,
+// and SpreadsheetApp boundaries. These tests inject failures deterministically;
+// the release also requires real private TEST workbook and browser readback.
+const source = readFileSync(new URL('../promotions/Code.gs', import.meta.url), 'utf8');
+const copy = value => structuredClone(value);
+const plain = value => JSON.parse(JSON.stringify(value));
+const WORKBOOK_TITLE = 'GYM IN A BOX Promotions — PRIVATE SYNTHETIC TEST';
+const OWNER = 'test-manager@example.invalid';
+const BOOK_ID = 'synthetic-private-test-workbook';
+const LEGACY_TABS = ['Black Belt', 'Brown Belt', 'Purple Belt', 'Blue Belt', 'White Belt', 'Former student'];
+const FIXED_NOW = '2026-09-13T15:20:30.000Z';
+const BRIDGE_ORIGIN = 'https://deploy-preview-85--gib-live.netlify.app';
+const BRIDGE_SECRET = 'synthetic-promotions-bridge-secret-0123456789';
+const BRIDGE_MODE = 'm1-authorized-tablet-test-v1';
+const LIVE_BOOK_ID = 'synthetic-proposed-live-workbook';
+const LIVE_WORKBOOK_TITLE = 'Synthetic Revolution pilot fixture';
+const LIVE_ORIGIN = 'https://gib-live.netlify.app';
+const LIVE_SECRET = 'synthetic-live-promotions-bridge-secret-9876543210';
+const LIVE_MODE = 'm1-authorized-tablet-live-v1';
+const STUDENT_HEADERS = ['student_id', 'display_name', 'distinguishing_label', 'status', 'rank_known', 'belt', 'marks', 'mark_type', 'revision', 'last_event_id', 'legacy_refs', 'history_note'];
+const HISTORY_HEADERS = [
+  'event_id', 'request_id', 'student_id', 'revision', 'event_kind', 'event_date_ny', 'recorded_at_utc',
+  'display_name', 'distinguishing_label', 'before_status', 'after_status', 'before_rank_known',
+  'before_belt', 'before_marks', 'before_mark_type', 'after_rank_known', 'after_belt', 'after_marks',
+  'after_mark_type', 'approver_id', 'approver_label', 'recorder_identity', 'corrects_event_id',
+  'reason', 'legacy_refs', 'history_note', 'payload_fingerprint'
+];
+const STUDENTS = [
+  { id: 'fixture-student-001', name: 'TEST Stripe Student', label: 'Evening group', known: true, belt: 'Blue Belt', marks: 2 },
+  { id: 'fixture-student-002', name: 'TEST Duplicate Name', label: 'Morning group', known: true, belt: 'White Belt', marks: 1 },
+  { id: 'fixture-student-003', name: 'TEST Duplicate Name', label: 'Evening group', known: true, belt: 'Purple Belt', marks: 3 },
+  { id: 'fixture-student-004', name: 'TEST Unknown Rank', label: 'Legacy unknown', known: false, belt: '', marks: '' },
+  { id: 'fixture-student-005', name: 'TEST Black Degree', label: 'Synthetic degree case', known: true, belt: 'Black Belt', marks: 5 },
+  { id: 'fixture-student-006', name: 'TEST Former Student', label: 'Historical archived', known: true, belt: 'Brown Belt', marks: 2, status: 'archived' }
+];
+
+function seedSheets() {
+  const students = [];
+  const history = [];
+  for (const [index, student] of STUDENTS.entries()) {
+    const legacy = `${student.belt || 'White Belt'}!A${index + 2}:D${index + 2}`;
+    const note = index % 2 ? 'Unknown historical date: ?; Transplant' : 'Early 2014; original date remains blank';
+    const eventId = `fixture-event-${String(index + 1).padStart(3, '0')}`;
+    const rank = student.known ? (student.belt === 'Black Belt' ? 'degrees' : 'stripes') : '';
+    const status = student.status || 'active';
+    students.push([student.id, student.name, student.label, status, student.known, student.belt, student.marks, rank, 1, eventId, legacy, note]);
+    history.push([
+      eventId, `fixture-request-${String(index + 1).padStart(3, '0')}`, student.id, 1, 'REGISTER', '', '',
+      student.name, student.label, '', status, '', '', '', '', student.known, student.belt, student.marks,
+      rank, '', '', 'SYNTHETIC FIXTURE', '', '', legacy, note, ''
+    ]);
+  }
+  return [['Students', [STUDENT_HEADERS, ...students]], ['Promotion History', [HISTORY_HEADERS, ...history]]];
+}
+
+function formattedDate(value, timezone, pattern) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  }).formatToParts(new Date(value)).map(part => [part.type, part.value]));
+  const day = `${parts.year}-${parts.month}-${parts.day}`;
+  const time = `${parts.hour}:${parts.minute}:${parts.second}`;
+  if (pattern === 'yyyy-MM-dd') return day;
+  if (pattern === "yyyy-MM-dd'T'HH:mm:ss") return `${day}T${time}`;
+  if (pattern === 'yyyy-MM-dd HH:mm:ss') return `${day} ${time}`;
+  if (pattern === "yyyy-MM-dd'T'HH:mm:ss'Z'") return `${day}T${time}Z`;
+  throw new Error(`Unexpected date pattern: ${pattern}`);
+}
+
+function makeSheet(name, initialRows, faults, operations) {
+  const values = copy(initialRows);
+  const formats = new Map();
+  const fault = (kind, payload) => {
+    if (['Students', 'Promotion History'].includes(name)) faults.assertLocked?.();
+    if (faults[kind]?.({ name, values, ...payload })) throw new Error(`Injected ${kind} failure in ${name}`);
+  };
+  const range = (row, column, height = 1, width = 1) => ({
+    getValues() {
+      fault('read', { row, column, height, width });
+      operations.push({ kind: 'read', name, row, column, height, width });
+      return Array.from({ length: height }, (_, y) => Array.from({ length: width }, (_, x) => copy(values[row + y - 1]?.[column + x - 1] ?? '')));
+    },
+    getDisplayValues() { return this.getValues().map(line => line.map(value => String(value))); },
+    getValue() { return this.getValues()[0][0]; },
+    setValues(rows) {
+      assert.equal(rows.length, height);
+      assert.ok(rows.every(line => line.length === width));
+      fault('writeBefore', { row, column, rows: copy(rows) });
+      rows.forEach((line, y) => {
+        if (!values[row + y - 1]) values[row + y - 1] = [];
+        line.forEach((value, x) => {
+          // Native Sheets consumes one leading apostrophe as its text marker.
+          // Exercise this explicitly where the hosted workbook exposed it.
+          const stored = faults.nativeTextMarkers && typeof value === 'string' && value.startsWith("'")
+            ? value.slice(1) : value;
+          values[row + y - 1][column + x - 1] = copy(stored);
+        });
+      });
+      operations.push({ kind: 'write', name, row, column, rows: copy(rows) });
+      fault('writeAfter', { row, column, rows: copy(rows) });
+      return this;
+    },
+    setValue(value) { return this.setValues([[value]]); },
+    setNumberFormat(format) {
+      for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) formats.set(`${row + y}:${column + x}`, format);
+      return this;
+    },
+    setNumberFormats(rows) { rows.forEach((line, y) => line.forEach((value, x) => formats.set(`${row + y}:${column + x}`, value))); return this; },
+    clearContent() {
+      fault('writeBefore', { row, column, rows: [] });
+      for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) if (values[row + y - 1]) values[row + y - 1][column + x - 1] = '';
+      operations.push({ kind: 'clearRange', name, row, column, height, width });
+      return this;
+    }
+  });
+  return {
+    name, values, formats,
+    getName: () => name,
+    getLastRow: () => values.length,
+    getLastColumn: () => Math.max(0, ...values.map(line => line.length)),
+    getMaxRows: () => Math.max(1000, values.length),
+    getMaxColumns: () => 100,
+    getRange: range,
+    getDataRange() { return range(1, 1, Math.max(1, values.length), Math.max(1, this.getLastColumn())); },
+    appendRow(row) { range(values.length + 1, 1, 1, row.length).setValues([row]); return this; },
+    clearContents() { fault('writeBefore', { row: 1, rows: [] }); values.length = 0; operations.push({ kind: 'clearSheet', name }); return this; },
+    setFrozenRows() { return this; },
+    autoResizeColumns() { return this; },
+    insertRowsAfter() { return this; },
+    insertColumnsAfter() { return this; }
+  };
+}
+
+function createHarness({
+  activeEmail = OWNER, effectiveEmail = OWNER, owner = OWNER,
+  workbookTitle = WORKBOOK_TITLE, timezone = 'America/New_York', now = FIXED_NOW,
+  lockAvailable = true, sheets: suppliedSheets = seedSheets(), nativeTextMarkers = false
+} = {}) {
+  const operations = [];
+  const faults = { nativeTextMarkers };
+  const sheets = new Map();
+  const clock = { now };
+  const counters = { opens: 0, locks: 0, releases: 0, flushes: 0, held: false };
+  const cache = new Map();
+  faults.assertLocked = () => assert.equal(counters.held, true, 'authoritative reads and writes must hold the script lock');
+  const properties = new Map([['TEST_OWNER_EMAIL', owner], ['TEST_WORKBOOK_ID', BOOK_ID]]);
+  for (const [index, name] of LEGACY_TABS.entries()) {
+    // Deliberately inconsistent historical structures, blanks, dates, and notes.
+    const rows = index % 2 ? [
+      ['Name', 'Stripe 1', '', 'Historical annotation'],
+      [`TEST Legacy ${index}`, '', new Date('2022-02-03T12:00:00Z'), 'Unknown date; retain this note'],
+      ['', '', '', '']
+    ] : [
+      ['Name', 'Belt Date', 'Degree', 'Notes', ''],
+      [`TEST Legacy ${index}`, 'circa 2019?', 5, 'Keep punctuation, spacing  and blanks', '']
+    ];
+    sheets.set(name, makeSheet(name, rows, faults, operations));
+  }
+  for (const [name, rows] of suppliedSheets || []) sheets.set(name, makeSheet(name, rows, faults, operations));
+  const book = {
+    getName: () => workbookTitle,
+    getId: () => BOOK_ID,
+    getSpreadsheetTimeZone: () => timezone,
+    getSheetByName: name => sheets.get(name) || null,
+    getSheets: () => [...sheets.values()],
+    insertSheet(name) {
+      assert.ok(!sheets.has(name), `Cannot replace sheet ${name}`);
+      const sheet = makeSheet(name, [], faults, operations); sheets.set(name, sheet);
+      operations.push({ kind: 'insertSheet', name }); return sheet;
+    }
+  };
+  const books = new Map([[BOOK_ID, book]]);
+  const openedIds = [];
+  function addWorkbook(id, { title, timezone: bookTimezone = 'America/New_York', rows = seedSheets() } = {}) {
+    assert.equal(books.has(id), false);
+    const addedSheets = new Map(LEGACY_TABS.map(name => [name, makeSheet(name, sheets.get(name).values, faults, operations)]));
+    for (const [name, values] of rows) addedSheets.set(name, makeSheet(name, values, faults, operations));
+    const addedBook = {
+      getName: () => title, getId: () => id, getSpreadsheetTimeZone: () => bookTimezone,
+      getSheetByName: name => addedSheets.get(name) || null,
+      getSheets: () => [...addedSheets.values()],
+      insertSheet(name) {
+        assert.ok(!addedSheets.has(name));
+        const sheet = makeSheet(name, [], faults, operations);
+        addedSheets.set(name, sheet);
+        operations.push({ kind: 'insertSheet', name, workbookId: id });
+        return sheet;
+      }
+    };
+    books.set(id, addedBook);
+    return { book: addedBook, sheets: addedSheets };
+  }
+  class ControlledDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [clock.now])); }
+    static now() { return Date.parse(clock.now); }
+  }
+  const context = vm.createContext({
+    console, Date: ControlledDate,
+    Session: {
+      getActiveUser: () => ({ getEmail: () => activeEmail }),
+      getEffectiveUser: () => ({ getEmail: () => effectiveEmail })
+    },
+    PropertiesService: { getScriptProperties: () => ({
+      getProperty: key => properties.get(key) || '',
+      getProperties: () => Object.fromEntries(properties)
+    }) },
+    LockService: { getScriptLock: () => ({
+      tryLock(milliseconds) { assert.ok(milliseconds > 0); counters.locks += 1; counters.held = lockAvailable; return lockAvailable; },
+      releaseLock() { assert.equal(counters.held, true); counters.held = false; counters.releases += 1; }
+    }) },
+    CacheService: { getScriptCache: () => ({
+      get(key) {
+        if (faults.cacheGet?.()) throw new Error('Injected nonce-cache read failure');
+        return cache.get(key)?.value ?? null;
+      },
+      put(key, value, expiration) {
+        assert.equal(counters.held, true, 'nonce consumption must hold the shared script lock');
+        assert.ok(expiration > 0);
+        if (faults.cachePut?.()) throw new Error('Injected nonce-cache write failure');
+        cache.set(key, { value, expiration });
+      }
+    }) },
+    SpreadsheetApp: {
+      openById(id) {
+        assert.equal(books.has(id), true, 'only named synthetic workbook fixtures may be opened');
+        counters.opens += 1; openedIds.push(id); return books.get(id);
+      },
+      flush() { counters.flushes += 1; if (faults.flush?.()) throw new Error('Injected flush failure'); }
+    },
+    Utilities: {
+      Charset: { UTF_8: 'UTF_8' }, DigestAlgorithm: { SHA_256: 'SHA_256' },
+      getUuid: randomUUID,
+      computeDigest: (_algorithm, value) => [...createHash('sha256').update(String(value)).digest()],
+      computeHmacSha256Signature: (value, key) => [...createHmac('sha256', String(key)).update(String(value)).digest()].map(byte => byte > 127 ? byte - 256 : byte),
+      base64EncodeWebSafe: bytes => Buffer.from(bytes).toString('base64url'),
+      formatDate: formattedDate
+    },
+    HtmlService: { createHtmlOutput: text => ({ text, setTitle() { return this; }, addMetaTag() { return this; } }) },
+    ContentService: {
+      MimeType: { JSON: 'application/json' },
+      createTextOutput: text => ({ text, setMimeType(value) { this.mimeType = value; return this; } })
+    }
+  });
+  vm.runInContext(source, context, { filename: 'promotions/Code.gs' });
+  return {
+    context, sheets, operations, faults, properties, counters, clock, cache, books, openedIds, addWorkbook,
+    call(request) { return plain(context.promotionRequest(copy(request))); },
+    post(envelope) {
+      const result = context.doPost({ postData: { contents: JSON.stringify(envelope), type: 'application/json' } });
+      assert.equal(result.mimeType, 'application/json');
+      const parsed = JSON.parse(result.text);
+      if (Object.hasOwn(parsed, 'result')) {
+        assert.equal(parsed.bridge, envelope.payload.mode);
+        assert.equal(parsed.target, envelope.payload.target);
+        assert.equal(parsed.installation, 'rev');
+        assert.equal(parsed.requestNonce, envelope.payload.nonce);
+        return parsed.result;
+      }
+      return parsed;
+    },
+    freshSession() { return createHarness({ now: clock.now, nativeTextMarkers, sheets: [...sheets].map(([name, sheet]) => [name, copy(sheet.values)]) }); },
+    legacySnapshot() { return copy(LEGACY_TABS.map(name => [name, sheets.get(name).values])); }
+  };
+}
+
+function expectFailure(result, code) {
+  assert.equal(result.ok, false, JSON.stringify(result));
+  if (code) assert.equal(result.error.code, code);
+  assert.equal(typeof result.error.message, 'string');
+  assert.equal(Object.hasOwn(result, 'data'), false, 'rejected calls must not leak roster data');
+  return result;
+}
+
+function expectSuccess(result) {
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.ok(result.data);
+  return result.data;
+}
+
+const requestId = () => `req-${randomUUID()}`;
+const readStudent = (h, studentId = STUDENTS[0].id) => expectSuccess(h.call({ operation: 'readStudent', studentId }));
+const stripeRequest = (overrides = {}) => ({
+  operation: 'recordPromotion', requestId: requestId(), studentId: STUDENTS[0].id,
+  expectedRevision: 1, action: 'stripe', approverId: 'TEST-COACH-A', ...overrides
+});
+const rankRequest = (overrides = {}) => ({
+  operation: 'confirmRank', requestId: requestId(), studentId: STUDENTS[3].id,
+  expectedRevision: 1, rank: { belt: 'White Belt', marks: 2 }, approverId: 'TEST-COACH-B',
+  reason: 'TEST explicit current rank verified', ...overrides
+});
+const historyRows = h => copy(h.sheets.get('Promotion History').values);
+const registerRequest = (overrides = {}) => ({
+  operation: 'registerStudent', requestId: requestId(), displayName: 'TEST Newly Registered',
+  distinguishingLabel: 'Synthetic new group', historyNote: 'No historical rank inferred', ...overrides
+});
+const namedRequest = (request, approverName = "TEST José  O'Neill-Smith") => {
+  const { approverId, ...intent } = request;
+  return { ...intent, approverName };
+};
+
+function canonicalBridgeJSON(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalBridgeJSON).join(',')}]`;
+  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalBridgeJSON(value[key])}`).join(',')}}`;
+}
+
+function bridgeHarness(options = {}) {
+  const h = createHarness({ activeEmail: '', ...options });
+  h.properties.set('TEST_BRIDGE_MODE', BRIDGE_MODE);
+  h.properties.set('TEST_BRIDGE_INSTALLATION', 'rev');
+  h.properties.set('TEST_BRIDGE_ORIGIN', BRIDGE_ORIGIN);
+  h.properties.set('TEST_BRIDGE_SECRET', BRIDGE_SECRET);
+  return h;
+}
+
+function bridgeEnvelope(request = { operation: 'bootstrap' }, changes = {}, secret = BRIDGE_SECRET) {
+  const payload = {
+    version: 1, mode: BRIDGE_MODE, target: 'test', installation: 'rev', origin: BRIDGE_ORIGIN,
+    issuedAt: Math.floor(Date.parse(FIXED_NOW) / 1000), nonce: randomUUID().replaceAll('-', ''),
+    deviceIdentity: 'm1-test-device-1234567890abcdef12345678', request: copy(request), ...changes
+  };
+  return {
+    payload,
+    signature: createHmac('sha256', secret).update(`gib-promotions-test-bridge:v1\n${canonicalBridgeJSON(payload)}`).digest('hex')
+  };
+}
+
+function liveHarness({ liveTitle = LIVE_WORKBOOK_TITLE, liveTimezone = 'America/New_York', liveRows, ...options } = {}) {
+  const h = bridgeHarness(options);
+  const rows = liveRows || seedSheets();
+  if (!liveRows) {
+    rows[0][1][1][STUDENT_HEADERS.indexOf('display_name')] = 'SYNTHETIC PILOT Student';
+    rows[1][1][1][HISTORY_HEADERS.indexOf('display_name')] = 'SYNTHETIC PILOT Student';
+  }
+  h.live = h.addWorkbook(LIVE_BOOK_ID, { title: liveTitle, timezone: liveTimezone, rows });
+  for (const [key, value] of Object.entries({
+    LIVE_ENABLED: 'true', LIVE_BRIDGE_MODE: LIVE_MODE, LIVE_BRIDGE_INSTALLATION: 'rev',
+    LIVE_BRIDGE_ORIGIN: LIVE_ORIGIN, LIVE_BRIDGE_SECRET: LIVE_SECRET,
+    LIVE_WORKBOOK_ID: LIVE_BOOK_ID, LIVE_WORKBOOK_TITLE: LIVE_WORKBOOK_TITLE
+  })) h.properties.set(key, value);
+  return h;
+}
+
+function liveEnvelope(request = { operation: 'bootstrap' }, changes = {}, secret = LIVE_SECRET, domain = 'gib-promotions-live-bridge:v1\n') {
+  const payload = {
+    ...bridgeEnvelope(request).payload, mode: LIVE_MODE, target: 'live', origin: LIVE_ORIGIN,
+    deviceIdentity: 'm1-live-device-1234567890abcdef12345678', ...changes
+  };
+  return { payload, signature: createHmac('sha256', secret).update(`${domain}${canonicalBridgeJSON(payload)}`).digest('hex') };
+}
+
+const workbookSnapshot = sheets => copy([...sheets].map(([name, sheet]) => [name, sheet.values]));
+const liveHistoryRows = h => copy(h.live.sheets.get('Promotion History').values);
+
+function legacyBaselineSheets() {
+  const supplied = seedSheets();
+  for (const row of supplied[1][1].slice(1)) {
+    const index = name => HISTORY_HEADERS.indexOf(name);
+    row[index('recorder_identity')] = 'LEGACY BASELINE IMPORT';
+    row[index('recorded_at_utc')] = FIXED_NOW;
+    row[index('reason')] = 'Legacy baseline import; manifest=promotions-live-baseline-v1; promotion date unknown.';
+    row[index('legacy_refs')] = JSON.stringify([{ range: "'Blue Belt'!A2:K2", fingerprint: 'a'.repeat(64) }]);
+    if (row[index('after_status')] === 'archived') {
+      row[index('after_rank_known')] = false;
+      for (const field of ['after_belt', 'after_marks', 'after_mark_type']) row[index(field)] = '';
+    }
+  }
+  return supplied;
+}
+
+test('blank or unauthorized active/effective sessions reveal no roster and perform no spreadsheet work', () => {
+  for (const options of [
+    { activeEmail: '' }, { effectiveEmail: '' },
+    { activeEmail: 'unapproved@example.invalid' }, { effectiveEmail: 'unapproved@example.invalid' },
+    { owner: '' }
+  ]) {
+    const h = createHarness(options);
+    for (const request of [{ operation: 'bootstrap' }, {
+      operation: 'registerStudent', requestId: 'TEST-unauthorized-request', displayName: 'TEST Student', distinguishingLabel: 'TEST group'
+    }]) expectFailure(h.call(request));
+    const page = h.context.doGet().text;
+    assert.match(page, /Private TEST access required/u);
+    assert.doesNotMatch(page, /TEST Stripe Student|fixture-student|synthetic-private-test-workbook/u);
+    assert.equal(h.counters.opens, 0);
+    assert.equal(h.operations.length, 0);
+  }
+});
+
+test('workbook identity and New York timezone must match before the promotion roster can be read or written', () => {
+  for (const options of [{ workbookTitle: 'Unrelated workbook' }, { timezone: 'UTC' }]) {
+    const h = createHarness(options);
+    expectFailure(h.call({ operation: 'bootstrap' }));
+    expectFailure(h.call(stripeRequest()));
+    assert.equal(h.operations.length, 0);
+  }
+});
+
+test('bootstrap returns only fixed fictional approvers and separates identical names by stable student identity', () => {
+  const h = createHarness();
+  const data = expectSuccess(h.call({ operation: 'bootstrap' }));
+  assert.equal(data.todayNY, '2026-09-13');
+  assert.equal(data.testOnly, true);
+  assert.deepEqual(data.approvers.map(person => person.id), ['TEST-COACH-A', 'TEST-COACH-B']);
+  const duplicates = data.students.filter(student => student.displayName === 'TEST Duplicate Name');
+  assert.equal(duplicates.length, 2);
+  assert.equal(new Set(duplicates.map(student => student.studentId)).size, 2);
+  assert.equal(new Set(duplicates.map(student => student.distinguishingLabel)).size, 2);
+  assert.ok(data.students.every(student => student.studentId));
+});
+
+test('one stripe appends exactly one dated event and keeps the before/after rank and server recorder', () => {
+  const h = createHarness();
+  const before = historyRows(h);
+  const data = expectSuccess(h.call(stripeRequest()));
+  assert.equal(data.student.belt, 'Blue Belt');
+  assert.equal(data.student.marks, 3);
+  assert.equal(data.student.revision, 2);
+  assert.equal(data.receipt.eventDateNY, '2026-09-13');
+  assert.equal(data.receipt.recordedAtUTC, FIXED_NOW);
+  assert.equal(data.receipt.before.belt, 'Blue Belt');
+  assert.equal(data.receipt.before.marks, 2);
+  assert.equal(data.receipt.after.marks, 3);
+  assert.equal(data.receipt.approverId, 'TEST-COACH-A');
+  assert.ok(data.receipt.approverLabel);
+  assert.equal(data.receipt.recorderIdentity, OWNER);
+  assert.notEqual(data.receipt.recorderIdentity, data.receipt.approverLabel);
+  assert.match(data.receipt.eventId, /^evt-/u);
+  assert.deepEqual(historyRows(h).slice(0, before.length), before, 'prior history remains byte/value-identical');
+  assert.equal(historyRows(h).length, before.length + 1);
+  const fresh = readStudent(h.freshSession());
+  assert.equal(fresh.student.lastEventId, data.receipt.eventId);
+  assert.equal(fresh.history.at(-1).eventId, data.receipt.eventId);
+});
+
+test('client recorder spoofing and unapproved approver choices cannot write a promotion', () => {
+  const h = createHarness();
+  const before = historyRows(h);
+  for (const extra of [
+    { recorderIdentity: 'Spoofed manager' }, { recorder: OWNER }, { recordedAtUTC: '2000-01-01T00:00:00Z' },
+    { eventDateNY: '2000-01-01' }, { approverId: OWNER }, { approverId: 'TEST-COACH-C' }
+  ]) expectFailure(h.call(stripeRequest(extra)));
+  assert.deepEqual(historyRows(h), before);
+});
+
+test('same request retry returns the original receipt once while changed payload conflicts', () => {
+  const h = createHarness();
+  const request = stripeRequest();
+  const beforeCount = historyRows(h).length;
+  const first = expectSuccess(h.call(request));
+  h.clock.now = '2026-09-14T15:20:30.000Z';
+  const retry = expectSuccess(h.call(request));
+  assert.deepEqual(retry.receipt, first.receipt);
+  assert.equal(historyRows(h).length, beforeCount + 1);
+  assert.equal(retry.student.marks, 3);
+  expectFailure(h.call({ ...request, approverId: 'TEST-COACH-B' }), 'REQUEST_CONFLICT');
+  assert.equal(historyRows(h).length, beforeCount + 1);
+});
+
+test('two writers reading the same revision cannot each add a stripe', () => {
+  const h = createHarness();
+  const firstView = readStudent(h);
+  const secondView = readStudent(h);
+  const first = stripeRequest({ expectedRevision: firstView.student.revision });
+  const second = stripeRequest({ expectedRevision: secondView.student.revision });
+  expectSuccess(h.call(first));
+  expectFailure(h.call(second));
+  const final = readStudent(h);
+  assert.equal(final.student.marks, 3);
+  assert.equal(final.student.revision, 2);
+  assert.equal(final.history.filter(event => event.eventKind !== 'REGISTER').length, 1);
+  assert.equal(h.counters.locks, h.counters.releases);
+});
+
+test('unavailable script lock rejects all authoritative data reads and writes', () => {
+  const h = createHarness({ lockAvailable: false });
+  const before = historyRows(h);
+  expectFailure(h.call({ operation: 'bootstrap' }));
+  expectFailure(h.call(stripeRequest()));
+  assert.deepEqual(historyRows(h), before);
+  assert.equal(h.operations.length, 0, 'destination metadata may be checked, but row contents stay behind the lock');
+  assert.equal(h.counters.releases, 0);
+});
+
+test('lost response after committed append retries the original request without awarding another stripe', () => {
+  const h = createHarness();
+  const request = stripeRequest();
+  const original = historyRows(h);
+  let fail = true;
+  h.faults.writeAfter = event => {
+    if (event.name === 'Promotion History' && event.row > original.length && fail) { fail = false; return true; }
+    return false;
+  };
+  const ambiguous = h.call(request);
+  assert.equal(historyRows(h).length, original.length + 1, 'the injected error occurs after the authoritative append');
+  assert.equal(typeof ambiguous.ok, 'boolean');
+  delete h.faults.writeAfter;
+  const recovered = expectSuccess(h.call(request));
+  assert.equal(recovered.student.marks, 3);
+  assert.equal(historyRows(h).length, original.length + 1);
+  const checked = expectSuccess(h.call({ operation: 'checkSave', requestId: request.requestId }));
+  assert.equal(checked.receipt.eventId, recovered.receipt.eventId);
+});
+
+test('a history readback failure after append does not duplicate the committed event on retry', () => {
+  const h = createHarness();
+  const request = stripeRequest();
+  const original = historyRows(h);
+  h.faults.read = event => event.name === 'Promotion History' && event.values.length > original.length;
+  h.call(request);
+  assert.equal(historyRows(h).length, original.length + 1);
+  delete h.faults.read;
+  const recovered = expectSuccess(h.call(request));
+  assert.equal(recovered.student.marks, 3);
+  assert.equal(historyRows(h).length, original.length + 1);
+});
+
+test('Students view write failure keeps history authoritative and checkSave repairs the derived view', () => {
+  const h = createHarness();
+  const original = historyRows(h);
+  h.faults.writeBefore = event => event.name === 'Students';
+  const request = stripeRequest();
+  const saved = expectSuccess(h.call(request));
+  assert.equal(saved.viewPending, true);
+  assert.equal(saved.student.marks, 3);
+  assert.equal(historyRows(h).length, original.length + 1);
+  const pending = expectSuccess(h.call({ operation: 'checkSave', requestId: request.requestId }));
+  assert.equal(pending.viewPending, true);
+  assert.deepEqual(pending.receipt, saved.receipt);
+  assert.equal(readStudent(h).student.marks, 3, 'ordinary reads use history even while the view is stale');
+  delete h.faults.writeBefore;
+  const refreshed = expectSuccess(h.call({ operation: 'checkSave', requestId: request.requestId }));
+  assert.equal(refreshed.viewPending, false);
+  assert.equal(refreshed.student.marks, 3);
+  const viewRow = h.sheets.get('Students').values.find(row => row[0] === STUDENTS[0].id);
+  assert.equal(Number(viewRow[6]), 3);
+  assert.equal(historyRows(h).length, original.length + 1);
+});
+
+test('belt transition preserves every prior event, unknown historical date, and annotation', () => {
+  const h = createHarness();
+  const first = expectSuccess(h.call(stripeRequest()));
+  const before = readStudent(h);
+  const rowsBefore = historyRows(h);
+  const changed = expectSuccess(h.call(stripeRequest({
+    expectedRevision: 2, action: 'belt', belt: 'Purple Belt', approverId: 'TEST-COACH-B'
+  })));
+  assert.equal(changed.student.belt, 'Purple Belt');
+  assert.equal(changed.student.marks, 0);
+  assert.equal(changed.receipt.before.belt, 'Blue Belt');
+  assert.equal(changed.receipt.before.marks, 3);
+  assert.equal(changed.receipt.approverId, 'TEST-COACH-B');
+  assert.deepEqual(historyRows(h).slice(0, rowsBefore.length), rowsBefore);
+  const after = readStudent(h);
+  assert.deepEqual(after.history.slice(0, before.history.length), before.history);
+  assert.equal(after.history[0].eventDateNY, '');
+  assert.equal(after.history[1].eventId, first.receipt.eventId);
+  assert.equal(after.student.historyNote, before.student.historyNote);
+  assert.equal(after.student.legacyRefs, before.student.legacyRefs);
+});
+
+test('audited latest-event correction appends a link and reason without altering the mistaken event', () => {
+  const h = createHarness();
+  const mistaken = expectSuccess(h.call(stripeRequest()));
+  const original = historyRows(h);
+  const request = {
+    operation: 'correctLatest', requestId: requestId(), studentId: STUDENTS[0].id,
+    expectedRevision: 2, correctsEventId: mistaken.receipt.eventId,
+    rank: { belt: 'Blue Belt', marks: 2 }, approverId: 'TEST-COACH-B', reason: 'TEST accidental extra stripe'
+  };
+  expectFailure(h.call({ ...request, reason: '' }));
+  assert.deepEqual(historyRows(h), original);
+  const corrected = expectSuccess(h.call(request));
+  assert.equal(corrected.student.marks, 2);
+  assert.equal(corrected.receipt.correctsEventId, mistaken.receipt.eventId);
+  assert.equal(corrected.receipt.reason, request.reason);
+  assert.equal(corrected.receipt.before.marks, 3);
+  assert.deepEqual(historyRows(h).slice(0, original.length), original);
+  expectFailure(h.call({ ...request, requestId: requestId(), expectedRevision: 3 }));
+  assert.equal(historyRows(h).length, original.length + 1, 'an old nonlatest event cannot be corrected in place');
+});
+
+test('unknown current rank requires an explicit resolution before any promotion', () => {
+  const h = createHarness();
+  const original = readStudent(h, STUDENTS[3].id);
+  assert.equal(original.student.rankKnown, false);
+  expectFailure(h.call(stripeRequest({ studentId: STUDENTS[3].id })));
+  expectFailure(h.call(rankRequest({ reason: '' })));
+  const resolved = expectSuccess(h.call(rankRequest()));
+  assert.equal(resolved.student.rankKnown, true);
+  assert.equal(resolved.student.belt, 'White Belt');
+  assert.equal(resolved.student.marks, 2);
+  assert.equal(resolved.receipt.before.rankKnown, false);
+  expectFailure(h.call(rankRequest({ requestId: requestId(), expectedRevision: 2 })));
+  const promoted = expectSuccess(h.call(stripeRequest({ studentId: STUDENTS[3].id, expectedRevision: 2 })));
+  assert.equal(promoted.student.marks, 3);
+  assert.equal(readStudent(h, STUDENTS[3].id).history[0].eventDateNY, '');
+});
+
+test('missing student requires explicit registration and duplicate names retain separate identities', () => {
+  const h = createHarness();
+  expectFailure(h.call(stripeRequest({ studentId: 'fixture-missing-student' })));
+  const request = registerRequest();
+  const first = expectSuccess(h.call(request));
+  assert.equal(first.student.rankKnown, false);
+  assert.equal(first.student.historyNote, request.historyNote);
+  assert.match(first.student.studentId, /^stu-/u);
+  expectFailure(h.call(registerRequest()));
+  const differentPerson = expectSuccess(h.call(registerRequest({ distinguishingLabel: 'Different synthetic group' })));
+  assert.notEqual(differentPerson.student.studentId, first.student.studentId);
+  assert.equal(differentPerson.student.displayName, first.student.displayName);
+  const retry = expectSuccess(h.call(request));
+  assert.equal(retry.student.studentId, first.student.studentId);
+});
+
+test('black-belt degrees can advance five to six without ordinary stripe limits or a belt transition', () => {
+  const h = createHarness();
+  const data = expectSuccess(h.call(stripeRequest({ studentId: STUDENTS[4].id })));
+  assert.equal(data.student.belt, 'Black Belt');
+  assert.equal(data.student.markType, 'degrees');
+  assert.equal(data.student.marks, 6);
+  assert.equal(data.receipt.before.marks, 5);
+  assert.equal(data.receipt.after.marks, 6);
+});
+
+test('ordinary stripes never automatically change the belt and archived students cannot be promoted', () => {
+  const h = createHarness();
+  const fourth = expectSuccess(h.call(stripeRequest({ studentId: STUDENTS[2].id })));
+  assert.equal(fourth.student.belt, 'Purple Belt');
+  assert.equal(fourth.student.marks, 4);
+  const next = expectSuccess(h.call(stripeRequest({ studentId: STUDENTS[2].id, expectedRevision: 2 })));
+  assert.equal(next.student.belt, 'Purple Belt');
+  assert.equal(next.student.marks, 5, 'this TEST tool does not invent ordinary stripe eligibility rules');
+  expectFailure(h.call(stripeRequest({ studentId: STUDENTS[5].id })));
+});
+
+test('New York promotion dates use actual midnight and daylight-saving boundaries', () => {
+  for (const [instant, expected] of [
+    ['2026-09-14T03:59:59.000Z', '2026-09-13'], ['2026-09-14T04:00:00.000Z', '2026-09-14'],
+    ['2026-03-08T04:59:59.000Z', '2026-03-07'], ['2026-03-08T05:00:00.000Z', '2026-03-08'],
+    ['2026-11-02T04:59:59.000Z', '2026-11-01'], ['2026-11-02T05:00:00.000Z', '2026-11-02']
+  ]) {
+    const h = createHarness({ now: instant });
+    const data = expectSuccess(h.call(stripeRequest()));
+    assert.equal(data.receipt.eventDateNY, expected);
+    assert.equal(data.receipt.recordedAtUTC, instant);
+  }
+});
+
+test('all six legacy rank tabs retain exact values, blanks, dates, terminology and structure after every mutation', () => {
+  const h = createHarness();
+  const before = h.legacySnapshot();
+  expectSuccess(h.call({ operation: 'bootstrap' }));
+  const promotion = expectSuccess(h.call(stripeRequest()));
+  expectSuccess(h.call({
+    operation: 'correctLatest', requestId: requestId(), studentId: STUDENTS[0].id,
+    expectedRevision: 2, correctsEventId: promotion.receipt.eventId,
+    rank: { belt: 'Blue Belt', marks: 2 }, approverId: 'TEST-COACH-A', reason: 'TEST corrected extra stripe'
+  }));
+  expectSuccess(h.call(rankRequest()));
+  expectSuccess(h.call(registerRequest()));
+  expectSuccess(h.call(stripeRequest({ studentId: STUDENTS[4].id })));
+  assert.deepEqual(h.legacySnapshot(), before);
+  assert.equal(h.operations.filter(operation => LEGACY_TABS.includes(operation.name)).length, 0);
+});
+
+test('new typed spreadsheet formula text is rejected and literal ordinary text stays unchanged', () => {
+  const h = createHarness();
+  const before = historyRows(h);
+  for (const value of ['=SUM(1,2)', '+SUM(1,2)', '-2+3', '@SUM(1,2)', '\t=SUM(1,2)']) {
+    expectFailure(h.call(registerRequest({ displayName: value })));
+    expectFailure(h.call(registerRequest({ distinguishingLabel: value })));
+  }
+  assert.deepEqual(historyRows(h), before);
+  const displayName = 'TEST O’Connor, Jr.';
+  const data = expectSuccess(h.call(registerRequest({ displayName, historyNote: 'Unknown date; preserve punctuation, commas and blanks.' })));
+  assert.equal(data.student.displayName, displayName);
+  assert.equal(readStudent(h, data.student.studentId).student.historyNote, 'Unknown date; preserve punctuation, commas and blanks.');
+});
+
+test('flush failure after append is recoverable by the same request from a fresh receiver session', () => {
+  const h = createHarness();
+  const request = stripeRequest();
+  const original = historyRows(h);
+  let failed = false;
+  h.faults.flush = () => { if (!failed) { failed = true; return true; } return false; };
+  expectFailure(h.call(request), 'UNAVAILABLE');
+  assert.equal(historyRows(h).length, original.length + 1);
+  const newSession = h.freshSession();
+  const recovered = expectSuccess(newSession.call(request));
+  assert.equal(recovered.student.marks, 3);
+  assert.equal(recovered.receipt.requestId, request.requestId);
+  assert.equal(historyRows(newSession).length, original.length + 1);
+});
+
+test('a failed append leaves history unchanged and the exact same request remains safe to retry', () => {
+  const h = createHarness();
+  const request = stripeRequest();
+  const original = historyRows(h);
+  h.faults.writeBefore = event => event.name === 'Promotion History';
+  expectFailure(h.call(request), 'UNAVAILABLE');
+  assert.deepEqual(historyRows(h), original);
+  delete h.faults.writeBefore;
+  const saved = expectSuccess(h.call(request));
+  assert.equal(saved.student.marks, 3);
+  assert.equal(historyRows(h).length, original.length + 1);
+});
+
+test('a retry after later promotions returns its original receipt and cannot revert the current student view', () => {
+  const h = createHarness();
+  const request = stripeRequest();
+  const first = expectSuccess(h.call(request));
+  const second = expectSuccess(h.call(stripeRequest({ expectedRevision: 2 })));
+  const count = historyRows(h).length;
+  const retry = expectSuccess(h.call(Object.fromEntries(Object.entries(request).reverse())));
+  assert.deepEqual(retry.receipt, first.receipt, 'key order must not change an identical request fingerprint');
+  assert.deepEqual(retry.student, second.student, 'a receipt and the current rank are distinct facts');
+  assert.equal(historyRows(h).length, count);
+});
+
+test('Students cells never become rank authority, even when edited to a different revision and belt', () => {
+  const h = createHarness();
+  const row = h.sheets.get('Students').values.find(value => value[0] === STUDENTS[0].id);
+  row[5] = 'Black Belt'; row[6] = 99; row[7] = 'degrees'; row[8] = 999;
+  const current = readStudent(h);
+  assert.equal(current.student.belt, 'Blue Belt');
+  assert.equal(current.student.marks, 2);
+  assert.equal(current.student.revision, 1);
+  const saved = expectSuccess(h.call(stripeRequest()));
+  assert.equal(saved.student.belt, 'Blue Belt');
+  assert.equal(saved.student.marks, 3);
+  const restored = h.sheets.get('Students').values.find(value => value[0] === STUDENTS[0].id);
+  assert.equal(restored[5], 'Blue Belt');
+  assert.equal(Number(restored[8]), 2);
+});
+
+test('an unknown request is explicitly not found and checking it creates no record', () => {
+  const h = createHarness();
+  const original = historyRows(h);
+  const data = expectSuccess(h.call({ operation: 'checkSave', requestId: requestId() }));
+  assert.equal(data.status, 'not_found');
+  assert.equal(Object.hasOwn(data, 'receipt'), false);
+  assert.deepEqual(historyRows(h), original);
+});
+
+test('malformed or unsupported write fields cannot silently change rank or history', () => {
+  const h = createHarness();
+  const original = historyRows(h);
+  for (const request of [
+    stripeRequest({ action: 'stripe', belt: 'Black Belt' }),
+    stripeRequest({ expectedRevision: 1.5 }), stripeRequest({ expectedRevision: '1' }),
+    stripeRequest({ action: 'belt', belt: 'Gold Belt' }),
+    rankRequest({ rank: { belt: 'Blue Belt', marks: -1 } }),
+    rankRequest({ rank: { belt: 'Blue Belt', marks: 1.25 } }),
+    rankRequest({ rank: { belt: 'Blue Belt', marks: '2' } }),
+    rankRequest({ rank: { belt: 'Blue Belt', marks: 2, markType: 'degrees' } }),
+    registerRequest({ distinguishingLabel: '' }), { operation: 'deleteStudent', studentId: STUDENTS[0].id }
+  ]) expectFailure(h.call(request), 'VALIDATION');
+  assert.deepEqual(historyRows(h), original);
+});
+
+test('an altered append readback cannot be reported as the exact promotion that was requested', () => {
+  const h = createHarness();
+  const original = historyRows(h);
+  h.faults.writeAfter = event => {
+    if (event.name === 'Promotion History' && event.row > original.length) {
+      event.values.at(-1)[HISTORY_HEADERS.indexOf('approver_label')] = 'TEST Wrong Readback';
+    }
+    return false;
+  };
+  expectFailure(h.call(stripeRequest()), 'UNAVAILABLE');
+  assert.equal(historyRows(h).length, original.length + 1, 'unknown confirmation must not imply nothing was committed');
+});
+
+test('native Sheets text markers preserve quoted legacy references and formula-looking carried metadata exactly', () => {
+  const quotedReference = "'Blue Belt'!A2:K2";
+  const supplied = seedSheets();
+  supplied[0][1][1][STUDENT_HEADERS.indexOf('legacy_refs')] = quotedReference;
+  supplied[1][1][1][HISTORY_HEADERS.indexOf('legacy_refs')] = quotedReference;
+  supplied[0][1][1][STUDENT_HEADERS.indexOf('history_note')] = '=literal historical annotation';
+  supplied[1][1][1][HISTORY_HEADERS.indexOf('history_note')] = '=literal historical annotation';
+  const h = createHarness({ sheets: supplied, nativeTextMarkers: true });
+  const probe = makeSheet('Native text-marker probe', [], { nativeTextMarkers: true }, []);
+  probe.appendRow([quotedReference]);
+  assert.equal(probe.values[0][0], "Blue Belt'!A2:K2", 'unescaped append reproduces the observed native failure');
+  const literalValues = [quotedReference, '=literal historical annotation', '+literal note', '-literal note', '@literal note'];
+  probe.appendRow(plain(h.context.literalPromotionRow_(literalValues)));
+  assert.deepEqual(probe.values[1], literalValues, 'one escaped text marker round-trips every literal value');
+
+  const original = historyRows(h);
+  const saved = expectSuccess(h.call(stripeRequest()));
+  assert.equal(saved.viewPending, false);
+  assert.equal(saved.receipt.after.legacyRefs, quotedReference);
+  assert.equal(saved.receipt.after.historyNote, '=literal historical annotation');
+  assert.equal(historyRows(h).at(-1)[HISTORY_HEADERS.indexOf('legacy_refs')], quotedReference);
+  const view = h.sheets.get('Students').values.find(row => row[0] === STUDENTS[0].id);
+  assert.equal(view[STUDENT_HEADERS.indexOf('legacy_refs')], quotedReference);
+  assert.equal(view[STUDENT_HEADERS.indexOf('history_note')], '=literal historical annotation');
+  assert.deepEqual(historyRows(h).slice(0, original.length), original);
+  assert.equal(readStudent(h.freshSession()).student.legacyRefs, quotedReference);
+});
+
+test('post-append metadata corruption remains unknown on retry and checkSave until one exact repair recovers the original receipt', () => {
+  const quotedReference = "'Blue Belt'!A2:K2";
+  const column = HISTORY_HEADERS.indexOf('legacy_refs');
+  const supplied = seedSheets();
+  supplied[0][1][1][STUDENT_HEADERS.indexOf('legacy_refs')] = quotedReference;
+  supplied[1][1][1][column] = quotedReference;
+  const h = createHarness({ sheets: supplied, nativeTextMarkers: true });
+  const request = stripeRequest();
+  const original = historyRows(h);
+  h.faults.writeAfter = event => {
+    if (event.name === 'Promotion History' && event.row > original.length) event.values.at(-1)[column] = quotedReference.slice(1);
+    return false;
+  };
+  const initial = expectFailure(h.call(request), 'UNAVAILABLE');
+  assert.equal(initial.error.retryable, true);
+  const committed = historyRows(h).at(-1);
+  const eventId = committed[HISTORY_HEADERS.indexOf('event_id')];
+  assert.equal(historyRows(h).length, original.length + 1);
+  delete h.faults.writeAfter;
+  const corruptSnapshot = historyRows(h);
+  for (const pending of [request, { operation: 'checkSave', requestId: request.requestId }]) {
+    const result = expectFailure(h.call(pending), 'UNAVAILABLE');
+    assert.equal(result.error.retryable, true, 'a previously appended request must not be described as definitely unsaved');
+    assert.deepEqual(historyRows(h), corruptSnapshot, 'retry and checkSave must not append or silently repair metadata');
+  }
+  expectFailure(h.call({ operation: 'readStudent', studentId: request.studentId }), 'TEST_DESTINATION_INVALID');
+  assert.deepEqual(historyRows(h), corruptSnapshot, 'the immutable metadata validator stays strict');
+
+  // Model only the separately authorized one-cell TEST repair, outside the app.
+  h.sheets.get('Promotion History').values.at(-1)[column] = quotedReference;
+  const repaired = historyRows(h);
+  assert.deepEqual(repaired.at(-1).filter((_, index) => index !== column), committed.filter((_, index) => index !== column));
+  const recovered = expectSuccess(h.call(request));
+  assert.equal(recovered.receipt.eventId, eventId);
+  assert.equal(recovered.receipt.requestId, request.requestId);
+  assert.equal(recovered.student.marks, 3);
+  assert.equal(recovered.student.legacyRefs, quotedReference);
+  assert.deepEqual(historyRows(h), repaired, 'the original receipt is recovered with zero additional history appends');
+  assert.equal(expectSuccess(h.call({ operation: 'checkSave', requestId: request.requestId })).receipt.eventId, eventId);
+});
+
+test('signed tablet lookup works without a Google login and creates no promotion event', () => {
+  const h = bridgeHarness();
+  const initial = historyRows(h);
+  const bootstrap = expectSuccess(h.post(bridgeEnvelope()));
+  assert.equal(bootstrap.recorderLabel, 'Authorized TEST tablet');
+  assert.equal(bootstrap.students.length, STUDENTS.length);
+  assert.equal(bootstrap.students[0].lastPromotionDateNY, '');
+  const lookup = expectSuccess(h.post(bridgeEnvelope({ operation: 'readStudent', studentId: STUDENTS[0].id })));
+  assert.equal(lookup.student.marks, 2);
+  assert.equal(lookup.student.lastPromotionDateNY, '');
+  assert.equal(lookup.history[0].eventDateNY, '');
+  assert.deepEqual(historyRows(h), initial);
+  assert.equal(h.operations.some(item => ['write', 'clearRange', 'clearSheet', 'insertSheet'].includes(item.kind)), false);
+});
+
+test('tablet transport records a chosen instructor separately from its device and preserves duplicate-safe domain writes', () => {
+  const h = bridgeHarness();
+  const initial = historyRows(h);
+  const request = stripeRequest({ approverId: 'TEST-COACH-B' });
+  const envelope = bridgeEnvelope(request);
+  const saved = expectSuccess(h.post(envelope));
+  assert.equal(saved.receipt.recorderIdentity, envelope.payload.deviceIdentity);
+  assert.equal(saved.receipt.approverId, 'TEST-COACH-B');
+  assert.equal(saved.receipt.approverLabel, 'TEST Coach Blake');
+  assert.notEqual(saved.receipt.recorderIdentity, OWNER);
+  assert.equal(saved.student.lastPromotionDateNY, '2026-09-13');
+  assert.equal(saved.receipt.before.marks, 2);
+  assert.equal(saved.receipt.after.marks, 3);
+  const retry = expectSuccess(h.post(bridgeEnvelope(request, { deviceIdentity: 'm1-test-device-abcdef1234567890abcdef12' })));
+  assert.equal(retry.receipt.eventId, saved.receipt.eventId);
+  assert.equal(retry.receipt.recorderIdentity, envelope.payload.deviceIdentity, 'reconciliation from a different authorized tablet retains the original recording device');
+  const checked = expectSuccess(h.post(bridgeEnvelope({ operation: 'checkSave', requestId: request.requestId })));
+  assert.equal(checked.status, 'confirmed');
+  assert.equal(checked.receipt.eventId, saved.receipt.eventId);
+  assert.equal(historyRows(h).length, initial.length + 1);
+  assert.deepEqual(historyRows(h).slice(0, initial.length), initial);
+});
+
+test('bridge rejects unsigned, altered, expired, cross-installation and malformed envelopes before opening the workbook', () => {
+  const valid = bridgeEnvelope();
+  const changedPayload = copy(valid);
+  changedPayload.payload.request = stripeRequest();
+  const changedSignature = copy(valid);
+  changedSignature.signature = '0'.repeat(64);
+  const now = Math.floor(Date.parse(FIXED_NOW) / 1000);
+  const invalid = [
+    {}, { request: { operation: 'bootstrap' } }, { ...valid, unexpected: true },
+    changedPayload, changedSignature, bridgeEnvelope(undefined, {}, `${BRIDGE_SECRET}-wrong`),
+    bridgeEnvelope(undefined, { version: 2 }), bridgeEnvelope(undefined, { target: 'production' }),
+    bridgeEnvelope(undefined, { mode: 'unrestricted' }), bridgeEnvelope(undefined, { installation: 'richmond' }),
+    bridgeEnvelope(undefined, { origin: 'https://gib-live.netlify.app' }),
+    bridgeEnvelope(undefined, { issuedAt: now - 121 }), bridgeEnvelope(undefined, { issuedAt: now + 31 }),
+    bridgeEnvelope(undefined, { issuedAt: String(now) }), bridgeEnvelope(undefined, { nonce: '' }),
+    bridgeEnvelope(undefined, { deviceIdentity: OWNER }), bridgeEnvelope(undefined, { extra: 'not signed contract' })
+  ];
+  for (const envelope of invalid) {
+    const h = bridgeHarness();
+    expectFailure(h.post(envelope));
+    assert.equal(h.counters.opens, 0, JSON.stringify(envelope));
+    assert.equal(h.operations.length, 0);
+    assert.equal(h.cache.size, 0, 'a malformed envelope must not reserve a valid nonce');
+  }
+});
+
+test('bridge requires exact private TEST mode, installation, origin, secret and effective owner before data access', () => {
+  const invalidProperties = [
+    ['TEST_BRIDGE_MODE', ''], ['TEST_BRIDGE_MODE', 'production'],
+    ['TEST_BRIDGE_INSTALLATION', 'richmond'], ['TEST_BRIDGE_ORIGIN', 'https://gib-live.netlify.app'],
+    ['TEST_BRIDGE_SECRET', ''], ['TEST_BRIDGE_SECRET', 'short'], ['TEST_OWNER_EMAIL', '']
+  ];
+  for (const [key, value] of invalidProperties) {
+    const h = bridgeHarness();
+    h.properties.set(key, value);
+    expectFailure(h.post(bridgeEnvelope()));
+    assert.equal(h.counters.opens, 0, key);
+  }
+  for (const effectiveEmail of ['', 'another-ops@example.invalid']) {
+    const h = bridgeHarness({ effectiveEmail });
+    expectFailure(h.post(bridgeEnvelope()));
+    assert.equal(h.counters.opens, 0);
+  }
+});
+
+test('a signed bridge never unlocks owner RPC or the private reference page for an anonymous session', () => {
+  const h = bridgeHarness();
+  expectFailure(h.call({ operation: 'bootstrap' }), 'UNAUTHORIZED');
+  expectFailure(h.call(stripeRequest()), 'UNAUTHORIZED');
+  expectFailure(plain(h.context.promotionRequest({ operation: 'bootstrap' }, OWNER, bridgeEnvelope().payload)), 'UNAUTHORIZED');
+  expectFailure(plain(h.context.promotionRequest(stripeRequest(), OWNER, bridgeEnvelope().payload)), 'UNAUTHORIZED');
+  const page = h.context.doGet().text;
+  assert.match(page, /Private TEST access required/);
+  assert.equal(h.counters.opens, 0);
+});
+
+test('one bridge nonce is consumed once before lookup or write and a fresh envelope may reconcile the same request', () => {
+  const h = bridgeHarness();
+  const request = stripeRequest();
+  const envelope = bridgeEnvelope(request);
+  const saved = expectSuccess(h.post(envelope));
+  const opens = h.counters.opens;
+  const count = historyRows(h).length;
+  expectFailure(h.post(envelope));
+  assert.equal(h.counters.opens, opens, 'replayed transport cannot reopen the workbook');
+  assert.equal(historyRows(h).length, count);
+  assert.equal(expectSuccess(h.post(bridgeEnvelope(request))).receipt.eventId, saved.receipt.eventId);
+  assert.equal(historyRows(h).length, count);
+});
+
+test('bridge nonce-cache outages deny before workbook access and remain retryable with the same request', () => {
+  for (const fault of ['cacheGet', 'cachePut']) {
+    const h = bridgeHarness();
+    const request = stripeRequest();
+    const envelope = bridgeEnvelope(request);
+    h.faults[fault] = () => true;
+    const failed = expectFailure(h.post(envelope), 'UNAVAILABLE');
+    assert.equal(failed.error.retryable, true);
+    assert.equal(failed.requestId, request.requestId);
+    assert.equal(h.counters.opens, 0);
+    assert.equal(h.operations.length, 0);
+    assert.equal(h.counters.held, false);
+    delete h.faults[fault];
+    assert.equal(expectSuccess(h.post(envelope)).receipt.requestId, request.requestId);
+  }
+});
+
+test('tablet callers cannot replace their signed device recorder or write without selecting an instructor', () => {
+  for (const request of [
+    stripeRequest({ recorderIdentity: OWNER }), stripeRequest({ approverId: '' }),
+    registerRequest({ approverId: '' }), registerRequest({ approverId: 'not-a-coach' })
+  ]) {
+    const h = bridgeHarness();
+    const initial = historyRows(h);
+    expectFailure(h.post(bridgeEnvelope(request)));
+    assert.deepEqual(historyRows(h), initial);
+  }
+  const request = registerRequest();
+  delete request.approverId;
+  const h = bridgeHarness();
+  expectFailure(h.post(bridgeEnvelope(request)));
+});
+
+test('new registration records its chosen instructor while original undated historical seeds remain exactly unchanged', () => {
+  const h = bridgeHarness();
+  const initial = historyRows(h);
+  const saved = expectSuccess(h.post(bridgeEnvelope(registerRequest({ approverId: 'TEST-COACH-B' }))));
+  assert.equal(saved.receipt.approverId, 'TEST-COACH-B');
+  assert.equal(saved.receipt.approverLabel, 'TEST Coach Blake');
+  assert.equal(saved.receipt.eventDateNY, '2026-09-13');
+  assert.equal(saved.student.lastPromotionDateNY, '', 'registering a student is not a recorded promotion');
+  assert.deepEqual(historyRows(h).slice(0, initial.length), initial);
+});
+
+test('latest promotion date comes from stripe or belt events and does not invent dates for rank confirmation or later correction', () => {
+  const h = createHarness();
+  const confirmed = expectSuccess(h.call(rankRequest()));
+  assert.equal(confirmed.student.lastPromotionDateNY, '');
+  const stripe = expectSuccess(h.call(stripeRequest()));
+  assert.equal(stripe.student.lastPromotionDateNY, '2026-09-13');
+  h.clock.now = '2026-09-14T15:20:30.000Z';
+  const corrected = expectSuccess(h.call({
+    operation: 'correctLatest', requestId: requestId(), studentId: STUDENTS[0].id,
+    expectedRevision: 2, correctsEventId: stripe.receipt.eventId,
+    rank: { belt: 'Blue Belt', marks: 2 }, approverId: 'TEST-COACH-B', reason: 'TEST corrected rank next day'
+  }));
+  assert.equal(corrected.receipt.eventDateNY, '2026-09-14');
+  assert.equal(corrected.student.lastPromotionDateNY, '2026-09-13');
+  h.clock.now = '2026-09-15T15:20:30.000Z';
+  const belt = expectSuccess(h.call(stripeRequest({ expectedRevision: 3, action: 'belt', belt: 'Purple Belt' })));
+  assert.equal(belt.student.lastPromotionDateNY, '2026-09-15');
+  assert.equal(readStudent(h.freshSession()).student.lastPromotionDateNY, '2026-09-15');
+});
+
+test('unlisted typed instructor names preserve Unicode, case, internal spacing, apostrophes and hyphens in permanent attribution', () => {
+  for (const name of ['TEST Guest Instructor Not Listed', "TEST José  O'Neill-Smith", 'TEST 教練 李', 'TEST aLeX McKay']) {
+    const h = bridgeHarness({ nativeTextMarkers: true });
+    const initial = historyRows(h);
+    const envelope = bridgeEnvelope(namedRequest(stripeRequest(), `  ${name}  `));
+    const saved = expectSuccess(h.post(envelope));
+    assert.equal(saved.receipt.approverId, '', 'typed attribution is not converted to an authenticated or allowlisted identity');
+    assert.equal(saved.receipt.approverLabel, name);
+    assert.equal(saved.receipt.recorderIdentity, envelope.payload.deviceIdentity);
+    assert.notEqual(saved.receipt.recorderIdentity, saved.receipt.approverLabel);
+    assert.equal(historyRows(h).at(-1)[HISTORY_HEADERS.indexOf('approver_id')], '');
+    assert.equal(historyRows(h).at(-1)[HISTORY_HEADERS.indexOf('approver_label')], name);
+    const fresh = readStudent(h.freshSession());
+    assert.equal(fresh.history.at(-1).approverLabel, name);
+    assert.equal(fresh.history.at(-1).recorderIdentity, envelope.payload.deviceIdentity);
+    assert.deepEqual(historyRows(h).slice(0, initial.length), initial);
+  }
+});
+
+test('typed attribution is accepted for registration, unknown-rank resolution, belt change and audited correction', () => {
+  const h = bridgeHarness();
+  const registered = expectSuccess(h.post(bridgeEnvelope(namedRequest(registerRequest(), 'TEST Visiting Instructor'))));
+  const confirmed = expectSuccess(h.post(bridgeEnvelope(namedRequest(rankRequest({ studentId: registered.student.studentId }), 'TEST 教練 李'))));
+  const belt = expectSuccess(h.post(bridgeEnvelope(namedRequest(stripeRequest({
+    studentId: registered.student.studentId, expectedRevision: 2, action: 'belt', belt: 'Blue Belt'
+  }), "TEST O'Neill-Smith"))));
+  const corrected = expectSuccess(h.post(bridgeEnvelope(namedRequest({
+    operation: 'correctLatest', requestId: requestId(), studentId: registered.student.studentId,
+    expectedRevision: 3, correctsEventId: belt.receipt.eventId, rank: { belt: 'White Belt', marks: 2 }, reason: 'TEST original belt entry was mistaken'
+  }, 'TEST Second Visiting Instructor'))));
+  for (const event of [registered, confirmed, belt, corrected]) assert.equal(event.receipt.approverId, '');
+  assert.equal(registered.receipt.approverLabel, 'TEST Visiting Instructor');
+  assert.equal(confirmed.receipt.approverLabel, 'TEST 教練 李');
+  assert.equal(belt.receipt.approverLabel, "TEST O'Neill-Smith");
+  assert.equal(corrected.receipt.approverLabel, 'TEST Second Visiting Instructor');
+  assert.equal(corrected.receipt.correctsEventId, belt.receipt.eventId);
+  const history = expectSuccess(h.post(bridgeEnvelope({ operation: 'readStudent', studentId: registered.student.studentId })));
+  assert.equal(history.history.length, 4);
+  assert.equal(history.history[2].eventId, belt.receipt.eventId);
+  assert.equal(history.history[2].approverLabel, "TEST O'Neill-Smith");
+});
+
+test('blank, oversized, non-text, control-containing and ambiguous typed write attribution cannot change history', () => {
+  const invalid = ['', '   ', null, 123, [], {}, 'x'.repeat(121), 'TEST\nCoach', 'TEST\tCoach', 'TEST\u0000Coach', 'TEST\u001fCoach', 'TEST\u007fCoach', 'TEST\u0085Coach'];
+  for (const name of invalid) for (const request of [stripeRequest(), registerRequest(), rankRequest()]) {
+    const h = bridgeHarness();
+    const initial = historyRows(h);
+    expectFailure(h.post(bridgeEnvelope(namedRequest(request, name))));
+    assert.deepEqual(historyRows(h), initial);
+  }
+  const h = bridgeHarness();
+  const initial = historyRows(h);
+  expectFailure(h.post(bridgeEnvelope({ ...stripeRequest(), approverName: 'TEST Coach Avery' })));
+  assert.deepEqual(historyRows(h), initial);
+  const lookup = expectSuccess(h.post(bridgeEnvelope({ operation: 'readStudent', studentId: STUDENTS[0].id })));
+  assert.equal(lookup.student.marks, 2, 'lookup needs no instructor name even after an invalid write');
+  assert.deepEqual(historyRows(h), initial);
+});
+
+test('valid typed names at the length boundary and formula-like prefixes are safely stored as literal text', () => {
+  for (const name of ['x'.repeat(120), '=TEST Coach', '+TEST Coach', '-TEST Coach', '@TEST Coach', "'TEST Coach"]) {
+    const h = bridgeHarness({ nativeTextMarkers: true });
+    const saved = expectSuccess(h.post(bridgeEnvelope(namedRequest(stripeRequest(), name))));
+    assert.equal(saved.receipt.approverLabel, name);
+    assert.equal(historyRows(h).at(-1)[HISTORY_HEADERS.indexOf('approver_label')], name);
+    assert.equal(readStudent(h.freshSession()).history.at(-1).approverLabel, name);
+  }
+});
+
+test('typed attribution participates in the exact original request fingerprint and cannot change during retry', () => {
+  const h = bridgeHarness();
+  const request = namedRequest(stripeRequest(), "TEST José  O'Neill-Smith");
+  const original = expectSuccess(h.post(bridgeEnvelope(request)));
+  const savedRows = historyRows(h);
+  const retry = expectSuccess(h.post(bridgeEnvelope(request, { deviceIdentity: 'm1-test-device-abcdef1234567890abcdef12' })));
+  assert.equal(retry.receipt.eventId, original.receipt.eventId);
+  assert.equal(retry.receipt.approverLabel, request.approverName);
+  assert.equal(retry.receipt.recorderIdentity, original.receipt.recorderIdentity);
+  for (const name of ['TEST Other Instructor', "TEST José O'Neill-Smith", "TEST josé  O'Neill-Smith", ` ${request.approverName} `]) {
+    expectFailure(h.post(bridgeEnvelope({ ...request, approverName: name })), 'REQUEST_CONFLICT');
+    assert.deepEqual(historyRows(h), savedRows);
+  }
+  const checked = expectSuccess(h.post(bridgeEnvelope({ operation: 'checkSave', requestId: request.requestId })));
+  assert.equal(checked.receipt.eventId, original.receipt.eventId);
+  assert.equal(checked.receipt.approverLabel, request.approverName);
+});
+
+test('an unresolved legacy approverId request retains its original fingerprint, receipt and historical attribution', () => {
+  const h = bridgeHarness();
+  const request = stripeRequest({ approverId: 'TEST-COACH-B' });
+  const original = historyRows(h);
+  h.faults.flush = () => true;
+  assert.equal(expectFailure(h.post(bridgeEnvelope(request)), 'UNAVAILABLE').error.retryable, true);
+  const persisted = historyRows(h);
+  assert.equal(persisted.length, original.length + 1);
+  delete h.faults.flush;
+  const retry = expectSuccess(h.post(bridgeEnvelope(request)));
+  assert.equal(retry.receipt.approverId, 'TEST-COACH-B');
+  assert.equal(retry.receipt.approverLabel, 'TEST Coach Blake');
+  assert.deepEqual(historyRows(h), persisted);
+  expectFailure(h.post(bridgeEnvelope(namedRequest(request, 'TEST Coach Blake'))), 'REQUEST_CONFLICT');
+  assert.deepEqual(historyRows(h), persisted, 'matching display text does not rewrite an earlier request into the new wire format');
+  const checked = expectSuccess(h.post(bridgeEnvelope({ operation: 'checkSave', requestId: request.requestId })));
+  assert.equal(checked.receipt.eventId, retry.receipt.eventId);
+  assert.equal(checked.receipt.approverId, 'TEST-COACH-B');
+  assert.deepEqual(historyRows(h).slice(0, original.length), original);
+});
+
+test('freely typed attribution cannot replace the signed device recorder or bypass owner and bridge authorization', () => {
+  const request = namedRequest(stripeRequest(), 'TEST Visiting Instructor');
+  const h = bridgeHarness();
+  const initial = historyRows(h);
+  expectFailure(h.call(request), 'UNAUTHORIZED');
+  const unsigned = bridgeEnvelope(request);
+  unsigned.signature = '0'.repeat(64);
+  expectFailure(h.post(unsigned), 'UNAUTHORIZED');
+  assert.equal(h.counters.opens, 0);
+  for (const changes of [
+    { recorderIdentity: OWNER }, { recorder: OWNER }, { recordedAtUTC: '2000-01-01T00:00:00Z' }, { approverLabel: 'forged label' }
+  ]) expectFailure(h.post(bridgeEnvelope({ ...request, ...changes })), 'VALIDATION');
+  assert.deepEqual(historyRows(h), initial);
+  const saved = expectSuccess(h.post(bridgeEnvelope(request)));
+  assert.match(saved.receipt.recorderIdentity, /^m1-test-device-/);
+  assert.equal(saved.receipt.approverLabel, request.approverName);
+});
+
+test('LIVE bridge requires every private activation and destination-isolation setting before opening either workbook', () => {
+  for (const [key, value] of [
+    ['LIVE_ENABLED', ''], ['LIVE_ENABLED', 'false'], ['LIVE_BRIDGE_MODE', BRIDGE_MODE],
+    ['LIVE_BRIDGE_INSTALLATION', 'richmond'], ['LIVE_BRIDGE_ORIGIN', BRIDGE_ORIGIN],
+    ['LIVE_BRIDGE_ORIGIN', LIVE_ORIGIN + '/'], ['LIVE_BRIDGE_SECRET', BRIDGE_SECRET],
+    ['LIVE_BRIDGE_SECRET', 'short'], ['LIVE_WORKBOOK_ID', BOOK_ID], ['LIVE_WORKBOOK_ID', ''],
+    ['LIVE_WORKBOOK_TITLE', ''], ['TEST_WORKBOOK_ID', ''], ['TEST_BRIDGE_SECRET', ''], ['TEST_OWNER_EMAIL', '']
+  ]) {
+    const h = liveHarness(); h.properties.set(key, value);
+    expectFailure(h.post(liveEnvelope()), 'UNAUTHORIZED');
+    assert.deepEqual(h.openedIds, [], key);
+    assert.equal(h.operations.length, 0, key);
+  }
+  for (const effectiveEmail of ['', 'different-owner@example.invalid']) {
+    const h = liveHarness({ effectiveEmail });
+    expectFailure(h.post(liveEnvelope()), 'UNAUTHORIZED');
+    assert.equal(h.counters.opens, 0);
+  }
+});
+
+test('LIVE signatures bind target, canonical origin, device identity, nonce and time without accepting TEST envelopes', () => {
+  for (const changes of [
+    { mode: BRIDGE_MODE }, { target: 'test' }, { target: 'production' }, { installation: 'richmond' },
+    { origin: BRIDGE_ORIGIN }, { origin: LIVE_ORIGIN + '/' },
+    { deviceIdentity: 'm1-test-device-1234567890abcdef12345678' }, { deviceIdentity: OWNER },
+    { nonce: 'invalid' }, { issuedAt: Date.parse(FIXED_NOW) / 1000 - 121 },
+    { issuedAt: Date.parse(FIXED_NOW) / 1000 + 31 }
+  ]) {
+    const h = liveHarness(); expectFailure(h.post(liveEnvelope(undefined, changes)), 'UNAUTHORIZED');
+    assert.equal(h.counters.opens, 0);
+  }
+  for (const envelope of [
+    liveEnvelope(undefined, {}, BRIDGE_SECRET),
+    liveEnvelope(undefined, {}, LIVE_SECRET, 'gib-promotions-test-bridge:v1\n'),
+    { ...liveEnvelope(), signature: '0'.repeat(64) }
+  ]) {
+    const h = liveHarness(); expectFailure(h.post(envelope), 'UNAUTHORIZED');
+    assert.equal(h.counters.opens, 0);
+  }
+});
+
+test('LIVE reads and writes use only their verified workbook and exact historical names provide optional suggestions', () => {
+  const h = liveHarness({ nativeTextMarkers: true });
+  const originalTest = workbookSnapshot(h.sheets);
+  const originalLive = liveHistoryRows(h);
+  const legacy = workbookSnapshot(new Map([...h.live.sheets].filter(([name]) => LEGACY_TABS.includes(name))));
+  const initial = expectSuccess(h.post(liveEnvelope()));
+  assert.equal(initial.testOnly, false);
+  assert.equal(initial.recorderLabel, 'Authorized Revolution tablet');
+  assert.equal(initial.students[0].displayName, 'SYNTHETIC PILOT Student');
+  assert.deepEqual(initial.approvers, [], 'the LIVE book does not receive a fictional TEST roster');
+  const name = "Renée  O'Neill-Santos";
+  const first = namedRequest(stripeRequest(), name);
+  const saved = expectSuccess(h.post(liveEnvelope(first)));
+  assert.equal(saved.receipt.approverId, ''); assert.equal(saved.receipt.approverLabel, name);
+  assert.match(saved.receipt.recorderIdentity, /^m1-live-device-[a-f0-9]{24}$/u);
+  assert.equal(saved.student.marks, STUDENTS[0].marks + 1);
+  expectFailure(h.post(liveEnvelope(namedRequest(stripeRequest(), 'Another Instructor'))), 'STALE_REVISION');
+  expectSuccess(h.post(liveEnvelope(namedRequest(stripeRequest({ studentId: STUDENTS[1].id }), name))));
+  expectSuccess(h.post(liveEnvelope(namedRequest(stripeRequest({ studentId: STUDENTS[2].id }), name.toUpperCase()))));
+  const lookup = expectSuccess(h.post(liveEnvelope({ operation: 'readStudent', studentId: first.studentId })));
+  assert.equal(lookup.history.at(-1).approverLabel, name);
+  const suggestions = expectSuccess(h.post(liveEnvelope())).approvers;
+  assert.deepEqual(suggestions.map(item => item.label), [name, name.toUpperCase()]);
+  assert.deepEqual(h.openedIds, Array(h.openedIds.length).fill(LIVE_BOOK_ID));
+  assert.deepEqual(workbookSnapshot(h.sheets), originalTest);
+  assert.deepEqual(liveHistoryRows(h).slice(0, originalLive.length), originalLive);
+  assert.deepEqual(workbookSnapshot(new Map([...h.live.sheets].filter(([title]) => LEGACY_TABS.includes(title)))), legacy);
+});
+
+test('LIVE requires both prepared schemas, all legacy tabs, exact title and New York time before any write', () => {
+  for (const title of ['Students', 'Promotion History', ...LEGACY_TABS]) {
+    const h = liveHarness(); h.live.sheets.delete(title);
+    const snapshot = workbookSnapshot(h.live.sheets);
+    expectFailure(h.post(liveEnvelope(namedRequest(stripeRequest()))), 'TEST_DESTINATION_INVALID');
+    assert.deepEqual(workbookSnapshot(h.live.sheets), snapshot, title);
+    assert.ok(h.operations.every(operation => operation.kind === 'read'), title);
+  }
+  for (const title of ['Students', 'Promotion History']) {
+    const h = liveHarness(); h.live.sheets.get(title).values[0][0] = 'unexpected_header';
+    expectFailure(h.post(liveEnvelope(namedRequest(stripeRequest()))), 'TEST_DESTINATION_INVALID');
+    assert.ok(h.operations.every(operation => operation.kind === 'read'));
+  }
+  for (const options of [{ liveTitle: WORKBOOK_TITLE }, { liveTimezone: 'UTC' }]) {
+    const h = liveHarness(options);
+    expectFailure(h.post(liveEnvelope()), 'TEST_DESTINATION_INVALID');
+    assert.equal(h.operations.length, 0);
+  }
+});
+
+test('LIVE lost confirmation reconciles its original receipt once and retains audit and revision safeguards', () => {
+  const h = liveHarness(); const request = namedRequest(stripeRequest());
+  const before = liveHistoryRows(h); const originalTest = workbookSnapshot(h.sheets);
+  h.faults.flush = () => true;
+  const failed = expectFailure(h.post(liveEnvelope(request)), 'UNAVAILABLE');
+  assert.equal(failed.error.retryable, true);
+  assert.equal(liveHistoryRows(h).length, before.length + 1);
+  delete h.faults.flush;
+  const checked = expectSuccess(h.post(liveEnvelope({ operation: 'checkSave', requestId: request.requestId })));
+  assert.equal(checked.status, 'confirmed');
+  const retry = expectSuccess(h.post(liveEnvelope(request)));
+  assert.deepEqual(retry.receipt, checked.receipt);
+  expectFailure(h.post(liveEnvelope({ ...request, approverName: 'Changed name' })), 'REQUEST_CONFLICT');
+  assert.equal(liveHistoryRows(h).length, before.length + 1);
+  assert.deepEqual(workbookSnapshot(h.sheets), originalTest);
+  const corrected = expectSuccess(h.post(liveEnvelope({
+    operation: 'correctLatest', requestId: requestId(), studentId: request.studentId,
+    expectedRevision: 2, correctsEventId: retry.receipt.eventId, rank: { belt: 'Blue Belt', marks: 2 },
+    approverName: 'Correction Instructor', reason: 'Confirmed one entry was mistaken'
+  })));
+  assert.equal(corrected.receipt.correctsEventId, retry.receipt.eventId);
+  assert.equal(corrected.receipt.reason, 'Confirmed one entry was mistaken');
+  assert.deepEqual(liveHistoryRows(h).slice(0, before.length), before);
+});
+
+test('LIVE nonce replay is rejected while existing TEST nonce and owner routes remain TEST only', () => {
+  const h = liveHarness({ activeEmail: OWNER }); const envelope = liveEnvelope();
+  expectSuccess(h.post(envelope)); expectFailure(h.post(envelope), 'UNAUTHORIZED');
+  const testEnvelope = bridgeEnvelope(undefined, { nonce: envelope.payload.nonce });
+  assert.equal(expectSuccess(h.post(testEnvelope)).testOnly, true);
+  expectFailure(h.post(testEnvelope), 'UNAUTHORIZED');
+  const priorNonce = bridgeEnvelope(); h.cache.set('promotions-bridge:' + priorNonce.payload.nonce, { value: 'used' });
+  expectFailure(h.post(priorNonce), 'UNAUTHORIZED');
+  h.openedIds.length = 0;
+  const ownerResult = expectSuccess(h.call({ operation: 'bootstrap' }));
+  assert.equal(ownerResult.testOnly, true);
+  assert.equal(ownerResult.recorderLabel, 'Signed-in TEST manager');
+  assert.deepEqual(h.openedIds, [BOOK_ID]);
+  const liveBefore = liveHistoryRows(h);
+  expectFailure(h.call({ operation: 'bootstrap', target: 'live' }), 'VALIDATION');
+  assert.deepEqual(liveHistoryRows(h), liveBefore);
+  h.context.HtmlService.createTemplateFromFile = () => ({ evaluate: () => ({ setTitle() { return this; }, addMetaTag() { return this; } }) });
+  h.openedIds.length = 0; h.context.doGet(); assert.deepEqual(h.openedIds, [BOOK_ID]);
+});
+
+test('new LIVE writes require a typed name without changing historical TEST attribution or old TEST retries', () => {
+  const h = liveHarness(); const before = liveHistoryRows(h);
+  expectFailure(h.post(liveEnvelope(stripeRequest())), 'VALIDATION');
+  expectFailure(h.post(liveEnvelope(registerRequest({ approverId: 'TEST-COACH-A' }))), 'VALIDATION');
+  assert.deepEqual(liveHistoryRows(h), before);
+  assert.equal(h.counters.opens, 0);
+  const oldTest = stripeRequest();
+  const saved = expectSuccess(h.post(bridgeEnvelope(oldTest)));
+  assert.equal(saved.receipt.approverId, 'TEST-COACH-A');
+  assert.deepEqual(expectSuccess(h.post(bridgeEnvelope(oldTest))).receipt, saved.receipt);
+  assert.deepEqual(liveHistoryRows(h), before);
+});
+
+test('prepared legacy baselines retain unknown dates and archived unknown ranks while subsequent writes use actual dates', () => {
+  const h = liveHarness({ liveRows: legacyBaselineSheets(), nativeTextMarkers: true });
+  const before = liveHistoryRows(h);
+  const bootstrap = expectSuccess(h.post(liveEnvelope()));
+  assert.equal(bootstrap.students.length, STUDENTS.length);
+  assert.ok(bootstrap.students.every(record => record.lastPromotionDateNY === ''));
+  assert.deepEqual(bootstrap.approvers, []);
+  const archived = bootstrap.students.find(record => record.studentId === STUDENTS[5].id);
+  assert.equal(archived.status, 'archived'); assert.equal(archived.rankKnown, false);
+  assert.equal(archived.belt, ''); assert.equal(archived.marks, null);
+  expectFailure(h.post(liveEnvelope(namedRequest(stripeRequest({ studentId: archived.studentId })))), 'ARCHIVED');
+  const saved = expectSuccess(h.post(liveEnvelope(namedRequest(stripeRequest(), 'Visiting Instructor'))));
+  assert.equal(saved.receipt.eventDateNY, '2026-09-13');
+  assert.equal(saved.receipt.recordedAtUTC, FIXED_NOW);
+  assert.match(saved.receipt.recorderIdentity, /^m1-live-device-/u);
+  assert.deepEqual(liveHistoryRows(h).slice(0, before.length), before);
+  const registered = expectSuccess(h.post(liveEnvelope(namedRequest(registerRequest(), 'Visiting Instructor'))));
+  assert.equal(registered.receipt.eventDateNY, '2026-09-13');
+  assert.equal(registered.student.lastPromotionDateNY, '');
+  assert.equal(registered.receipt.reason, 'Explicit student registration; current rank needs confirmation.');
+  assert.notEqual(registered.receipt.recorderIdentity, 'LEGACY BASELINE IMPORT');
+});
+
+test('the legacy import exception accepts only an explicitly referenced initial baseline with no invented award attribution', () => {
+  for (const [field, value] of [
+    ['recorder_identity', 'LEGACY IMPORT'], ['reason', ''], ['reason', 'Legacy baseline import; manifest=other; promotion date unknown.'],
+    ['recorded_at_utc', ''], ['recorded_at_utc', 'not-a-date'], ['event_date_ny', '2026-09-13'],
+    ['payload_fingerprint', 'a'.repeat(64)], ['approver_id', 'TEST-COACH-A'], ['approver_label', 'Earlier Coach'],
+    ['legacy_refs', ''], ['legacy_refs', "'Blue Belt'!A2:K2"], ['legacy_refs', '[]'],
+    ['legacy_refs', JSON.stringify([{ range: ' ', fingerprint: 'a'.repeat(64) }])],
+    ['legacy_refs', JSON.stringify([{ range: "'Blue Belt'!A2:K2", fingerprint: 'invalid' }])],
+    ['legacy_refs', JSON.stringify([{ range: "'Blue Belt'!A2:K2", fingerprint: 'a'.repeat(64), extra: true }])]
+  ]) {
+    const rows = legacyBaselineSheets(); rows[1][1][1][HISTORY_HEADERS.indexOf(field)] = value;
+    const h = liveHarness({ liveRows: rows }); const before = liveHistoryRows(h);
+    expectFailure(h.post(liveEnvelope()));
+    assert.deepEqual(liveHistoryRows(h), before, field);
+    assert.ok(h.operations.every(operation => operation.kind === 'read'), field);
+  }
+  const rows = legacyBaselineSheets(); const former = rows[1][1].at(-1);
+  former[HISTORY_HEADERS.indexOf('after_rank_known')] = true;
+  former[HISTORY_HEADERS.indexOf('after_belt')] = 'Brown Belt';
+  former[HISTORY_HEADERS.indexOf('after_marks')] = 0;
+  former[HISTORY_HEADERS.indexOf('after_mark_type')] = 'stripes';
+  expectFailure(liveHarness({ liveRows: rows }).post(liveEnvelope()), 'TEST_DESTINATION_INVALID');
+});
+
+test('public requests cannot create or impersonate a legacy import baseline', () => {
+  const h = liveHarness({ liveRows: legacyBaselineSheets() }); const before = liveHistoryRows(h);
+  for (const changes of [
+    { recorderIdentity: 'LEGACY BASELINE IMPORT' }, { eventKind: 'REGISTER' },
+    { eventDateNY: '' }, { payload_fingerprint: '' }, { legacy_refs: 'private-manifest' },
+    { reason: 'Legacy baseline import; manifest=promotions-live-baseline-v1; promotion date unknown.' }
+  ]) expectFailure(h.post(liveEnvelope({ ...namedRequest(registerRequest()), ...changes })), 'VALIDATION');
+  assert.deepEqual(liveHistoryRows(h), before);
+  assert.equal(h.counters.opens, 0);
+});

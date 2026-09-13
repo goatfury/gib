@@ -441,6 +441,10 @@ input, textarea, select {
 #classListWrap label { padding: 16px 12px; }
 #classListWrap input[type="checkbox"] { width: 28px; height: 28px; }
 
+/* Keep an unavailable optional log closed, even when its stylesheet is offline. */
+#promotionsNavigation[hidden], #promotionsPanel[hidden] { display:none !important; }
+body.promotions-view #kiosk, body.promotions-view #staffClock { display:none !important; }
+
 /* M1B: a deliberately compact secondary task below Instructor Sign-In. */
 .staff-clock {
   margin-top: 12px;
@@ -976,6 +980,8 @@ body.admin-mode .container { max-width: 1120px; }
     </nav>
   </header>
 
+  <section id="promotionsPanel" class="m1-promotions" aria-label="Belt and Stripe Log" hidden></section>
+
   <!-- KIOSK -->
   <section id="kiosk" class="card">
     <h2 class="kiosk-heading">Instructor Sign-In</h2>
@@ -1008,6 +1014,9 @@ body.admin-mode .container { max-width: 1120px; }
     <div id="kioskDelivery" class="kiosk-delivery" hidden>
       <span id="kioskDeliveryText" role="status" aria-live="polite"></span>
       <a href='/m1/connection'>Connection check</a>
+    </div>
+    <div id="promotionsNavigation" class="promotions-navigation" hidden>
+      <button id="openPromotionsLog" class="promotions-log-entry" type="button" aria-expanded="false" aria-controls="promotionsPanel">Belt &amp; Stripe Log</button>
     </div>
   </section>
 
@@ -4873,6 +4882,32 @@ function refreshNameDatalist() {
   startCanonicalScheduleRefresh();
   const requestedInitialView = new URLSearchParams(window.location.search).get('view');
   if (requestedInitialView === 'admin') openAdminWithGate();
+
+  // The optional log can read this guard; it cannot reset a sign-in or its queue.
+  globalThis.M1_KIOSK_NAVIGATION = Object.freeze({
+    canLeaveSignIn: () => !signInLocked && !lastSigninBatchId && !kioskFormInProgress()
+      && !document.body.classList.contains('admin-mode')
+  });
+
+  // OPTIONAL_PROMOTIONS_LOADER_START
+  // Optional assets load only after the core kiosk and Staff Clock have initialized.
+  function startOptionalPromotions() {
+    import('./promotions-config.generated.js?v=2026-09-13-promotions-test-a').then(() => {
+      if (globalThis.M1_PROMOTIONS_TEST_CONFIG?.enabled !== true) return;
+      const stylesheet = document.createElement('link');
+      stylesheet.rel = 'stylesheet';
+      stylesheet.href = './promotions.css?v=2026-09-13-promotions-test-a';
+      stylesheet.media = 'not all';
+      stylesheet.addEventListener('load', () => {
+        stylesheet.media = 'all';
+        import('./promotions-client.mjs?v=2026-09-13-promotions-test-a').catch(() => {});
+      }, { once: true });
+      document.head.appendChild(stylesheet);
+    }).catch(() => {});
+  }
+  if (document.readyState === 'complete') startOptionalPromotions();
+  else document.addEventListener('DOMContentLoaded', startOptionalPromotions, { once: true });
+  // OPTIONAL_PROMOTIONS_LOADER_END
 
 })();
 </script>

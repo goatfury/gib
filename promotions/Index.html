@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Promotions · TEST</title>
+  <style>
+    :root { color-scheme: dark; --bg:#080f1c; --panel:#111b2d; --inset:#0a1425; --line:#2d405d; --text:#edf3fd; --muted:#aabbcf; --blue:#397ef3; --blue-light:#bcd5ff; --amber:#f7cb70; --red:#ffb5bb; --green:#a5e4c0; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    button,input,select,textarea { font:inherit; }
+    button,input,select { min-height:48px; }
+    button { border:1px solid var(--line); border-radius:10px; padding:10px 16px; background:#1b2a40; color:var(--text); cursor:pointer; font-weight:650; }
+    button:hover:not(:disabled) { background:#263c5a; }
+    button:disabled { cursor:default; opacity:.55; }
+    button.primary { background:var(--blue); border-color:var(--blue); color:white; }
+    button.primary:hover:not(:disabled) { background:#2b6fe1; }
+    button.quiet { background:transparent; }
+    button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible,a:focus-visible { outline:3px solid #8eb8ff; outline-offset:3px; }
+    [hidden] { display:none !important; }
+    main { max-width:680px; margin:0 auto; padding:28px 18px 36px; }
+    header { margin-bottom:22px; }
+    h1 { margin:8px 0 3px; font-size:32px; line-height:1.2; letter-spacing:-.6px; }
+    h2 { margin:0 0 12px; font-size:21px; line-height:1.3; }
+    h3 { font-size:17px; margin:0 0 8px; }
+    p { margin:8px 0; }
+    .muted { color:var(--muted); }
+    .small { font-size:14px; }
+    .badge { display:inline-block; color:var(--blue-light); background:#182d50; border:1px solid #33558a; border-radius:6px; padding:2px 8px; font-size:12px; font-weight:750; letter-spacing:.7px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:20px; margin:16px 0; }
+    .notice { padding:13px 15px; border:1px solid var(--line); border-radius:10px; color:var(--muted); background:var(--inset); overflow-wrap:anywhere; }
+    .notice.error { color:var(--red); border-color:#75424d; }
+    .notice.warning { color:var(--amber); border-color:#715b30; }
+    .notice.success { color:var(--green); border-color:#2e634b; }
+    .notice p:first-child { margin-top:0; }
+    .notice p:last-child { margin-bottom:0; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .spread { justify-content:space-between; }
+    .actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:16px; }
+    .actions button { flex:1 1 160px; }
+    .field { margin:14px 0; }
+    label { display:block; font-weight:650; margin-bottom:6px; }
+    input,select,textarea { display:block; width:100%; border:1px solid var(--line); border-radius:10px; padding:11px 12px; color:var(--text); background:var(--inset); }
+    textarea { min-height:90px; resize:vertical; }
+    input::placeholder,textarea::placeholder { color:#8da0b8; opacity:1; }
+    .hint { margin:5px 0 0; font-size:13px; color:var(--muted); }
+    .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .two .field { min-width:0; }
+    .search-results { max-height:300px; overflow:auto; overscroll-behavior:contain; margin:8px 0 0; border:1px solid var(--line); border-radius:10px; background:var(--inset); }
+    .search-option { display:block; width:100%; text-align:left; border:0; border-radius:0; background:transparent; padding:12px 14px; min-height:64px; font-weight:450; }
+    .search-option + .search-option { border-top:1px solid var(--line); }
+    .search-option[aria-selected="true"] { background:#1d365b; }
+    .search-option strong,.search-option span { display:block; overflow-wrap:anywhere; }
+    .search-option span { margin-top:2px; color:var(--muted); font-size:13px; }
+    .student-name { font-size:23px; margin:0; overflow-wrap:anywhere; }
+    .identity { color:var(--muted); margin-top:3px; overflow-wrap:anywhere; }
+    .rank { font-size:20px; font-weight:700; margin-top:18px; color:var(--blue-light); }
+    .rank-label { font-size:12px; font-weight:700; letter-spacing:.6px; text-transform:uppercase; color:var(--muted); margin-top:17px; }
+    .rank-label + .rank { margin-top:2px; }
+    .rank-preview { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:12px; padding:16px 0; }
+    .rank-preview p { margin:0; font-weight:700; overflow-wrap:anywhere; }
+    .rank-preview .small { display:block; color:var(--muted); font-weight:450; margin-bottom:4px; }
+    .arrow { color:var(--muted); font-size:22px; }
+    dl { display:grid; grid-template-columns:125px 1fr; gap:7px 12px; margin:14px 0; font-size:14px; }
+    dt { color:var(--muted); }
+    dd { margin:0; overflow-wrap:anywhere; }
+    details { margin-top:14px; }
+    summary { min-height:44px; display:list-item; cursor:pointer; padding:8px 0; font-weight:650; }
+    .history-item { padding:15px 0; border-top:1px solid var(--line); }
+    .history-item p { overflow-wrap:anywhere; }
+    .history-item .history-meta { color:var(--muted); font-size:13px; }
+    footer { margin-top:30px; padding-top:18px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }
+    footer a { display:block; color:var(--blue-light); margin-top:10px; overflow-wrap:anywhere; }
+    @media (max-width:440px) { main { padding:20px 12px 28px; } .card { padding:17px; } h1 { font-size:29px; } .two { grid-template-columns:1fr; gap:0; } dl { grid-template-columns:105px 1fr; } .rank-preview { gap:8px; font-size:15px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="badge">PRIVATE TEST</span>
+    <h1>Promotions</h1>
+    <p class="muted">Find a student. Add a stripe or change their belt.</p>
+    <p id="recorder" class="small muted" hidden></p>
+  </header>
+
+  <div id="accessStatus" class="notice" role="status">Checking secure access…</div>
+  <button id="retryAccess" class="quiet" type="button" hidden>Try again</button>
+
+  <div id="app" hidden>
+    <div id="message" class="notice" role="status" aria-live="polite" hidden></div>
+    <section id="pendingPanel" class="notice warning" aria-labelledby="pendingHeading" hidden>
+      <h2 id="pendingHeading">Save not confirmed</h2>
+      <p id="pendingText"></p>
+      <div class="actions">
+        <button id="checkSave" type="button">Check save</button>
+        <button id="retrySave" type="button">Retry this entry</button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="findHeading">
+      <h2 id="findHeading">Find student</h2>
+      <label for="studentSearch">Name</label>
+      <input id="studentSearch" type="search" placeholder="Start typing a name" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="searchResults" aria-describedby="searchHint">
+      <div id="searchResults" class="search-results" role="listbox" aria-label="Matching students" hidden></div>
+      <p id="searchHint" class="hint">Use the identifying label to distinguish students with the same name.</p>
+      <button id="addStudent" class="quiet" type="button" style="margin-top:12px">Add a missing student</button>
+    </section>
+
+    <section id="studentCard" class="card" aria-labelledby="studentName" hidden>
+      <div class="row spread">
+        <div><h2 id="studentName" class="student-name"></h2><p id="studentIdentity" class="identity"></p></div>
+        <button id="refreshStudent" class="quiet" type="button">Refresh</button>
+      </div>
+      <div class="rank-label">Recorded current rank</div>
+      <p id="studentRank" class="rank"></p>
+      <p id="studentState" class="notice warning" hidden></p>
+      <div id="promotionActions" class="actions" hidden>
+        <button id="addStripe" class="primary" type="button">Add stripe</button>
+        <button id="changeBelt" type="button">Change belt</button>
+      </div>
+      <button id="confirmRank" type="button" class="primary" style="margin-top:15px" hidden>Confirm current rank</button>
+      <details id="legacyDetails" hidden><summary>Earlier record notes</summary><p id="legacyNotes" class="small muted"></p></details>
+    </section>
+
+    <section id="editor" class="card" aria-labelledby="editorHeading" hidden>
+      <div class="row spread"><h2 id="editorHeading">Review promotion</h2><button id="closeEditor" class="quiet" type="button">Close</button></div>
+      <form id="entryForm" novalidate>
+        <div id="registrationFields" hidden>
+          <div class="field"><label for="newName">Student name</label><input id="newName" autocomplete="off" maxlength="120"></div>
+          <div class="field"><label for="newIdentity">Identifying label</label><input id="newIdentity" autocomplete="off" maxlength="120" placeholder="For example, evening class"><p class="hint">Required so a matching name does not silently become the same student.</p></div>
+          <div class="field"><label for="newHistoryNote">Existing history notes (optional)</label><textarea id="newHistoryNote" maxlength="500" placeholder="Keep unknown dates or existing annotations as written"></textarea></div>
+          <p class="notice">This creates a separate student with an unknown rank. Confirm their verified current rank as the next step.</p>
+        </div>
+        <div id="rankFields" class="two" hidden>
+          <div class="field"><label for="beltChoice">Belt</label><select id="beltChoice"><option value="">Choose belt</option><option>White Belt</option><option>Blue Belt</option><option>Purple Belt</option><option>Brown Belt</option><option>Black Belt</option></select></div>
+          <div id="marksField" class="field"><label id="marksLabel" for="marksChoice">Stripes</label><input id="marksChoice" type="number" min="0" step="1" inputmode="numeric" value="0"></div>
+        </div>
+        <div id="reasonField" class="field" hidden><label id="reasonLabel" for="entryReason">Reason</label><textarea id="entryReason" maxlength="500"></textarea></div>
+        <div id="approvalField" class="field"><label for="approverChoice">Approving instructor</label><select id="approverChoice"><option value="">Choose a TEST approver</option></select><p class="hint">Fictional TEST names only. Choosing a name is not proof of approval.</p></div>
+        <div id="preview" aria-live="polite">
+          <div class="rank-preview"><p><span class="small">Before</span><span id="beforeRank"></span></p><span class="arrow" aria-hidden="true">→</span><p><span class="small">After</span><span id="afterRank"></span></p></div>
+          <dl><dt>Date</dt><dd id="previewDate"></dd><dt>Approved by</dt><dd id="previewApprover"></dd><dt>Recorded by</dt><dd id="previewRecorder"></dd></dl>
+          <p id="previewNote" class="hint"></p>
+        </div>
+        <p id="formError" class="notice error" role="alert" hidden></p>
+        <div class="actions"><button id="saveEntry" class="primary" type="submit">Confirm promotion</button></div>
+      </form>
+    </section>
+
+    <section id="historyCard" class="card" aria-labelledby="historyHeading" hidden>
+      <h2 id="historyHeading">Promotion history</h2>
+      <p id="historyEmpty" class="muted">No recorded promotion events.</p>
+      <div id="historyList"></div>
+      <button id="correctLatest" class="quiet" type="button" hidden>Correct latest entry</button>
+      <p id="correctionHint" class="hint" hidden>A correction adds an audit entry. The original remains in history.</p>
+    </section>
+  </div>
+
+  <footer>
+    <strong>TEST records only.</strong> Manager access is protected by Google sign-in. Promotion storage is separate from instructor sign-ins and payroll. Production approval permissions remain undecided.
+    <p>Test the separate, frozen kiosk fix:</p>
+    <a href="https://6aa69c52a5e6850008327824--gib-live.netlify.app/m1/" target="_blank" rel="noopener">https://6aa69c52a5e6850008327824--gib-live.netlify.app/m1/</a>
+    <a href="https://6aa69c2931deb2da3772f393--gib-richmond-test.netlify.app/m1/" target="_blank" rel="noopener">https://6aa69c2931deb2da3772f393--gib-richmond-test.netlify.app/m1/</a>
+  </footer>
+</main>
+<script>
+'use strict';
+(() => {
+  const $ = id => document.getElementById(id);
+  const state = {
+    students: new Map(), approvers: [], recorderLabel: '', todayNY: '', selected: null,
+    history: [], selectedGeneration: 0, readGeneration: 0, searchGeneration: 0, searchResults: [], activeResult: -1,
+    draft: null, drafts: new Map(), pending: null, authenticated: false, loadingStudent: false
+  };
+  const belts = ['White Belt', 'Blue Belt', 'Purple Belt', 'Brown Belt', 'Black Belt'];
+  const mutationErrors = new Set(['VALIDATION', 'NOT_FOUND', 'ARCHIVED', 'RANK_UNKNOWN', 'RANK_ALREADY_KNOWN', 'STALE_REVISION', 'REQUEST_CONFLICT', 'DUPLICATE_STUDENT', 'CORRECTION_NOT_LATEST', 'TEST_DESTINATION_INVALID']);
+  const eventLabels = { REGISTER:'Student registered', RANK_CONFIRM:'Current rank confirmed', STRIPE:'Stripe or degree added', BELT:'Belt changed', CORRECTION:'Audited correction' };
+
+  function node(tag, text, className) {
+    const element = document.createElement(tag);
+    if (text !== undefined) element.textContent = String(text);
+    if (className) element.className = className;
+    return element;
+  }
+  function rankLabel(student) {
+    if (!student || !student.rankKnown) return 'Unknown — needs confirmation';
+    const type = student.belt === 'Black Belt' ? 'degree' : 'stripe';
+    return `${student.belt} · ${student.marks} ${type}${student.marks === 1 ? '' : 's'}`;
+  }
+  function normalize(value) { return String(value || '').normalize('NFKC').toLocaleLowerCase().trim(); }
+  function todayNY() {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone:'America/New_York', year:'numeric', month:'2-digit', day:'2-digit' }).formatToParts(new Date()).map(part => [part.type, part.value]));
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  }
+  function newRequestId() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+    const hex = [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+  }
+  function showMessage(message, tone = '') {
+    $('message').textContent = message;
+    $('message').className = `notice ${tone}`;
+    $('message').hidden = !message;
+  }
+  function formError(message) { $('formError').textContent = message; $('formError').hidden = !message; }
+  function rpc(payload) {
+    return new Promise((resolve, reject) => {
+      if (!globalThis.google?.script?.run) {
+        reject({ code:'UNAVAILABLE', message:'Open the protected Google app to use this log.', retryable:true });
+        return;
+      }
+      let settled = false;
+      const finish = callback => value => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        callback(value);
+      };
+      const timer = setTimeout(finish(reject), 30000, { code:'UNAVAILABLE', message:'The connection did not return a confirmation.', retryable:true });
+      try {
+        google.script.run
+          .withSuccessHandler(finish(result => {
+            if (result?.ok === true && result.data && typeof result.data === 'object') resolve(result.data);
+            else reject(result?.error || { code:'UNAVAILABLE', message:'No readable confirmation was returned.', retryable:true });
+          }))
+          .withFailureHandler(finish(() => reject({ code:'UNAVAILABLE', message:'The connection was interrupted.', retryable:true })))
+          .promotionRequest(payload);
+      } catch (_) {
+        finish(reject)({ code:'UNAVAILABLE', message:'The request could not be confirmed.', retryable:true });
+      }
+    });
+  }
+  function accessFailure(error) {
+    state.authenticated = false;
+    $('app').hidden = true;
+    $('recorder').hidden = true;
+    $('accessStatus').hidden = false;
+    $('accessStatus').className = 'notice error';
+    $('accessStatus').textContent = error?.code === 'UNAUTHORIZED'
+      ? 'This private TEST log is available only to the authorized manager signed in with Google.'
+      : (error?.message || 'The protected log could not be loaded.');
+    $('retryAccess').hidden = false;
+  }
+  async function bootstrap() {
+    $('retryAccess').hidden = true;
+    $('accessStatus').hidden = false;
+    $('accessStatus').className = 'notice';
+    $('accessStatus').textContent = 'Checking secure access…';
+    try {
+      const data = await rpc({ operation:'bootstrap' });
+      if (data.testOnly !== true || !Array.isArray(data.students) || !Array.isArray(data.approvers)) {
+        throw { code:'TEST_DESTINATION_INVALID', message:'The TEST destination could not be verified.' };
+      }
+      state.students = new Map(data.students.map(student => [student.studentId, student]));
+      state.approvers = data.approvers;
+      state.recorderLabel = String(data.recorderLabel || 'Signed-in TEST manager');
+      state.todayNY = data.todayNY;
+      state.authenticated = true;
+      $('approverChoice').replaceChildren(node('option', 'Choose a TEST approver'));
+      $('approverChoice').firstElementChild.value = '';
+      for (const approver of state.approvers) {
+        const option = node('option', approver.label); option.value = approver.id; $('approverChoice').append(option);
+      }
+      $('recorder').textContent = `Recording as: ${state.recorderLabel}`;
+      $('recorder').hidden = false;
+      $('accessStatus').hidden = true;
+      $('app').hidden = false;
+      renderSearch();
+      renderBusy();
+    } catch (error) { accessFailure(error); }
+  }
+
+  function renderSearch() {
+    const query = normalize($('studentSearch').value);
+    const matches = query ? [...state.students.values()].filter(student => normalize(`${student.displayName} ${student.distinguishingLabel}`).includes(query)) : [];
+    state.searchResults = matches.slice(0, 8);
+    state.activeResult = -1;
+    $('searchResults').replaceChildren();
+    for (const [index, student] of state.searchResults.entries()) {
+      const option = node('button', undefined, 'search-option');
+      option.type = 'button'; option.id = `student-result-${index}`;
+      option.setAttribute('role', 'option'); option.setAttribute('aria-selected', 'false');
+      option.append(node('strong', student.displayName), node('span', `${student.distinguishingLabel} · ${student.status === 'archived' ? 'Archived' : rankLabel(student)}`));
+      option.addEventListener('click', () => selectStudent(student.studentId));
+      $('searchResults').append(option);
+    }
+    const open = state.searchResults.length > 0;
+    $('searchResults').hidden = !open;
+    $('studentSearch').setAttribute('aria-expanded', String(open));
+    $('studentSearch').removeAttribute('aria-activedescendant');
+    $('searchHint').textContent = !query
+      ? 'Use the identifying label to distinguish students with the same name.'
+      : matches.length === 0 ? 'No matching student. Add a separate student if they are missing.'
+      : matches.length > 8 ? `Showing 8 of ${matches.length} matches. Type more to narrow the list.`
+      : 'Choose the correct identifying label. Matching names are separate students.';
+  }
+  function closeSearch() {
+    $('searchResults').hidden = true;
+    $('studentSearch').setAttribute('aria-expanded', 'false');
+    $('studentSearch').removeAttribute('aria-activedescendant');
+    state.activeResult = -1;
+  }
+  async function selectStudent(studentId) {
+    if (state.draft) state.drafts.set(state.draft.studentId || '__register', state.draft);
+    state.selected = state.students.get(studentId) || null;
+    state.selectedGeneration += 1;
+    state.history = [];
+    state.draft = state.drafts.get(studentId) || null;
+    $('studentSearch').value = state.selected?.displayName || '';
+    closeSearch();
+    showMessage('');
+    renderStudent();
+    renderEditor(true);
+    await refreshSelected();
+  }
+  async function refreshSelected() {
+    if (!state.selected) return;
+    const studentId = state.selected.studentId;
+    const selectedGeneration = state.selectedGeneration;
+    const readGeneration = ++state.readGeneration;
+    state.loadingStudent = true;
+    renderBusy();
+    try {
+      const data = await rpc({ operation:'readStudent', studentId });
+      if (selectedGeneration !== state.selectedGeneration || readGeneration !== state.readGeneration || state.selected?.studentId !== studentId) return;
+      if (!data.student || data.student.studentId !== studentId || !Array.isArray(data.history)) throw { message:'The student record could not be verified.' };
+      if ((state.students.get(studentId)?.revision || 0) > data.student.revision) return;
+      state.selected = data.student;
+      state.students.set(studentId, data.student);
+      state.history = data.history;
+      if (state.draft) state.draft.expectedRevision = data.student.revision;
+      renderStudent();
+      renderEditor(false);
+    } catch (error) {
+      if (selectedGeneration !== state.selectedGeneration) return;
+      if (error?.code === 'UNAUTHORIZED') accessFailure(error);
+      else showMessage(error?.message || 'The current record could not be loaded. Refresh before saving.', 'error');
+    } finally {
+      if (selectedGeneration === state.selectedGeneration && readGeneration === state.readGeneration) { state.loadingStudent = false; renderBusy(); }
+    }
+  }
+  function renderStudent() {
+    const student = state.selected;
+    $('studentCard').hidden = !student;
+    $('historyCard').hidden = !student;
+    if (!student) return;
+    $('studentName').textContent = student.displayName;
+    $('studentIdentity').textContent = student.distinguishingLabel;
+    $('studentRank').textContent = rankLabel(student);
+    $('studentState').hidden = student.status !== 'archived' && student.rankKnown;
+    $('studentState').textContent = student.status === 'archived'
+      ? 'Archived student. Their record and history are available to read; promotions are disabled.'
+      : 'The current rank is uncertain. Confirm a verified rank before recording a promotion. Unknown historical dates stay unknown.';
+    $('promotionActions').hidden = student.status !== 'active' || !student.rankKnown;
+    $('confirmRank').hidden = student.status !== 'active' || student.rankKnown;
+    $('addStripe').textContent = student.belt === 'Black Belt' ? 'Add degree' : 'Add stripe';
+    const legacy = [student.historyNote, student.legacyRefs].filter(Boolean).join('\n');
+    $('legacyDetails').hidden = !legacy;
+    $('legacyNotes').textContent = legacy;
+    $('legacyNotes').style.whiteSpace = 'pre-wrap';
+    renderHistory();
+    renderBusy();
+  }
+  function latestCorrectable() {
+    return [...state.history].sort((left, right) => right.revision - left.revision).find(event => event.eventKind !== 'REGISTER') || null;
+  }
+  function renderHistory() {
+    $('historyList').replaceChildren();
+    const history = [...state.history].sort((left, right) => right.revision - left.revision);
+    $('historyEmpty').hidden = history.length > 0;
+    for (const event of history) {
+      const article = node('article', undefined, 'history-item');
+      article.append(node('h3', `${event.eventDateNY} · ${eventLabels[event.eventKind] || 'Recorded event'}`));
+      article.append(node('p', `${event.before ? rankLabel(event.before) : 'New identity'} → ${rankLabel(event.after)}`));
+      article.append(node('p', `Approver: ${event.approverLabel || 'Not applicable'} · Recorded by: ${event.recorderIdentity || state.recorderLabel}`, 'history-meta'));
+      if (event.reason) article.append(node('p', event.reason, 'small'));
+      if (event.correctsEventId) article.append(node('p', 'Corrects an earlier entry; the original is retained below.', 'history-meta'));
+      $('historyList').append(article);
+    }
+    const canCorrect = state.selected?.status === 'active' && Boolean(latestCorrectable());
+    $('correctLatest').hidden = !canCorrect;
+    $('correctionHint').hidden = !canCorrect;
+  }
+
+  function openDraft(kind) {
+    if (state.pending || state.loadingStudent) return;
+    const student = state.selected;
+    if (kind !== 'register' && (!student || student.status !== 'active')) return;
+    const studentId = kind === 'register' ? null : student.studentId;
+    const savedDraft = state.draft?.kind === kind && state.draft.studentId === studentId
+      ? state.draft : state.drafts.get(studentId || '__register');
+    if (savedDraft?.kind === kind) {
+      state.draft = savedDraft;
+      renderEditor(true);
+      $('editor').scrollIntoView({ block:'nearest', behavior:'smooth' });
+      return;
+    }
+    state.draft = {
+      kind, studentId,
+      expectedRevision:student?.revision, belt:kind === 'correct' && student?.rankKnown ? student.belt : '',
+      marks:kind === 'correct' && student?.rankKnown ? student.marks : 0,
+      approverId:'', reason:'', displayName:kind === 'register' ? $('studentSearch').value.trim() : '',
+      distinguishingLabel:'', historyNote:'', correctsEventId:kind === 'correct' ? latestCorrectable()?.eventId : null,
+      intent:null, intentSignature:''
+    };
+    showMessage('');
+    renderEditor(true);
+    $('editor').scrollIntoView({ block:'nearest', behavior:'smooth' });
+  }
+  function renderEditor(fillControls) {
+    const draft = state.draft;
+    $('editor').hidden = !draft || (draft.kind !== 'register' && draft.studentId !== state.selected?.studentId);
+    if ($('editor').hidden) return;
+    const labels = { stripe:state.selected?.belt === 'Black Belt' ? 'Add one degree' : 'Add one stripe', belt:'Change belt', confirm:'Confirm current rank', correct:'Correct latest entry', register:'Add a missing student' };
+    $('editorHeading').textContent = labels[draft.kind];
+    $('registrationFields').hidden = draft.kind !== 'register';
+    $('rankFields').hidden = !['belt', 'confirm', 'correct'].includes(draft.kind);
+    $('marksField').hidden = draft.kind === 'belt';
+    $('reasonField').hidden = !['confirm', 'correct'].includes(draft.kind);
+    $('reasonLabel').textContent = draft.kind === 'confirm' ? 'How was this current rank verified?' : 'Reason for the correction';
+    $('approvalField').hidden = draft.kind === 'register';
+    $('preview').hidden = draft.kind === 'register';
+    $('saveEntry').textContent = { register:'Confirm student identity', confirm:'Confirm verified rank', correct:'Confirm correction' }[draft.kind] || 'Confirm promotion';
+    if (fillControls) {
+      $('newName').value = draft.displayName; $('newIdentity').value = draft.distinguishingLabel;
+      $('newHistoryNote').value = draft.historyNote; $('beltChoice').value = draft.belt;
+      $('marksChoice').value = String(draft.marks); $('approverChoice').value = draft.approverId;
+      $('entryReason').value = draft.reason; formError('');
+    }
+    updatePreview();
+    renderBusy();
+  }
+  function readDraftControls() {
+    const draft = state.draft;
+    if (!draft) return;
+    draft.displayName = $('newName').value;
+    draft.distinguishingLabel = $('newIdentity').value;
+    draft.historyNote = $('newHistoryNote').value;
+    draft.belt = $('beltChoice').value;
+    draft.marks = $('marksChoice').value;
+    draft.approverId = $('approverChoice').value;
+    draft.reason = $('entryReason').value;
+    updatePreview();
+  }
+  function intendedRank() {
+    const draft = state.draft;
+    if (!draft) return null;
+    if (draft.kind === 'stripe') return { ...state.selected, marks:state.selected.marks + 1 };
+    return { rankKnown:Boolean(draft.belt), belt:draft.belt, marks:draft.kind === 'belt' ? 0 : Number(draft.marks) };
+  }
+  function updatePreview() {
+    const draft = state.draft;
+    if (!draft || draft.kind === 'register') return;
+    $('marksLabel').textContent = draft.belt === 'Black Belt' ? 'Degrees' : 'Stripes';
+    $('beforeRank').textContent = rankLabel(state.selected);
+    $('afterRank').textContent = draft.kind !== 'stripe' && !draft.belt ? 'Choose a belt' : rankLabel(intendedRank());
+    $('previewDate').textContent = `${todayNY()} · New York`;
+    $('previewApprover').textContent = state.approvers.find(approver => approver.id === draft.approverId)?.label || 'Choose an approver';
+    $('previewRecorder').textContent = state.recorderLabel;
+    $('previewNote').textContent = draft.kind === 'stripe'
+      ? 'Adds one only. The belt does not change automatically.'
+      : draft.kind === 'belt' ? 'The new belt starts with zero stripes or degrees. Earlier history is preserved.'
+      : draft.kind === 'confirm' ? 'Confirms the current rank today. It does not invent a historical promotion date.'
+      : 'A new correction entry will preserve the original event and its approval.';
+  }
+  function buildIntent() {
+    readDraftControls();
+    const draft = state.draft;
+    if (!draft) throw new Error('Choose an action first.');
+    let request;
+    if (draft.kind === 'register') {
+      if (!draft.displayName.trim() || !draft.distinguishingLabel.trim()) throw new Error('Enter the student name and a distinguishing label.');
+      request = { operation:'registerStudent', displayName:draft.displayName.trim(), distinguishingLabel:draft.distinguishingLabel.trim(), historyNote:draft.historyNote.trim() };
+    } else {
+      if (!state.selected || state.selected.studentId !== draft.studentId) throw new Error('Select this student again before saving.');
+      if (!state.approvers.some(approver => approver.id === draft.approverId)) throw new Error('Choose the instructor approving this entry.');
+      request = { studentId:draft.studentId, expectedRevision:draft.expectedRevision, approverId:draft.approverId };
+      if (draft.kind === 'stripe') request = { ...request, operation:'recordPromotion', action:'stripe' };
+      else if (draft.kind === 'belt') {
+        if (!belts.includes(draft.belt)) throw new Error('Choose the intended new belt.');
+        if (draft.belt === state.selected.belt) throw new Error('Choose a different belt. Use an audited correction to fix the current rank.');
+        request = { ...request, operation:'recordPromotion', action:'belt', belt:draft.belt };
+      } else {
+        const marks = Number(draft.marks);
+        if (!belts.includes(draft.belt) || !String(draft.marks).trim() || !Number.isSafeInteger(marks) || marks < 0) throw new Error('Choose the verified belt and enter a whole number of stripes or degrees.');
+        if (draft.reason.trim().length < 3) throw new Error('Explain how the rank was verified or why this correction is needed.');
+        request = { ...request, operation:draft.kind === 'confirm' ? 'confirmRank' : 'correctLatest', rank:{ belt:draft.belt, marks }, reason:draft.reason.trim() };
+        if (draft.kind === 'correct') request.correctsEventId = draft.correctsEventId;
+      }
+    }
+    const signature = JSON.stringify(request);
+    if (draft.intent && draft.intentSignature === signature) return draft.intent;
+    draft.intent = Object.freeze({ ...request, requestId:newRequestId() });
+    draft.intentSignature = signature;
+    return draft.intent;
+  }
+  function renderBusy() {
+    const locked = Boolean(state.pending);
+    for (const id of ['addStripe', 'changeBelt', 'confirmRank', 'correctLatest', 'addStudent']) $(id).disabled = locked || state.loadingStudent;
+    $('refreshStudent').disabled = state.loadingStudent || locked;
+    $('closeEditor').disabled = locked;
+    for (const control of $('entryForm').querySelectorAll('input,select,textarea,button')) control.disabled = locked || state.loadingStudent;
+    $('pendingPanel').hidden = !state.pending;
+    if (state.pending) {
+      $('pendingHeading').textContent = state.pending.busy ? 'Saving…' : 'Save not confirmed';
+      $('pendingText').textContent = state.pending.message || 'Keep this entry until its save is confirmed. You can view another student without changing the pending entry.';
+      $('checkSave').disabled = state.pending.busy;
+      $('retrySave').disabled = state.pending.busy;
+    }
+  }
+  async function submitEntry(event) {
+    event.preventDefault();
+    if (state.pending || state.loadingStudent || !state.authenticated) return;
+    let intent;
+    try { intent = buildIntent(); } catch (error) { formError(error.message); return; }
+    formError('');
+    state.pending = {
+      intent:JSON.parse(JSON.stringify(intent)), selectedGeneration:state.selectedGeneration,
+      searchGeneration:state.searchGeneration, submittedDraft:state.draft,
+      studentId:state.draft.studentId, displayName:state.draft.kind === 'register' ? state.draft.displayName.trim() : state.selected.displayName,
+      identityLabel:state.draft.kind === 'register' ? state.draft.distinguishingLabel.trim() : state.selected.distinguishingLabel,
+      busy:true, message:'Saving this entry. Wait for a confirmed result.'
+    };
+    renderBusy();
+    await sendPending(false);
+  }
+  async function sendPending(checkOnly) {
+    const pending = state.pending;
+    if (!pending) return;
+    pending.busy = true;
+    pending.message = checkOnly ? 'Checking whether this exact entry was saved.' : 'Saving this entry. Wait for a confirmed result.';
+    renderBusy();
+    try {
+      const data = await rpc(checkOnly ? { operation:'checkSave', requestId:pending.intent.requestId } : pending.intent);
+      if (state.pending !== pending) return;
+      if (checkOnly && data.status === 'not_found') {
+        pending.busy = false;
+        pending.message = 'No confirmed save was found. Retry this same entry; its details have been kept.';
+        renderBusy();
+        return;
+      }
+      if (!data.receipt || !data.student || data.receipt.requestId !== pending.intent.requestId || data.receipt.studentId !== data.student.studentId) {
+        throw { code:'UNAVAILABLE', message:'The response did not verify this exact entry.', retryable:true };
+      }
+      state.pending = null;
+      const cachedStudent = state.students.get(data.student.studentId);
+      const currentStudent = cachedStudent && cachedStudent.revision > data.student.revision ? cachedStudent : data.student;
+      state.students.set(currentStudent.studentId, currentStudent);
+      const draftKey = pending.studentId || '__register';
+      if (state.drafts.get(draftKey) === pending.submittedDraft) state.drafts.delete(draftKey);
+      // Reselecting A while A's save is pending restores this same draft object.
+      // Retire that exact submitted draft even if a newer read has changed its revision.
+      // An unrelated student's draft and a newly typed search remain untouched.
+      if (state.draft === pending.submittedDraft) state.draft = null;
+      const sameStudent = state.selected?.studentId === currentStudent.studentId;
+      const showRegisteredStudent = pending.intent.operation === 'registerStudent'
+        && pending.selectedGeneration === state.selectedGeneration
+        && pending.searchGeneration === state.searchGeneration;
+      if (sameStudent || showRegisteredStudent) {
+        // A read begun before this commit must not replay an older rank/history.
+        state.readGeneration += 1;
+        state.loadingStudent = false;
+        state.selected = currentStudent;
+        state.history = [data.receipt, ...state.history.filter(event => event.studentId === currentStudent.studentId && event.eventId !== data.receipt.eventId)];
+        if (showRegisteredStudent) {
+          $('studentSearch').value = currentStudent.displayName;
+          closeSearch();
+        }
+        renderStudent();
+      }
+      renderEditor(false);
+      const personLabel = `${pending.displayName} (${pending.identityLabel})`;
+      const label = data.receipt.eventKind === 'REGISTER' ? `Registered ${personLabel}. Confirm their verified current rank next.`
+        : `Saved: ${personLabel} · ${rankLabel(data.receipt.after)} · ${data.receipt.eventDateNY}.`;
+      showMessage(data.viewPending ? `${label} The history is saved; the spreadsheet view is still updating.` : label, 'success');
+      renderBusy();
+    } catch (error) {
+      if (state.pending !== pending) return;
+      if (error?.code === 'UNAUTHORIZED') { pending.busy = false; accessFailure(error); return; }
+      if (mutationErrors.has(error?.code) && error.retryable !== true) {
+        state.pending = null;
+        showMessage(`Not saved for ${pending.displayName}. ${error.message || 'Review the entry and try again.'}`, 'error');
+        if (pending.selectedGeneration === state.selectedGeneration) formError(error.message || 'The entry was not saved. Your input is unchanged.');
+      } else {
+        pending.busy = false;
+        pending.message = `${error?.message || 'The connection was interrupted.'} Save not confirmed. Check save or retry this same entry. Its details have been kept.`;
+      }
+      renderBusy();
+    }
+  }
+
+  $('retryAccess').addEventListener('click', bootstrap);
+  $('studentSearch').addEventListener('input', () => { state.searchGeneration += 1; renderSearch(); });
+  $('studentSearch').addEventListener('keydown', event => {
+    if (event.key === 'Escape') { closeSearch(); return; }
+    if (!['ArrowDown', 'ArrowUp', 'Enter'].includes(event.key) || $('searchResults').hidden || !state.searchResults.length) return;
+    event.preventDefault();
+    if (event.key === 'Enter') {
+      if (state.activeResult >= 0) selectStudent(state.searchResults[state.activeResult].studentId);
+      else if (state.searchResults.length === 1) selectStudent(state.searchResults[0].studentId);
+      return;
+    }
+    const delta = event.key === 'ArrowDown' ? 1 : -1;
+    state.activeResult = (state.activeResult + delta + state.searchResults.length) % state.searchResults.length;
+    for (const [index, element] of [...$('searchResults').children].entries()) element.setAttribute('aria-selected', String(index === state.activeResult));
+    const active = $('searchResults').children[state.activeResult];
+    $('studentSearch').setAttribute('aria-activedescendant', active.id);
+    active.scrollIntoView({ block:'nearest' });
+  });
+  $('addStudent').addEventListener('click', () => openDraft('register'));
+  $('addStripe').addEventListener('click', () => openDraft('stripe'));
+  $('changeBelt').addEventListener('click', () => openDraft('belt'));
+  $('confirmRank').addEventListener('click', () => openDraft('confirm'));
+  $('correctLatest').addEventListener('click', () => openDraft('correct'));
+  $('refreshStudent').addEventListener('click', refreshSelected);
+  $('closeEditor').addEventListener('click', () => {
+    if (state.pending) return;
+    if (state.draft) state.drafts.set(state.draft.studentId || '__register', state.draft);
+    state.draft = null; renderEditor(false);
+  });
+  $('entryForm').addEventListener('input', readDraftControls);
+  $('entryForm').addEventListener('change', readDraftControls);
+  $('entryForm').addEventListener('submit', submitEntry);
+  $('checkSave').addEventListener('click', () => { if (state.pending && !state.pending.busy) sendPending(true); });
+  $('retrySave').addEventListener('click', () => { if (state.pending && !state.pending.busy) sendPending(false); });
+  window.addEventListener('beforeunload', event => {
+    if (!state.pending) return;
+    event.preventDefault(); event.returnValue = '';
+  });
+  bootstrap();
+})();
+</script>
+</body>
+</html>

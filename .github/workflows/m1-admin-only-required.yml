@@ -73,5 +73,5 @@ jobs:
             tar -x --strip-components=1 -C "$baseline_suite"
           node tools/m1-proven-regression-gate.mjs "$baseline_suite"
 
-      - name: Run all candidate M1 tests
-        run: node --test tests/m1-*.test.mjs
+      - name: Run all candidate M1 and promotion tests
+        run: node --test tests/m1-*.test.mjs tests/promotions*.test.mjs
