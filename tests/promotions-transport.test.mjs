@@ -93,10 +93,6 @@ function noPrivateConfiguration(value) {
   }
 }
 
-function noUpstreamDiagnostics(headers) {
-  assert.deepEqual([...headers.keys()].filter(name => name.startsWith('x-gib-test-upstream')), [], 'upstream diagnostics belong only to authorized TEST proxy failures');
-}
-
 function oneTimeStore() {
   const entries = new Map();
   const calls = [];
@@ -148,7 +144,6 @@ test('both lookup and writes require a current signed TEST device cookie before 
     assert.equal(denied.body.ok, false);
     assert.equal(h.calls.length, 0, 'authorization must run before Google');
     assert.equal(JSON.stringify(denied.body).includes(h.data.marker), false);
-    noUpstreamDiagnostics(denied.headers);
     noPrivateConfiguration(denied.body);
   }
 });
@@ -188,9 +183,7 @@ test('missing TEST configuration, other gyms and reused backend credentials fail
   ];
   for (const changes of envChanges) {
     const h = serverHarness({ env: { ...ENV, ...changes } });
-    const response = await h.run(request());
-    assert.ok(response.status >= 400, JSON.stringify(changes));
-    noUpstreamDiagnostics(response.headers);
+    assert.ok((await h.run(request())).status >= 400, JSON.stringify(changes));
     assert.equal(h.calls.length, 0);
   }
   for (const changes of [{ installationId: 'richmond' }, { siteId: 'wrong-site' }]) {
@@ -214,7 +207,6 @@ test('authorized lookup and save use an independently verified HMAC envelope wit
     assert.deepEqual(response.body, { ok: true, data: h.data });
     assert.match(response.headers.get('cache-control'), /no-store/);
     assert.equal(response.headers.has('access-control-allow-origin'), false);
-    noUpstreamDiagnostics(response.headers);
     noPrivateConfiguration(response.body);
     const sent = h.calls.at(-1);
     assert.equal(String(sent.url), ENV.GIB_PROMOTIONS_TEST_WEBHOOK_URL);
@@ -346,143 +338,10 @@ test('transport outages and unbound receiver replies leave the same save unconfi
   }
 });
 
-function assertSafeDiagnosticFailure(response, { category, type, status, cause }, forbidden = []) {
-  assert.equal(response.status, 503);
-  assert.deepEqual(response.body, {
-    ok: false,
-    error: { code: 'UNAVAILABLE', message: 'The TEST connection did not confirm this request. Keep the original entry and check or retry it.', retryable: true },
-    requestId: SAVE.requestId
-  }, 'diagnostics do not change the original unconfirmed-save response');
-  const expected = {
-    'x-gib-test-upstream': category,
-    'x-gib-test-upstream-type': type,
-    ...(status === undefined ? {} : { 'x-gib-test-upstream-status': String(status) }),
-    ...(cause ? { 'x-gib-test-upstream-cause': cause } : {})
-  };
-  assert.deepEqual(Object.fromEntries([...response.headers.entries()].filter(([name]) => name.startsWith('x-gib-test-upstream'))), expected);
-  assert.match(response.headers.get('cache-control'), /no-store/);
-  assert.equal(response.headers.has('set-cookie'), false);
-  const visible = { body: response.body, headers: [...response.headers.entries()] };
-  noPrivateConfiguration(visible);
-  for (const value of [...forbidden, credential()]) assert.equal(JSON.stringify(visible).includes(value), false, 'raw upstream details must not reach the browser');
-}
-
-test('authorized TEST proxy failures expose only fixed categories and preserve the original unresolved save', async () => {
-  const privateDetail = `SYNTHETIC_PRIVATE_UPSTREAM ${ENV.GIB_PROMOTIONS_TEST_WEBHOOK_URL} ${ENV.GIB_PROMOTIONS_TEST_BRIDGE_SECRET}`;
-  const cases = [
-    {
-      category: 'network', type: 'missing',
-      fetch: async () => { throw new Error(privateDetail); }
-    },
-    {
-      category: 'timeout', type: 'missing',
-      fetch: async () => { throw new DOMException(privateDetail, 'TimeoutError'); }
-    },
-    {
-      category: 'http', type: 'html', status: 403,
-      fetch: async () => new Response(`<html>${privateDetail}</html>`, { status: 403, headers: { 'Content-Type': 'text/html; charset=utf-8', 'X-Private-Detail': privateDetail } })
-    },
-    {
-      category: 'body_size', type: 'json', status: 200,
-      fetch: async () => new Response(JSON.stringify({ privateDetail, oversized: 'x'.repeat(1000000) }), { headers: { 'Content-Type': 'application/json' } })
-    },
-    {
-      category: 'json', type: 'json', status: 200,
-      fetch: async () => new Response(`invalid JSON ${privateDetail}`, { headers: { 'Content-Type': 'application/json' } })
-    },
-    {
-      category: 'envelope', type: 'json', status: 200,
-      fetch: async () => new Response(JSON.stringify({ ok: true, privateDetail }), { headers: { 'Content-Type': 'application/json' } })
-    }
-  ];
-  for (const { fetch, ...expected } of cases) {
-    const h = serverHarness({ fetch });
-    const response = await result(await h.run(request(API, { body: namedRequest(SAVE) })));
-    assertSafeDiagnosticFailure(response, expected, ['SYNTHETIC_PRIVATE_UPSTREAM', privateDetail]);
-  }
-});
-
-test('diagnostic content types are fixed enums and upstream status is emitted only as a valid number', async () => {
-  const cases = [
-    { contentType: 'Application/JSON; charset=UTF-8', type: 'json', status: 502 },
-    { contentType: 'text/html; charset=utf-8', type: 'html', status: 401 },
-    { contentType: 'application/x-SYNTHETIC_PRIVATE_MEDIA; private=private-parameter', type: 'other', status: 503 },
-    { contentType: null, type: 'missing', status: 504 },
-    { contentType: 'text/plain', type: 'other', status: 'SYNTHETIC_PRIVATE_STATUS', expectedStatus: undefined },
-    { contentType: 'text/plain', type: 'other', status: 999, expectedStatus: undefined }
-  ];
-  for (const item of cases) {
-    const headers = new Headers(item.contentType === null ? {} : { 'Content-Type': item.contentType });
-    const h = serverHarness({ fetch: async () => ({
-      ok: false, status: item.status, headers,
-      text: async () => 'SYNTHETIC_PRIVATE_RESPONSE_BODY'
-    }) });
-    const response = await result(await h.run(request(API, { body: SAVE })));
-    assertSafeDiagnosticFailure(response, {
-      category: 'http', type: item.type,
-      ...(Object.hasOwn(item, 'expectedStatus') ? {} : { status: item.status })
-    }, ['SYNTHETIC_PRIVATE_MEDIA', 'private-parameter', 'SYNTHETIC_PRIVATE_STATUS', 'SYNTHETIC_PRIVATE_RESPONSE_BODY']);
-  }
-});
-
-test('diagnostic causes accept only known Node codes and never expose arbitrary error properties', async () => {
-  const allowed = ['UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
-    'UND_ERR_SOCKET', 'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT'];
-  for (const cause of allowed) for (const nested of [true, false]) {
-    const error = new Error('SYNTHETIC_PRIVATE_ERROR_MESSAGE');
-    error.stack = 'SYNTHETIC_PRIVATE_ERROR_STACK';
-    if (nested) error.cause = { code: cause, message: ENV.GIB_PROMOTIONS_TEST_WEBHOOK_URL };
-    else error.code = cause;
-    const h = serverHarness({ fetch: async () => { throw error; } });
-    assertSafeDiagnosticFailure(await result(await h.run(request(API, { body: SAVE }))), {
-      category: cause.endsWith('TIMEOUT') || cause === 'ETIMEDOUT' ? 'timeout' : 'network', type: 'missing', cause
-    }, ['SYNTHETIC_PRIVATE_ERROR_MESSAGE', 'SYNTHETIC_PRIVATE_ERROR_STACK']);
-  }
-  for (const cause of ['SYNTHETIC_PRIVATE_CODE', ENV.GIB_PROMOTIONS_TEST_BRIDGE_SECRET, 'ECONNRESET extra-private-data', 123, null]) {
-    const error = Object.assign(new Error('SYNTHETIC_PRIVATE_ERROR_MESSAGE'), {
-      name: 'SYNTHETIC_PRIVATE_ERROR_NAME', code: cause, cause: { code: cause }
-    });
-    const h = serverHarness({ fetch: async () => { throw error; } });
-    assertSafeDiagnosticFailure(await result(await h.run(request(API, { body: SAVE }))), {
-      category: 'network', type: 'missing'
-    }, ['SYNTHETIC_PRIVATE_CODE', 'SYNTHETIC_PRIVATE_ERROR_MESSAGE', 'SYNTHETIC_PRIVATE_ERROR_NAME', 'extra-private-data']);
-  }
-});
-
-test('a failed response-body read retains received status and type without exposing its contents', async () => {
-  const h = serverHarness({ fetch: async () => ({
-    ok: true, status: 200, headers: new Headers({ 'Content-Type': 'application/json' }),
-    text: async () => { throw Object.assign(new Error('SYNTHETIC_PRIVATE_PARTIAL_BODY'), { cause: { code: 'UND_ERR_BODY_TIMEOUT' } }); }
-  }) });
-  assertSafeDiagnosticFailure(await result(await h.run(request(API, { body: SAVE }))), {
-    category: 'timeout', type: 'json', status: 200, cause: 'UND_ERR_BODY_TIMEOUT'
-  }, ['SYNTHETIC_PRIVATE_PARTIAL_BODY']);
-});
-
-test('valid domain denials and request-validation failures do not acquire upstream diagnostics', async () => {
-  const domainError = { ok: false, error: { code: 'STALE', message: 'Reload this student before saving.', retryable: false }, requestId: SAVE.requestId };
-  const h = serverHarness({ fetch: async (_url, options) => {
-    const envelope = JSON.parse(options.body);
-    return new Response(JSON.stringify({ bridge: MODE, target: 'test', installation: 'rev', requestNonce: envelope.payload.nonce, result: domainError }), {
-      headers: { 'Content-Type': 'application/json', 'X-GIB-TEST-Upstream': 'SYNTHETIC_PRIVATE_INJECTED_HEADER' }
-    });
-  } });
-  const response = await result(await h.run(request(API, { body: SAVE })));
-  assert.equal(response.status, 200);
-  assert.deepEqual(response.body, domainError);
-  noUpstreamDiagnostics(response.headers);
-  for (const input of [request(API, { body: {} }), request(API, { body: namedRequest(SAVE, '') }), request(API, { rawBody: 'not JSON' })]) {
-    const rejected = await serverHarness().run(input);
-    assert.equal(rejected.status, 400);
-    noUpstreamDiagnostics(rejected.headers);
-  }
-});
-
 async function startPairing(h) {
   const response = await result(await h.run(request(INSTALL, { cookie: '', body: { operation: 'start' } })));
   assert.equal(response.status, 200);
   assert.equal(response.body.result, 'pending');
-  noUpstreamDiagnostics(response.headers);
   assert.match(response.body.pairingCode, /^[A-F0-9]{10}$/);
   const cookie = response.headers.get('set-cookie');
   assert.match(cookie, /^__Host-gib_m1_promotions_test_pending=/);

@@ -12,8 +12,6 @@ export const config = {
 const OPERATIONS = new Set(['bootstrap', 'readStudent', 'checkSave', 'recordPromotion', 'confirmRank', 'registerStudent', 'correctLatest']);
 const WRITE_OPERATIONS = new Set(['recordPromotion', 'confirmRank', 'registerStudent', 'correctLatest']);
 const REQUEST_KEYS = new Set(['operation', 'studentId', 'requestId', 'expectedRevision', 'correctsEventId', 'action', 'belt', 'rank', 'approverId', 'approverName', 'reason', 'displayName', 'distinguishingLabel', 'historyNote']);
-const UPSTREAM_CAUSES = new Set(['UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
-  'UND_ERR_SOCKET', 'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT']);
 
 function validAttribution(input) {
   const hasName = Object.hasOwn(input, 'approverName');
@@ -61,39 +59,21 @@ export async function handlePromotions(request, dependencies = {}) {
     return failure(400, 'VALIDATION', 'Enter a name in Promoted by.');
   }
   const envelope = createPromotionsEnvelope(runtime, credential, input, now, dependencies.randomBytes);
-  let failureStage = 'network';
-  let upstreamStatus = 0;
-  let upstreamType = 'missing';
   try {
     const response = await (dependencies.fetch || fetch)(runtime.webhookUrl, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(envelope), redirect: 'follow', signal: AbortSignal.timeout(25000)
     });
-    upstreamStatus = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : 0;
-    const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    upstreamType = contentType === 'application/json' ? 'json' : contentType === 'text/html' ? 'html' : contentType ? 'other' : 'missing';
-    if (!response.ok) { failureStage = 'http'; throw new Error('Unconfirmed TEST response.'); }
     const text = await response.text();
-    if (Buffer.byteLength(text, 'utf8') > 1000000) { failureStage = 'body_size'; throw new Error('Unconfirmed TEST response.'); }
-    failureStage = 'json';
+    if (!response.ok || Buffer.byteLength(text, 'utf8') > 1000000) throw new Error('Unconfirmed TEST response.');
     const body = JSON.parse(text);
-    failureStage = 'envelope';
     if (!body || Object.keys(body).length !== 5 || body.bridge !== PROMOTIONS_BRIDGE_MODE || body.target !== 'test'
       || body.installation !== 'rev' || body.requestNonce !== envelope.payload.nonce
       || !body.result || typeof body.result.ok !== 'boolean') throw new Error('Invalid TEST confirmation.');
     return respond(200, body.result);
-  } catch (error) {
-    const cause = UPSTREAM_CAUSES.has(error?.cause?.code) ? error.cause.code : UPSTREAM_CAUSES.has(error?.code) ? error.code : '';
-    if (failureStage === 'network' && (error?.name === 'TimeoutError' || error?.name === 'AbortError' || cause.endsWith('TIMEOUT') || cause === 'ETIMEDOUT')) failureStage = 'timeout';
-    const response = respond(503, { ok: false, error: { code: 'UNAVAILABLE', message: 'The TEST connection did not confirm this request. Keep the original entry and check or retry it.', retryable: true },
+  } catch {
+    return respond(503, { ok: false, error: { code: 'UNAVAILABLE', message: 'The TEST connection did not confirm this request. Keep the original entry and check or retry it.', retryable: true },
       ...(typeof input.requestId === 'string' ? { requestId: input.requestId } : {}) });
-    // This route is already restricted to an authenticated TEST tablet. Fixed
-    // categories locate an upstream failure without exposing its body or URL.
-    response.headers.set('X-GIB-TEST-Upstream', failureStage);
-    response.headers.set('X-GIB-TEST-Upstream-Type', upstreamType);
-    if (upstreamStatus) response.headers.set('X-GIB-TEST-Upstream-Status', String(upstreamStatus));
-    if (cause) response.headers.set('X-GIB-TEST-Upstream-Cause', cause);
-    return response;
   }
 }
 

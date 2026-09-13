@@ -45,6 +45,8 @@ body.promotions-view #kiosk, body.promotions-view #staffClock { display:none !im
 .m1-promotions .search-option[aria-selected="true"] { background:#1d365b; }
 .m1-promotions .search-option strong,.m1-promotions .search-option span { display:block; overflow-wrap:anywhere; }
 .m1-promotions .search-option span { margin-top:2px; color:#aabbcf; font-size:14px; }
+.m1-promotions .approver-results { max-height:180px; }
+.m1-promotions .approver-results .search-option { min-height:44px; padding:9px 12px; overflow-wrap:anywhere; }
 .m1-promotions .student-name { font-size:24px; margin:0; overflow-wrap:anywhere; }
 .m1-promotions .rank { font-size:23px; font-weight:700; color:#bcd5ff; }
 .m1-promotions .rank-label { font-size:12px; text-transform:uppercase; color:#aabbcf; margin-top:16px; }

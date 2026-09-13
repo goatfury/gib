@@ -167,6 +167,8 @@ function mountedHarness(t, { profile = installationProfile('rev'), stored = new 
       assert.equal(document.body.classList.contains('promotions-view'), false);
       for (const id of ['studentSearch', 'approverChoice', 'entryReason', 'newName', 'newIdentity', 'newHistoryNote']) assert.equal(el(id).value, '');
       for (const id of ['studentName', 'studentIdentity', 'studentRank', 'studentDate', 'legacyNotes', 'historyList', 'message']) assert.equal(el(id).textContent, '');
+      assert.equal(el('approverSuggestions').hidden, true);
+      assert.equal(el('approverSuggestions').children.length, 0);
     }
   };
 }
@@ -329,18 +331,77 @@ test('instructor suggestions appear only after typing and remain optional free-t
   await h.bootstrap(undefined, approvers); await h.choose('A'); h.el('addStripe').emit('click');
   const input = h.el('approverChoice'); const suggestions = h.el('approverSuggestions');
   assert.equal(input.value, '');
+  assert.equal(suggestions.hidden, true);
   assert.equal(suggestions.children.length, 0, 'opening an entry must not offer or select a previous instructor');
   input.value = 'TEST Coach'; input.emit('input');
-  assert.ok(suggestions.children.length > 0 && suggestions.children.length <= 6, 'typing offers a bounded set of suggestions');
+  assert.equal(suggestions.hidden, false, 'suggestions are visible application controls, independent of native browser popups');
+  assert.equal(input.getAttribute('aria-expanded'), 'true');
+  assert.ok(suggestions.children.length > 0 && suggestions.children.length <= 4, 'typing offers a bounded set of suggestions');
   assert.equal(input.value, 'TEST Coach', 'a matching prefix must not automatically become an instructor selection');
-  const suggestedName = suggestions.children[0].value;
+  assert.ok(suggestions.children.every(option => option.getAttribute('aria-selected') !== 'true'));
+  const suggestion = suggestions.children[0];
+  const staleOtherSuggestion = suggestions.children[1];
+  const suggestedName = suggestion.textContent;
   assert.ok(approvers.some(approver => approver.label === suggestedName));
-  input.value = suggestedName; input.emit('input');
+  assert.equal(suggestion.type, 'button');
+  input.focus();
+  let pointerDefaultPrevented = false;
+  suggestion.emit('pointerdown', { preventDefault() { pointerDefaultPrevented = true; } });
+  assert.equal(pointerDefaultPrevented, true, 'pointer selection keeps input focus until the click completes');
+  assert.equal(h.document.activeElement, input);
+  suggestion.emit('click');
+  assert.equal(input.value, suggestedName);
   assert.equal(h.el('previewApprover').textContent, suggestedName);
+  assert.equal(suggestions.hidden, true);
+  assert.equal(input.getAttribute('aria-expanded'), 'false');
+  assert.equal(h.document.activeElement, input);
+  assert.ok(h.calls.every(call => ['bootstrap', 'readStudent'].includes(call.payload.operation)), 'choosing a name must not save');
   h.el('entryForm').emit('submit'); await flush();
   const save = h.take('recordPromotion');
   assert.equal(save.payload.approverName, suggestedName);
   assert.equal(Object.hasOwn(save.payload, 'approverId'), false, 'suggestions cannot reinstate a roster-ID requirement');
+  staleOtherSuggestion.emit('click');
+  assert.equal(input.value, suggestedName, 'a stale suggestion cannot alter the attribution while its exact request is pending');
+  assert.equal(h.mounted.lifecycle.pending().approverName, suggestedName);
+  assert.equal(suggestions.hidden, true);
+});
+
+test('visible instructor suggestions support explicit keyboard selection and Escape without submitting the form', async t => {
+  const h = mountedHarness(t);
+  await h.bootstrap(undefined, ['Avery', 'Blake', 'Casey'].map(name => ({ id: `old-${name}`, label: `TEST Coach ${name}` })));
+  await h.choose('A'); h.el('addStripe').emit('click');
+  const input = h.el('approverChoice'); const suggestions = h.el('approverSuggestions');
+  const key = value => {
+    let prevented = false;
+    input.emit('keydown', { key: value, preventDefault() { prevented = true; } });
+    return prevented;
+  };
+  input.value = 'TEST Coach'; input.emit('input');
+  assert.equal(key('Enter'), true, 'Enter in the instructor field cannot implicitly submit a promotion');
+  assert.equal(input.value, 'TEST Coach', 'Enter without a highlighted choice preserves freely typed text');
+  assert.equal(key('ArrowDown'), true);
+  assert.equal(suggestions.children[0].getAttribute('aria-selected'), 'true');
+  assert.equal(input.getAttribute('aria-activedescendant'), suggestions.children[0].id);
+  assert.equal(input.value, 'TEST Coach', 'highlighting does not silently select a name');
+  key('ArrowDown'); assert.equal(suggestions.children[1].getAttribute('aria-selected'), 'true');
+  key('ArrowUp'); assert.equal(suggestions.children[0].getAttribute('aria-selected'), 'true');
+  assert.equal(key('Enter'), true);
+  assert.equal(input.value, 'TEST Coach Avery');
+  assert.equal(h.el('previewApprover').textContent, 'TEST Coach Avery');
+  assert.equal(suggestions.hidden, true);
+  input.value = 'TEST Coach'; input.emit('input'); key('ArrowUp');
+  assert.equal(suggestions.children.at(-1).getAttribute('aria-selected'), 'true', 'Arrow Up from no highlight selects the last matching name');
+  key('Escape');
+  assert.equal(input.value, 'TEST Coach');
+  assert.equal(suggestions.hidden, true);
+  assert.equal(input.getAttribute('aria-activedescendant'), null);
+  input.value = 'Unlisted Instructor'; input.emit('input');
+  assert.equal(suggestions.hidden, true);
+  assert.equal(key('Enter'), true);
+  assert.equal(input.value, 'Unlisted Instructor');
+  assert.ok(h.calls.every(call => ['bootstrap', 'readStudent'].includes(call.payload.operation)));
+  h.el('entryForm').emit('submit'); await flush();
+  assert.equal(h.take('recordPromotion').payload.approverName, 'Unlisted Instructor');
 });
 
 test('an unlisted typed instructor works without a suggestion roster and preserves the name in preview, request and history', async t => {

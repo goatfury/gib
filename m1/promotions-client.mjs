@@ -32,6 +32,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
   const state = {
     students: new Map(), approvers: [], recorderLabel: '', todayNY: '', selected: null,
     history: [], selectedGeneration: 0, readGeneration: 0, searchGeneration: 0, searchResults: [], activeResult: -1,
+    approverResults: [], activeApproverResult: -1,
     draft: null, drafts: new Map(), pending: null, authenticated: false, loadingStudent: false, selectedFresh: false
   };
   const belts = ['White Belt', 'Blue Belt', 'Purple Belt', 'Brown Belt', 'Black Belt'];
@@ -98,7 +99,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
       state.recorderLabel = String(data.recorderLabel || 'Authorized TEST tablet');
       state.todayNY = data.todayNY;
       state.authenticated = true;
-      $('approverSuggestions').replaceChildren();
+      closeApproverSuggestions();
       $('recorder').textContent = `Access: ${state.recorderLabel}`;
       $('recorder').hidden = false;
       $('accessStatus').hidden = true;
@@ -145,12 +146,34 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
   }
   function renderApproverSuggestions() {
     const query = normalize($('approverChoice').value);
-    $('approverSuggestions').replaceChildren();
+    closeApproverSuggestions();
     if (!query || $('approverChoice').disabled) return;
     const names = [...new Set(state.approvers.map(approver => approver?.label).filter(name => typeof name === 'string' && name.trim()))];
-    for (const name of names.filter(name => normalize(name).includes(query)).slice(0, 4)) {
-      const option = node('option'); option.value = name; $('approverSuggestions').append(option);
+    state.approverResults = names.filter(name => normalize(name).includes(query)).slice(0, 4);
+    for (const [index, name] of state.approverResults.entries()) {
+      const option = node('button', name, 'search-option');
+      option.type = 'button'; option.tabIndex = -1; option.id = `promotions-approver-result-${index}`;
+      option.setAttribute('role', 'option'); option.setAttribute('aria-selected', 'false');
+      // Keep the input focused until an explicit pointer selection completes.
+      option.addEventListener('pointerdown', event => event.preventDefault());
+      option.addEventListener('click', () => selectApproverSuggestion(name));
+      $('approverSuggestions').append(option);
     }
+    const open = state.approverResults.length > 0;
+    $('approverSuggestions').hidden = !open;
+    $('approverChoice').setAttribute('aria-expanded', String(open));
+  }
+  function closeApproverSuggestions() {
+    state.approverResults = []; state.activeApproverResult = -1;
+    $('approverSuggestions').replaceChildren(); $('approverSuggestions').hidden = true;
+    $('approverChoice').setAttribute('aria-expanded', 'false');
+    $('approverChoice').removeAttribute('aria-activedescendant');
+  }
+  function selectApproverSuggestion(name) {
+    if (!lifecycle.isCurrent(lifecycle.token()) || !state.draft || state.pending || $('approverChoice').disabled
+      || $('approverSuggestions').hidden || !state.approverResults.includes(name)) return;
+    $('approverChoice').value = name;
+    readDraftControls(); closeApproverSuggestions(); $('approverChoice').focus();
   }
   function resetDraftApprover(draft) {
     if (!draft || draft === state.pending?.submittedDraft) return;
@@ -281,7 +304,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     const draft = state.draft;
     $('editor').hidden = !draft || (draft.kind !== 'register' && draft.studentId !== state.selected?.studentId);
     if ($('editor').hidden) {
-      $('approverChoice').value = ''; $('approverSuggestions').replaceChildren();
+      $('approverChoice').value = ''; closeApproverSuggestions();
       return;
     }
     const labels = { stripe:state.selected?.belt === 'Black Belt' ? 'Add one degree' : 'Add one stripe', belt:'Change belt', confirm:'Confirm current rank', correct:'Correct latest entry', register:'Add a missing student' };
@@ -298,7 +321,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
       $('newName').value = draft.displayName; $('newIdentity').value = draft.distinguishingLabel;
       $('newHistoryNote').value = draft.historyNote; $('beltChoice').value = draft.belt;
       $('marksChoice').value = String(draft.marks); $('approverChoice').value = draft.approverName || '';
-      $('approverSuggestions').replaceChildren();
+      closeApproverSuggestions();
       $('entryReason').value = draft.reason; formError('');
     }
     updatePreview();
@@ -373,6 +396,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
   }
   function renderBusy() {
     const locked = Boolean(state.pending) || lifecycle.snapshot().phase === 'success';
+    if (locked || state.loadingStudent) closeApproverSuggestions();
     $('studentSearch').disabled = lifecycle.snapshot().phase === 'success';
     for (const id of ['addStripe', 'changeBelt', 'confirmRank', 'correctLatest', 'addStudent']) $(id).disabled = locked || state.loadingStudent;
     $('refreshStudent').disabled = state.loadingStudent || locked;
@@ -529,7 +553,25 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
   $('entryForm').addEventListener('input', readDraftControls);
   $('entryForm').addEventListener('change', readDraftControls);
   $('approverChoice').addEventListener('input', renderApproverSuggestions);
-  $('approverChoice').addEventListener('change', () => $('approverSuggestions').replaceChildren());
+  $('approverChoice').addEventListener('blur', closeApproverSuggestions);
+  $('approverChoice').addEventListener('keydown', event => {
+    if (event.key === 'Escape') { closeApproverSuggestions(); return; }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (state.activeApproverResult >= 0) selectApproverSuggestion(state.approverResults[state.activeApproverResult]);
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp'].includes(event.key) || $('approverSuggestions').hidden || !state.approverResults.length) return;
+    event.preventDefault();
+    const delta = event.key === 'ArrowDown' ? 1 : -1;
+    state.activeApproverResult = state.activeApproverResult < 0
+      ? (delta > 0 ? 0 : state.approverResults.length - 1)
+      : (state.activeApproverResult + delta + state.approverResults.length) % state.approverResults.length;
+    for (const [index, option] of [...$('approverSuggestions').children].entries()) option.setAttribute('aria-selected', String(index === state.activeApproverResult));
+    const active = $('approverSuggestions').children[state.activeApproverResult];
+    $('approverChoice').setAttribute('aria-activedescendant', active.id);
+    active.scrollIntoView({ block:'nearest' });
+  });
   $('entryForm').addEventListener('submit', submitEntry);
   $('checkSave').addEventListener('click', () => { if (state.pending && !state.pending.busy) sendPending(true); });
   $('retrySave').addEventListener('click', () => { if (state.pending && !state.pending.busy) sendPending(false); });
@@ -554,7 +596,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     state.draft = null; state.drafts.clear(); state.loadingStudent = false; state.searchResults = [];
     for (const control of host.querySelectorAll('input,textarea,select')) control.value = '';
     for (const id of ['searchResults','historyList','studentName','studentIdentity','studentRank','studentDate','legacyNotes','message','beforeRank','afterRank','previewDate','previewApprover','formError','recorder']) $(id).textContent = '';
-    $('approverSuggestions').replaceChildren();
+    closeApproverSuggestions();
     for (const id of ['app','studentCard','editor','historyCard','searchResults','message','pendingPanel','legacyDetails','recorder']) $(id).hidden = true;
     $('historyDisclosure').open = false; $('legacyDetails').open = false;
     $('studentSearch').removeAttribute('aria-activedescendant'); $('studentSearch').setAttribute('aria-expanded','false');
