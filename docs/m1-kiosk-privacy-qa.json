@@ -1,0 +1,194 @@
+{
+  "checkedDate": "2026-09-13",
+  "applicationCommit": "2bda629f872c70a957dcd4b67e658cc6de22f4df",
+  "status": "TEST PASS; separately release-ready; no production approval",
+  "automatedTests": 842,
+  "deployment": [
+    {
+      "gym": "rev",
+      "applicationCommit": "2bda629f872c70a957dcd4b67e658cc6de22f4df",
+      "deployedGitCommit": "b70ae7dccdd02fa503aa68976846bd830b4cd2d3",
+      "origin": "https://6aa69c52a5e6850008327824--gib-live.netlify.app",
+      "deploymentId": "6aa69c52a5e6850008327824",
+      "context": "deploy-preview",
+      "liveUnchanged": true,
+      "publicFileHashChecks": 28,
+      "liveRevolutionDeploy": "6aa06fd14a529800081626d8",
+      "liveRichmondDeploy": "6aa05f7230bf02ecf3cfb48a"
+    },
+    {
+      "gym": "richmond",
+      "applicationCommit": "2bda629f872c70a957dcd4b67e658cc6de22f4df",
+      "deployedGitCommit": null,
+      "origin": "https://6aa69c2931deb2da3772f393--gib-richmond-test.netlify.app",
+      "deploymentId": "6aa69c2931deb2da3772f393",
+      "context": "production",
+      "liveUnchanged": true,
+      "publicFileHashChecks": 28,
+      "liveRevolutionDeploy": "6aa06fd14a529800081626d8",
+      "liveRichmondDeploy": "6aa05f7230bf02ecf3cfb48a"
+    }
+  ],
+  "flows": [
+    {
+      "gym": "rev",
+      "flow": "back-final",
+      "origin": "https://6aa69c52a5e6850008327824--gib-live.netlify.app",
+      "status": "PASS",
+      "checks": [
+        "Verified TEST destination before synthetic writes",
+        "Final exact hosted native Back clears name notes selected classes and confirmation",
+        "Next person completes actual next transaction and15s walk-away reset",
+        "Visible usable controls and no horizontal overflow phone",
+        "Visible usable controls and no horizontal overflow tablet",
+        "Visible usable controls and no horizontal overflow laptop",
+        "Verified TEST destination before synthetic writes",
+        "Fresh independent TEST Admin receiver readback matches IDs, exact count, hours, and Undo absence",
+        "Actual Export backup CSV control downloaded all active synthetic rows and omitted Undo row"
+      ],
+      "timings": [
+        {
+          "kind": "instructor",
+          "elapsedMs": 15021
+        }
+      ],
+      "savedCount": 2,
+      "savedIdentitySha256": "eeeb8e9865dfb1b6e7a1fa046f30797f2dbb017109388cd29548133e09666442",
+      "independentReadback": {
+        "freshAdmin": true,
+        "activeCount": 2,
+        "undoneAbsent": 0,
+        "identityHash": "eeeb8e9865dfb1b6e7a1fa046f30797f2dbb017109388cd29548133e09666442",
+        "teachingHours": 2
+      },
+      "csv": {
+        "name": "Actual Export backup CSV control downloaded all active synthetic rows and omitted Undo row",
+        "rows": 2,
+        "bytes": 458,
+        "sha256": "a531c70649b3dd215d780735a657452bc2385f29d338c07c373d01a434a9ecb8"
+      },
+      "queueCount": 0,
+      "browserErrors": 0
+    },
+    {
+      "gym": "rev",
+      "flow": "staff-focused",
+      "origin": "https://6aa69c52a5e6850008327824--gib-live.netlify.app",
+      "status": "PASS",
+      "checks": [
+        "Verified TEST destination before synthetic writes",
+        "Final exact candidate Staff in and out both auto-clear after five actual seconds",
+        "Verified TEST destination before synthetic writes",
+        "Fresh independent TEST Admin reads exact staff punch IDs and completed durations",
+        "Visible usable controls and no horizontal overflow phone",
+        "Visible usable controls and no horizontal overflow tablet",
+        "Visible usable controls and no horizontal overflow laptop"
+      ],
+      "timings": [
+        {
+          "kind": "staff",
+          "elapsedMs": 5077
+        },
+        {
+          "kind": "staff",
+          "elapsedMs": 5064
+        }
+      ],
+      "savedCount": 2,
+      "savedIdentitySha256": "09475da6d9ab8124c998ba85b66b49695008c93f220f67c71c7d5b09709aa435",
+      "independentReadback": {
+        "freshAdmin": true,
+        "punches": 2,
+        "completedShifts": 1,
+        "identityHash": "09475da6d9ab8124c998ba85b66b49695008c93f220f67c71c7d5b09709aa435",
+        "durationSeconds": 5
+      },
+      "csv": null,
+      "queueCount": 0,
+      "browserErrors": 0
+    },
+    {
+      "gym": "richmond",
+      "flow": "back-resume-external",
+      "origin": "https://6aa69c2931deb2da3772f393--gib-richmond-test.netlify.app",
+      "status": "PASS",
+      "checks": [
+        "Verified TEST destination before synthetic writes",
+        "Richmond Staff Clock stays disabled",
+        "Resumed exact original row after Back fields passed; static hidden Instructor placeholder is neutral",
+        "Next person completes actual next transaction and15s walk-away reset",
+        "Visible usable controls and no horizontal overflow phone",
+        "Visible usable controls and no horizontal overflow tablet",
+        "Visible usable controls and no horizontal overflow laptop",
+        "Exact synthetic IDs checkpointed for independent private TEST workbook readback",
+        "Actual Export backup CSV control downloaded all active synthetic rows and omitted Undo row"
+      ],
+      "timings": [
+        {
+          "kind": "instructor",
+          "elapsedMs": 15023
+        }
+      ],
+      "savedCount": 2,
+      "savedIdentitySha256": "2fe5aa24f499b689469b8aa1ce895efac6b0e447c0a4d12b5384d97bd7970991",
+      "independentReadback": {
+        "method": "Private Sheets connector, exact IDs and all expected fields",
+        "count": 2,
+        "hours": 2,
+        "unique": true
+      },
+      "csv": {
+        "name": "Actual Export backup CSV control downloaded all active synthetic rows and omitted Undo row",
+        "rows": 2,
+        "bytes": 451,
+        "sha256": "5be99534a76a37168feacdb92a7878660e29d751f258282d387e6790140730f5"
+      },
+      "queueCount": 0,
+      "browserErrors": 0
+    }
+  ],
+  "priorUnchangedCoverage": {
+    "applicationCommit": "56889378600756ba1da8b368ce43a2b5eacb88f1",
+    "checks": [
+      "Done",
+      "Undo and unsent barrier",
+      "Active unsaved input",
+      "Rapid next users",
+      "Offline recovery",
+      "Lost successful HTTP-200 acknowledgment and same-ID retry",
+      "Delayed Staff acknowledgment preserves original deadline",
+      "Browser suspension and elapsed time"
+    ],
+    "staff": {
+      "punches": 12,
+      "completedShifts": 6,
+      "exactTimestampAndDurationReadback": true,
+      "totalSeconds": 53
+    },
+    "instructorExactReadbacks": {
+      "revolution": 7,
+      "richmond": 7,
+      "undoneAbsentEach": 1
+    },
+    "supersededFailure": "Native class checkbox restored on Back; fixed in final application and repeated at both gyms"
+  },
+  "visual": {
+    "reviewed": true,
+    "sizes": [
+      "phone",
+      "tablet",
+      "laptop"
+    ],
+    "priorPersonalDetailsAbsent": true,
+    "controlsReadable": true
+  },
+  "limitations": [
+    "Browser touch and suspension emulation; physical tablet hardware not tested",
+    "Actual CSV download fallback tested; optional OS save picker not exercised",
+    "Richmond TEST Admin reads timed out; independent private Sheets read proved persistence",
+    "Portable hosted runner syntax/review checked; actual hosted runs used its scratch predecessor"
+  ],
+  "liveGymsChanged": false,
+  "livePromotionWorkbookChanged": false,
+  "merged": false
+}

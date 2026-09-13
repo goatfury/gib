@@ -34,7 +34,13 @@ function signInHarness({ richmond = false, duration = 1 } = {}) {
   const label = '8:00 AM TEST Limited Class';
   const nameInput = { value: 'TEST Instructor One' };
   const notesInput = { value: 'Synthetic TEST only; DO NOT PAY' };
-  const nodes = { '#nameInput': nameInput, '#notesInput': notesInput };
+  const nodes = {
+    '#nameInput': nameInput,
+    '#notesInput': notesInput,
+    '#signInModalName': { textContent: '' },
+    '#signInModalClasses': { replaceChildren() {} },
+    '#btnConfirmSignInUndo': { textContent: '', disabled: false }
+  };
   const context = vm.createContext({
     IS_RICHMOND: richmond,
     IS_RICHMOND_PRODUCTION: false,
@@ -64,13 +70,14 @@ function signInHarness({ richmond = false, duration = 1 } = {}) {
     openSignInModal(value) { confirmations.push(clone(value)); },
     updateSyncStatus() {},
     clearSignInCountdown() {},
+    updateSignInUndoLabel() {},
     toggleSignInModal() {},
     window: { setTimeout() { networkCalls += 1; } },
     syncNow() { networkCalls += 1; },
     alert: message => alerts.push(message)
   });
   const source = [
-    'let signInLocked = false; let signInSecondsRemaining = 0;',
+    'let signInLocked = false; let signInSecondsRemaining = 0; let signInConfirmationDeadline = 0; let lastSigninBatchId = null; let lastSigninFormSnapshot = null;',
     sourceBetween('  function getDurationForClass(', '  // Admin schedule editor state'),
     sourceBetween('  function closeSignInModal()', '  function undoLastSigninBatch()'),
     sourceBetween('  function signIn()', '  function voidLastSignin()'),
