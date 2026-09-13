@@ -1,6 +1,6 @@
 # Promotions TEST handoff
 
-Status: implementation and simulated integration checks pass; **the hosted Google workflow is not verified or ready for owner review**. The kiosk hotfix is separately frozen and release-ready in PR #84. Promotions must not delay its release decision.
+Status: implementation and simulated integration checks pass; **the hosted Google workflow is not verified or ready for owner review**. The separately frozen kiosk hotfix in PR #84 was explicitly authorized and merged as `1f16dd6ac2e5a1c974b50a98d14f31dbc2453b31`; both gyms have published it, with final release verification recorded in PR #84. Promotions remains separate and TEST only.
 
 Application: `f00bea9b2bf225bce311d2f6b680088f31452bd8` on `prototype/promotions-log-test-20260913`, based on main `93dba9e`. Core files are `promotions/Code.gs`, `promotions/Index.html`, and `promotions/appsscript.json`. No production deployment or live migration is authorized.
 
@@ -23,6 +23,10 @@ Task-private evidence remains outside the repository: `work/promotions-final-tes
 ## Blocker and continuation
 
 The exact reviewed backend, interface, and owner-only manifest are saved in a new private Google Apps Script project. Its development entry point reaches Google authorization; no consent has been granted and no app promotion has been written. Private project/deployment identifiers are saved only in task-private configuration.
+
+The connector owns the private synthetic workbook, while the staged app is owned by and restricted to a different existing manager account. Fresh workbook metadata confirms it remains owner-only. The app executes as the accessing user, so connector ownership does not authorize this manager to append history or rebuild the student view. No identity was switched and no authentication guard was weakened.
+
+The proposed grant is Editor on this one synthetic workbook to the configured app manager. The separate app consent requests `spreadsheets` (read, edit, create, and delete Google Sheets accessible to that account) and `userinfo.email` (read its primary email). These Google permissions extend beyond the synthetic workbook; the exact-workbook guard constrains app behavior, not the OAuth scope. Confirm the signing-in identity before consent. Exact recipient, workbook, project and signing-in account stay in task-private configuration and the owner approval request.
 
 Automatic approval review rejected the requested access grant to the existing TEST manager. That grant remains unapplied. The manager's access and any required Google OAuth approval must be resolved before completing native visual QA and the owner-only hosted integration. No account permissions were broadened as a workaround.
 
