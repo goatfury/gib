@@ -82,7 +82,6 @@ const BASELINE_FIELD_IDS = Object.freeze([
 ]);
 
 const PROMOTIONS_NAVIGATION_BUTTON_IDS = Object.freeze([
-  'promotionsReturnSignIn',
   'openPromotionsLog'
 ]);
 
@@ -200,12 +199,12 @@ test('device maintenance keeps status and recovery disclosures behind the main A
 });
 
 test('every inherited control remains unique and connected after organization', () => {
-  // Keep the complete inventory exact: the optional log adds two sibling
-  // navigation buttons while every inherited control keeps its relative order.
+  // Keep the complete inventory exact: the optional log adds one entry after
+  // Sign In while every inherited control keeps its relative order.
   assert.deepEqual(elementIds(['button']), [
-    BASELINE_BUTTON_IDS[0],
+    ...BASELINE_BUTTON_IDS.slice(0, 3),
     ...PROMOTIONS_NAVIGATION_BUTTON_IDS,
-    ...BASELINE_BUTTON_IDS.slice(1)
+    ...BASELINE_BUTTON_IDS.slice(3)
   ]);
   assert.deepEqual(elementIds(['input', 'select', 'textarea', 'datalist']), [...BASELINE_FIELD_IDS]);
   assert.equal((kiosk.match(/<input[^>]*\bdata-series-day\b[^>]*>/giu) || []).length, 7);

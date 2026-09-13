@@ -1,8 +1,10 @@
 /* Scoped optional TEST log. The released sign-in and Staff Clock keep their styles. */
 #promotionsNavigation[hidden], #promotionsPanel[hidden], .m1-promotions [hidden] { display:none !important; }
-.promotions-navigation { display:flex; gap:10px; margin:16px 0; flex-wrap:wrap; }
-.promotions-navigation .btn { flex:1 1 180px; min-height:52px; }
-.promotions-navigation [aria-pressed="true"] { background:#2563eb; color:white; border-color:#397ef3; }
+.promotions-navigation { margin-top:12px; }
+.promotions-log-entry { display:inline-block; width:auto; min-height:44px; padding:8px 12px; border:1px solid var(--outline); border-radius:6px; background:transparent; color:var(--muted); font:500 14px/1.4 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; cursor:pointer; }
+.promotions-log-entry:hover { border-color:#64748b; color:var(--text); }
+.promotions-log-entry:focus-visible { outline:3px solid #8eb8ff; outline-offset:3px; }
+.promotions-log-entry:disabled { opacity:.55; cursor:default; }
 body.admin-mode .promotions-navigation { display:none; }
 body.promotions-view #kiosk, body.promotions-view #staffClock { display:none !important; }
 .m1-promotions { max-width:680px; margin:0 auto 24px; color:#edf3fd; font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }

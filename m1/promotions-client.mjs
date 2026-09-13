@@ -524,8 +524,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
   function updateNavigation() {
     const active = lifecycle.snapshot().active;
     document.getElementById('openPromotionsLog').disabled = !active && navigationBlocked();
-    document.getElementById('openPromotionsLog').setAttribute('aria-pressed', String(active));
-    document.getElementById('promotionsReturnSignIn').setAttribute('aria-pressed', String(!active));
+    document.getElementById('openPromotionsLog').setAttribute('aria-expanded', String(active));
   }
   function clearPresentation() {
     state.selectedGeneration += 1;
@@ -570,7 +569,6 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
   function leave() { lifecycle.leave('back'); }
   $('clearBack').addEventListener('click', leave);
   document.getElementById('openPromotionsLog').addEventListener('click', () => { if (!lifecycle.snapshot().active) void open(); });
-  document.getElementById('promotionsReturnSignIn').addEventListener('click', leave);
   for (const type of ['input','keydown','pointerdown','change']) host.addEventListener(type, () => lifecycle.touch(), { passive:true });
   document.addEventListener('input', updateNavigation);
   document.addEventListener('change', updateNavigation);

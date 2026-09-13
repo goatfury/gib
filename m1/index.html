@@ -982,10 +982,6 @@ body.admin-mode .container { max-width: 1120px; }
     </nav>
   </header>
 
-  <nav id="promotionsNavigation" class="promotions-navigation" aria-label="Kiosk task" hidden>
-    <button id="promotionsReturnSignIn" class="btn" type="button" aria-pressed="true">Sign-In</button>
-    <button id="openPromotionsLog" class="btn" type="button" aria-pressed="false">Belt &amp; Stripe Log</button>
-  </nav>
   <section id="promotionsPanel" class="m1-promotions" aria-label="Belt and Stripe Log" hidden></section>
 
   <!-- KIOSK -->
@@ -1020,6 +1016,9 @@ body.admin-mode .container { max-width: 1120px; }
     <div id="kioskDelivery" class="kiosk-delivery" hidden>
       <span id="kioskDeliveryText" role="status" aria-live="polite"></span>
       <a href='/m1/connection'>Connection check</a>
+    </div>
+    <div id="promotionsNavigation" class="promotions-navigation" hidden>
+      <button id="openPromotionsLog" class="promotions-log-entry" type="button" aria-expanded="false" aria-controls="promotionsPanel">Belt &amp; Stripe Log</button>
     </div>
   </section>
 

@@ -252,7 +252,7 @@ test('a late pending failure after Back and reopen leaves Check save usable and 
   assert.equal(h.el('retrySave').disabled, false);
   assert.equal([...h.stored.values()][0], original);
   assert.equal(h.el('studentSearch').value, '');
-  h.document.getElementById('promotionsReturnSignIn').emit('click'); h.neutral();
+  h.el('clearBack').emit('click'); h.neutral();
   assert.equal(h.document.getElementById('btnSignIn').disabled, false);
 });
 
