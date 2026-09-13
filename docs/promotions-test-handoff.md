@@ -1,6 +1,8 @@
 # Promotions TEST handoff
 
-Status: **INTEGRATED INSTRUCTOR TEST CANDIDATE — hosted integration QA and Google deployment-access approval are pending.** The earlier Google-owner reference app passed its own hosted checks and review delivery. Those results do not establish that the new instructor/tablet workflow is deployed, verified, or ready for review.
+Status: **INTEGRATED INSTRUCTOR TEST READY FOR REVIEW — all technical, hosted workflow, visual, and independent native workbook checks passed.** Andrew's confirmation that the integrated interface is visible remains pending. The current evidence below belongs to the integrated kiosk. Earlier Google-owner reference results are retained separately as historical evidence.
+
+Current nonproduction kiosk: https://deploy-preview-85--gib-live.netlify.app/m1/
 
 Work remains on `prototype/promotions-log-test-20260913`. Promotions PR #85 remains draft, unmerged, separate, and TEST only. The kiosk hotfix in PR #84 was separately authorized, merged, and published at both gyms; preserve those released kiosks. No production promotions release, live migration, live workbook change, or additional sharing is authorized.
 
@@ -16,7 +18,7 @@ Lookup and form details clear after **60 seconds without activity**. A confirmed
 
 ## Candidate implementation and workbook views
 
-The integration spans `m1/index.html`, the `m1/promotions-*` client/template/style/lifecycle files, TEST configuration/setup, the promotions server route/runtime, and the signed tablet entry path in `promotions/Code.gs`. The older `promotions/Index.html` owner page remains reference material. The current integrated candidate has passed its local automated and supplemental browser checks; hosted integration remains pending. Do not label the older `9c73042` reference revision as current integrated source or its historical test counts as a current complete-suite pass.
+The integration spans `m1/index.html`, the `m1/promotions-*` client/template/style/lifecycle files, TEST configuration/setup, the promotions server route/runtime, and the signed tablet entry path in `promotions/Code.gs`. The older `promotions/Index.html` owner page remains reference material. The final application revision, **`2e1947641cb9440235b1f33d44b92fe483606ad5`**, is pushed, deployed, and artifact-verified. It includes the registration/current-rank preview guidance fix discovered during actual hosted QA. Do not label the earlier `42ea4ae` integrated checkpoint or `9c73042` owner reference as the final application, or their historical test counts as the final complete-suite pass.
 
 Lookup and writes use the configured Revolution TEST server route. The candidate validates the authorized tablet, exact TEST installation/origin, and signed server-to-Google request. Every tablet write, including registration, requires a selected TEST instructor. An endpoint URL or instructor selection alone must not grant access. Connection values and credentials stay in private configuration, outside public source, screenshots, and handoff evidence.
 
@@ -24,25 +26,37 @@ Lookup and writes use the configured Revolution TEST server route. The candidate
 
 Current TEST work preserves all six legacy tabs as source history. The proposed production mapping distinguishes those source blocks from current Students; it is not a permanent live-view policy already applied. Live labels, formulas, migration, or tab changes need later explicit release approval. The pure preparation utility and synthetic tests in `docs/promotions-legacy-mapping.md` preserve native values, dates, notes, unknowns, and references. They perform no migration or workbook writes and do not yet make every earlier source award a complete imported event history.
 
-## Pending Google deployment access and integrated QA
+## Approved TEST deployment and current integrated evidence
 
-The earlier reference deployment ran as the accessing Google user with access restricted to its owner. That configuration does not establish the requested no-Google-login tablet workflow. The integrated signed backend route needs the TEST deployment to execute as the dedicated Ops owner and accept server requests without interactive Google sign-in, while retaining application authorization checks. **Approval for this Google deployment-access change is pending.** Previous Sheets consent does not approve that change.
+Andrew's explicit “sure” approved the bounded Google TEST deployment-access change. **Version 3 is deployed**, executing as the existing dedicated Ops owner with access set to Anyone and application-level signed authorization enforced for the tablet route. This enables server requests without an interactive Google login; the URL alone does not authorize lookup or recording. No new OAuth grant, workbook sharing, account substitution, or project was created.
 
-Earlier OAuth consent is already complete for the dedicated Ops project: primary-email access plus see/edit/create/delete access to Sheets accessible to that account, including live operational spreadsheets. Do not request identical OAuth consent again. It grants neither production release nor additional sharing and is separate from the pending deployment-access choice. Preserve the superseded wrong-account project and existing sessions; no new project or account substitution is required.
+Earlier OAuth consent remains complete for the dedicated Ops project: primary-email access plus see/edit/create/delete access to Sheets accessible to that account, including live operational spreadsheets. Do not request identical OAuth consent again. That consent and the approved TEST deployment do not authorize production release or live operational edits. Preserve the superseded wrong-account project and existing sessions.
 
-Current integrated-candidate evidence: **`npm test`: 946 passed, zero failures, zero skipped.** Root also inspected the current interface in actual Chromium at phone, tablet, and laptop sizes using a mocked API. These local browser checks are supplemental; they do not prove the hosted server connection, tablet authorization, or durable integrated writes.
+The Revolution TEST Netlify configuration now contains the nine required private keys scoped to TEST functions. The final integrated kiosk is deployed and verified at the public nonproduction URL. Private configuration values, Google identifiers, and backend URLs remain outside this document and public artifacts.
 
-The current `Code.gs` head source was staged and saved in Google, then compared exactly with the intended text in the editor. The existing `/exec` version-2 deployment remains unchanged. A new TEST deployment dialog is staged to execute as the dedicated Ops owner with access set to Anyone; **the final Deploy button has not been clicked and approval remains pending**. No integrated-candidate Netlify configuration or deployment, and no new workbook writes, have occurred.
+Verified current results:
 
-After the approved TEST deployment/configuration is concrete, verify through the same hosted kiosk controls an instructor will use:
+- **`npm test`: 948 passed, zero failures, zero skipped**, on the final application source. This includes the retained kiosk checks and integrated promotion lifecycle, mounted-client, authorization, transport, and history regressions.
+- At the first integrated native checkpoint, hosted kiosk controls had recorded **four integrated events**: a stripe, its audited correction, a black-belt degree, and a belt transition. Native workbook verification showed **9 Students and 24 History events**. Two authorized-device recorder identities remained separate from the fictional selected instructors. A duplicate click created only one event. The completed final checkpoint below includes the later hosted actions.
+- During the degree save, an actual page reload returned to clean Sign-In while preserving the unresolved request. **Check save reconciled the original event once.** A later pending belt request also reconciled once through Check save. Intermittent Google transport timeouts left an unconfirmed intent; the interface did not falsely report Not saved.
+- The prior **20 History events and all six legacy tabs remained exact** at the native checkpoint. The four new events and current Students view were checked against the expected ranks and audit fields.
+- The final deployment matched **68 of 68 artifact hashes**. All **22 excluded private/source paths returned 404**. Both live kiosks' **56 checked assets and deployment identities remained unchanged** during this TEST integration.
+- Actual concurrent-browser QA saved TEST Ellis from Brown Belt two to three stripes with Avery selected in Edge. Another browser's older Brown Belt two-stripe draft, with Blake selected, was rejected as changed in another session. Refresh showed Brown Belt three stripes.
+- Both labeled TEST Jordan candidates were visible. The Morning student's White Belt one-to-two stripe save succeeded with Avery selected; a fresh Evening lookup still showed White Belt three stripes, unchanged.
+- Explicit registration created **TEST Integration Unknown / Integrated fixture** with Blake selected and an unknown rank. On the final artifact, verified-baseline confirmation saved White Belt zero stripes with Blake selected. A fresh browser document read White Belt zero and **Date not recorded** for the latest promotion; expanded history showed both registration and rank confirmation with Blake and **Authorized TEST tablet**. The baseline confirmation did not invent a promotion award or date. Registration guidance explains the separate student identity, and current-rank guidance distinguishes a verified baseline from a new award.
+- An actual unknown-student lookup was cleared before its response arrived. After more than 30 seconds, the page still showed clean Sign-In with no old student details restored.
+- Final hosted viewport screenshots were inspected at **390 × 844, 820 × 1180, 1180 × 820, and 1440 × 900**. Page content fit the viewport at each size (`clientWidth` equaled `scrollWidth`); normal viewport images confirmed the interface was clear. A full-page screenshot stitching artifact was distinguished from the actual page. The final fresh document had **no console errors or warnings**, and Arrow Down then Enter selected a search result.
+- Actual hosted typing at approximately 33 seconds renewed lookup activity. The query remained visible at approximately 72 seconds from the start, about 38 seconds after typing, then returned to clean Sign-In when checked about 70 seconds after typing. The **3-second confirmed-save return** was also observed in the hosted UI. These are actual elapsed-time observations in addition to the exact-deadline automated tests.
+- Actual hosted navigation respected an active Sign-In draft. The promotion checks created no Sign-In or payroll records. Earlier mocked browser checks supplement these final hosted results.
+- **Independent final native verification passed: 10 Students and 28 History events**, including eight integrated entries recorded by two authorized-device identities with separate selected-instructor attribution. All prior 24 events and all six legacy tabs retained exact native content. Ellis was Brown Belt three stripes, Jordan Morning White Belt two, Jordan Evening White Belt three, and the newly registered unknown student was confirmed at White Belt zero. Every Students view matched authoritative History; correction links, unique event/request identities, and New York dates passed verification. Native Students/History visual checks passed, and the original legacy visual evidence remained valid with exact native preservation. The TEST workbook remained private and solely Ops-owned.
 
-- Authorized-tablet lookup and entry without Google login, plus unauthorized lookup/write denial.
-- Selected-instructor attribution separated from backend/device identity in native history readback.
-- Stripe/degree, belt, missing/unknown student, duplicate-name, correction, stale-session, and same-request recovery flows.
-- The 60-second inactivity clear, 3-second confirmed return, Back, suspended-page recovery, and late responses, without losing an uncertain request.
-- Laptop, tablet, and phone layouts, console sanity, unchanged Sign-In behavior, current Students/history agreement, and unchanged legacy source cells.
+## Review delivery and later release boundary
 
-Integrated hosted checks and delivery through a directly accessible nonproduction kiosk preview are **pending**. No integrated deployment or review-ready result is claimed here.
+All technical acceptance checks are complete for this TEST review: final hosted workflow, copy, privacy, visual, console, deployment, and independent native workbook verification passed. The authorized preview opens at **https://deploy-preview-85--gib-live.netlify.app/m1/** with clean Sign-In and the neighboring Belt & Stripe Log entry.
+
+No physical tablet, physical sleep/resume cycle, or hardware/OS keyboard was tested. Automated suspended-page checks and browser viewport/keyboard checks do not replace those physical checks. The permanent release gate in `docs/m1-release-checklist.md` remains in force for a later production release; these physical release checks do not block review of the isolated TEST preview.
+
+The final authorized preview was opened visibly in the in-app browser, showing clean Sign-In with the neighboring log entry. Andrew has been asked to confirm that the new integrated interface is visible; **his visibility confirmation remains pending**. The older owner-page visibility confirmation below does not satisfy that step.
 
 ## Historical evidence: Google-owner reference only
 
@@ -54,7 +68,7 @@ These results belong to the previous owner-authenticated reference workflow. The
 - Actual version-2 reference-app layout checks passed at 1440px, 820px, and 390px. Fresh documents showed the corrected rank and unknown-registration/zero-stripe case with history intact. Console errors were empty. These were hosted owner-page checks, not integrated kiosk checks.
 - The real owner session's recorded identity was independently verified as the dedicated Ops account. A fresh anonymous request redirected to Google login without reference-app data. Nonowner/blank-identity guards had automated coverage; a signed-in wrong-account browser test was not performed. The old anonymous redirect is not the acceptance criterion for the authorized-tablet route.
 
-Private evidence includes `work/promotions-final-tests.log`, `work/promotions-ui-qa/report.json`, and the private fixture baseline, repair, recovery, and final native-verification records. Exact accounts, workbook/project/deployment identifiers, URLs, backend hashes, and connection configuration stay outside the repository and public evidence.
+Private evidence includes `work/promotions-final-tests.log`, `work/promotions-ui-qa/report.json`, the private fixture baseline, repair and recovery records, and `work/promotions-fixture/integrated-final-native-verification-private.json`. Exact accounts, workbook/project/deployment identifiers, backend URLs and hashes, and connection configuration stay outside the repository and public evidence.
 
 ## Historical save recovery and native checkpoint
 
@@ -79,4 +93,4 @@ Original History rows retained native values, types, and formats. The repaired s
 
 Andrew confirmed the old owner's Add one stripe form was visible in Codex's right panel. An earlier external-browser error exposed no account identity, so its cause was not established. Delivery was verified in the Ops-signed-in Codex browser for the reference only. The new instructor review target must be the authorized TEST kiosk preview and must not depend on that Google owner session.
 
-Browser viewport checks are not a physical-device pass. The historical reference workflow and current local checks are complete; integrated hosted checks, Google deployment-access approval, and instructor-facing delivery remain outstanding. This document neither grants those approvals nor claims the candidate deployed or ready. PR #85 remains draft and unmerged. No production promotions release, live migration, additional sharing, or live operational edits are authorized. Preserve both released kiosks and the live promotion workbook.
+Browser viewport checks are not a physical-device pass. The approved TEST integration is deployed and technically ready for review; Andrew's visibility confirmation is pending. PR #85 remains draft and unmerged. No production promotions release, live migration, additional sharing, or live operational edits are authorized. Preserve both released kiosks and the live promotion workbook.
