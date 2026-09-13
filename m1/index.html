@@ -441,6 +441,10 @@ input, textarea, select {
 #classListWrap label { padding: 16px 12px; }
 #classListWrap input[type="checkbox"] { width: 28px; height: 28px; }
 
+/* Keep an unavailable optional log closed, even when its stylesheet is offline. */
+#promotionsNavigation[hidden], #promotionsPanel[hidden] { display:none !important; }
+body.promotions-view #kiosk, body.promotions-view #staffClock { display:none !important; }
+
 /* M1B: a deliberately compact secondary task below Instructor Sign-In. */
 .staff-clock {
   margin-top: 12px;
@@ -943,6 +947,8 @@ body.admin-mode .container { max-width: 1120px; }
 <script src="./installation-profile.generated.js?v=2026-09-13-kiosk-walk-away-c"></script>
 <script src="./temporary-classes-core.js?v=2026-09-13-kiosk-walk-away-c"></script>
 <script src="./added-classes-kiosk.js?v=2026-09-13-kiosk-walk-away-c"></script>
+<script src="./promotions-config.generated.js?v=2026-09-13-promotions-test-a"></script>
+<link rel="stylesheet" href="./promotions.css?v=2026-09-13-promotions-test-a">
 </head>
 <body>
 <div class="container">
@@ -975,6 +981,12 @@ body.admin-mode .container { max-width: 1120px; }
       <details class="device-tools-menu"><summary>Device tools</summary><button id="btnAdmin" class="btn" type="button">Open device maintenance</button></details>
     </nav>
   </header>
+
+  <nav id="promotionsNavigation" class="promotions-navigation" aria-label="Kiosk task" hidden>
+    <button id="promotionsReturnSignIn" class="btn" type="button" aria-pressed="true">Sign-In</button>
+    <button id="openPromotionsLog" class="btn" type="button" aria-pressed="false">Belt &amp; Stripe Log</button>
+  </nav>
+  <section id="promotionsPanel" class="m1-promotions" aria-label="Belt and Stripe Log" hidden></section>
 
   <!-- KIOSK -->
   <section id="kiosk" class="card">
@@ -4874,8 +4886,15 @@ function refreshNameDatalist() {
   const requestedInitialView = new URLSearchParams(window.location.search).get('view');
   if (requestedInitialView === 'admin') openAdminWithGate();
 
+  // The optional log can read this guard; it cannot reset a sign-in or its queue.
+  globalThis.M1_KIOSK_NAVIGATION = Object.freeze({
+    canLeaveSignIn: () => !signInLocked && !lastSigninBatchId && !kioskFormInProgress()
+      && !document.body.classList.contains('admin-mode')
+  });
+
 })();
 </script>
 <script type="module" src="./staff-clock-client.mjs?v=2026-09-13-kiosk-walk-away-c"></script>
+<script type="module" src="./promotions-client.mjs?v=2026-09-13-promotions-test-a"></script>
 </body>
 </html>

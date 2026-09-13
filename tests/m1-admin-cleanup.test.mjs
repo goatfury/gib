@@ -81,6 +81,11 @@ const BASELINE_FIELD_IDS = Object.freeze([
   'adminPinSetupConfirm'
 ]);
 
+const PROMOTIONS_NAVIGATION_BUTTON_IDS = Object.freeze([
+  'promotionsReturnSignIn',
+  'openPromotionsLog'
+]);
+
 const REPARENT_MAP = Object.freeze({
   signinsCard: 'recentSigninsSlot',
   temporaryClassesCard: 'temporaryClassesSlot',
@@ -195,11 +200,17 @@ test('device maintenance keeps status and recovery disclosures behind the main A
 });
 
 test('every inherited control remains unique and connected after organization', () => {
-  assert.deepEqual(elementIds(['button']), [...BASELINE_BUTTON_IDS]);
+  // Keep the complete inventory exact: the optional log adds two sibling
+  // navigation buttons while every inherited control keeps its relative order.
+  assert.deepEqual(elementIds(['button']), [
+    BASELINE_BUTTON_IDS[0],
+    ...PROMOTIONS_NAVIGATION_BUTTON_IDS,
+    ...BASELINE_BUTTON_IDS.slice(1)
+  ]);
   assert.deepEqual(elementIds(['input', 'select', 'textarea', 'datalist']), [...BASELINE_FIELD_IDS]);
   assert.equal((kiosk.match(/<input[^>]*\bdata-series-day\b[^>]*>/giu) || []).length, 7);
 
-  for (const id of [...BASELINE_BUTTON_IDS, ...BASELINE_FIELD_IDS, 'dailyReviewLink']) {
+  for (const id of [...BASELINE_BUTTON_IDS, ...PROMOTIONS_NAVIGATION_BUTTON_IDS, ...BASELINE_FIELD_IDS, 'dailyReviewLink']) {
     assert.equal((kiosk.match(new RegExp(`\\bid="${escapeRegExp(id)}"`, 'gu')) || []).length, 1, id);
   }
 

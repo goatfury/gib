@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>TEST tablet setup · GYM IN A BOX</title>
+  <style>
+    :root { color-scheme: light; font: 17px/1.5 system-ui, sans-serif; color: #172125; background: #edf1f0; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    main { width: min(100%, 480px); padding: 32px; background: white; border: 1px solid #d0dad5; border-radius: 20px; }
+    .tag { font-size: 12px; font-weight: 750; letter-spacing: .12em; color: #586962; }
+    h1 { font-size: 28px; line-height: 1.2; margin: 16px 0; }
+    p { margin: 16px 0; }
+    #pairingCode { display: block; font: 700 28px/1.5 ui-monospace, monospace; letter-spacing: .08em; overflow-wrap: anywhere; }
+    button, a { display: block; width: 100%; padding: 14px 18px; border-radius: 10px; text-align: center; font: inherit; }
+    button { border: 0; color: white; background: #23563c; cursor: pointer; font-weight: 700; }
+    button:disabled { opacity: .6; cursor: default; }
+    a { margin-top: 12px; color: #23563c; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="tag">REVOLUTION · SYNTHETIC TEST ONLY</div>
+    <h1>Authorize this TEST tablet</h1>
+    <p>This one-time setup allows this browser to open the TEST promotion log.</p>
+    <p id="status" role="status" aria-live="polite">Start setup and keep this page open while its request is approved.</p>
+    <p id="codeWrap" hidden>Setup request <span id="pairingCode"></span></p>
+    <button id="start" type="button">Start TEST setup</button>
+    <a href="/m1/">Return to sign-in</a>
+  </main>
+  <script type="module">
+    const start = document.getElementById('start');
+    const status = document.getElementById('status');
+    const codeWrap = document.getElementById('codeWrap');
+    const pairingCode = document.getElementById('pairingCode');
+    let timer = 0;
+    let expiresAt = 0;
+    let running = false;
+
+    async function requestSetup(operation) {
+      const response = await fetch('/api/m1-promotions-install', {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation })
+      });
+      const result = await response.json();
+      if (!response.ok || result.ok !== true) throw new Error('Setup could not be confirmed. Try again.');
+      return result;
+    }
+
+    function stop(message) {
+      clearTimeout(timer);
+      running = false;
+      start.disabled = false;
+      status.textContent = message;
+    }
+
+    async function check(operation) {
+      try {
+        const result = await requestSetup(operation);
+        if (result.installed === true) {
+          status.textContent = 'TEST tablet authorized. Opening sign-in…';
+          location.replace('/m1/');
+          return;
+        }
+        if (result.result !== 'pending' || !/^[0-9A-F]{10}$/.test(result.pairingCode)
+          || !Number.isSafeInteger(result.expiresAt)) throw new Error('Setup could not be confirmed. Try again.');
+        expiresAt = result.expiresAt;
+        pairingCode.textContent = result.pairingCode;
+        codeWrap.hidden = false;
+        status.textContent = 'Waiting for TEST setup approval. Keep this page open.';
+        if (expiresAt * 1000 <= Date.now()) return stop('This setup request expired. Start again.');
+        timer = setTimeout(() => check('poll'), 2000);
+      } catch {
+        stop('Setup could not be confirmed. Try again.');
+      }
+    }
+
+    start.addEventListener('click', () => {
+      if (running) return;
+      running = true;
+      start.disabled = true;
+      status.textContent = 'Starting TEST setup…';
+      check('start');
+    });
+    addEventListener('pagehide', () => clearTimeout(timer));
+    addEventListener('pageshow', event => {
+      if (event.persisted && running) {
+        clearTimeout(timer);
+        check('poll');
+      }
+    });
+  </script>
+</body>
+</html>

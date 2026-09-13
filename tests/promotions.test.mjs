@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
@@ -15,6 +15,9 @@ const OWNER = 'test-manager@example.invalid';
 const BOOK_ID = 'synthetic-private-test-workbook';
 const LEGACY_TABS = ['Black Belt', 'Brown Belt', 'Purple Belt', 'Blue Belt', 'White Belt', 'Former student'];
 const FIXED_NOW = '2026-09-13T15:20:30.000Z';
+const BRIDGE_ORIGIN = 'https://deploy-preview-85--gib-live.netlify.app';
+const BRIDGE_SECRET = 'synthetic-promotions-bridge-secret-0123456789';
+const BRIDGE_MODE = 'm1-authorized-tablet-test-v1';
 const STUDENT_HEADERS = ['student_id', 'display_name', 'distinguishing_label', 'status', 'rank_known', 'belt', 'marks', 'mark_type', 'revision', 'last_event_id', 'legacy_refs', 'history_note'];
 const HISTORY_HEADERS = [
   'event_id', 'request_id', 'student_id', 'revision', 'event_kind', 'event_date_ny', 'recorded_at_utc',
@@ -139,6 +142,7 @@ function createHarness({
   const sheets = new Map();
   const clock = { now };
   const counters = { opens: 0, locks: 0, releases: 0, flushes: 0, held: false };
+  const cache = new Map();
   faults.assertLocked = () => assert.equal(counters.held, true, 'authoritative reads and writes must hold the script lock');
   const properties = new Map([['TEST_OWNER_EMAIL', owner], ['TEST_WORKBOOK_ID', BOOK_ID]]);
   for (const [index, name] of LEGACY_TABS.entries()) {
@@ -184,6 +188,18 @@ function createHarness({
       tryLock(milliseconds) { assert.ok(milliseconds > 0); counters.locks += 1; counters.held = lockAvailable; return lockAvailable; },
       releaseLock() { assert.equal(counters.held, true); counters.held = false; counters.releases += 1; }
     }) },
+    CacheService: { getScriptCache: () => ({
+      get(key) {
+        if (faults.cacheGet?.()) throw new Error('Injected nonce-cache read failure');
+        return cache.get(key)?.value ?? null;
+      },
+      put(key, value, expiration) {
+        assert.equal(counters.held, true, 'nonce consumption must hold the shared script lock');
+        assert.ok(expiration > 0);
+        if (faults.cachePut?.()) throw new Error('Injected nonce-cache write failure');
+        cache.set(key, { value, expiration });
+      }
+    }) },
     SpreadsheetApp: {
       openById(id) { assert.equal(id, BOOK_ID); counters.opens += 1; return book; },
       flush() { counters.flushes += 1; if (faults.flush?.()) throw new Error('Injected flush failure'); }
@@ -192,15 +208,33 @@ function createHarness({
       Charset: { UTF_8: 'UTF_8' }, DigestAlgorithm: { SHA_256: 'SHA_256' },
       getUuid: randomUUID,
       computeDigest: (_algorithm, value) => [...createHash('sha256').update(String(value)).digest()],
+      computeHmacSha256Signature: (value, key) => [...createHmac('sha256', String(key)).update(String(value)).digest()].map(byte => byte > 127 ? byte - 256 : byte),
       base64EncodeWebSafe: bytes => Buffer.from(bytes).toString('base64url'),
       formatDate: formattedDate
     },
-    HtmlService: { createHtmlOutput: text => ({ text, setTitle() { return this; }, addMetaTag() { return this; } }) }
+    HtmlService: { createHtmlOutput: text => ({ text, setTitle() { return this; }, addMetaTag() { return this; } }) },
+    ContentService: {
+      MimeType: { JSON: 'application/json' },
+      createTextOutput: text => ({ text, setMimeType(value) { this.mimeType = value; return this; } })
+    }
   });
   vm.runInContext(source, context, { filename: 'promotions/Code.gs' });
   return {
-    context, sheets, operations, faults, properties, counters, clock,
+    context, sheets, operations, faults, properties, counters, clock, cache,
     call(request) { return plain(context.promotionRequest(copy(request))); },
+    post(envelope) {
+      const result = context.doPost({ postData: { contents: JSON.stringify(envelope), type: 'application/json' } });
+      assert.equal(result.mimeType, 'application/json');
+      const parsed = JSON.parse(result.text);
+      if (Object.hasOwn(parsed, 'result')) {
+        assert.equal(parsed.bridge, BRIDGE_MODE);
+        assert.equal(parsed.target, 'test');
+        assert.equal(parsed.installation, 'rev');
+        assert.equal(parsed.requestNonce, envelope.payload.nonce);
+        return parsed.result;
+      }
+      return parsed;
+    },
     freshSession() { return createHarness({ now: clock.now, nativeTextMarkers, sheets: [...sheets].map(([name, sheet]) => [name, copy(sheet.values)]) }); },
     legacySnapshot() { return copy(LEGACY_TABS.map(name => [name, sheets.get(name).values])); }
   };
@@ -236,6 +270,33 @@ const registerRequest = (overrides = {}) => ({
   operation: 'registerStudent', requestId: requestId(), displayName: 'TEST Newly Registered',
   distinguishingLabel: 'Synthetic new group', historyNote: 'No historical rank inferred', ...overrides
 });
+
+function canonicalBridgeJSON(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalBridgeJSON).join(',')}]`;
+  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalBridgeJSON(value[key])}`).join(',')}}`;
+}
+
+function bridgeHarness(options = {}) {
+  const h = createHarness({ activeEmail: '', ...options });
+  h.properties.set('TEST_BRIDGE_MODE', BRIDGE_MODE);
+  h.properties.set('TEST_BRIDGE_INSTALLATION', 'rev');
+  h.properties.set('TEST_BRIDGE_ORIGIN', BRIDGE_ORIGIN);
+  h.properties.set('TEST_BRIDGE_SECRET', BRIDGE_SECRET);
+  return h;
+}
+
+function bridgeEnvelope(request = { operation: 'bootstrap' }, changes = {}, secret = BRIDGE_SECRET) {
+  const payload = {
+    version: 1, mode: BRIDGE_MODE, target: 'test', installation: 'rev', origin: BRIDGE_ORIGIN,
+    issuedAt: Math.floor(Date.parse(FIXED_NOW) / 1000), nonce: randomUUID().replaceAll('-', ''),
+    deviceIdentity: 'm1-test-device-1234567890abcdef12345678', request: copy(request), ...changes
+  };
+  return {
+    payload,
+    signature: createHmac('sha256', secret).update(`gib-promotions-test-bridge:v1\n${canonicalBridgeJSON(payload)}`).digest('hex')
+  };
+}
 
 test('blank or unauthorized active/effective sessions reveal no roster and perform no spreadsheet work', () => {
   for (const options of [
@@ -707,4 +768,176 @@ test('post-append metadata corruption remains unknown on retry and checkSave unt
   assert.equal(recovered.student.legacyRefs, quotedReference);
   assert.deepEqual(historyRows(h), repaired, 'the original receipt is recovered with zero additional history appends');
   assert.equal(expectSuccess(h.call({ operation: 'checkSave', requestId: request.requestId })).receipt.eventId, eventId);
+});
+
+test('signed tablet lookup works without a Google login and creates no promotion event', () => {
+  const h = bridgeHarness();
+  const initial = historyRows(h);
+  const bootstrap = expectSuccess(h.post(bridgeEnvelope()));
+  assert.equal(bootstrap.recorderLabel, 'Authorized TEST tablet');
+  assert.equal(bootstrap.students.length, STUDENTS.length);
+  assert.equal(bootstrap.students[0].lastPromotionDateNY, '');
+  const lookup = expectSuccess(h.post(bridgeEnvelope({ operation: 'readStudent', studentId: STUDENTS[0].id })));
+  assert.equal(lookup.student.marks, 2);
+  assert.equal(lookup.student.lastPromotionDateNY, '');
+  assert.equal(lookup.history[0].eventDateNY, '');
+  assert.deepEqual(historyRows(h), initial);
+  assert.equal(h.operations.some(item => ['write', 'clearRange', 'clearSheet', 'insertSheet'].includes(item.kind)), false);
+});
+
+test('tablet transport records a chosen instructor separately from its device and preserves duplicate-safe domain writes', () => {
+  const h = bridgeHarness();
+  const initial = historyRows(h);
+  const request = stripeRequest({ approverId: 'TEST-COACH-B' });
+  const envelope = bridgeEnvelope(request);
+  const saved = expectSuccess(h.post(envelope));
+  assert.equal(saved.receipt.recorderIdentity, envelope.payload.deviceIdentity);
+  assert.equal(saved.receipt.approverId, 'TEST-COACH-B');
+  assert.equal(saved.receipt.approverLabel, 'TEST Coach Blake');
+  assert.notEqual(saved.receipt.recorderIdentity, OWNER);
+  assert.equal(saved.student.lastPromotionDateNY, '2026-09-13');
+  assert.equal(saved.receipt.before.marks, 2);
+  assert.equal(saved.receipt.after.marks, 3);
+  const retry = expectSuccess(h.post(bridgeEnvelope(request, { deviceIdentity: 'm1-test-device-abcdef1234567890abcdef12' })));
+  assert.equal(retry.receipt.eventId, saved.receipt.eventId);
+  assert.equal(retry.receipt.recorderIdentity, envelope.payload.deviceIdentity, 'reconciliation from a different authorized tablet retains the original recording device');
+  const checked = expectSuccess(h.post(bridgeEnvelope({ operation: 'checkSave', requestId: request.requestId })));
+  assert.equal(checked.status, 'confirmed');
+  assert.equal(checked.receipt.eventId, saved.receipt.eventId);
+  assert.equal(historyRows(h).length, initial.length + 1);
+  assert.deepEqual(historyRows(h).slice(0, initial.length), initial);
+});
+
+test('bridge rejects unsigned, altered, expired, cross-installation and malformed envelopes before opening the workbook', () => {
+  const valid = bridgeEnvelope();
+  const changedPayload = copy(valid);
+  changedPayload.payload.request = stripeRequest();
+  const changedSignature = copy(valid);
+  changedSignature.signature = '0'.repeat(64);
+  const now = Math.floor(Date.parse(FIXED_NOW) / 1000);
+  const invalid = [
+    {}, { request: { operation: 'bootstrap' } }, { ...valid, unexpected: true },
+    changedPayload, changedSignature, bridgeEnvelope(undefined, {}, `${BRIDGE_SECRET}-wrong`),
+    bridgeEnvelope(undefined, { version: 2 }), bridgeEnvelope(undefined, { target: 'production' }),
+    bridgeEnvelope(undefined, { mode: 'unrestricted' }), bridgeEnvelope(undefined, { installation: 'richmond' }),
+    bridgeEnvelope(undefined, { origin: 'https://gib-live.netlify.app' }),
+    bridgeEnvelope(undefined, { issuedAt: now - 121 }), bridgeEnvelope(undefined, { issuedAt: now + 31 }),
+    bridgeEnvelope(undefined, { issuedAt: String(now) }), bridgeEnvelope(undefined, { nonce: '' }),
+    bridgeEnvelope(undefined, { deviceIdentity: OWNER }), bridgeEnvelope(undefined, { extra: 'not signed contract' })
+  ];
+  for (const envelope of invalid) {
+    const h = bridgeHarness();
+    expectFailure(h.post(envelope));
+    assert.equal(h.counters.opens, 0, JSON.stringify(envelope));
+    assert.equal(h.operations.length, 0);
+    assert.equal(h.cache.size, 0, 'a malformed envelope must not reserve a valid nonce');
+  }
+});
+
+test('bridge requires exact private TEST mode, installation, origin, secret and effective owner before data access', () => {
+  const invalidProperties = [
+    ['TEST_BRIDGE_MODE', ''], ['TEST_BRIDGE_MODE', 'production'],
+    ['TEST_BRIDGE_INSTALLATION', 'richmond'], ['TEST_BRIDGE_ORIGIN', 'https://gib-live.netlify.app'],
+    ['TEST_BRIDGE_SECRET', ''], ['TEST_BRIDGE_SECRET', 'short'], ['TEST_OWNER_EMAIL', '']
+  ];
+  for (const [key, value] of invalidProperties) {
+    const h = bridgeHarness();
+    h.properties.set(key, value);
+    expectFailure(h.post(bridgeEnvelope()));
+    assert.equal(h.counters.opens, 0, key);
+  }
+  for (const effectiveEmail of ['', 'another-ops@example.invalid']) {
+    const h = bridgeHarness({ effectiveEmail });
+    expectFailure(h.post(bridgeEnvelope()));
+    assert.equal(h.counters.opens, 0);
+  }
+});
+
+test('a signed bridge never unlocks owner RPC or the private reference page for an anonymous session', () => {
+  const h = bridgeHarness();
+  expectFailure(h.call({ operation: 'bootstrap' }), 'UNAUTHORIZED');
+  expectFailure(h.call(stripeRequest()), 'UNAUTHORIZED');
+  expectFailure(plain(h.context.promotionRequest({ operation: 'bootstrap' }, OWNER, bridgeEnvelope().payload)), 'UNAUTHORIZED');
+  expectFailure(plain(h.context.promotionRequest(stripeRequest(), OWNER, bridgeEnvelope().payload)), 'UNAUTHORIZED');
+  const page = h.context.doGet().text;
+  assert.match(page, /Private TEST access required/);
+  assert.equal(h.counters.opens, 0);
+});
+
+test('one bridge nonce is consumed once before lookup or write and a fresh envelope may reconcile the same request', () => {
+  const h = bridgeHarness();
+  const request = stripeRequest();
+  const envelope = bridgeEnvelope(request);
+  const saved = expectSuccess(h.post(envelope));
+  const opens = h.counters.opens;
+  const count = historyRows(h).length;
+  expectFailure(h.post(envelope));
+  assert.equal(h.counters.opens, opens, 'replayed transport cannot reopen the workbook');
+  assert.equal(historyRows(h).length, count);
+  assert.equal(expectSuccess(h.post(bridgeEnvelope(request))).receipt.eventId, saved.receipt.eventId);
+  assert.equal(historyRows(h).length, count);
+});
+
+test('bridge nonce-cache outages deny before workbook access and remain retryable with the same request', () => {
+  for (const fault of ['cacheGet', 'cachePut']) {
+    const h = bridgeHarness();
+    const request = stripeRequest();
+    const envelope = bridgeEnvelope(request);
+    h.faults[fault] = () => true;
+    const failed = expectFailure(h.post(envelope), 'UNAVAILABLE');
+    assert.equal(failed.error.retryable, true);
+    assert.equal(failed.requestId, request.requestId);
+    assert.equal(h.counters.opens, 0);
+    assert.equal(h.operations.length, 0);
+    assert.equal(h.counters.held, false);
+    delete h.faults[fault];
+    assert.equal(expectSuccess(h.post(envelope)).receipt.requestId, request.requestId);
+  }
+});
+
+test('tablet callers cannot replace their signed device recorder or write without selecting an instructor', () => {
+  for (const request of [
+    stripeRequest({ recorderIdentity: OWNER }), stripeRequest({ approverId: '' }),
+    registerRequest({ approverId: '' }), registerRequest({ approverId: 'not-a-coach' })
+  ]) {
+    const h = bridgeHarness();
+    const initial = historyRows(h);
+    expectFailure(h.post(bridgeEnvelope(request)));
+    assert.deepEqual(historyRows(h), initial);
+  }
+  const request = registerRequest();
+  delete request.approverId;
+  const h = bridgeHarness();
+  expectFailure(h.post(bridgeEnvelope(request)));
+});
+
+test('new registration records its chosen instructor while original undated historical seeds remain exactly unchanged', () => {
+  const h = bridgeHarness();
+  const initial = historyRows(h);
+  const saved = expectSuccess(h.post(bridgeEnvelope(registerRequest({ approverId: 'TEST-COACH-B' }))));
+  assert.equal(saved.receipt.approverId, 'TEST-COACH-B');
+  assert.equal(saved.receipt.approverLabel, 'TEST Coach Blake');
+  assert.equal(saved.receipt.eventDateNY, '2026-09-13');
+  assert.equal(saved.student.lastPromotionDateNY, '', 'registering a student is not a recorded promotion');
+  assert.deepEqual(historyRows(h).slice(0, initial.length), initial);
+});
+
+test('latest promotion date comes from stripe or belt events and does not invent dates for rank confirmation or later correction', () => {
+  const h = createHarness();
+  const confirmed = expectSuccess(h.call(rankRequest()));
+  assert.equal(confirmed.student.lastPromotionDateNY, '');
+  const stripe = expectSuccess(h.call(stripeRequest()));
+  assert.equal(stripe.student.lastPromotionDateNY, '2026-09-13');
+  h.clock.now = '2026-09-14T15:20:30.000Z';
+  const corrected = expectSuccess(h.call({
+    operation: 'correctLatest', requestId: requestId(), studentId: STUDENTS[0].id,
+    expectedRevision: 2, correctsEventId: stripe.receipt.eventId,
+    rank: { belt: 'Blue Belt', marks: 2 }, approverId: 'TEST-COACH-B', reason: 'TEST corrected rank next day'
+  }));
+  assert.equal(corrected.receipt.eventDateNY, '2026-09-14');
+  assert.equal(corrected.student.lastPromotionDateNY, '2026-09-13');
+  h.clock.now = '2026-09-15T15:20:30.000Z';
+  const belt = expectSuccess(h.call(stripeRequest({ expectedRevision: 3, action: 'belt', belt: 'Purple Belt' })));
+  assert.equal(belt.student.lastPromotionDateNY, '2026-09-15');
+  assert.equal(readStudent(h.freshSession()).student.lastPromotionDateNY, '2026-09-15');
 });

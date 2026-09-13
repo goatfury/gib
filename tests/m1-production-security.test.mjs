@@ -125,13 +125,21 @@ test('candidate text contains no private Google identifier, endpoint, or literal
   }
 
   const opaqueLiteral = /['"`]([A-Za-z0-9_-]{36,80})['"`]/gu;
+  // These exact public cookie names identify browser slots; they are not the
+  // signed credential values. Keep this exception scoped to their definition.
+  const publicPromotionCookieNames = new Set([
+    '__Host-gib_m1_promotions_test_device',
+    '__Host-gib_m1_promotions_test_pending'
+  ]);
   for (const entry of entries) {
     for (const match of entry.text.matchAll(opaqueLiteral)) {
       const value = match[1];
       const knownHash = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value);
       const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
       const looksOpaque = /[A-Z]/u.test(value) && /[a-z]/u.test(value) && /\d/u.test(value);
-      if (looksOpaque && !knownHash && !uuid && !placeholder(value, entry.path)) {
+      const publicCookieName = entry.path === 'netlify/functions/_lib/promotions-runtime.mts'
+        && publicPromotionCookieNames.has(value);
+      if (looksOpaque && !knownHash && !uuid && !publicCookieName && !placeholder(value, entry.path)) {
         identifierViolations.push(`${entry.path}: unexplained opaque identifier`);
       }
     }
