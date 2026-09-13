@@ -919,7 +919,7 @@ test('kiosk selects production transport only from the exact canonical origins',
     [...kioskHtml.matchAll(/productionOrigin: IS_PRODUCTION_SYNC_ORIGIN/gu)].length,
     3
   );
-  assert.match(kioskHtml, /2026-09-07 M1 TEST elegant-admin-classes/u);
+  assert.match(kioskHtml, /2026-09-13 M1 TEST kiosk-walk-away/u);
   assert.match(kioskHtml, /secure host-only cookie/u);
 
   const transportSource = kioskHtml.match(

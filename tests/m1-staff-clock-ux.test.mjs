@@ -208,7 +208,7 @@ test('confirmation, offline retention, and retry lifecycle stay visible and auto
   assert.match(clientSource, /waiting to sync/iu);
   assert.match(clientSource, /STAFF_CLOCK_RETRY_INTERVAL_MS = 30_000/u);
   assert.match(clientSource, /window\.addEventListener\('online'/u);
-  assert.match(clientSource, /\['focus', 'pageshow'\]/u);
+  assert.match(clientSource, /\['focus', 'pageshow', 'popstate'\]/u);
   assert.match(clientSource, /document\.addEventListener\('visibilitychange'/u);
   assert.match(clientSource, /navigator\.onLine/u);
 });

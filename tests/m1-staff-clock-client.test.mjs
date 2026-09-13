@@ -1153,6 +1153,7 @@ test('blank reset state saves an authoritative open Mandy shift and immediately 
       ${namedFunctionSource(clientSource, 'staffClockStatusFor')}
       ${namedFunctionSource(clientSource, 'selectedStaffClockPerson')}
       ${namedFunctionSource(clientSource, 'formatStaffClockTime')}
+      ${namedFunctionSource(clientSource, 'updateStaffClockDelivery')}
       ${namedFunctionSource(clientSource, 'renderStaffClock')}
       ${namedFunctionSource(clientSource, 'populateStaffClockPeople')}
       ${namedFunctionSource(clientSource, 'refreshStaffClockRosterAfterAuthorization')}
