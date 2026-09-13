@@ -36,6 +36,7 @@ function doGet() {
 function promotionRequest(request) {
   let lock;
   let locked = false;
+  let appendAttempted = false;
   try {
     const recorder = authenticatedPromotionOwner_();
     const intent = validatePromotionRequest_(request);
@@ -43,7 +44,17 @@ function promotionRequest(request) {
     lock = LockService.getScriptLock();
     locked = lock.tryLock(10000);
     if (!locked) failPromotion_('BUSY', 'Another save is finishing. Please retry this same request.', true);
-    const state = readPromotionHistory_(workbook);
+    let state;
+    try {
+      state = readPromotionHistory_(workbook);
+    } catch (error) {
+      // A retry may already be durable even when history cannot be read back.
+      // Keep the validator strict and leave the same request unresolved.
+      if (intent.operation !== 'bootstrap' && intent.operation !== 'readStudent') {
+        failPromotion_('UNAVAILABLE', 'Promotion history could not confirm whether this request was saved. Keep the input and check or retry the same request.', true);
+      }
+      throw error;
+    }
     if (intent.operation === 'bootstrap') {
       return promotionSuccess_({
         todayNY: promotionToday_(), recorderLabel: 'Signed-in TEST manager', testOnly: true,
@@ -73,6 +84,7 @@ function promotionRequest(request) {
     const history = requirePromotionSheet_(workbook, 'Promotion History', PROMOTION_HISTORY_HEADERS_);
     // Idempotency, revision checks, the one append, and exact readback all share
     // this lock. No mutable Students cell is ever used as rank authority.
+    appendAttempted = true;
     history.appendRow(literalPromotionRow_(row));
     SpreadsheetApp.flush();
     const committed = readPromotionHistory_(workbook);
@@ -86,9 +98,9 @@ function promotionRequest(request) {
     return {
       ok: false,
       error: {
-        code: error && error.promotionCode || 'UNAVAILABLE',
-        message: error && error.promotionCode ? error.message : 'The connection could not confirm this request. Keep the input and check or retry the same request.',
-        retryable: error && error.promotionCode ? error.promotionRetryable === true : true
+        code: !appendAttempted && error && error.promotionCode || 'UNAVAILABLE',
+        message: !appendAttempted && error && error.promotionCode ? error.message : 'The connection could not confirm this request. Keep the input and check or retry the same request.',
+        retryable: !appendAttempted && error && error.promotionCode ? error.promotionRetryable === true : true
       },
       ...(request && typeof request.requestId === 'string' ? { requestId: request.requestId.slice(0, 128) } : {})
     };
@@ -402,8 +414,9 @@ function promotionEventRow_(event, fingerprint) {
 
 function literalPromotionRow_(row) {
   // New user text is validated; this also keeps carried legacy annotations
-  // literal if a future synthetic fixture contains formula-looking text.
-  return row.map(value => typeof value === 'string' && /^[\s]*[=+\-@]/.test(value) ? "'" + value : value);
+  // literal. Sheets consumes one leading apostrophe as a text marker, so an
+  // existing literal apostrophe (such as a quoted sheet name) needs escaping too.
+  return row.map(value => typeof value === 'string' && /^[\s]*['=+\-@]/.test(value) ? "'" + value : value);
 }
 
 function rebuildPromotionStudents_(workbook, state) {

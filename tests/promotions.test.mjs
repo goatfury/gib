@@ -86,7 +86,13 @@ function makeSheet(name, initialRows, faults, operations) {
       fault('writeBefore', { row, column, rows: copy(rows) });
       rows.forEach((line, y) => {
         if (!values[row + y - 1]) values[row + y - 1] = [];
-        line.forEach((value, x) => { values[row + y - 1][column + x - 1] = copy(value); });
+        line.forEach((value, x) => {
+          // Native Sheets consumes one leading apostrophe as its text marker.
+          // Exercise this explicitly where the hosted workbook exposed it.
+          const stored = faults.nativeTextMarkers && typeof value === 'string' && value.startsWith("'")
+            ? value.slice(1) : value;
+          values[row + y - 1][column + x - 1] = copy(stored);
+        });
       });
       operations.push({ kind: 'write', name, row, column, rows: copy(rows) });
       fault('writeAfter', { row, column, rows: copy(rows) });
@@ -126,10 +132,10 @@ function makeSheet(name, initialRows, faults, operations) {
 function createHarness({
   activeEmail = OWNER, effectiveEmail = OWNER, owner = OWNER,
   workbookTitle = WORKBOOK_TITLE, timezone = 'America/New_York', now = FIXED_NOW,
-  lockAvailable = true, sheets: suppliedSheets = seedSheets()
+  lockAvailable = true, sheets: suppliedSheets = seedSheets(), nativeTextMarkers = false
 } = {}) {
   const operations = [];
-  const faults = {};
+  const faults = { nativeTextMarkers };
   const sheets = new Map();
   const clock = { now };
   const counters = { opens: 0, locks: 0, releases: 0, flushes: 0, held: false };
@@ -195,7 +201,7 @@ function createHarness({
   return {
     context, sheets, operations, faults, properties, counters, clock,
     call(request) { return plain(context.promotionRequest(copy(request))); },
-    freshSession() { return createHarness({ now: clock.now, sheets: [...sheets].map(([name, sheet]) => [name, copy(sheet.values)]) }); },
+    freshSession() { return createHarness({ now: clock.now, nativeTextMarkers, sheets: [...sheets].map(([name, sheet]) => [name, copy(sheet.values)]) }); },
     legacySnapshot() { return copy(LEGACY_TABS.map(name => [name, sheets.get(name).values])); }
   };
 }
@@ -632,4 +638,73 @@ test('an altered append readback cannot be reported as the exact promotion that 
   };
   expectFailure(h.call(stripeRequest()), 'UNAVAILABLE');
   assert.equal(historyRows(h).length, original.length + 1, 'unknown confirmation must not imply nothing was committed');
+});
+
+test('native Sheets text markers preserve quoted legacy references and formula-looking carried metadata exactly', () => {
+  const quotedReference = "'Blue Belt'!A2:K2";
+  const supplied = seedSheets();
+  supplied[0][1][1][STUDENT_HEADERS.indexOf('legacy_refs')] = quotedReference;
+  supplied[1][1][1][HISTORY_HEADERS.indexOf('legacy_refs')] = quotedReference;
+  supplied[0][1][1][STUDENT_HEADERS.indexOf('history_note')] = '=literal historical annotation';
+  supplied[1][1][1][HISTORY_HEADERS.indexOf('history_note')] = '=literal historical annotation';
+  const h = createHarness({ sheets: supplied, nativeTextMarkers: true });
+  const probe = makeSheet('Native text-marker probe', [], { nativeTextMarkers: true }, []);
+  probe.appendRow([quotedReference]);
+  assert.equal(probe.values[0][0], "Blue Belt'!A2:K2", 'unescaped append reproduces the observed native failure');
+  const literalValues = [quotedReference, '=literal historical annotation', '+literal note', '-literal note', '@literal note'];
+  probe.appendRow(plain(h.context.literalPromotionRow_(literalValues)));
+  assert.deepEqual(probe.values[1], literalValues, 'one escaped text marker round-trips every literal value');
+
+  const original = historyRows(h);
+  const saved = expectSuccess(h.call(stripeRequest()));
+  assert.equal(saved.viewPending, false);
+  assert.equal(saved.receipt.after.legacyRefs, quotedReference);
+  assert.equal(saved.receipt.after.historyNote, '=literal historical annotation');
+  assert.equal(historyRows(h).at(-1)[HISTORY_HEADERS.indexOf('legacy_refs')], quotedReference);
+  const view = h.sheets.get('Students').values.find(row => row[0] === STUDENTS[0].id);
+  assert.equal(view[STUDENT_HEADERS.indexOf('legacy_refs')], quotedReference);
+  assert.equal(view[STUDENT_HEADERS.indexOf('history_note')], '=literal historical annotation');
+  assert.deepEqual(historyRows(h).slice(0, original.length), original);
+  assert.equal(readStudent(h.freshSession()).student.legacyRefs, quotedReference);
+});
+
+test('post-append metadata corruption remains unknown on retry and checkSave until one exact repair recovers the original receipt', () => {
+  const quotedReference = "'Blue Belt'!A2:K2";
+  const column = HISTORY_HEADERS.indexOf('legacy_refs');
+  const supplied = seedSheets();
+  supplied[0][1][1][STUDENT_HEADERS.indexOf('legacy_refs')] = quotedReference;
+  supplied[1][1][1][column] = quotedReference;
+  const h = createHarness({ sheets: supplied, nativeTextMarkers: true });
+  const request = stripeRequest();
+  const original = historyRows(h);
+  h.faults.writeAfter = event => {
+    if (event.name === 'Promotion History' && event.row > original.length) event.values.at(-1)[column] = quotedReference.slice(1);
+    return false;
+  };
+  const initial = expectFailure(h.call(request), 'UNAVAILABLE');
+  assert.equal(initial.error.retryable, true);
+  const committed = historyRows(h).at(-1);
+  const eventId = committed[HISTORY_HEADERS.indexOf('event_id')];
+  assert.equal(historyRows(h).length, original.length + 1);
+  delete h.faults.writeAfter;
+  const corruptSnapshot = historyRows(h);
+  for (const pending of [request, { operation: 'checkSave', requestId: request.requestId }]) {
+    const result = expectFailure(h.call(pending), 'UNAVAILABLE');
+    assert.equal(result.error.retryable, true, 'a previously appended request must not be described as definitely unsaved');
+    assert.deepEqual(historyRows(h), corruptSnapshot, 'retry and checkSave must not append or silently repair metadata');
+  }
+  expectFailure(h.call({ operation: 'readStudent', studentId: request.studentId }), 'TEST_DESTINATION_INVALID');
+  assert.deepEqual(historyRows(h), corruptSnapshot, 'the immutable metadata validator stays strict');
+
+  // Model only the separately authorized one-cell TEST repair, outside the app.
+  h.sheets.get('Promotion History').values.at(-1)[column] = quotedReference;
+  const repaired = historyRows(h);
+  assert.deepEqual(repaired.at(-1).filter((_, index) => index !== column), committed.filter((_, index) => index !== column));
+  const recovered = expectSuccess(h.call(request));
+  assert.equal(recovered.receipt.eventId, eventId);
+  assert.equal(recovered.receipt.requestId, request.requestId);
+  assert.equal(recovered.student.marks, 3);
+  assert.equal(recovered.student.legacyRefs, quotedReference);
+  assert.deepEqual(historyRows(h), repaired, 'the original receipt is recovered with zero additional history appends');
+  assert.equal(expectSuccess(h.call({ operation: 'checkSave', requestId: request.requestId })).receipt.eventId, eventId);
 });
