@@ -281,3 +281,24 @@ test('every personal promotion input opts out of native Back form restoration', 
     assert.equal(control.getAttribute('autocomplete'), 'off', `${control.id} must not restore the previous interaction through native form history`);
   }
 });
+
+test('history distinguishes actual tablet entries from earlier records without exposing recorder identities or inventing dates', async t => {
+  const h = mountedHarness(t); await h.bootstrap(); await h.choose('A');
+  h.el('refreshStudent').emit('click'); await flush();
+  const record = student('A', 4);
+  const history = [
+    { revision:1, eventKind:'REGISTER', eventDateNY:'', recorderIdentity:'SYNTHETIC FIXTURE', before:null, after:record },
+    { revision:2, eventKind:'STRIPE', eventDateNY:'2026-09-12', recorderIdentity:'earlier-owner@example.invalid', before:record, after:record, approverLabel:'TEST Coach Avery' },
+    { revision:3, eventKind:'STRIPE', eventDateNY:'2026-09-13', recorderIdentity:'m1-test-device-0123456789abcdef01234567', before:record, after:record, approverLabel:'TEST Coach Avery' },
+    { revision:4, eventKind:'CORRECTION', eventDateNY:'2026-09-13', recorderIdentity:'m1-test-device-short', before:record, after:record, approverLabel:'TEST Coach Blake' }
+  ];
+  await h.success(h.take('readStudent'), { student:record, history });
+  const rows = h.el('historyList').children.map(row => row.textContent);
+  assert.equal(rows.filter(text => text.includes('Recorded through: Authorized TEST tablet')).length, 1);
+  assert.equal(rows.filter(text => text.includes('Recorded through: Earlier log')).length, 3);
+  assert.match(rows.at(-1), /Date not recorded · Student registered/u);
+  assert.doesNotMatch(rows.join('\n'), /earlier-owner@example\.invalid|m1-test-device-|SYNTHETIC FIXTURE/u);
+  h.el('correctLatest').emit('click');
+  assert.match(h.el('previewNote').textContent, /original event and its selected instructor/u);
+  assert.doesNotMatch(h.el('previewNote').textContent, /approval/u);
+});

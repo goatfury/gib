@@ -226,9 +226,11 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('historyEmpty').hidden = history.length > 0;
     for (const event of history) {
       const article = node('article', undefined, 'history-item');
-      article.append(node('h3', `${event.eventDateNY} · ${eventLabels[event.eventKind] || 'Recorded event'}`));
+      article.append(node('h3', `${event.eventDateNY || 'Date not recorded'} · ${eventLabels[event.eventKind] || 'Recorded event'}`));
       article.append(node('p', `${event.before ? rankLabel(event.before) : 'New identity'} → ${rankLabel(event.after)}`));
-      article.append(node('p', `Promoted by: ${event.approverLabel || 'Not recorded'} · Recorded through: ${state.recorderLabel}`, 'history-meta'));
+      const recordedThrough = /^m1-test-device-[a-f0-9]{24}$/u.test(event.recorderIdentity || '')
+        ? 'Authorized TEST tablet' : 'Earlier log';
+      article.append(node('p', `Promoted by: ${event.approverLabel || 'Not recorded'} · Recorded through: ${recordedThrough}`, 'history-meta'));
       if (event.reason) article.append(node('p', event.reason, 'small'));
       if (event.correctsEventId) article.append(node('p', 'Corrects an earlier entry; the original is retained below.', 'history-meta'));
       $('historyList').append(article);
@@ -317,7 +319,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
       ? 'Adds one only. The belt does not change automatically.'
       : draft.kind === 'belt' ? 'The new belt starts with zero stripes or degrees. Earlier history is preserved.'
       : draft.kind === 'confirm' ? 'Confirms the current rank today. It does not invent a historical promotion date.'
-      : 'A new correction entry will preserve the original event and its approval.';
+      : 'A new correction entry will preserve the original event and its selected instructor.';
   }
   function buildIntent() {
     readDraftControls();
