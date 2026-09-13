@@ -27,6 +27,32 @@ test('personal kiosk controls disable native history autofill after a completed 
     assert.ok(control, `${id} must exist`);
     assert.match(control, /\bautocomplete="off"/u, `${id} must disable native history autofill`);
   }
+
+  // Regular, local temporary, and shared classes all pass through this renderer.
+  // Inspect the generated controls themselves, not a source spelling match.
+  const labels = ['TEST Regular Class', 'TEST Local Temporary Class', 'TEST Shared Added Class'];
+  const makeNode = () => ({
+    children: [], checked: false,
+    appendChild(node) { this.children.push(node); },
+    classList: { add() {}, remove() {} }
+  });
+  const wrap = makeNode();
+  const hint = makeNode();
+  const context = vm.createContext({
+    $: selector => selector === '#classListWrap' ? wrap : hint,
+    document: { createElement: makeNode },
+    classesForDateKey: () => ({ day: 'Sunday', classes: labels, meta: {} }),
+    renderScheduleStatuses() {}
+  });
+  vm.runInContext(`${functionSource(instructorSource, 'renderClassesForDateKey')}\nrenderClassesForDateKey('2026-09-13');`, context);
+  assert.equal(wrap.children.length, labels.length);
+  for (const [index, label] of wrap.children.entries()) {
+    const checkbox = label.children[0];
+    assert.equal(checkbox.type, 'checkbox');
+    assert.equal(checkbox.value, labels[index]);
+    assert.equal(checkbox.autocomplete, 'off', 'generated class controls must disable native history autofill');
+    assert.equal(checkbox.checked, false, 'new class choices must begin unselected');
+  }
 });
 
 function functionSource(source, name) {
