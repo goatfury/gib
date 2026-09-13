@@ -1,11 +1,13 @@
 export const PROMOTIONS_IDLE_MS = 60_000;
 export const PROMOTIONS_SUCCESS_MS = 3_000;
 
-export function promotionsEnabled(profile, config) {
+export function promotionsEnabled(profile, config, origin = globalThis.location?.origin) {
+  const validTarget = config?.testOnly === true && (config.target === undefined || config.target === 'test')
+    || config?.testOnly === false && config.target === 'live' && origin === 'https://gib-live.netlify.app';
   return profile?.installationId === 'rev'
     && profile.backend?.enabled === true
     && config?.enabled === true
-    && config.testOnly === true
+    && validTarget
     && config.endpoint === '/api/m1-promotions';
 }
 

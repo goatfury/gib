@@ -9,6 +9,8 @@ import { mountPromotionsLog } from '../m1/promotions-client.mjs';
 // fetch boundaries are simulated; real browser timing/layout remain release QA.
 const html = readFileSync(new URL('../m1/index.html', import.meta.url), 'utf8');
 const config = { enabled: true, testOnly: true, endpoint: '/api/m1-promotions' };
+const liveConfig = { enabled: true, testOnly: false, target: 'live', endpoint: '/api/m1-promotions' };
+const liveOrigin = 'https://gib-live.netlify.app';
 const student = (id, revision = 1, marks = 1) => ({
   studentId: `fixture-student-${id}`, displayName: `TEST Person ${id}`, distinguishingLabel: `Group ${id}`,
   status: 'active', rankKnown: true, belt: 'White Belt', marks, markType: 'stripes',
@@ -114,7 +116,7 @@ function installActualKioskGuard(document) {
 
 async function flush() { for (let count = 0; count < 8; count += 1) await Promise.resolve(); }
 
-function mountedHarness(t, { profile = installationProfile('rev'), stored = new Map() } = {}) {
+function mountedHarness(t, { profile = installationProfile('rev'), stored = new Map(), logConfig = config, origin = liveOrigin } = {}) {
   const document = makeDocument();
   const clock = { now: Date.parse('2026-09-13T16:00:00Z') };
   const windowTarget = new EventTarget();
@@ -127,7 +129,7 @@ function mountedHarness(t, { profile = installationProfile('rev'), stored = new 
   const oldGuard = globalThis.M1_KIOSK_NAVIGATION;
   globalThis.M1_KIOSK_NAVIGATION = guard.value;
   const fetcher = (url, options) => new Promise((resolve, reject) => calls.push({ url, options, payload: JSON.parse(options.body), resolve, reject, settled: false, taken: false }));
-  const mounted = mountPromotionsLog({ document, profile, config, fetcher, storage, now: () => clock.now, windowTarget });
+  const mounted = mountPromotionsLog({ document, profile, config: logConfig, origin, fetcher, storage, now: () => clock.now, windowTarget });
   const el = id => document.getElementById(id.startsWith('promotions-') ? id : `promotions-${id}`);
   const take = (operation, studentId) => {
     const call = calls.find(item => !item.taken && item.payload.operation === operation && (!studentId || item.payload.studentId === studentId));
@@ -135,13 +137,13 @@ function mountedHarness(t, { profile = installationProfile('rev'), stored = new 
   };
   const respond = async (call, body, status = 200) => { call.settled = true; call.resolve({ ok: status >= 200 && status < 300, status, json: async () => body }); await flush(); };
   const success = (call, data) => respond(call, { ok: true, data });
-  const bootstrap = async (students = [student('A'), student('B')], approvers = [{ id: 'TEST-COACH-A', label: 'TEST Coach Avery' }]) => {
+  const bootstrap = async (students = [student('A'), student('B')], approvers = [{ id: 'TEST-COACH-A', label: 'TEST Coach Avery' }], overrides = {}) => {
     const opening = mounted.open(); await flush();
-    await success(take('bootstrap'), { testOnly: true, todayNY: '2026-09-13', recorderLabel: 'Authorized TEST tablet', approvers, students });
+    await success(take('bootstrap'), { testOnly: true, todayNY: '2026-09-13', recorderLabel: 'Authorized TEST tablet', approvers, students, ...overrides });
     await opening;
   };
   const choose = async (id, fresh = student(id), history = []) => {
-    el('studentSearch').value = `TEST Person ${id}`; el('studentSearch').emit('input');
+    el('studentSearch').value = fresh.displayName; el('studentSearch').emit('input');
     el('searchResults').children[0].emit('click'); await flush();
     const call = take('readStudent', fresh.studentId);
     await success(call, { student: fresh, history });
@@ -489,3 +491,131 @@ test('opening another entry or lookup starts with blank instructor attribution a
   assert.equal(h.el('approverChoice').value, '');
   assert.equal(h.el('approverSuggestions').children.length, 0);
 });
+
+for (const origin of [
+  'https://deploy-preview-88--gib-live.netlify.app',
+  'https://0123456789abcdef01234567--gib-live.netlify.app',
+  'http://gib-live.netlify.app',
+  'https://gib-richmond-live.netlify.app',
+  'https://gib-live.netlify.app.example.invalid',
+  ''
+]) {
+  test(`live mounted log refuses origin ${origin || '(missing)' } without rendering or requesting records`, t => {
+    const h = mountedHarness(t, { logConfig: liveConfig, origin });
+    assert.equal(h.mounted, null);
+    assert.equal(h.document.getElementById('promotionsNavigation').hidden, true);
+    assert.equal(h.document.getElementById('promotionsPanel').hidden, true);
+    assert.equal(h.document.getElementById('promotionsPanel').children.length, 0);
+    assert.equal(h.calls.length, 0);
+    assert.equal(h.stored.size, 0);
+  });
+}
+
+for (const [name, logConfig, reply] of [
+  ['TEST UI with live bootstrap', config, { testOnly: false, target: 'live' }],
+  ['live UI with TEST bootstrap', liveConfig, { testOnly: true, target: 'test' }],
+  ['TEST UI with mismatched optional target', config, { testOnly: true, target: 'live' }],
+  ['live UI with mismatched optional target', liveConfig, { testOnly: false, target: 'test' }]
+]) {
+  test(`${name} fails before any roster or recorder details are exposed`, async t => {
+    const h = mountedHarness(t, { logConfig });
+    const rejectedStudent = { ...student('wrong-target'), displayName: 'Fictional Wrong-Destination Person' };
+    await h.bootstrap([rejectedStudent], [], { ...reply, recorderLabel: 'Fictional wrong-destination recorder' });
+    assert.equal(h.el('app').hidden, true);
+    assert.equal(h.el('recorder').hidden, true);
+    assert.equal(h.el('accessStatus').hidden, false);
+    assert.equal(h.el('retryAccess').hidden, false);
+    h.el('studentSearch').value = rejectedStudent.displayName;
+    h.el('studentSearch').emit('input');
+    assert.equal(h.el('searchResults').children.length, 0);
+    assert.equal(h.mounted.snapshot().selectedId, null);
+    assert.doesNotMatch(h.document.getElementById('promotionsPanel').textContent, /Fictional Wrong-Destination Person|Fictional wrong-destination recorder/u);
+    assert.deepEqual(h.calls.map(call => call.payload.operation), ['bootstrap']);
+    assert.equal(h.stored.size, 0);
+  });
+}
+
+test('live mounted labels use generic tablet provenance without TEST chrome or private recorder identities', async t => {
+  const h = mountedHarness(t, { logConfig: liveConfig });
+  const record = { ...student('A', 3), displayName: 'Fictional Avery Rowan' };
+  await h.bootstrap([record], [], { testOnly: false, target: 'live', recorderLabel: '' });
+  assert.equal(h.el('app').hidden, false);
+  assert.equal(h.el('recorder').textContent, 'Access: Authorized Revolution tablet');
+  assert.ok(h.el('modeBadge'), 'the mode badge remains a shared template hook');
+  assert.doesNotMatch(h.el('modeBadge').textContent, /TEST/u);
+  assert.ok(h.el('privacyNote'), 'the privacy note remains a shared template hook');
+  assert.doesNotMatch(h.el('privacyNote').textContent, /TEST data only/u);
+  assert.match(h.el('privacyNote').textContent, /60 seconds.*3 seconds/u);
+  const liveDevice = 'm1-live-device-0123456789abcdef01234567';
+  const testDevice = 'm1-test-device-89abcdef0123456701234567';
+  const earlierIdentity = 'earlier-owner@example.invalid';
+  const history = [liveDevice, testDevice, earlierIdentity].map((recorderIdentity, index) => ({
+    eventId: `fictional-provenance-${index}`, revision: index + 1, eventKind: 'STRIPE',
+    eventDateNY: '2026-09-13', recorderIdentity, before: record, after: record, approverLabel: 'Fictional Coach Rowan'
+  }));
+  await h.choose('A', record, history);
+  const rows = h.el('historyList').children.map(row => row.textContent);
+  assert.equal(rows.filter(text => text.includes('Recorded through: Authorized Revolution tablet')).length, 1);
+  assert.equal(rows.filter(text => text.includes('Recorded through: Authorized TEST tablet')).length, 1);
+  assert.equal(rows.filter(text => text.includes('Recorded through: Earlier log')).length, 1);
+  assert.doesNotMatch(h.document.getElementById('promotionsPanel').textContent, /m1-live-device-|m1-test-device-|earlier-owner@example\.invalid/u);
+  assert.deepEqual(h.calls.map(call => call.payload.operation), ['bootstrap', 'readStudent']);
+});
+
+test('matched live mounted lookup and typed promotion preserve the existing confirmation and three-second clearing flow', async t => {
+  const h = mountedHarness(t, { logConfig: liveConfig });
+  const record = { ...student('A'), displayName: 'Fictional Avery Rowan' };
+  // target is optional; matching testOnly is still mandatory.
+  await h.bootstrap([record], [], { testOnly: false, recorderLabel: '' });
+  await h.choose('A', record);
+  assert.equal(h.mounted.snapshot().selectedFresh, true);
+  assert.equal(h.el('studentName').textContent, record.displayName);
+  assert.equal(h.el('approverChoice').value, '');
+  const save = await h.beginStripe('Fictional Coach Rowan');
+  assert.equal(save.url, '/api/m1-promotions');
+  assert.equal(save.payload.studentId, record.studentId);
+  assert.equal(save.payload.expectedRevision, 1);
+  assert.equal(save.payload.action, 'stripe');
+  assert.equal(save.payload.approverName, 'Fictional Coach Rowan');
+  assert.equal(Object.hasOwn(save.payload, 'approverId'), false);
+  assert.deepEqual(JSON.parse(h.stored.get('gib_m1_promotions_pending_v1')), { version: 1, intent: save.payload });
+  h.el('entryForm').emit('submit'); await flush();
+  assert.equal(h.calls.filter(call => call.payload.operation === 'recordPromotion').length, 1);
+  const after = { ...record, marks: 2, revision: 2 };
+  const saved = h.saved(save);
+  await h.success(save, { ...saved, student: after, receipt: { ...saved.receipt, before: record, after, recorderIdentity: 'm1-live-device-0123456789abcdef01234567' } });
+  assert.match(h.el('studentRank').textContent, /White Belt.*2 stripes/u);
+  assert.match(h.el('historyList').textContent, /Promoted by: Fictional Coach Rowan.*Recorded through: Authorized Revolution tablet/u);
+  assert.equal(h.stored.size, 0);
+  h.tick(2_999); assert.equal(h.mounted.snapshot().active, true);
+  h.tick(1); h.neutral();
+  assert.deepEqual(h.calls.map(call => call.payload.operation), ['bootstrap', 'readStudent', 'recordPromotion']);
+});
+
+for (const [name, attribution] of [
+  ['legacy synthetic instructor ID', { approverId: 'TEST-COACH-A' }],
+  ['live typed instructor', { approverName: "Fictional Renée  D'Angelo-Sato" }]
+]) {
+  test(`live mounted recovery preserves ${name} in the unchanged pending key and exact retry payload`, async t => {
+    const intent = { operation: 'recordPromotion', requestId: `pending-${name.replaceAll(' ', '-')}`, studentId: student('A').studentId, expectedRevision: 1, action: 'stripe', ...attribution };
+    const raw = JSON.stringify({ version: 1, intent });
+    const stored = new Map([['gib_m1_promotions_pending_v1', raw]]);
+    const h = mountedHarness(t, { stored, logConfig: liveConfig });
+    await h.bootstrap([], [], { testOnly: false, target: 'live', recorderLabel: '' });
+    assert.equal(h.el('approverChoice').value, '');
+    assert.deepEqual(h.calls.map(call => call.payload.operation), ['bootstrap'], 'opening recovery cannot dispatch a mutation');
+    assert.equal(stored.get('gib_m1_promotions_pending_v1'), raw);
+    h.el('checkSave').emit('click'); await flush();
+    const check = h.take('checkSave');
+    assert.deepEqual(check.payload, { operation: 'checkSave', requestId: intent.requestId });
+    await h.success(check, { status: 'not_found' });
+    h.el('retrySave').emit('click'); await flush();
+    const retry = h.take('recordPromotion');
+    assert.deepEqual(retry.payload, intent);
+    await h.respond(retry, { ok: false, error: { code: 'UNAVAILABLE', message: 'Fictional dropped confirmation', retryable: true } }, 503);
+    assert.equal(stored.get('gib_m1_promotions_pending_v1'), raw);
+    assert.equal(stored.size, 1, 'live mode cannot move or rewrite the durable pending entry');
+    h.el('clearBack').emit('click'); h.neutral();
+    assert.equal(stored.get('gib_m1_promotions_pending_v1'), raw);
+  });
+}

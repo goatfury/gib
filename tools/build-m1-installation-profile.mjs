@@ -21,13 +21,23 @@ if (!profile) {
 
 const source = browserInstallationProfileSource(profile);
 const promotionsTestEnabled = process.env.GIB_PROMOTIONS_TEST_ENABLED === 'true';
+const promotionsLiveEnabled = process.env.GIB_PROMOTIONS_LIVE_ENABLED === 'true';
+if (promotionsTestEnabled && promotionsLiveEnabled) {
+  throw new Error('The Belt & Stripe Log cannot enable TEST and LIVE in the same build.');
+}
 if (promotionsTestEnabled && (
   profile.installationId !== 'rev'
   || !['deploy-preview', 'branch-deploy', 'dev'].includes(process.env.CONTEXT || '')
 )) {
   throw new Error('The Belt & Stripe Log can only be enabled in an explicit Revolution TEST build.');
 }
-const promotionsConfig = `Object.defineProperty(globalThis, 'M1_PROMOTIONS_TEST_CONFIG', {\n  value: Object.freeze(${JSON.stringify({ enabled: promotionsTestEnabled, endpoint: '/api/m1-promotions', testOnly: true })}),\n  writable: false, configurable: false\n});\n`;
+if (promotionsLiveEnabled && (profile.installationId !== 'rev' || process.env.CONTEXT !== 'production')) {
+  throw new Error('The live Belt & Stripe Log requires an explicit Revolution production build.');
+}
+const promotionsSettings = promotionsLiveEnabled
+  ? { enabled: true, endpoint: '/api/m1-promotions', testOnly: false, target: 'live' }
+  : { enabled: promotionsTestEnabled, endpoint: '/api/m1-promotions', testOnly: true };
+const promotionsConfig = `Object.defineProperty(globalThis, 'M1_PROMOTIONS_TEST_CONFIG', {\n  value: Object.freeze(${JSON.stringify(promotionsSettings)}),\n  writable: false, configurable: false\n});\n`;
 
 await Promise.all([
   writeFile(

@@ -1,5 +1,5 @@
-/* Private synthetic TEST only. Configure the destination and owner privately in
- * Script Properties; neither setting belongs in source or browser assets. */
+/* TEST owner reference and separately enabled, signed Revolution tablet routes.
+ * Configure destinations and credentials privately in Script Properties. */
 const PROMOTION_TEST_TITLE_ = 'GYM IN A BOX Promotions — PRIVATE SYNTHETIC TEST';
 const PROMOTION_TIME_ZONE_ = 'America/New_York';
 const PROMOTION_BELTS_ = ['White Belt', 'Blue Belt', 'Purple Belt', 'Brown Belt', 'Black Belt'];
@@ -46,9 +46,9 @@ function doPost(event) {
   try {
     bridge = verifiedPromotionBridge_(event);
     const result = promotionRequestWithRecorder_(bridge.request, bridge.deviceIdentity, bridge);
-    return promotionJsonOutput_({ bridge: bridge.mode, target: 'test', installation: 'rev', requestNonce: bridge.nonce, result });
+    return promotionJsonOutput_({ bridge: bridge.mode, target: bridge.target, installation: 'rev', requestNonce: bridge.nonce, result });
   } catch (error) {
-    return promotionJsonOutput_({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Authorized TEST tablet access is required.', retryable: false } });
+    return promotionJsonOutput_({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Authorized tablet access is required.', retryable: false } });
   }
 }
 
@@ -57,33 +57,44 @@ function promotionJsonOutput_(value) {
 }
 
 function verifiedPromotionBridge_(event) {
-  const properties = PropertiesService.getScriptProperties();
-  const mode = 'm1-authorized-tablet-test-v1';
-  const owner = String(properties.getProperty('TEST_OWNER_EMAIL') || '').trim().toLowerCase();
-  const effective = String(Session.getEffectiveUser().getEmail() || '').trim().toLowerCase();
-  const secret = String(properties.getProperty('TEST_BRIDGE_SECRET') || '');
-  const origin = String(properties.getProperty('TEST_BRIDGE_ORIGIN') || '');
-  if (!owner || effective !== owner || properties.getProperty('TEST_BRIDGE_MODE') !== mode
-    || properties.getProperty('TEST_BRIDGE_INSTALLATION') !== 'rev'
-    || !/^https:\/\/(?:deploy-preview-[0-9]+|[0-9a-f]{24})--gib-live\.netlify\.app$/.test(origin)
-    || secret.length < 32 || secret.length > 512 || secret !== secret.trim()
-    || !event || !event.postData || typeof event.postData.contents !== 'string'
-    || event.postData.contents.length > 65536) failPromotion_('UNAUTHORIZED', 'Invalid TEST bridge.');
+  if (!event || !event.postData || typeof event.postData.contents !== 'string'
+    || event.postData.contents.length > 65536) failPromotion_('UNAUTHORIZED', 'Invalid promotion bridge.');
   const envelope = JSON.parse(event.postData.contents);
   exactPromotionFields_(envelope, ['payload', 'signature']);
   const payload = envelope.payload;
   exactPromotionFields_(payload, ['version', 'mode', 'target', 'installation', 'origin', 'issuedAt', 'nonce', 'deviceIdentity', 'request']);
+  if (payload.target !== 'test' && payload.target !== 'live') failPromotion_('UNAUTHORIZED', 'Invalid promotion bridge.');
+  const properties = PropertiesService.getScriptProperties();
+  const live = payload.target === 'live';
+  const mode = live ? 'm1-authorized-tablet-live-v1' : 'm1-authorized-tablet-test-v1';
+  const prefix = live ? 'LIVE' : 'TEST';
+  const owner = String(properties.getProperty('TEST_OWNER_EMAIL') || '').trim().toLowerCase();
+  const effective = String(Session.getEffectiveUser().getEmail() || '').trim().toLowerCase();
+  const secret = String(properties.getProperty(prefix + '_BRIDGE_SECRET') || '');
+  const origin = String(properties.getProperty(prefix + '_BRIDGE_ORIGIN') || '');
+  if (!owner || effective !== owner || properties.getProperty(prefix + '_BRIDGE_MODE') !== mode
+    || properties.getProperty(prefix + '_BRIDGE_INSTALLATION') !== 'rev'
+    || (live ? origin !== 'https://gib-live.netlify.app' : !/^https:\/\/(?:deploy-preview-[0-9]+|[0-9a-f]{24})--gib-live\.netlify\.app$/.test(origin))
+    || secret.length < 32 || secret.length > 512 || secret !== secret.trim()
+    || (live && (properties.getProperty('LIVE_ENABLED') !== 'true'
+      || !properties.getProperty('TEST_BRIDGE_SECRET') || secret === properties.getProperty('TEST_BRIDGE_SECRET')))) {
+    failPromotion_('UNAUTHORIZED', 'Invalid promotion bridge.');
+  }
+  // Validate live destination isolation before signature acceptance or any open.
+  if (live) promotionLiveDestination_();
   const now = Math.floor(Date.now() / 1000);
-  if (payload.version !== 1 || payload.mode !== mode || payload.target !== 'test' || payload.installation !== 'rev'
+  const identityPattern = live ? /^m1-live-device-[0-9a-f]{24}$/ : /^m1-test-device-[0-9a-f]{24}$/;
+  if (payload.version !== 1 || payload.mode !== mode || payload.installation !== 'rev'
     || payload.origin !== origin || !Number.isSafeInteger(payload.issuedAt)
     || payload.issuedAt > now + 30 || payload.issuedAt < now - 120
-    || !/^[0-9a-f]{32}$/.test(payload.nonce || '') || !/^m1-test-device-[0-9a-f]{24}$/.test(payload.deviceIdentity || '')
-    || !/^[0-9a-f]{64}$/.test(envelope.signature || '')) failPromotion_('UNAUTHORIZED', 'Invalid TEST bridge.');
-  const signature = Utilities.computeHmacSha256Signature('gib-promotions-test-bridge:v1\n' + canonicalPromotionJson_(payload), secret, Utilities.Charset.UTF_8)
+    || !/^[0-9a-f]{32}$/.test(payload.nonce || '') || !identityPattern.test(payload.deviceIdentity || '')
+    || !/^[0-9a-f]{64}$/.test(envelope.signature || '')) failPromotion_('UNAUTHORIZED', 'Invalid promotion bridge.');
+  const domain = live ? 'gib-promotions-live-bridge:v1\n' : 'gib-promotions-test-bridge:v1\n';
+  const signature = Utilities.computeHmacSha256Signature(domain + canonicalPromotionJson_(payload), secret, Utilities.Charset.UTF_8)
     .map(byte => ((byte + 256) % 256).toString(16).padStart(2, '0')).join('');
   let difference = 0;
   for (let index = 0; index < signature.length; index += 1) difference |= signature.charCodeAt(index) ^ envelope.signature.charCodeAt(index);
-  if (difference) failPromotion_('UNAUTHORIZED', 'Invalid TEST bridge.');
+  if (difference) failPromotion_('UNAUTHORIZED', 'Invalid promotion bridge.');
   // Registration is a write too. The retained owner reference may still use
   // its older registration form; every tablet write requires attribution.
   if (payload.request && payload.request.operation === 'registerStudent') promotionAttribution_(payload.request);
@@ -95,17 +106,23 @@ function promotionRequestWithRecorder_(request, recorder, bridge) {
   let locked = false;
   let appendAttempted = false;
   try {
+    const target = bridge ? bridge.target : 'test';
     const intent = validatePromotionRequest_(request);
+    if (target === 'live' && !['bootstrap', 'readStudent', 'checkSave'].includes(intent.operation)
+      && (!Object.prototype.hasOwnProperty.call(request, 'approverName')
+        || Object.prototype.hasOwnProperty.call(request, 'approverId'))) {
+      failPromotion_('VALIDATION', 'Enter a name in Promoted by.');
+    }
     lock = LockService.getScriptLock();
     locked = lock.tryLock(10000);
     if (!locked) failPromotion_('BUSY', 'Another save is finishing. Please retry this same request.', true);
     if (bridge) {
       const cache = CacheService.getScriptCache();
-      const key = 'promotions-bridge:' + bridge.nonce;
-      if (cache.get(key)) failPromotion_('UNAUTHORIZED', 'This TEST bridge request has already been used.');
+      const key = 'promotions-bridge:' + (bridge.target === 'live' ? 'live:' : '') + bridge.nonce;
+      if (cache.get(key)) failPromotion_('UNAUTHORIZED', 'This tablet request has already been used.');
       cache.put(key, 'used', 180);
     }
-    const workbook = verifiedPromotionWorkbook_();
+    const workbook = verifiedPromotionWorkbook_(target);
     let state;
     try {
       state = readPromotionHistory_(workbook);
@@ -119,8 +136,10 @@ function promotionRequestWithRecorder_(request, recorder, bridge) {
     }
     if (intent.operation === 'bootstrap') {
       return promotionSuccess_({
-        todayNY: promotionToday_(), recorderLabel: bridge ? 'Authorized TEST tablet' : 'Signed-in TEST manager', testOnly: true,
-        approvers: PROMOTION_APPROVERS_.map(item => ({ ...item })),
+        todayNY: promotionToday_(), recorderLabel: target === 'live' ? 'Authorized Revolution tablet' : bridge ? 'Authorized TEST tablet' : 'Signed-in TEST manager', testOnly: target === 'test',
+        approvers: target === 'live'
+          ? [...new Set(state.events.map(event => event.approverLabel).filter(name => typeof name === 'string' && name.trim()))].map(label => ({ label }))
+          : PROMOTION_APPROVERS_.map(item => ({ ...item })),
         students: Array.from(state.students.values())
       });
     }
@@ -141,7 +160,7 @@ function promotionRequestWithRecorder_(request, recorder, bridge) {
       if (prior.fingerprint !== fingerprint) failPromotion_('REQUEST_CONFLICT', 'This request ID already belongs to a different save.');
       return promotionSuccess_(confirmedPromotionResult_(workbook, state, prior.receipt));
     }
-    const event = buildPromotionEvent_(intent, state, recorder);
+    const event = buildPromotionEvent_(intent, state, recorder, target);
     const row = promotionEventRow_(event, fingerprint);
     const history = requirePromotionSheet_(workbook, 'Promotion History', PROMOTION_HISTORY_HEADERS_);
     // Idempotency, revision checks, the one append, and exact readback all share
@@ -191,25 +210,46 @@ function authenticatedPromotionOwner_() {
   return active;
 }
 
-function verifiedPromotionWorkbook_() {
-  const id = PropertiesService.getScriptProperties().getProperty('TEST_WORKBOOK_ID');
-  if (!id || typeof id !== 'string') failPromotion_('TEST_DESTINATION_INVALID', 'The private TEST destination is not configured.');
+function promotionLiveDestination_() {
+  const properties = PropertiesService.getScriptProperties();
+  const id = properties.getProperty('LIVE_WORKBOOK_ID');
+  const title = properties.getProperty('LIVE_WORKBOOK_TITLE');
+  const testId = properties.getProperty('TEST_WORKBOOK_ID');
+  if (properties.getProperty('LIVE_ENABLED') !== 'true' || !id || typeof id !== 'string' || id !== id.trim()
+    || !testId || id === testId || !title || typeof title !== 'string' || !title.trim()) {
+    failPromotion_('TEST_DESTINATION_INVALID', 'The promotion destination is not configured.');
+  }
+  return { id, title };
+}
+
+function verifiedPromotionWorkbook_(target = 'test') {
+  if (target !== 'test' && target !== 'live') failPromotion_('TEST_DESTINATION_INVALID', 'The promotion destination is not configured.');
+  const destination = target === 'live' ? promotionLiveDestination_() : {
+    id: PropertiesService.getScriptProperties().getProperty('TEST_WORKBOOK_ID'), title: PROMOTION_TEST_TITLE_
+  };
+  const { id, title } = destination;
+  if (!id || typeof id !== 'string') failPromotion_('TEST_DESTINATION_INVALID', 'The promotion destination is not configured.');
   const workbook = SpreadsheetApp.openById(id);
-  if (workbook.getName() !== PROMOTION_TEST_TITLE_ || workbook.getSpreadsheetTimeZone() !== PROMOTION_TIME_ZONE_) {
-    failPromotion_('TEST_DESTINATION_INVALID', 'The configured destination is not the verified private TEST workbook.');
+  if (workbook.getName() !== title || workbook.getSpreadsheetTimeZone() !== PROMOTION_TIME_ZONE_) {
+    failPromotion_('TEST_DESTINATION_INVALID', 'The configured destination could not be verified.');
   }
   for (const title of ['Black Belt', 'Brown Belt', 'Purple Belt', 'Blue Belt', 'White Belt', 'Former student']) {
-    if (!workbook.getSheetByName(title)) failPromotion_('TEST_DESTINATION_INVALID', 'The private TEST legacy views are incomplete.');
+    if (!workbook.getSheetByName(title)) failPromotion_('TEST_DESTINATION_INVALID', 'The promotion legacy views are incomplete.');
+  }
+  // Live never creates or repairs an unprepared schema before accepting work.
+  if (target === 'live') {
+    requirePromotionSheet_(workbook, 'Students', STUDENT_HEADERS_);
+    requirePromotionSheet_(workbook, 'Promotion History', PROMOTION_HISTORY_HEADERS_);
   }
   return workbook;
 }
 
 function requirePromotionSheet_(workbook, title, headers) {
   const sheet = workbook.getSheetByName(title);
-  if (!sheet || sheet.getLastColumn() !== headers.length) failPromotion_('TEST_DESTINATION_INVALID', 'The private TEST data layout does not match this tool.');
+  if (!sheet || sheet.getLastColumn() !== headers.length) failPromotion_('TEST_DESTINATION_INVALID', 'The promotion data layout does not match this tool.');
   const actual = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
   if (!actual || headers.some((header, index) => actual[index] !== header)) {
-    failPromotion_('TEST_DESTINATION_INVALID', 'The private TEST data headers do not match this tool.');
+    failPromotion_('TEST_DESTINATION_INVALID', 'The promotion data headers do not match this tool.');
   }
   return sheet;
 }
@@ -358,6 +398,23 @@ function rankSnapshot_(student) {
   return { status: student.status, rankKnown: student.rankKnown, belt: student.belt, marks: student.marks, markType: student.markType };
 }
 
+function validLegacyPromotionBaseline_(entry, previous, student) {
+  if (previous || entry.event_kind !== 'REGISTER' || Number(entry.revision) !== 1
+    || entry.reason !== 'Legacy baseline import; manifest=promotions-live-baseline-v1; promotion date unknown.'
+    || entry.event_date_ny !== '' || entry.payload_fingerprint !== '' || entry.approver_id !== '' || entry.approver_label !== ''
+    || (student.status === 'archived' && student.rankKnown)) return false;
+  const recorded = promotionCellText_(entry.recorded_at_utc);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(recorded)) return false;
+  try {
+    if (new Date(recorded).toISOString() !== recorded) return false;
+    const references = JSON.parse(entry.legacy_refs);
+    return Array.isArray(references) && references.length > 0 && references.every(reference =>
+      plainPromotionObject_(reference) && Object.keys(reference).sort().join('|') === 'fingerprint|range'
+      && typeof reference.range === 'string' && reference.range.trim()
+      && typeof reference.fingerprint === 'string' && /^[0-9a-f]{64}$/.test(reference.fingerprint));
+  } catch (_) { return false; }
+}
+
 function readPromotionHistory_(workbook) {
   const sheet = requirePromotionSheet_(workbook, 'Promotion History', PROMOTION_HISTORY_HEADERS_);
   const rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, PROMOTION_HISTORY_HEADERS_.length).getValues() : [];
@@ -400,7 +457,10 @@ function readPromotionHistory_(workbook) {
     }
     const fingerprint = promotionCellText_(entry.payload_fingerprint);
     const syntheticSeed = !previous && kind === 'REGISTER' && entry.recorder_identity === 'SYNTHETIC FIXTURE';
-    if ((!syntheticSeed && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^[0-9a-f]{64}$/.test(fingerprint)))
+    const legacyImport = entry.recorder_identity === 'LEGACY BASELINE IMPORT';
+    const legacySeed = legacyImport && validLegacyPromotionBaseline_(entry, previous, student);
+    if ((legacyImport && !legacySeed)
+      || (!syntheticSeed && !legacySeed && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^[0-9a-f]{64}$/.test(fingerprint)))
       || (syntheticSeed && (date !== '' || fingerprint !== '' || entry.approver_id !== '' || entry.approver_label !== ''))) {
       failPromotion_('TEST_DESTINATION_INVALID', 'A historical event date or request identity is invalid.');
     }
@@ -421,11 +481,11 @@ function readPromotionHistory_(workbook) {
 
 function requirePromotionStudent_(state, studentId) {
   const student = state.students.get(studentId);
-  if (!student) failPromotion_('NOT_FOUND', 'This student was not found. Search again or explicitly register a missing TEST student.');
+  if (!student) failPromotion_('NOT_FOUND', 'This student was not found. Search again or explicitly register a missing student.');
   return student;
 }
 
-function buildPromotionEvent_(intent, state, recorder) {
+function buildPromotionEvent_(intent, state, recorder, target = 'test') {
   let previous = null;
   let after;
   let kind;
@@ -437,7 +497,7 @@ function buildPromotionEvent_(intent, state, recorder) {
       failPromotion_('DUPLICATE_STUDENT', 'That name and identifying label already exist. Select that student or use a different label for a different person.');
     }
     kind = 'REGISTER';
-    reason = 'Explicit TEST student registration; current rank needs confirmation.';
+    reason = target === 'live' ? 'Explicit student registration; current rank needs confirmation.' : 'Explicit TEST student registration; current rank needs confirmation.';
     after = {
       studentId: 'stu-' + Utilities.getUuid(), displayName: intent.displayName, distinguishingLabel: intent.distinguishingLabel,
       status: 'active', rankKnown: false, belt: '', marks: null, markType: '', revision: 1,
@@ -445,7 +505,7 @@ function buildPromotionEvent_(intent, state, recorder) {
     };
   } else {
     previous = requirePromotionStudent_(state, intent.studentId);
-    if (previous.status === 'archived') failPromotion_('ARCHIVED', 'This former student record is read-only. Return-to-training policy is outside this TEST tool.');
+    if (previous.status === 'archived') failPromotion_('ARCHIVED', 'This former student record is read-only. Return-to-training policy is outside this tool.');
     if (previous.revision !== intent.expectedRevision) failPromotion_('STALE_REVISION', 'This student changed in another session. Reload and review the current rank before making a new decision.');
     after = { ...previous, revision: previous.revision + 1 };
     if (intent.operation === 'confirmRank') {

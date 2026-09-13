@@ -18,6 +18,11 @@ const FIXED_NOW = '2026-09-13T15:20:30.000Z';
 const BRIDGE_ORIGIN = 'https://deploy-preview-85--gib-live.netlify.app';
 const BRIDGE_SECRET = 'synthetic-promotions-bridge-secret-0123456789';
 const BRIDGE_MODE = 'm1-authorized-tablet-test-v1';
+const LIVE_BOOK_ID = 'synthetic-proposed-live-workbook';
+const LIVE_WORKBOOK_TITLE = 'Synthetic Revolution pilot fixture';
+const LIVE_ORIGIN = 'https://gib-live.netlify.app';
+const LIVE_SECRET = 'synthetic-live-promotions-bridge-secret-9876543210';
+const LIVE_MODE = 'm1-authorized-tablet-live-v1';
 const STUDENT_HEADERS = ['student_id', 'display_name', 'distinguishing_label', 'status', 'rank_known', 'belt', 'marks', 'mark_type', 'revision', 'last_event_id', 'legacy_refs', 'history_note'];
 const HISTORY_HEADERS = [
   'event_id', 'request_id', 'student_id', 'revision', 'event_kind', 'event_date_ny', 'recorded_at_utc',
@@ -170,6 +175,27 @@ function createHarness({
       operations.push({ kind: 'insertSheet', name }); return sheet;
     }
   };
+  const books = new Map([[BOOK_ID, book]]);
+  const openedIds = [];
+  function addWorkbook(id, { title, timezone: bookTimezone = 'America/New_York', rows = seedSheets() } = {}) {
+    assert.equal(books.has(id), false);
+    const addedSheets = new Map(LEGACY_TABS.map(name => [name, makeSheet(name, sheets.get(name).values, faults, operations)]));
+    for (const [name, values] of rows) addedSheets.set(name, makeSheet(name, values, faults, operations));
+    const addedBook = {
+      getName: () => title, getId: () => id, getSpreadsheetTimeZone: () => bookTimezone,
+      getSheetByName: name => addedSheets.get(name) || null,
+      getSheets: () => [...addedSheets.values()],
+      insertSheet(name) {
+        assert.ok(!addedSheets.has(name));
+        const sheet = makeSheet(name, [], faults, operations);
+        addedSheets.set(name, sheet);
+        operations.push({ kind: 'insertSheet', name, workbookId: id });
+        return sheet;
+      }
+    };
+    books.set(id, addedBook);
+    return { book: addedBook, sheets: addedSheets };
+  }
   class ControlledDate extends Date {
     constructor(...args) { super(...(args.length ? args : [clock.now])); }
     static now() { return Date.parse(clock.now); }
@@ -201,7 +227,10 @@ function createHarness({
       }
     }) },
     SpreadsheetApp: {
-      openById(id) { assert.equal(id, BOOK_ID); counters.opens += 1; return book; },
+      openById(id) {
+        assert.equal(books.has(id), true, 'only named synthetic workbook fixtures may be opened');
+        counters.opens += 1; openedIds.push(id); return books.get(id);
+      },
       flush() { counters.flushes += 1; if (faults.flush?.()) throw new Error('Injected flush failure'); }
     },
     Utilities: {
@@ -220,15 +249,15 @@ function createHarness({
   });
   vm.runInContext(source, context, { filename: 'promotions/Code.gs' });
   return {
-    context, sheets, operations, faults, properties, counters, clock, cache,
+    context, sheets, operations, faults, properties, counters, clock, cache, books, openedIds, addWorkbook,
     call(request) { return plain(context.promotionRequest(copy(request))); },
     post(envelope) {
       const result = context.doPost({ postData: { contents: JSON.stringify(envelope), type: 'application/json' } });
       assert.equal(result.mimeType, 'application/json');
       const parsed = JSON.parse(result.text);
       if (Object.hasOwn(parsed, 'result')) {
-        assert.equal(parsed.bridge, BRIDGE_MODE);
-        assert.equal(parsed.target, 'test');
+        assert.equal(parsed.bridge, envelope.payload.mode);
+        assert.equal(parsed.target, envelope.payload.target);
         assert.equal(parsed.installation, 'rev');
         assert.equal(parsed.requestNonce, envelope.payload.nonce);
         return parsed.result;
@@ -300,6 +329,49 @@ function bridgeEnvelope(request = { operation: 'bootstrap' }, changes = {}, secr
     payload,
     signature: createHmac('sha256', secret).update(`gib-promotions-test-bridge:v1\n${canonicalBridgeJSON(payload)}`).digest('hex')
   };
+}
+
+function liveHarness({ liveTitle = LIVE_WORKBOOK_TITLE, liveTimezone = 'America/New_York', liveRows, ...options } = {}) {
+  const h = bridgeHarness(options);
+  const rows = liveRows || seedSheets();
+  if (!liveRows) {
+    rows[0][1][1][STUDENT_HEADERS.indexOf('display_name')] = 'SYNTHETIC PILOT Student';
+    rows[1][1][1][HISTORY_HEADERS.indexOf('display_name')] = 'SYNTHETIC PILOT Student';
+  }
+  h.live = h.addWorkbook(LIVE_BOOK_ID, { title: liveTitle, timezone: liveTimezone, rows });
+  for (const [key, value] of Object.entries({
+    LIVE_ENABLED: 'true', LIVE_BRIDGE_MODE: LIVE_MODE, LIVE_BRIDGE_INSTALLATION: 'rev',
+    LIVE_BRIDGE_ORIGIN: LIVE_ORIGIN, LIVE_BRIDGE_SECRET: LIVE_SECRET,
+    LIVE_WORKBOOK_ID: LIVE_BOOK_ID, LIVE_WORKBOOK_TITLE: LIVE_WORKBOOK_TITLE
+  })) h.properties.set(key, value);
+  return h;
+}
+
+function liveEnvelope(request = { operation: 'bootstrap' }, changes = {}, secret = LIVE_SECRET, domain = 'gib-promotions-live-bridge:v1\n') {
+  const payload = {
+    ...bridgeEnvelope(request).payload, mode: LIVE_MODE, target: 'live', origin: LIVE_ORIGIN,
+    deviceIdentity: 'm1-live-device-1234567890abcdef12345678', ...changes
+  };
+  return { payload, signature: createHmac('sha256', secret).update(`${domain}${canonicalBridgeJSON(payload)}`).digest('hex') };
+}
+
+const workbookSnapshot = sheets => copy([...sheets].map(([name, sheet]) => [name, sheet.values]));
+const liveHistoryRows = h => copy(h.live.sheets.get('Promotion History').values);
+
+function legacyBaselineSheets() {
+  const supplied = seedSheets();
+  for (const row of supplied[1][1].slice(1)) {
+    const index = name => HISTORY_HEADERS.indexOf(name);
+    row[index('recorder_identity')] = 'LEGACY BASELINE IMPORT';
+    row[index('recorded_at_utc')] = FIXED_NOW;
+    row[index('reason')] = 'Legacy baseline import; manifest=promotions-live-baseline-v1; promotion date unknown.';
+    row[index('legacy_refs')] = JSON.stringify([{ range: "'Blue Belt'!A2:K2", fingerprint: 'a'.repeat(64) }]);
+    if (row[index('after_status')] === 'archived') {
+      row[index('after_rank_known')] = false;
+      for (const field of ['after_belt', 'after_marks', 'after_mark_type']) row[index(field)] = '';
+    }
+  }
+  return supplied;
 }
 
 test('blank or unauthorized active/effective sessions reveal no roster and perform no spreadsheet work', () => {
@@ -1070,4 +1142,210 @@ test('freely typed attribution cannot replace the signed device recorder or bypa
   const saved = expectSuccess(h.post(bridgeEnvelope(request)));
   assert.match(saved.receipt.recorderIdentity, /^m1-test-device-/);
   assert.equal(saved.receipt.approverLabel, request.approverName);
+});
+
+test('LIVE bridge requires every private activation and destination-isolation setting before opening either workbook', () => {
+  for (const [key, value] of [
+    ['LIVE_ENABLED', ''], ['LIVE_ENABLED', 'false'], ['LIVE_BRIDGE_MODE', BRIDGE_MODE],
+    ['LIVE_BRIDGE_INSTALLATION', 'richmond'], ['LIVE_BRIDGE_ORIGIN', BRIDGE_ORIGIN],
+    ['LIVE_BRIDGE_ORIGIN', LIVE_ORIGIN + '/'], ['LIVE_BRIDGE_SECRET', BRIDGE_SECRET],
+    ['LIVE_BRIDGE_SECRET', 'short'], ['LIVE_WORKBOOK_ID', BOOK_ID], ['LIVE_WORKBOOK_ID', ''],
+    ['LIVE_WORKBOOK_TITLE', ''], ['TEST_WORKBOOK_ID', ''], ['TEST_BRIDGE_SECRET', ''], ['TEST_OWNER_EMAIL', '']
+  ]) {
+    const h = liveHarness(); h.properties.set(key, value);
+    expectFailure(h.post(liveEnvelope()), 'UNAUTHORIZED');
+    assert.deepEqual(h.openedIds, [], key);
+    assert.equal(h.operations.length, 0, key);
+  }
+  for (const effectiveEmail of ['', 'different-owner@example.invalid']) {
+    const h = liveHarness({ effectiveEmail });
+    expectFailure(h.post(liveEnvelope()), 'UNAUTHORIZED');
+    assert.equal(h.counters.opens, 0);
+  }
+});
+
+test('LIVE signatures bind target, canonical origin, device identity, nonce and time without accepting TEST envelopes', () => {
+  for (const changes of [
+    { mode: BRIDGE_MODE }, { target: 'test' }, { target: 'production' }, { installation: 'richmond' },
+    { origin: BRIDGE_ORIGIN }, { origin: LIVE_ORIGIN + '/' },
+    { deviceIdentity: 'm1-test-device-1234567890abcdef12345678' }, { deviceIdentity: OWNER },
+    { nonce: 'invalid' }, { issuedAt: Date.parse(FIXED_NOW) / 1000 - 121 },
+    { issuedAt: Date.parse(FIXED_NOW) / 1000 + 31 }
+  ]) {
+    const h = liveHarness(); expectFailure(h.post(liveEnvelope(undefined, changes)), 'UNAUTHORIZED');
+    assert.equal(h.counters.opens, 0);
+  }
+  for (const envelope of [
+    liveEnvelope(undefined, {}, BRIDGE_SECRET),
+    liveEnvelope(undefined, {}, LIVE_SECRET, 'gib-promotions-test-bridge:v1\n'),
+    { ...liveEnvelope(), signature: '0'.repeat(64) }
+  ]) {
+    const h = liveHarness(); expectFailure(h.post(envelope), 'UNAUTHORIZED');
+    assert.equal(h.counters.opens, 0);
+  }
+});
+
+test('LIVE reads and writes use only their verified workbook and exact historical names provide optional suggestions', () => {
+  const h = liveHarness({ nativeTextMarkers: true });
+  const originalTest = workbookSnapshot(h.sheets);
+  const originalLive = liveHistoryRows(h);
+  const legacy = workbookSnapshot(new Map([...h.live.sheets].filter(([name]) => LEGACY_TABS.includes(name))));
+  const initial = expectSuccess(h.post(liveEnvelope()));
+  assert.equal(initial.testOnly, false);
+  assert.equal(initial.recorderLabel, 'Authorized Revolution tablet');
+  assert.equal(initial.students[0].displayName, 'SYNTHETIC PILOT Student');
+  assert.deepEqual(initial.approvers, [], 'the LIVE book does not receive a fictional TEST roster');
+  const name = "Renée  O'Neill-Santos";
+  const first = namedRequest(stripeRequest(), name);
+  const saved = expectSuccess(h.post(liveEnvelope(first)));
+  assert.equal(saved.receipt.approverId, ''); assert.equal(saved.receipt.approverLabel, name);
+  assert.match(saved.receipt.recorderIdentity, /^m1-live-device-[a-f0-9]{24}$/u);
+  assert.equal(saved.student.marks, STUDENTS[0].marks + 1);
+  expectFailure(h.post(liveEnvelope(namedRequest(stripeRequest(), 'Another Instructor'))), 'STALE_REVISION');
+  expectSuccess(h.post(liveEnvelope(namedRequest(stripeRequest({ studentId: STUDENTS[1].id }), name))));
+  expectSuccess(h.post(liveEnvelope(namedRequest(stripeRequest({ studentId: STUDENTS[2].id }), name.toUpperCase()))));
+  const lookup = expectSuccess(h.post(liveEnvelope({ operation: 'readStudent', studentId: first.studentId })));
+  assert.equal(lookup.history.at(-1).approverLabel, name);
+  const suggestions = expectSuccess(h.post(liveEnvelope())).approvers;
+  assert.deepEqual(suggestions.map(item => item.label), [name, name.toUpperCase()]);
+  assert.deepEqual(h.openedIds, Array(h.openedIds.length).fill(LIVE_BOOK_ID));
+  assert.deepEqual(workbookSnapshot(h.sheets), originalTest);
+  assert.deepEqual(liveHistoryRows(h).slice(0, originalLive.length), originalLive);
+  assert.deepEqual(workbookSnapshot(new Map([...h.live.sheets].filter(([title]) => LEGACY_TABS.includes(title)))), legacy);
+});
+
+test('LIVE requires both prepared schemas, all legacy tabs, exact title and New York time before any write', () => {
+  for (const title of ['Students', 'Promotion History', ...LEGACY_TABS]) {
+    const h = liveHarness(); h.live.sheets.delete(title);
+    const snapshot = workbookSnapshot(h.live.sheets);
+    expectFailure(h.post(liveEnvelope(namedRequest(stripeRequest()))), 'TEST_DESTINATION_INVALID');
+    assert.deepEqual(workbookSnapshot(h.live.sheets), snapshot, title);
+    assert.ok(h.operations.every(operation => operation.kind === 'read'), title);
+  }
+  for (const title of ['Students', 'Promotion History']) {
+    const h = liveHarness(); h.live.sheets.get(title).values[0][0] = 'unexpected_header';
+    expectFailure(h.post(liveEnvelope(namedRequest(stripeRequest()))), 'TEST_DESTINATION_INVALID');
+    assert.ok(h.operations.every(operation => operation.kind === 'read'));
+  }
+  for (const options of [{ liveTitle: WORKBOOK_TITLE }, { liveTimezone: 'UTC' }]) {
+    const h = liveHarness(options);
+    expectFailure(h.post(liveEnvelope()), 'TEST_DESTINATION_INVALID');
+    assert.equal(h.operations.length, 0);
+  }
+});
+
+test('LIVE lost confirmation reconciles its original receipt once and retains audit and revision safeguards', () => {
+  const h = liveHarness(); const request = namedRequest(stripeRequest());
+  const before = liveHistoryRows(h); const originalTest = workbookSnapshot(h.sheets);
+  h.faults.flush = () => true;
+  const failed = expectFailure(h.post(liveEnvelope(request)), 'UNAVAILABLE');
+  assert.equal(failed.error.retryable, true);
+  assert.equal(liveHistoryRows(h).length, before.length + 1);
+  delete h.faults.flush;
+  const checked = expectSuccess(h.post(liveEnvelope({ operation: 'checkSave', requestId: request.requestId })));
+  assert.equal(checked.status, 'confirmed');
+  const retry = expectSuccess(h.post(liveEnvelope(request)));
+  assert.deepEqual(retry.receipt, checked.receipt);
+  expectFailure(h.post(liveEnvelope({ ...request, approverName: 'Changed name' })), 'REQUEST_CONFLICT');
+  assert.equal(liveHistoryRows(h).length, before.length + 1);
+  assert.deepEqual(workbookSnapshot(h.sheets), originalTest);
+  const corrected = expectSuccess(h.post(liveEnvelope({
+    operation: 'correctLatest', requestId: requestId(), studentId: request.studentId,
+    expectedRevision: 2, correctsEventId: retry.receipt.eventId, rank: { belt: 'Blue Belt', marks: 2 },
+    approverName: 'Correction Instructor', reason: 'Confirmed one entry was mistaken'
+  })));
+  assert.equal(corrected.receipt.correctsEventId, retry.receipt.eventId);
+  assert.equal(corrected.receipt.reason, 'Confirmed one entry was mistaken');
+  assert.deepEqual(liveHistoryRows(h).slice(0, before.length), before);
+});
+
+test('LIVE nonce replay is rejected while existing TEST nonce and owner routes remain TEST only', () => {
+  const h = liveHarness({ activeEmail: OWNER }); const envelope = liveEnvelope();
+  expectSuccess(h.post(envelope)); expectFailure(h.post(envelope), 'UNAUTHORIZED');
+  const testEnvelope = bridgeEnvelope(undefined, { nonce: envelope.payload.nonce });
+  assert.equal(expectSuccess(h.post(testEnvelope)).testOnly, true);
+  expectFailure(h.post(testEnvelope), 'UNAUTHORIZED');
+  const priorNonce = bridgeEnvelope(); h.cache.set('promotions-bridge:' + priorNonce.payload.nonce, { value: 'used' });
+  expectFailure(h.post(priorNonce), 'UNAUTHORIZED');
+  h.openedIds.length = 0;
+  const ownerResult = expectSuccess(h.call({ operation: 'bootstrap' }));
+  assert.equal(ownerResult.testOnly, true);
+  assert.equal(ownerResult.recorderLabel, 'Signed-in TEST manager');
+  assert.deepEqual(h.openedIds, [BOOK_ID]);
+  const liveBefore = liveHistoryRows(h);
+  expectFailure(h.call({ operation: 'bootstrap', target: 'live' }), 'VALIDATION');
+  assert.deepEqual(liveHistoryRows(h), liveBefore);
+  h.context.HtmlService.createTemplateFromFile = () => ({ evaluate: () => ({ setTitle() { return this; }, addMetaTag() { return this; } }) });
+  h.openedIds.length = 0; h.context.doGet(); assert.deepEqual(h.openedIds, [BOOK_ID]);
+});
+
+test('new LIVE writes require a typed name without changing historical TEST attribution or old TEST retries', () => {
+  const h = liveHarness(); const before = liveHistoryRows(h);
+  expectFailure(h.post(liveEnvelope(stripeRequest())), 'VALIDATION');
+  expectFailure(h.post(liveEnvelope(registerRequest({ approverId: 'TEST-COACH-A' }))), 'VALIDATION');
+  assert.deepEqual(liveHistoryRows(h), before);
+  assert.equal(h.counters.opens, 0);
+  const oldTest = stripeRequest();
+  const saved = expectSuccess(h.post(bridgeEnvelope(oldTest)));
+  assert.equal(saved.receipt.approverId, 'TEST-COACH-A');
+  assert.deepEqual(expectSuccess(h.post(bridgeEnvelope(oldTest))).receipt, saved.receipt);
+  assert.deepEqual(liveHistoryRows(h), before);
+});
+
+test('prepared legacy baselines retain unknown dates and archived unknown ranks while subsequent writes use actual dates', () => {
+  const h = liveHarness({ liveRows: legacyBaselineSheets(), nativeTextMarkers: true });
+  const before = liveHistoryRows(h);
+  const bootstrap = expectSuccess(h.post(liveEnvelope()));
+  assert.equal(bootstrap.students.length, STUDENTS.length);
+  assert.ok(bootstrap.students.every(record => record.lastPromotionDateNY === ''));
+  assert.deepEqual(bootstrap.approvers, []);
+  const archived = bootstrap.students.find(record => record.studentId === STUDENTS[5].id);
+  assert.equal(archived.status, 'archived'); assert.equal(archived.rankKnown, false);
+  assert.equal(archived.belt, ''); assert.equal(archived.marks, null);
+  expectFailure(h.post(liveEnvelope(namedRequest(stripeRequest({ studentId: archived.studentId })))), 'ARCHIVED');
+  const saved = expectSuccess(h.post(liveEnvelope(namedRequest(stripeRequest(), 'Visiting Instructor'))));
+  assert.equal(saved.receipt.eventDateNY, '2026-09-13');
+  assert.equal(saved.receipt.recordedAtUTC, FIXED_NOW);
+  assert.match(saved.receipt.recorderIdentity, /^m1-live-device-/u);
+  assert.deepEqual(liveHistoryRows(h).slice(0, before.length), before);
+  const registered = expectSuccess(h.post(liveEnvelope(namedRequest(registerRequest(), 'Visiting Instructor'))));
+  assert.equal(registered.receipt.eventDateNY, '2026-09-13');
+  assert.equal(registered.student.lastPromotionDateNY, '');
+  assert.equal(registered.receipt.reason, 'Explicit student registration; current rank needs confirmation.');
+  assert.notEqual(registered.receipt.recorderIdentity, 'LEGACY BASELINE IMPORT');
+});
+
+test('the legacy import exception accepts only an explicitly referenced initial baseline with no invented award attribution', () => {
+  for (const [field, value] of [
+    ['recorder_identity', 'LEGACY IMPORT'], ['reason', ''], ['reason', 'Legacy baseline import; manifest=other; promotion date unknown.'],
+    ['recorded_at_utc', ''], ['recorded_at_utc', 'not-a-date'], ['event_date_ny', '2026-09-13'],
+    ['payload_fingerprint', 'a'.repeat(64)], ['approver_id', 'TEST-COACH-A'], ['approver_label', 'Earlier Coach'],
+    ['legacy_refs', ''], ['legacy_refs', "'Blue Belt'!A2:K2"], ['legacy_refs', '[]'],
+    ['legacy_refs', JSON.stringify([{ range: ' ', fingerprint: 'a'.repeat(64) }])],
+    ['legacy_refs', JSON.stringify([{ range: "'Blue Belt'!A2:K2", fingerprint: 'invalid' }])],
+    ['legacy_refs', JSON.stringify([{ range: "'Blue Belt'!A2:K2", fingerprint: 'a'.repeat(64), extra: true }])]
+  ]) {
+    const rows = legacyBaselineSheets(); rows[1][1][1][HISTORY_HEADERS.indexOf(field)] = value;
+    const h = liveHarness({ liveRows: rows }); const before = liveHistoryRows(h);
+    expectFailure(h.post(liveEnvelope()));
+    assert.deepEqual(liveHistoryRows(h), before, field);
+    assert.ok(h.operations.every(operation => operation.kind === 'read'), field);
+  }
+  const rows = legacyBaselineSheets(); const former = rows[1][1].at(-1);
+  former[HISTORY_HEADERS.indexOf('after_rank_known')] = true;
+  former[HISTORY_HEADERS.indexOf('after_belt')] = 'Brown Belt';
+  former[HISTORY_HEADERS.indexOf('after_marks')] = 0;
+  former[HISTORY_HEADERS.indexOf('after_mark_type')] = 'stripes';
+  expectFailure(liveHarness({ liveRows: rows }).post(liveEnvelope()), 'TEST_DESTINATION_INVALID');
+});
+
+test('public requests cannot create or impersonate a legacy import baseline', () => {
+  const h = liveHarness({ liveRows: legacyBaselineSheets() }); const before = liveHistoryRows(h);
+  for (const changes of [
+    { recorderIdentity: 'LEGACY BASELINE IMPORT' }, { eventKind: 'REGISTER' },
+    { eventDateNY: '' }, { payload_fingerprint: '' }, { legacy_refs: 'private-manifest' },
+    { reason: 'Legacy baseline import; manifest=promotions-live-baseline-v1; promotion date unknown.' }
+  ]) expectFailure(h.post(liveEnvelope({ ...namedRequest(registerRequest()), ...changes })), 'VALIDATION');
+  assert.deepEqual(liveHistoryRows(h), before);
+  assert.equal(h.counters.opens, 0);
 });

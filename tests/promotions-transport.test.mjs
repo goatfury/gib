@@ -494,3 +494,125 @@ test('a consumed capability stays burned when approval-state confirmation fails'
   assert.equal(poll.body.result, 'pending');
   assert.equal(poll.headers.has('set-cookie'), false);
 });
+
+const diagnosticHeaders = response => [...response.headers].filter(([name]) => name.startsWith('x-gib-test-'));
+
+test('authenticated TEST failures identify only fixed phases and numeric timing without losing original intent', async () => {
+  const privateText = `SYNTHETIC_PRIVATE_ERROR ${ENV.GIB_PROMOTIONS_TEST_WEBHOOK_URL} ${ENV.GIB_PROMOTIONS_TEST_BRIDGE_SECRET}`;
+  const cases = [
+    ['fetch', null, async () => { throw new DOMException(privateText, 'TimeoutError'); }],
+    ['body', '200', async () => new Response(new ReadableStream({ start(controller) { controller.error(new Error(privateText)); } }))],
+    ['body', '200', async () => new Response('x'.repeat(1000001))],
+    ['http', '503', async () => new Response(privateText, { status: 503 })],
+    ['json', '200', async () => new Response(privateText)],
+    ['envelope', '200', async () => new Response(JSON.stringify({ privateText, ok: true }))]
+  ];
+  for (const [phase, status, fetchResult] of cases) {
+    let calls = 0;
+    const h = serverHarness({ fetch: async (...args) => { calls += 1; return fetchResult(...args); } });
+    const response = await h.run(request(API, { body: namedRequest(SAVE) }));
+    const value = await result(response);
+    assert.equal(value.status, 503);
+    assert.equal(value.body.error.code, 'UNAVAILABLE');
+    assert.equal(value.body.error.retryable, true);
+    assert.equal(value.body.requestId, SAVE.requestId);
+    assert.equal(value.headers.get('x-gib-test-upstream'), phase);
+    assert.match(value.headers.get('x-gib-test-upstream-ms'), /^\d+$/u);
+    assert.equal(value.headers.get('x-gib-test-upstream-status'), status);
+    assert.equal(diagnosticHeaders(response).length, status === null ? 2 : 3);
+    assert.equal(calls, 1, 'diagnosis must never automatically resend the request');
+    const publicOutput = JSON.stringify({ body: value.body, headers: [...value.headers] });
+    assert.equal(publicOutput.includes('SYNTHETIC_PRIVATE_ERROR'), false);
+    noPrivateConfiguration(publicOutput);
+  }
+});
+
+test('TEST diagnostic headers are absent before authorization and on valid application responses', async () => {
+  const h = serverHarness();
+  const responses = [
+    await h.run(request(API, { cookie: '' })),
+    await serverHarness({ env: {} }).run(request()),
+    await h.run(request()),
+    await h.run(request(API, { body: namedRequest(SAVE, '') })),
+    await serverHarness({ fetch: async (_url, options) => {
+      const envelope = JSON.parse(options.body);
+      return new Response(JSON.stringify({ bridge: MODE, target: 'test', installation: 'rev', requestNonce: envelope.payload.nonce,
+        result: { ok: false, error: { code: 'STALE_REVISION', message: 'Reload the student.', retryable: false } } }));
+    } }).run(request(API, { body: namedRequest(SAVE) }))
+  ];
+  for (const response of responses) assert.deepEqual(diagnosticHeaders(response), []);
+});
+
+const LIVE_ORIGIN = 'https://gib-live.netlify.app';
+const LIVE_ENV = Object.freeze({ ...ENV,
+  GIB_PROMOTIONS_LIVE_ENABLED: 'true', GIB_PROMOTIONS_LIVE_INSTALLATION: 'rev', GIB_PROMOTIONS_LIVE_SITE_ID: SITE_ID,
+  GIB_PROMOTIONS_LIVE_WEBHOOK_URL: 'https://script.google.com/macros/s/SYNTHETIC_LIVE_PROMOTIONS_RECEIVER/exec',
+  GIB_PROMOTIONS_LIVE_BRIDGE_SECRET: 'synthetic-live-bridge-secret-0123456789',
+  GIB_M1_PRODUCTION_DEVICE_TOKEN: 'synthetic-existing-production-cookie-0123456789'
+});
+const liveRequest = (body, options = {}, path = API) => request(path, { origin: LIVE_ORIGIN,
+  cookie: `__Host-gib_m1_production_device=${credential(LIVE_ENV.GIB_M1_PRODUCTION_DEVICE_TOKEN)}`, body, ...options });
+
+test('live dispatcher uses its matching target and signing domain while preserving typed intent', async () => {
+  for (const intent of [...LOOKUPS, namedRequest(SAVE)]) {
+    let calls = 0;
+    const h = serverHarness({ env: LIVE_ENV, fetch: async (url, options) => {
+      calls += 1;
+      assert.equal(url, LIVE_ENV.GIB_PROMOTIONS_LIVE_WEBHOOK_URL);
+      const envelope = JSON.parse(options.body);
+      assert.equal(envelope.payload.target, 'live');
+      assert.equal(envelope.payload.mode, 'm1-authorized-tablet-live-v1');
+      assert.match(envelope.payload.deviceIdentity, /^m1-live-device-[0-9a-f]{24}$/u);
+      assert.deepEqual(envelope.payload.request, intent);
+      assert.equal(envelope.signature, createHmac('sha256', LIVE_ENV.GIB_PROMOTIONS_LIVE_BRIDGE_SECRET)
+        .update('gib-promotions-live-bridge:v1\n' + canonicalJSON(envelope.payload)).digest('hex'));
+      return new Response(JSON.stringify({ bridge: envelope.payload.mode, target: 'live', installation: 'rev', requestNonce: envelope.payload.nonce,
+        result: { ok: true, data: { testOnly: false } } }));
+    } });
+    const response = await h.run(liveRequest(intent));
+    assert.equal((await result(response)).body.data.testOnly, false);
+    assert.equal(calls, 1);
+    assert.deepEqual(diagnosticHeaders(response), []);
+  }
+});
+
+test('live failures retain safe uncertainty and never expose TEST diagnostics or cross-target replies', async () => {
+  for (const variant of ['fetch', 'body', 'http', 'json', 'target', 'mode', 'nonce']) {
+    const h = serverHarness({ env: LIVE_ENV, fetch: async (_url, options) => {
+      if (variant === 'fetch') throw new Error('SYNTHETIC_PRIVATE_LIVE_ERROR ' + LIVE_ENV.GIB_PROMOTIONS_LIVE_BRIDGE_SECRET);
+      if (variant === 'body') return new Response(new ReadableStream({ start(controller) { controller.error(new Error('SYNTHETIC_PRIVATE_LIVE_ERROR')); } }));
+      if (variant === 'http') return new Response('SYNTHETIC_PRIVATE_LIVE_ERROR', { status: 503 });
+      if (variant === 'json') return new Response('SYNTHETIC_PRIVATE_LIVE_ERROR');
+      const envelope = JSON.parse(options.body);
+      return new Response(JSON.stringify({ bridge: variant === 'mode' ? MODE : envelope.payload.mode,
+        target: variant === 'target' ? 'test' : 'live', installation: 'rev', requestNonce: variant === 'nonce' ? 'wrong-nonce' : envelope.payload.nonce,
+        result: { ok: true, data: { testOnly: false } } }));
+    } });
+    const response = await h.run(liveRequest(namedRequest(SAVE)));
+    const value = await result(response);
+    assert.equal(value.status, 503);
+    assert.equal(value.body.error.retryable, true);
+    assert.equal(value.body.requestId, SAVE.requestId);
+    assert.deepEqual(diagnosticHeaders(response), []);
+    assert.equal(JSON.stringify(value.body).includes('SYNTHETIC_PRIVATE_LIVE_ERROR'), false);
+    assert.equal(JSON.stringify(value.body).includes(LIVE_ENV.GIB_PROMOTIONS_LIVE_BRIDGE_SECRET), false);
+  }
+});
+
+test('live dispatcher requires typed attribution and denies TEST credentials and installation before Google', async () => {
+  const h = serverHarness({ env: LIVE_ENV });
+  for (const operation of ['recordPromotion', 'confirmRank', 'correctLatest', 'registerStudent']) {
+    const response = await h.run(liveRequest({ ...SAVE, operation }));
+    assert.equal(response.status, 400, `${operation} must require typed attribution`);
+    assert.deepEqual(diagnosticHeaders(response), []);
+  }
+  for (const response of [
+    await h.run(liveRequest(LOOKUPS[0], { cookie: '' })),
+    await h.run(liveRequest(LOOKUPS[0], { cookie: `${COOKIE}=${credential()}` })),
+    await h.run(liveRequest({ operation: 'start' }, {}, INSTALL))
+  ]) {
+    assert.ok([401, 403].includes(response.status));
+    assert.deepEqual(diagnosticHeaders(response), []);
+  }
+  assert.equal(h.calls.length, 0);
+});

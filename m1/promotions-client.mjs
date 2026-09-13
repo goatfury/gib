@@ -1,7 +1,7 @@
 import { promotionsTemplate } from './promotions-template.mjs?v=2026-09-13-promotions-test-a';
 import { promotionsEnabled, createPromotionsLifecycle } from './promotions-core.mjs?v=2026-09-13-promotions-test-a';
 
-export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online = () => globalThis.navigator?.onLine !== false } = {}) {
+export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online = () => globalThis.navigator?.onLine !== false, testOnly = true } = {}) {
   return payload => new Promise((resolve, reject) => {
     if (!online()) { reject({ code:'UNAVAILABLE', message:'Connect to load a fresh record or send this entry.', retryable:true }); return; }
     const abort = new AbortController();
@@ -14,20 +14,26 @@ export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online =
     })).then(async response => {
       const body = await response.json();
       if (response.ok && body?.ok === true && body.data && typeof body.data === 'object') finish(resolve, body.data);
-      else finish(reject, body?.error || { code:response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : 'UNAVAILABLE', message:'The TEST log could not confirm this request.', retryable:response.status >= 500 });
+      else finish(reject, body?.error || { code:response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : 'UNAVAILABLE', message:`The ${testOnly ? 'TEST ' : ''}log could not confirm this request.`, retryable:response.status >= 500 });
     }).catch(() => finish(reject, { code:'UNAVAILABLE', message:'The connection was interrupted. This entry is not confirmed.', retryable:true }));
   });
 }
 
 
-export function mountPromotionsLog({ document = globalThis.document, profile = globalThis.M1_INSTALLATION_PROFILE, config = globalThis.M1_PROMOTIONS_TEST_CONFIG, fetcher = globalThis.fetch?.bind(globalThis), storage = globalThis.localStorage, now = Date.now, windowTarget = globalThis.window } = {}) {
-  if (!promotionsEnabled(profile, config)) return null;
+export function mountPromotionsLog({ document = globalThis.document, profile = globalThis.M1_INSTALLATION_PROFILE, config = globalThis.M1_PROMOTIONS_TEST_CONFIG, fetcher = globalThis.fetch?.bind(globalThis), storage = globalThis.localStorage, now = Date.now, windowTarget = globalThis.window, origin = globalThis.location?.origin } = {}) {
+  if (!promotionsEnabled(profile, config, origin)) return null;
+  const testOnly = config.testOnly;
+  const target = testOnly ? 'test' : 'live';
   const host = document.getElementById('promotionsPanel');
   const navigation = document.getElementById('promotionsNavigation');
   if (!host || !navigation) return null;
   host.innerHTML = promotionsTemplate;
   const $ = id => host.querySelector(`[data-promo-id="${id}"]`);
-  const transport = createPromotionsTransport(fetcher);
+  if (!testOnly) {
+    $('modeBadge').textContent = ''; $('modeBadge').hidden = true;
+    $('privacyNote').textContent = 'Lookups clear after 60 seconds without activity. Confirmed entries return to Sign-In after 3 seconds.';
+  }
+  const transport = createPromotionsTransport(fetcher, { testOnly });
   const lifecycle = createPromotionsLifecycle({ now, storage, onClear: clearPresentation });
   const state = {
     students: new Map(), approvers: [], recorderLabel: '', todayNY: '', selected: null,
@@ -76,7 +82,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('accessStatus').hidden = false;
     $('accessStatus').className = 'notice error';
     $('accessStatus').textContent = error?.code === 'UNAUTHORIZED'
-      ? 'This tablet is not authorized for the TEST log. Sign-In is still available.'
+      ? `This tablet is not authorized for the ${testOnly ? 'TEST ' : ''}log. Sign-In is still available.`
       : (error?.message || 'The protected log could not be loaded.');
     $('retryAccess').hidden = false;
   }
@@ -91,12 +97,12 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     try {
       const data = await rpc({ operation:'bootstrap' });
       if (!lifecycle.isCurrent(viewToken)) return;
-      if (data.testOnly !== true || !Array.isArray(data.students)) {
-        throw { code:'TEST_DESTINATION_INVALID', message:'The TEST destination could not be verified.' };
+      if (data.testOnly !== testOnly || (data.target !== undefined && data.target !== target) || !Array.isArray(data.students)) {
+        throw { code:testOnly ? 'TEST_DESTINATION_INVALID' : 'LIVE_DESTINATION_INVALID', message:`The ${testOnly ? 'TEST' : 'live'} destination could not be verified.` };
       }
       state.students = new Map(data.students.map(student => [student.studentId, student]));
       state.approvers = Array.isArray(data.approvers) ? data.approvers : [];
-      state.recorderLabel = String(data.recorderLabel || 'Authorized TEST tablet');
+      state.recorderLabel = String(data.recorderLabel || (testOnly ? 'Authorized TEST tablet' : 'Authorized Revolution tablet'));
       state.todayNY = data.todayNY;
       state.authenticated = true;
       closeApproverSuggestions();
@@ -263,7 +269,8 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
       article.append(node('h3', `${event.eventDateNY || 'Date not recorded'} · ${eventLabels[event.eventKind] || 'Recorded event'}`));
       article.append(node('p', `${event.before ? rankLabel(event.before) : 'New identity'} → ${rankLabel(event.after)}`));
       const recordedThrough = /^m1-test-device-[a-f0-9]{24}$/u.test(event.recorderIdentity || '')
-        ? 'Authorized TEST tablet' : 'Earlier log';
+        ? 'Authorized TEST tablet' : /^m1-live-device-[a-f0-9]{24}$/u.test(event.recorderIdentity || '')
+          ? 'Authorized Revolution tablet' : 'Earlier log';
       article.append(node('p', `Promoted by: ${event.approverLabel || 'Not recorded'} · Recorded through: ${recordedThrough}`, 'history-meta'));
       if (event.reason) article.append(node('p', event.reason, 'small'));
       if (event.correctsEventId) article.append(node('p', 'Corrects an earlier entry; the original is retained below.', 'history-meta'));

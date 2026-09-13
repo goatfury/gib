@@ -66,6 +66,24 @@ test('the promotions pilot requires explicit TEST configuration and never enable
   assert.equal(promotionsEnabled({ ...rev, backend: { enabled: false } }, CONFIG), false);
 });
 
+test('live promotions require the explicit live target and exact Revolution live origin', () => {
+  const rev = installationProfile('rev');
+  const live = { ...CONFIG, testOnly: false, target: 'live' };
+  const origin = 'https://gib-live.netlify.app';
+  assert.equal(promotionsEnabled(rev, live, origin), true);
+  for (const other of [undefined, '', 'http://gib-live.netlify.app', 'https://review--gib-live.netlify.app',
+    'https://gib-live.netlify.app.example.invalid', 'https://gib-richmond-live.netlify.app']) {
+    assert.equal(promotionsEnabled(rev, live, other), false);
+  }
+  for (const malformed of [{ ...live, target: undefined }, { ...live, target: 'test' }, { ...live, testOnly: true },
+    { ...live, enabled: false }, { ...live, endpoint: 'https://gib-live.netlify.app/api/m1-promotions' }]) {
+    assert.equal(promotionsEnabled(rev, malformed, origin), false);
+  }
+  for (const profile of [installationProfile('richmond', 'test'), installationProfile('richmond', 'production', 'active'),
+    { ...rev, backend: { enabled: false } }]) assert.equal(promotionsEnabled(profile, live, origin), false);
+  assert.equal(promotionsEnabled(rev, { ...CONFIG, target: 'test' }), true, 'explicit TEST target remains compatible');
+});
+
 test('lookup privacy deadline is sixty seconds of inactivity and uses elapsed wall time', () => {
   const h = lifecycleHarness();
   assert.equal(PROMOTIONS_IDLE_MS, 60_000);
@@ -307,8 +325,8 @@ async function installationBuild(env) {
   return writes;
 }
 
-test('real build configuration keeps promotions disabled by default and cannot enable it in Richmond or production', async () => {
-  for (const env of [{}, { GIB_M1_INSTALLATION: 'richmond', GIB_M1_ENVIRONMENT: 'test' },
+test('real build configuration keeps promotions disabled by default and cannot enable TEST in Richmond or production', async () => {
+  for (const env of [{}, { GIB_M1_INSTALLATION: 'rev', CONTEXT: 'production' }, { GIB_M1_INSTALLATION: 'richmond', GIB_M1_ENVIRONMENT: 'test' },
     { GIB_M1_INSTALLATION: 'richmond', GIB_M1_ENVIRONMENT: 'production' }]) {
     const writes = await installationBuild(env);
     const context = vm.createContext({});
@@ -334,4 +352,25 @@ test('the explicit Revolution TEST build exposes only a fixed public endpoint an
   assert.deepEqual(clone(context.M1_PROMOTIONS_TEST_CONFIG), { enabled: true, endpoint: '/api/m1-promotions', testOnly: true });
   assert.equal(Object.isFrozen(context.M1_PROMOTIONS_TEST_CONFIG), true);
   assert.doesNotMatch(publicSource, /private-test-script|synthetic-secret-not-public|synthetic-workbook-not-public/u);
+});
+
+test('only an explicit Revolution production build emits live configuration without private integration settings', async () => {
+  const liveEnv = { GIB_M1_INSTALLATION: 'rev', CONTEXT: 'production', GIB_PROMOTIONS_LIVE_ENABLED: 'true' };
+  for (const changes of [{ CONTEXT: undefined }, { CONTEXT: 'deploy-preview' }, { CONTEXT: 'branch-deploy' }, { CONTEXT: 'dev' },
+    { GIB_M1_INSTALLATION: 'richmond', GIB_M1_ENVIRONMENT: 'production' }, { GIB_M1_INSTALLATION: 'richmond', GIB_M1_ENVIRONMENT: 'test' }]) {
+    await assert.rejects(installationBuild({ ...liveEnv, ...changes }), /explicit Revolution production build/u);
+  }
+  await assert.rejects(installationBuild({ ...liveEnv, GIB_PROMOTIONS_TEST_ENABLED: 'true' }), /cannot enable TEST and LIVE/u);
+  const writes = await installationBuild({
+    ...liveEnv,
+    GIB_PROMOTIONS_LIVE_WEBHOOK_URL: 'https://example.invalid/private-live-script',
+    GIB_PROMOTIONS_LIVE_BRIDGE_SECRET: 'synthetic-live-secret-not-public',
+    GIB_PROMOTIONS_LIVE_WORKBOOK_ID: 'synthetic-live-workbook-not-public'
+  });
+  const source = writes.get('promotions-config.generated.js');
+  const context = vm.createContext({}); vm.runInContext(source, context);
+  assert.deepEqual(clone(context.M1_PROMOTIONS_TEST_CONFIG), { enabled: true, endpoint: '/api/m1-promotions', testOnly: false, target: 'live' });
+  assert.equal(Object.isFrozen(context.M1_PROMOTIONS_TEST_CONFIG), true);
+  assert.doesNotMatch(source, /private-live-script|synthetic-live-secret-not-public|synthetic-live-workbook-not-public/u);
+  assert.equal(writes.get('installation-profile.generated.js'), browserInstallationProfileSource(installationProfile('rev')));
 });
