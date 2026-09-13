@@ -585,4 +585,3 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
 if (globalThis.document && globalThis.window) {
   try { mountPromotionsLog(); } catch (_) { /* Optional log failure must not interrupt Instructor Sign-In or Staff Clock. */ }
 }
-
