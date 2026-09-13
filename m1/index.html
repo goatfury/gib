@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" href="data:," />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-09-13 M1 TEST kiosk-walk-away-b)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-09-13 M1 TEST kiosk-walk-away-c)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -940,9 +940,9 @@ body.admin-mode .container { max-width: 1120px; }
   .device-tools-menu[open] > button { position: absolute; right: 0; top: 100%; z-index: 8; min-width: 200px; box-shadow: 0 8px 24px #0008; }
   #managerWorkspaceLink { min-height: 44px; text-decoration: none; }
 </style>
-<script src="./installation-profile.generated.js?v=2026-09-13-kiosk-walk-away-b"></script>
-<script src="./temporary-classes-core.js?v=2026-09-13-kiosk-walk-away-b"></script>
-<script src="./added-classes-kiosk.js?v=2026-09-13-kiosk-walk-away-b"></script>
+<script src="./installation-profile.generated.js?v=2026-09-13-kiosk-walk-away-c"></script>
+<script src="./temporary-classes-core.js?v=2026-09-13-kiosk-walk-away-c"></script>
+<script src="./added-classes-kiosk.js?v=2026-09-13-kiosk-walk-away-c"></script>
 </head>
 <body>
 <div class="container">
@@ -951,7 +951,7 @@ body.admin-mode .container { max-width: 1120px; }
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-09-13 M1 TEST kiosk-walk-away-b</span>
+        Build <span class="kbd" id="buildId">2026-09-13 M1 TEST kiosk-walk-away-c</span>
       </div>
     </div>
 
@@ -963,7 +963,7 @@ body.admin-mode .container { max-width: 1120px; }
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-09-13 M1 TEST kiosk-walk-away-b
+      Build 2026-09-13 M1 TEST kiosk-walk-away-c
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -1455,10 +1455,10 @@ import {
   syncFailureCode,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-09-13-kiosk-walk-away-b';
+} from './sync-core.mjs?v=2026-09-13-kiosk-walk-away-c';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-09-13-kiosk-walk-away-b';
+const OFFLINE_SHELL_REVISION = '2026-09-13-kiosk-walk-away-c';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -1526,8 +1526,8 @@ if ('serviceWorker' in navigator) {
   const IS_PRODUCTION_SYNC_ORIGIN = IS_REVOLUTION_PRODUCTION_ORIGIN
     || IS_RICHMOND_PRODUCTION_ORIGIN;
   const TEST_BUILD = IS_RICHMOND
-    ? '2026-09-13 RICHMOND M1 TEST kiosk-walk-away-b'
-    : '2026-09-13 M1 TEST kiosk-walk-away-b';
+    ? '2026-09-13 RICHMOND M1 TEST kiosk-walk-away-c'
+    : '2026-09-13 M1 TEST kiosk-walk-away-c';
   const RICHMOND_PRODUCTION_BUILD = RICHMOND_PRODUCTION_COPY.build;
   const PRODUCTION_BUILD = '2026-08-29 M1B PRODUCTION sign-in-sync-recovery';
   const BUILD = IS_RICHMOND
@@ -3226,6 +3226,7 @@ function refreshNameDatalist() {
         const label = document.createElement('label');
         const cb = document.createElement('input');
         cb.type = 'checkbox';
+        cb.autocomplete = 'off';
         cb.value = c;
         label.appendChild(cb);
         const span = document.createElement('span');
@@ -4875,6 +4876,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-09-13-kiosk-walk-away-b"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-09-13-kiosk-walk-away-c"></script>
 </body>
 </html>

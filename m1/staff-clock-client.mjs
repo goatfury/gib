@@ -7,7 +7,7 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-09-13-kiosk-walk-away-b';
+} from './staff-clock-core.mjs?v=2026-09-13-kiosk-walk-away-c';
 
 const installationProfile = globalThis.M1_INSTALLATION_PROFILE;
 const STAFF_CLOCK_PAIRING_ENABLED = installationProfile?.featureFlags?.staffClockPairing === true;
