@@ -302,3 +302,22 @@ test('history distinguishes actual tablet entries from earlier records without e
   assert.match(h.el('previewNote').textContent, /original event and its selected instructor/u);
   assert.doesNotMatch(h.el('previewNote').textContent, /approval/u);
 });
+
+test('registration and current-rank confirmation explain identity and verified baseline instead of correction or a new award', async t => {
+  const h = mountedHarness(t);
+  const unknown = { ...student('A'), rankKnown:false, belt:'', marks:null, markType:'' };
+  await h.bootstrap([unknown]);
+  h.el('addStudent').emit('click');
+  assert.equal(h.el('saveEntry').textContent, 'Confirm student identity');
+  assert.match(h.el('previewNote').textContent, /separate student with an unknown rank/u);
+  assert.match(h.el('previewNote').textContent, /Confirm their verified current rank next/u);
+  assert.doesNotMatch(h.el('previewNote').textContent, /correction|original event/u);
+
+  await h.choose('A', unknown);
+  h.el('confirmRank').emit('click');
+  assert.equal(h.el('saveEntry').textContent, 'Confirm verified rank');
+  assert.match(h.el('previewNote').textContent, /Records the verified current rank today/u);
+  assert.match(h.el('previewNote').textContent, /not a new promotion.*does not invent a historical date/u);
+  assert.doesNotMatch(h.el('previewNote').textContent, /correction|original event/u);
+  assert.equal(h.calls.filter(call => ['registerStudent','confirmRank','correctLatest'].includes(call.payload.operation)).length, 0, 'opening these previews must not write anything');
+});

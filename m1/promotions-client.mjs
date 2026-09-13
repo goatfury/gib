@@ -318,7 +318,8 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('previewNote').textContent = draft.kind === 'stripe'
       ? 'Adds one only. The belt does not change automatically.'
       : draft.kind === 'belt' ? 'The new belt starts with zero stripes or degrees. Earlier history is preserved.'
-      : draft.kind === 'confirm' ? 'Confirms the current rank today. It does not invent a historical promotion date.'
+      : draft.kind === 'register' ? 'Creates a separate student with an unknown rank. Confirm their verified current rank next.'
+      : draft.kind === 'confirm' ? 'Records the verified current rank today. This is not a new promotion and does not invent a historical date.'
       : 'A new correction entry will preserve the original event and its selected instructor.';
   }
   function buildIntent() {
