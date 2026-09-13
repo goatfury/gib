@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" href="data:," />
-<title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-09-13 M1 TEST kiosk-walk-away)</title>
+<title>GiB · Module 1 · Instructor Sign-In → Payroll (2026-09-13 M1 TEST kiosk-walk-away-b)</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -940,9 +940,9 @@ body.admin-mode .container { max-width: 1120px; }
   .device-tools-menu[open] > button { position: absolute; right: 0; top: 100%; z-index: 8; min-width: 200px; box-shadow: 0 8px 24px #0008; }
   #managerWorkspaceLink { min-height: 44px; text-decoration: none; }
 </style>
-<script src="./installation-profile.generated.js?v=2026-09-13-kiosk-walk-away"></script>
-<script src="./temporary-classes-core.js?v=2026-09-13-kiosk-walk-away"></script>
-<script src="./added-classes-kiosk.js?v=2026-09-13-kiosk-walk-away"></script>
+<script src="./installation-profile.generated.js?v=2026-09-13-kiosk-walk-away-b"></script>
+<script src="./temporary-classes-core.js?v=2026-09-13-kiosk-walk-away-b"></script>
+<script src="./added-classes-kiosk.js?v=2026-09-13-kiosk-walk-away-b"></script>
 </head>
 <body>
 <div class="container">
@@ -951,7 +951,7 @@ body.admin-mode .container { max-width: 1120px; }
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
-        Build <span class="kbd" id="buildId">2026-09-13 M1 TEST kiosk-walk-away</span>
+        Build <span class="kbd" id="buildId">2026-09-13 M1 TEST kiosk-walk-away-b</span>
       </div>
     </div>
 
@@ -963,7 +963,7 @@ body.admin-mode .container { max-width: 1120px; }
 
     <!-- Large build stamp for easy verification -->
     <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
-      Build 2026-09-13 M1 TEST kiosk-walk-away
+      Build 2026-09-13 M1 TEST kiosk-walk-away-b
     </div>
 
     <div class="metaRow kiosk-hide">
@@ -998,7 +998,7 @@ body.admin-mode .container { max-width: 1120px; }
 
     <div style="margin-top: 12px;">
       <label>Notes (optional)</label>
-      <textarea id="notesInput" placeholder="Add a quick note if needed"></textarea>
+      <textarea id="notesInput" placeholder="Add a quick note if needed" autocomplete="off"></textarea>
     </div>
 
     <div style="margin-top: 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
@@ -1035,7 +1035,7 @@ body.admin-mode .container { max-width: 1120px; }
     <div id="staffClockControls" class="staff-clock-controls" hidden>
       <div class="staff-clock-field">
         <label for="staffClockName">Staff name</label>
-        <select id="staffClockName" aria-describedby="staffClockStatus">
+        <select id="staffClockName" aria-describedby="staffClockStatus" autocomplete="off">
           <option value="">Select staff member</option>
         </select>
       </div>
@@ -1455,10 +1455,10 @@ import {
   syncFailureCode,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-09-13-kiosk-walk-away';
+} from './sync-core.mjs?v=2026-09-13-kiosk-walk-away-b';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-09-13-kiosk-walk-away';
+const OFFLINE_SHELL_REVISION = '2026-09-13-kiosk-walk-away-b';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -1526,8 +1526,8 @@ if ('serviceWorker' in navigator) {
   const IS_PRODUCTION_SYNC_ORIGIN = IS_REVOLUTION_PRODUCTION_ORIGIN
     || IS_RICHMOND_PRODUCTION_ORIGIN;
   const TEST_BUILD = IS_RICHMOND
-    ? '2026-09-13 RICHMOND M1 TEST kiosk-walk-away'
-    : '2026-09-13 M1 TEST kiosk-walk-away';
+    ? '2026-09-13 RICHMOND M1 TEST kiosk-walk-away-b'
+    : '2026-09-13 M1 TEST kiosk-walk-away-b';
   const RICHMOND_PRODUCTION_BUILD = RICHMOND_PRODUCTION_COPY.build;
   const PRODUCTION_BUILD = '2026-08-29 M1B PRODUCTION sign-in-sync-recovery';
   const BUILD = IS_RICHMOND
@@ -4875,6 +4875,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-09-13-kiosk-walk-away"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-09-13-kiosk-walk-away-b"></script>
 </body>
 </html>
