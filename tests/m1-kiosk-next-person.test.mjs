@@ -18,6 +18,17 @@ const instructorSource = readFileSync(new URL('../m1/index.html', import.meta.ur
 const staffSource = readFileSync(new URL('../m1/staff-clock-client.mjs', import.meta.url), 'utf8');
 const clone = value => JSON.parse(JSON.stringify(value));
 
+test('personal kiosk controls disable native history autofill after a completed interaction', () => {
+  // Browser Back may restore form values after page initialization. Lifecycle
+  // VM tests cannot reproduce that browser behavior; keep this markup contract
+  // alongside the hosted navigation test in the reusable release checklist.
+  for (const [tag, id] of [['input', 'nameInput'], ['textarea', 'notesInput'], ['select', 'staffClockName']]) {
+    const control = instructorSource.match(new RegExp(`<${tag}\\b[^>]*\\bid="${id}"[^>]*>`, 'u'))?.[0];
+    assert.ok(control, `${id} must exist`);
+    assert.match(control, /\bautocomplete="off"/u, `${id} must disable native history autofill`);
+  }
+});
+
 function functionSource(source, name) {
   const functionStart = source.indexOf(`function ${name}(`);
   assert.notEqual(functionStart, -1, `${name} must exist`);
