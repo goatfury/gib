@@ -947,8 +947,6 @@ body.admin-mode .container { max-width: 1120px; }
 <script src="./installation-profile.generated.js?v=2026-09-13-kiosk-walk-away-c"></script>
 <script src="./temporary-classes-core.js?v=2026-09-13-kiosk-walk-away-c"></script>
 <script src="./added-classes-kiosk.js?v=2026-09-13-kiosk-walk-away-c"></script>
-<script src="./promotions-config.generated.js?v=2026-09-13-promotions-test-a"></script>
-<link rel="stylesheet" href="./promotions.css?v=2026-09-13-promotions-test-a">
 </head>
 <body>
 <div class="container">
@@ -4891,9 +4889,28 @@ function refreshNameDatalist() {
       && !document.body.classList.contains('admin-mode')
   });
 
+  // OPTIONAL_PROMOTIONS_LOADER_START
+  // Optional assets load only after the core kiosk and Staff Clock have initialized.
+  function startOptionalPromotions() {
+    import('./promotions-config.generated.js?v=2026-09-13-promotions-test-a').then(() => {
+      if (globalThis.M1_PROMOTIONS_TEST_CONFIG?.enabled !== true) return;
+      const stylesheet = document.createElement('link');
+      stylesheet.rel = 'stylesheet';
+      stylesheet.href = './promotions.css?v=2026-09-13-promotions-test-a';
+      stylesheet.media = 'not all';
+      stylesheet.addEventListener('load', () => {
+        stylesheet.media = 'all';
+        import('./promotions-client.mjs?v=2026-09-13-promotions-test-a').catch(() => {});
+      }, { once: true });
+      document.head.appendChild(stylesheet);
+    }).catch(() => {});
+  }
+  if (document.readyState === 'complete') startOptionalPromotions();
+  else document.addEventListener('DOMContentLoaded', startOptionalPromotions, { once: true });
+  // OPTIONAL_PROMOTIONS_LOADER_END
+
 })();
 </script>
 <script type="module" src="./staff-clock-client.mjs?v=2026-09-13-kiosk-walk-away-c"></script>
-<script type="module" src="./promotions-client.mjs?v=2026-09-13-promotions-test-a"></script>
 </body>
 </html>
