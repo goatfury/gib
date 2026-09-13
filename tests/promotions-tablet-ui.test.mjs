@@ -135,16 +135,16 @@ function mountedHarness(t, { profile = installationProfile('rev'), stored = new 
   };
   const respond = async (call, body, status = 200) => { call.settled = true; call.resolve({ ok: status >= 200 && status < 300, status, json: async () => body }); await flush(); };
   const success = (call, data) => respond(call, { ok: true, data });
-  const bootstrap = async (students = [student('A'), student('B')]) => {
+  const bootstrap = async (students = [student('A'), student('B')], approvers = [{ id: 'TEST-COACH-A', label: 'TEST Coach Avery' }]) => {
     const opening = mounted.open(); await flush();
-    await success(take('bootstrap'), { testOnly: true, todayNY: '2026-09-13', recorderLabel: 'Authorized TEST tablet', approvers: [{ id: 'TEST-COACH-A', label: 'TEST Coach Avery' }], students });
+    await success(take('bootstrap'), { testOnly: true, todayNY: '2026-09-13', recorderLabel: 'Authorized TEST tablet', approvers, students });
     await opening;
   };
-  const choose = async (id, fresh = student(id)) => {
+  const choose = async (id, fresh = student(id), history = []) => {
     el('studentSearch').value = `TEST Person ${id}`; el('studentSearch').emit('input');
     el('searchResults').children[0].emit('click'); await flush();
     const call = take('readStudent', fresh.studentId);
-    await success(call, { student: fresh, history: [] });
+    await success(call, { student: fresh, history });
   };
   t.after(async () => {
     for (const call of calls) if (!call.settled) { call.settled = true; call.reject(new Error('Test cleanup')); }
@@ -154,13 +154,13 @@ function mountedHarness(t, { profile = installationProfile('rev'), stored = new 
   return {
     document, clock, windowTarget, intervals, calls, stored, guard, mounted, el, take, respond, success, bootstrap, choose,
     tick(ms) { clock.now += ms; for (const callback of intervals.values()) callback(); },
-    async beginStripe() {
-      el('addStripe').emit('click'); el('approverChoice').value = 'TEST-COACH-A'; el('approverChoice').emit('change');
+    async beginStripe(approverName = 'TEST Coach Avery') {
+      el('addStripe').emit('click'); el('approverChoice').value = approverName; el('approverChoice').emit('input');
       el('entryForm').emit('submit'); await flush(); return take('recordPromotion');
     },
     saved(call, id = 'A') {
       const after = student(id, 2, 2);
-      return { student: after, viewPending: false, receipt: { requestId: call.payload.requestId, studentId: after.studentId, eventId: `evt-${id}-2`, revision: 2, eventKind: 'STRIPE', eventDateNY: '2026-09-13', before: student(id), after, approverLabel: 'TEST Coach Avery' } };
+      return { student: after, viewPending: false, receipt: { requestId: call.payload.requestId, studentId: after.studentId, eventId: `evt-${id}-2`, revision: 2, eventKind: 'STRIPE', eventDateNY: '2026-09-13', before: student(id), after, approverLabel: call.payload.approverName || 'TEST Coach Avery' } };
     },
     neutral() {
       assert.equal(document.getElementById('promotionsPanel').hidden, true);
@@ -226,7 +226,8 @@ test('confirmed save locks duplicate submits and returns to clean Sign-In after 
   const call = await h.beginStripe();
   h.el('entryForm').emit('submit'); await flush();
   assert.equal(h.calls.filter(item => item.payload.operation === 'recordPromotion').length, 1);
-  assert.equal(call.payload.approverId, 'TEST-COACH-A');
+  assert.equal(call.payload.approverName, 'TEST Coach Avery');
+  assert.equal(Object.hasOwn(call.payload, 'approverId'), false);
   await h.success(call, h.saved(call));
   h.tick(2_999); assert.equal(h.mounted.snapshot().active, true);
   h.tick(1); h.neutral();
@@ -320,4 +321,110 @@ test('registration and current-rank confirmation explain identity and verified b
   assert.match(h.el('previewNote').textContent, /not a new promotion.*does not invent a historical date/u);
   assert.doesNotMatch(h.el('previewNote').textContent, /correction|original event/u);
   assert.equal(h.calls.filter(call => ['registerStudent','confirmRank','correctLatest'].includes(call.payload.operation)).length, 0, 'opening these previews must not write anything');
+});
+
+test('instructor suggestions appear only after typing and remain optional free-text attribution', async t => {
+  const h = mountedHarness(t);
+  const approvers = Array.from({ length: 10 }, (_, index) => ({ id: `legacy-coach-${index}`, label: `TEST Coach ${index}` }));
+  await h.bootstrap(undefined, approvers); await h.choose('A'); h.el('addStripe').emit('click');
+  const input = h.el('approverChoice'); const suggestions = h.el('approverSuggestions');
+  assert.equal(input.value, '');
+  assert.equal(suggestions.children.length, 0, 'opening an entry must not offer or select a previous instructor');
+  input.value = 'TEST Coach'; input.emit('input');
+  assert.ok(suggestions.children.length > 0 && suggestions.children.length <= 6, 'typing offers a bounded set of suggestions');
+  assert.equal(input.value, 'TEST Coach', 'a matching prefix must not automatically become an instructor selection');
+  const suggestedName = suggestions.children[0].value;
+  assert.ok(approvers.some(approver => approver.label === suggestedName));
+  input.value = suggestedName; input.emit('input');
+  assert.equal(h.el('previewApprover').textContent, suggestedName);
+  h.el('entryForm').emit('submit'); await flush();
+  const save = h.take('recordPromotion');
+  assert.equal(save.payload.approverName, suggestedName);
+  assert.equal(Object.hasOwn(save.payload, 'approverId'), false, 'suggestions cannot reinstate a roster-ID requirement');
+});
+
+test('an unlisted typed instructor works without a suggestion roster and preserves the name in preview, request and history', async t => {
+  const h = mountedHarness(t); await h.bootstrap(undefined, []); await h.choose('A');
+  const name = "Élodie  O'Neil-佐藤";
+  const save = await h.beginStripe(`  ${name}  `);
+  assert.equal(h.el('previewApprover').textContent, name);
+  assert.equal(save.payload.approverName, name, 'only outside whitespace may be trimmed');
+  assert.equal(Object.hasOwn(save.payload, 'approverId'), false);
+  assert.equal(h.el('approverSuggestions').children.length, 0);
+  await h.success(save, h.saved(save));
+  assert.ok(h.el('historyList').textContent.includes(`Promoted by: ${name}`));
+  h.tick(3_000); h.neutral();
+});
+
+for (const action of ['stripe', 'belt', 'confirm', 'correct', 'register']) {
+  test(`${action} rejects a blank typed instructor without blocking read-only student lookup`, async t => {
+    const h = mountedHarness(t);
+    const record = action === 'confirm' ? { ...student('A'), rankKnown: false, belt: '', marks: null, markType: '' } : student('A');
+    await h.bootstrap([record], []);
+    await h.choose('A', record, [{ eventId: 'evt-existing', revision: 1, eventKind: 'STRIPE', before: record, after: record, approverId: 'TEST-COACH-A', approverLabel: 'TEST Coach Avery' }]);
+    assert.equal(h.mounted.snapshot().selectedFresh, true, 'lookup needs no Promoted by value');
+    h.el({ stripe: 'addStripe', belt: 'changeBelt', confirm: 'confirmRank', correct: 'correctLatest', register: 'addStudent' }[action]).emit('click');
+    h.el('newName').value = 'TEST New Student'; h.el('newIdentity').value = 'Distinct group';
+    h.el('beltChoice').value = action === 'belt' ? 'Blue Belt' : 'White Belt'; h.el('marksChoice').value = '0';
+    h.el('entryReason').value = 'Verified with the instructor';
+    h.el('approverChoice').value = '   '; h.el('entryForm').emit('input');
+    h.el('entryForm').emit('submit'); await flush();
+    assert.equal(h.el('formError').hidden, false);
+    assert.match(h.el('formError').textContent, /instructor.*name|name.*instructor/iu);
+    assert.ok(h.calls.every(call => ['bootstrap', 'readStudent'].includes(call.payload.operation)), 'blank attribution cannot dispatch a mutation');
+    assert.equal(h.stored.size, 0, 'an invalid draft does not become a pending transaction');
+  });
+}
+
+test('typed pending attribution survives Clear and a fresh mount, then retries the exact original request', async t => {
+  const stored = new Map(); const first = mountedHarness(t, { stored });
+  await first.bootstrap(); await first.choose('A');
+  const original = await first.beginStripe("TEST Renée  D'Angelo-Sato");
+  await first.respond(original, { ok: false, error: { code: 'UNAVAILABLE', message: 'Confirmation unavailable', retryable: true } }, 503);
+  const originalRaw = [...stored.values()][0];
+  first.el('clearBack').emit('click'); first.neutral();
+  assert.equal([...stored.values()][0], originalRaw);
+  const reopened = mountedHarness(t, { stored });
+  await reopened.bootstrap(undefined, [{ id: 'different-coach', label: 'TEST A Different Instructor' }]);
+  assert.equal(reopened.el('approverChoice').value, '', 'recovery must not prefill the previous instructor into a new form');
+  reopened.el('checkSave').emit('click'); await flush();
+  const check = reopened.take('checkSave');
+  assert.deepEqual(check.payload, { operation: 'checkSave', requestId: original.payload.requestId });
+  await reopened.success(check, { status: 'not_found' });
+  reopened.el('retrySave').emit('click'); await flush();
+  const retry = reopened.take('recordPromotion');
+  assert.deepEqual(retry.payload, original.payload);
+  assert.equal([...stored.values()][0], originalRaw, 'retrying cannot rewrite its recorded attribution');
+  await reopened.success(retry, reopened.saved(retry)); reopened.tick(3_000); reopened.neutral();
+  assert.equal(stored.size, 0);
+});
+
+test('a legacy pending instructor-ID request remains exact after the free-text field ships', async t => {
+  const intent = { operation: 'recordPromotion', requestId: 'legacy-pending-attribution', studentId: student('A').studentId, expectedRevision: 1, action: 'stripe', approverId: 'TEST-COACH-A' };
+  const stored = new Map([['gib_m1_promotions_pending_v1', JSON.stringify({ version: 1, intent })]]);
+  const h = mountedHarness(t, { stored }); await h.bootstrap(undefined, []);
+  assert.equal(h.el('approverChoice').value, '');
+  h.el('retrySave').emit('click'); await flush();
+  const retry = h.take('recordPromotion');
+  assert.deepEqual(retry.payload, intent);
+  assert.equal(Object.hasOwn(retry.payload, 'approverName'), false, 'recovery cannot translate or augment a legacy fingerprint');
+  await h.success(retry, h.saved(retry)); h.tick(3_000); h.neutral();
+  assert.equal(stored.size, 0);
+});
+
+test('opening another entry or lookup starts with blank instructor attribution and privacy clearing removes suggestions too', async t => {
+  const h = mountedHarness(t); await h.bootstrap(); await h.choose('A'); h.el('addStripe').emit('click');
+  h.el('approverChoice').value = 'TEST Coach Avery'; h.el('approverChoice').emit('input');
+  h.el('closeEditor').emit('click'); h.el('addStripe').emit('click');
+  assert.equal(h.el('approverChoice').value, '', 'reopening an entry requires fresh attribution');
+  h.el('approverChoice').value = 'TEST Previous Instructor'; h.el('approverChoice').emit('input');
+  await h.choose('B'); h.el('addStripe').emit('click');
+  assert.equal(h.el('approverChoice').value, '', 'a different student does not inherit the prior instructor');
+  h.el('approverChoice').value = 'TEST Coach'; h.el('approverChoice').emit('input');
+  assert.ok(h.el('approverSuggestions').children.length > 0);
+  h.tick(60_000); h.neutral();
+  assert.equal(h.el('approverSuggestions').children.length, 0);
+  await h.bootstrap(); await h.choose('A'); h.el('addStripe').emit('click');
+  assert.equal(h.el('approverChoice').value, '');
+  assert.equal(h.el('approverSuggestions').children.length, 0);
 });

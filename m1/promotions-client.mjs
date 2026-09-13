@@ -90,19 +90,15 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     try {
       const data = await rpc({ operation:'bootstrap' });
       if (!lifecycle.isCurrent(viewToken)) return;
-      if (data.testOnly !== true || !Array.isArray(data.students) || !Array.isArray(data.approvers)) {
+      if (data.testOnly !== true || !Array.isArray(data.students)) {
         throw { code:'TEST_DESTINATION_INVALID', message:'The TEST destination could not be verified.' };
       }
       state.students = new Map(data.students.map(student => [student.studentId, student]));
-      state.approvers = data.approvers;
+      state.approvers = Array.isArray(data.approvers) ? data.approvers : [];
       state.recorderLabel = String(data.recorderLabel || 'Authorized TEST tablet');
       state.todayNY = data.todayNY;
       state.authenticated = true;
-      $('approverChoice').replaceChildren(node('option', 'Choose an instructor'));
-      $('approverChoice').firstElementChild.value = '';
-      for (const approver of state.approvers) {
-        const option = node('option', approver.label); option.value = approver.id; $('approverChoice').append(option);
-      }
+      $('approverSuggestions').replaceChildren();
       $('recorder').textContent = `Access: ${state.recorderLabel}`;
       $('recorder').hidden = false;
       $('accessStatus').hidden = true;
@@ -147,6 +143,20 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('studentSearch').removeAttribute('aria-activedescendant');
     state.activeResult = -1;
   }
+  function renderApproverSuggestions() {
+    const query = normalize($('approverChoice').value);
+    $('approverSuggestions').replaceChildren();
+    if (!query || $('approverChoice').disabled) return;
+    const names = [...new Set(state.approvers.map(approver => approver?.label).filter(name => typeof name === 'string' && name.trim()))];
+    for (const name of names.filter(name => normalize(name).includes(query)).slice(0, 4)) {
+      const option = node('option'); option.value = name; $('approverSuggestions').append(option);
+    }
+  }
+  function resetDraftApprover(draft) {
+    if (!draft || draft === state.pending?.submittedDraft) return;
+    draft.approverName = '';
+    draft.intent = null; draft.intentSignature = '';
+  }
   async function selectStudent(studentId) {
     if (!lifecycle.snapshot().active || lifecycle.snapshot().phase === 'success') return;
     state.selectedFresh = false;
@@ -156,6 +166,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     state.selectedGeneration += 1;
     state.history = [];
     state.draft = state.drafts.get(studentId) || null;
+    resetDraftApprover(state.draft);
     $('studentSearch').value = state.selected?.displayName || '';
     closeSearch();
     showMessage('');
@@ -249,6 +260,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
       ? state.draft : state.drafts.get(studentId || '__register');
     if (savedDraft?.kind === kind) {
       state.draft = savedDraft;
+      resetDraftApprover(state.draft);
       renderEditor(true);
       $('editor').scrollIntoView({ block:'nearest', behavior:'smooth' });
       return;
@@ -257,7 +269,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
       kind, studentId,
       expectedRevision:student?.revision, belt:kind === 'correct' && student?.rankKnown ? student.belt : '',
       marks:kind === 'correct' && student?.rankKnown ? student.marks : 0,
-      approverId:'', reason:'', displayName:kind === 'register' ? $('studentSearch').value.trim() : '',
+      approverName:'', reason:'', displayName:kind === 'register' ? $('studentSearch').value.trim() : '',
       distinguishingLabel:'', historyNote:'', correctsEventId:kind === 'correct' ? latestCorrectable()?.eventId : null,
       intent:null, intentSignature:''
     };
@@ -268,7 +280,10 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
   function renderEditor(fillControls) {
     const draft = state.draft;
     $('editor').hidden = !draft || (draft.kind !== 'register' && draft.studentId !== state.selected?.studentId);
-    if ($('editor').hidden) return;
+    if ($('editor').hidden) {
+      $('approverChoice').value = ''; $('approverSuggestions').replaceChildren();
+      return;
+    }
     const labels = { stripe:state.selected?.belt === 'Black Belt' ? 'Add one degree' : 'Add one stripe', belt:'Change belt', confirm:'Confirm current rank', correct:'Correct latest entry', register:'Add a missing student' };
     $('editorHeading').textContent = labels[draft.kind];
     $('registrationFields').hidden = draft.kind !== 'register';
@@ -282,7 +297,8 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     if (fillControls) {
       $('newName').value = draft.displayName; $('newIdentity').value = draft.distinguishingLabel;
       $('newHistoryNote').value = draft.historyNote; $('beltChoice').value = draft.belt;
-      $('marksChoice').value = String(draft.marks); $('approverChoice').value = draft.approverId;
+      $('marksChoice').value = String(draft.marks); $('approverChoice').value = draft.approverName || '';
+      $('approverSuggestions').replaceChildren();
       $('entryReason').value = draft.reason; formError('');
     }
     updatePreview();
@@ -297,7 +313,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     draft.historyNote = $('newHistoryNote').value;
     draft.belt = $('beltChoice').value;
     draft.marks = $('marksChoice').value;
-    draft.approverId = $('approverChoice').value;
+    draft.approverName = $('approverChoice').value;
     draft.reason = $('entryReason').value;
     updatePreview();
   }
@@ -314,7 +330,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('beforeRank').textContent = draft.kind === 'register' ? 'New student' : rankLabel(state.selected);
     $('afterRank').textContent = draft.kind === 'register' ? 'Unknown — confirm next' : draft.kind !== 'stripe' && !draft.belt ? 'Choose a belt' : rankLabel(intendedRank());
     $('previewDate').textContent = `${todayNY()} · New York`;
-    $('previewApprover').textContent = state.approvers.find(approver => approver.id === draft.approverId)?.label || 'Choose an instructor';
+    $('previewApprover').textContent = String(draft.approverName || '').trim() || 'Enter instructor’s name';
     $('previewNote').textContent = draft.kind === 'stripe'
       ? 'Adds one only. The belt does not change automatically.'
       : draft.kind === 'belt' ? 'The new belt starts with zero stripes or degrees. Earlier history is preserved.'
@@ -326,15 +342,16 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     readDraftControls();
     const draft = state.draft;
     if (!draft) throw new Error('Choose an action first.');
-    if (!state.approvers.some(approver => approver.id === draft.approverId)) throw new Error('Choose the instructor recording this entry.');
+    const approverName = draft.approverName.trim();
+    if (!approverName) throw new Error('Enter the instructor’s name in Promoted by.');
+    if (approverName.length > 120) throw new Error('Keep the instructor’s name to 120 characters or fewer.');
     let request;
     if (draft.kind === 'register') {
       if (!draft.displayName.trim() || !draft.distinguishingLabel.trim()) throw new Error('Enter the student name and a distinguishing label.');
-      request = { operation:'registerStudent', approverId:draft.approverId, displayName:draft.displayName.trim(), distinguishingLabel:draft.distinguishingLabel.trim(), historyNote:draft.historyNote.trim() };
+      request = { operation:'registerStudent', approverName, displayName:draft.displayName.trim(), distinguishingLabel:draft.distinguishingLabel.trim(), historyNote:draft.historyNote.trim() };
     } else {
       if (!state.selectedFresh || !state.selected || state.selected.studentId !== draft.studentId) throw new Error('Select this student again before saving.');
-      if (!state.approvers.some(approver => approver.id === draft.approverId)) throw new Error('Choose the instructor who awarded this promotion.');
-      request = { studentId:draft.studentId, expectedRevision:draft.expectedRevision, approverId:draft.approverId };
+      request = { studentId:draft.studentId, expectedRevision:draft.expectedRevision, approverName };
       if (draft.kind === 'stripe') request = { ...request, operation:'recordPromotion', action:'stripe' };
       else if (draft.kind === 'belt') {
         if (!belts.includes(draft.belt)) throw new Error('Choose the intended new belt.');
@@ -511,6 +528,8 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
   });
   $('entryForm').addEventListener('input', readDraftControls);
   $('entryForm').addEventListener('change', readDraftControls);
+  $('approverChoice').addEventListener('input', renderApproverSuggestions);
+  $('approverChoice').addEventListener('change', () => $('approverSuggestions').replaceChildren());
   $('entryForm').addEventListener('submit', submitEntry);
   $('checkSave').addEventListener('click', () => { if (state.pending && !state.pending.busy) sendPending(true); });
   $('retrySave').addEventListener('click', () => { if (state.pending && !state.pending.busy) sendPending(false); });
@@ -535,7 +554,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     state.draft = null; state.drafts.clear(); state.loadingStudent = false; state.searchResults = [];
     for (const control of host.querySelectorAll('input,textarea,select')) control.value = '';
     for (const id of ['searchResults','historyList','studentName','studentIdentity','studentRank','studentDate','legacyNotes','message','beforeRank','afterRank','previewDate','previewApprover','formError','recorder']) $(id).textContent = '';
-    $('approverChoice').replaceChildren();
+    $('approverSuggestions').replaceChildren();
     for (const id of ['app','studentCard','editor','historyCard','searchResults','message','pendingPanel','legacyDetails','recorder']) $(id).hidden = true;
     $('historyDisclosure').open = false; $('legacyDetails').open = false;
     $('studentSearch').removeAttribute('aria-activedescendant'); $('studentSearch').setAttribute('aria-expanded','false');

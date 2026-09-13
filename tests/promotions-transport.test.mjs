@@ -32,6 +32,10 @@ const SAVE = {
   operation: 'recordPromotion', requestId: 'synthetic-save-request-001', studentId: 'fixture-student-001',
   expectedRevision: 1, action: 'stripe', approverId: 'TEST-COACH-A'
 };
+const namedRequest = (request, approverName = "TEST José  O'Neill-Smith") => {
+  const { approverId, ...intent } = request;
+  return { ...intent, approverName };
+};
 
 function canonicalJSON(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -133,7 +137,7 @@ test('both lookup and writes require a current signed TEST device cookie before 
     `${COOKIE}=${credential()}; ${COOKIE}=invalid`,
     `${COOKIE}=invalid; ${COOKIE}=${credential()}`
   ];
-  for (const operation of [...LOOKUPS, SAVE]) for (const cookie of invalidCookies) {
+  for (const operation of [...LOOKUPS, SAVE, namedRequest(SAVE)]) for (const cookie of invalidCookies) {
     const h = serverHarness();
     const denied = await result(await h.run(request(API, { cookie, body: operation })));
     assert.ok(denied.status >= 400, `${operation.operation}: ${cookie}`);
@@ -197,7 +201,7 @@ test('authorized lookup and save use an independently verified HMAC envelope wit
     { operation: 'confirmRank', requestId: 'synthetic-rank-001', studentId: 'fixture-student-001', expectedRevision: 1, rank: { belt: 'Blue Belt', marks: 2 }, approverId: 'TEST-COACH-A', reason: 'TEST explicit current rank' },
     { operation: 'correctLatest', requestId: 'synthetic-correction-001', studentId: 'fixture-student-001', expectedRevision: 2, correctsEventId: 'synthetic-event-001', rank: { belt: 'Blue Belt', marks: 2 }, approverId: 'TEST-COACH-B', reason: 'TEST correction preserves original' }
   ];
-  for (const operation of [...LOOKUPS, ...writes]) {
+  for (const operation of [...LOOKUPS, ...writes, ...writes.map(write => namedRequest(write))]) {
     const response = await result(await h.run(request(API, { body: operation })));
     assert.equal(response.status, 200);
     assert.deepEqual(response.body, { ok: true, data: h.data });
@@ -251,6 +255,67 @@ test('malformed payloads and unselected registration instructors are rejected wi
     assert.ok((await h.run(request(API, options))).status >= 400);
     assert.equal(h.calls.length, 0);
   }
+});
+
+test('typed unlisted instructor names reach the bridge unchanged without adding a name requirement to lookup', async () => {
+  const h = serverHarness();
+  for (const approverName of [
+    'TEST Guest Instructor Not Listed', "TEST José  O'Neill-Smith", 'TEST 教練 李', '  TEST aLeX McKay  ',
+    'x'.repeat(120), '=TEST Coach', '+TEST Coach', '-TEST Coach', '@TEST Coach', "'TEST Coach"
+  ]) {
+    const intent = namedRequest(SAVE, approverName);
+    const response = await result(await h.run(request(API, { body: intent })));
+    assert.equal(response.status, 200, approverName);
+    const forwarded = h.calls.at(-1).envelope;
+    assert.deepEqual(forwarded.payload.request, intent, 'transport preserves the exact original request used for idempotent retry');
+    assert.equal(Object.hasOwn(forwarded.payload.request, 'approverId'), false);
+    assert.match(forwarded.payload.deviceIdentity, /^m1-test-device-/);
+    assert.notEqual(forwarded.payload.deviceIdentity, approverName);
+  }
+  for (const body of LOOKUPS) {
+    assert.equal((await h.run(request(API, { body }))).status, 200);
+    assert.deepEqual(h.calls.at(-1).envelope.payload.request, body);
+  }
+});
+
+test('invalid or ambiguous typed attribution is refused before Google for every writing operation', async () => {
+  const writes = [
+    SAVE,
+    { operation: 'registerStudent', requestId: 'synthetic-register-001', displayName: 'TEST New Student', distinguishingLabel: 'Evening' },
+    { operation: 'confirmRank', requestId: 'synthetic-rank-001', studentId: 'fixture-student-001', expectedRevision: 1, rank: { belt: 'Blue Belt', marks: 2 }, reason: 'TEST explicit current rank' },
+    { operation: 'correctLatest', requestId: 'synthetic-correction-001', studentId: 'fixture-student-001', expectedRevision: 2, correctsEventId: 'synthetic-event-001', rank: { belt: 'Blue Belt', marks: 2 }, reason: 'TEST correction' }
+  ];
+  const invalid = ['', '   ', null, 123, [], {}, 'x'.repeat(121), 'TEST\nCoach', 'TEST\tCoach', 'TEST\u0000Coach', 'TEST\u001fCoach', 'TEST\u007fCoach', 'TEST\u0085Coach'];
+  for (const write of writes) for (const name of invalid) {
+    const h = serverHarness();
+    const response = await result(await h.run(request(API, { body: namedRequest(write, name) })));
+    assert.ok(response.status >= 400, `${write.operation}: ${JSON.stringify(name)}`);
+    assert.equal(response.body.ok, false);
+    assert.equal(h.calls.length, 0);
+  }
+  for (const body of [
+    { ...SAVE, approverName: 'TEST Coach Avery' },
+    { ...namedRequest(SAVE), recorderIdentity: 'forged-device' },
+    { ...namedRequest(SAVE), approverLabel: 'forged-label' }
+  ]) {
+    const h = serverHarness();
+    assert.ok((await h.run(request(API, { body }))).status >= 400);
+    assert.equal(h.calls.length, 0);
+  }
+});
+
+test('legacy approverId requests retain their exact wire payload and unconfirmed save recovery', async () => {
+  const h = serverHarness();
+  const first = await h.run(request(API, { body: SAVE }));
+  assert.equal(first.status, 200);
+  assert.deepEqual(h.calls[0].envelope.payload.request, SAVE);
+  assert.equal(Object.hasOwn(h.calls[0].envelope.payload.request, 'approverName'), false);
+  const outage = serverHarness({ fetch: async () => { throw new Error('Synthetic lost response'); } });
+  const unconfirmed = await result(await outage.run(request(API, { body: SAVE })));
+  assert.equal(unconfirmed.body.error.retryable, true);
+  assert.equal(unconfirmed.body.requestId, SAVE.requestId);
+  assert.equal((await h.run(request(API, { body: SAVE }))).status, 200);
+  assert.deepEqual(h.calls.at(-1).envelope.payload.request, SAVE);
 });
 
 test('transport outages and unbound receiver replies leave the same save unconfirmed without exposing private errors', async () => {

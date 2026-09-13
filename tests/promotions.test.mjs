@@ -270,6 +270,10 @@ const registerRequest = (overrides = {}) => ({
   operation: 'registerStudent', requestId: requestId(), displayName: 'TEST Newly Registered',
   distinguishingLabel: 'Synthetic new group', historyNote: 'No historical rank inferred', ...overrides
 });
+const namedRequest = (request, approverName = "TEST José  O'Neill-Smith") => {
+  const { approverId, ...intent } = request;
+  return { ...intent, approverName };
+};
 
 function canonicalBridgeJSON(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -940,4 +944,130 @@ test('latest promotion date comes from stripe or belt events and does not invent
   const belt = expectSuccess(h.call(stripeRequest({ expectedRevision: 3, action: 'belt', belt: 'Purple Belt' })));
   assert.equal(belt.student.lastPromotionDateNY, '2026-09-15');
   assert.equal(readStudent(h.freshSession()).student.lastPromotionDateNY, '2026-09-15');
+});
+
+test('unlisted typed instructor names preserve Unicode, case, internal spacing, apostrophes and hyphens in permanent attribution', () => {
+  for (const name of ['TEST Guest Instructor Not Listed', "TEST José  O'Neill-Smith", 'TEST 教練 李', 'TEST aLeX McKay']) {
+    const h = bridgeHarness({ nativeTextMarkers: true });
+    const initial = historyRows(h);
+    const envelope = bridgeEnvelope(namedRequest(stripeRequest(), `  ${name}  `));
+    const saved = expectSuccess(h.post(envelope));
+    assert.equal(saved.receipt.approverId, '', 'typed attribution is not converted to an authenticated or allowlisted identity');
+    assert.equal(saved.receipt.approverLabel, name);
+    assert.equal(saved.receipt.recorderIdentity, envelope.payload.deviceIdentity);
+    assert.notEqual(saved.receipt.recorderIdentity, saved.receipt.approverLabel);
+    assert.equal(historyRows(h).at(-1)[HISTORY_HEADERS.indexOf('approver_id')], '');
+    assert.equal(historyRows(h).at(-1)[HISTORY_HEADERS.indexOf('approver_label')], name);
+    const fresh = readStudent(h.freshSession());
+    assert.equal(fresh.history.at(-1).approverLabel, name);
+    assert.equal(fresh.history.at(-1).recorderIdentity, envelope.payload.deviceIdentity);
+    assert.deepEqual(historyRows(h).slice(0, initial.length), initial);
+  }
+});
+
+test('typed attribution is accepted for registration, unknown-rank resolution, belt change and audited correction', () => {
+  const h = bridgeHarness();
+  const registered = expectSuccess(h.post(bridgeEnvelope(namedRequest(registerRequest(), 'TEST Visiting Instructor'))));
+  const confirmed = expectSuccess(h.post(bridgeEnvelope(namedRequest(rankRequest({ studentId: registered.student.studentId }), 'TEST 教練 李'))));
+  const belt = expectSuccess(h.post(bridgeEnvelope(namedRequest(stripeRequest({
+    studentId: registered.student.studentId, expectedRevision: 2, action: 'belt', belt: 'Blue Belt'
+  }), "TEST O'Neill-Smith"))));
+  const corrected = expectSuccess(h.post(bridgeEnvelope(namedRequest({
+    operation: 'correctLatest', requestId: requestId(), studentId: registered.student.studentId,
+    expectedRevision: 3, correctsEventId: belt.receipt.eventId, rank: { belt: 'White Belt', marks: 2 }, reason: 'TEST original belt entry was mistaken'
+  }, 'TEST Second Visiting Instructor'))));
+  for (const event of [registered, confirmed, belt, corrected]) assert.equal(event.receipt.approverId, '');
+  assert.equal(registered.receipt.approverLabel, 'TEST Visiting Instructor');
+  assert.equal(confirmed.receipt.approverLabel, 'TEST 教練 李');
+  assert.equal(belt.receipt.approverLabel, "TEST O'Neill-Smith");
+  assert.equal(corrected.receipt.approverLabel, 'TEST Second Visiting Instructor');
+  assert.equal(corrected.receipt.correctsEventId, belt.receipt.eventId);
+  const history = expectSuccess(h.post(bridgeEnvelope({ operation: 'readStudent', studentId: registered.student.studentId })));
+  assert.equal(history.history.length, 4);
+  assert.equal(history.history[2].eventId, belt.receipt.eventId);
+  assert.equal(history.history[2].approverLabel, "TEST O'Neill-Smith");
+});
+
+test('blank, oversized, non-text, control-containing and ambiguous typed write attribution cannot change history', () => {
+  const invalid = ['', '   ', null, 123, [], {}, 'x'.repeat(121), 'TEST\nCoach', 'TEST\tCoach', 'TEST\u0000Coach', 'TEST\u001fCoach', 'TEST\u007fCoach', 'TEST\u0085Coach'];
+  for (const name of invalid) for (const request of [stripeRequest(), registerRequest(), rankRequest()]) {
+    const h = bridgeHarness();
+    const initial = historyRows(h);
+    expectFailure(h.post(bridgeEnvelope(namedRequest(request, name))));
+    assert.deepEqual(historyRows(h), initial);
+  }
+  const h = bridgeHarness();
+  const initial = historyRows(h);
+  expectFailure(h.post(bridgeEnvelope({ ...stripeRequest(), approverName: 'TEST Coach Avery' })));
+  assert.deepEqual(historyRows(h), initial);
+  const lookup = expectSuccess(h.post(bridgeEnvelope({ operation: 'readStudent', studentId: STUDENTS[0].id })));
+  assert.equal(lookup.student.marks, 2, 'lookup needs no instructor name even after an invalid write');
+  assert.deepEqual(historyRows(h), initial);
+});
+
+test('valid typed names at the length boundary and formula-like prefixes are safely stored as literal text', () => {
+  for (const name of ['x'.repeat(120), '=TEST Coach', '+TEST Coach', '-TEST Coach', '@TEST Coach', "'TEST Coach"]) {
+    const h = bridgeHarness({ nativeTextMarkers: true });
+    const saved = expectSuccess(h.post(bridgeEnvelope(namedRequest(stripeRequest(), name))));
+    assert.equal(saved.receipt.approverLabel, name);
+    assert.equal(historyRows(h).at(-1)[HISTORY_HEADERS.indexOf('approver_label')], name);
+    assert.equal(readStudent(h.freshSession()).history.at(-1).approverLabel, name);
+  }
+});
+
+test('typed attribution participates in the exact original request fingerprint and cannot change during retry', () => {
+  const h = bridgeHarness();
+  const request = namedRequest(stripeRequest(), "TEST José  O'Neill-Smith");
+  const original = expectSuccess(h.post(bridgeEnvelope(request)));
+  const savedRows = historyRows(h);
+  const retry = expectSuccess(h.post(bridgeEnvelope(request, { deviceIdentity: 'm1-test-device-abcdef1234567890abcdef12' })));
+  assert.equal(retry.receipt.eventId, original.receipt.eventId);
+  assert.equal(retry.receipt.approverLabel, request.approverName);
+  assert.equal(retry.receipt.recorderIdentity, original.receipt.recorderIdentity);
+  for (const name of ['TEST Other Instructor', "TEST José O'Neill-Smith", "TEST josé  O'Neill-Smith", ` ${request.approverName} `]) {
+    expectFailure(h.post(bridgeEnvelope({ ...request, approverName: name })), 'REQUEST_CONFLICT');
+    assert.deepEqual(historyRows(h), savedRows);
+  }
+  const checked = expectSuccess(h.post(bridgeEnvelope({ operation: 'checkSave', requestId: request.requestId })));
+  assert.equal(checked.receipt.eventId, original.receipt.eventId);
+  assert.equal(checked.receipt.approverLabel, request.approverName);
+});
+
+test('an unresolved legacy approverId request retains its original fingerprint, receipt and historical attribution', () => {
+  const h = bridgeHarness();
+  const request = stripeRequest({ approverId: 'TEST-COACH-B' });
+  const original = historyRows(h);
+  h.faults.flush = () => true;
+  assert.equal(expectFailure(h.post(bridgeEnvelope(request)), 'UNAVAILABLE').error.retryable, true);
+  const persisted = historyRows(h);
+  assert.equal(persisted.length, original.length + 1);
+  delete h.faults.flush;
+  const retry = expectSuccess(h.post(bridgeEnvelope(request)));
+  assert.equal(retry.receipt.approverId, 'TEST-COACH-B');
+  assert.equal(retry.receipt.approverLabel, 'TEST Coach Blake');
+  assert.deepEqual(historyRows(h), persisted);
+  expectFailure(h.post(bridgeEnvelope(namedRequest(request, 'TEST Coach Blake'))), 'REQUEST_CONFLICT');
+  assert.deepEqual(historyRows(h), persisted, 'matching display text does not rewrite an earlier request into the new wire format');
+  const checked = expectSuccess(h.post(bridgeEnvelope({ operation: 'checkSave', requestId: request.requestId })));
+  assert.equal(checked.receipt.eventId, retry.receipt.eventId);
+  assert.equal(checked.receipt.approverId, 'TEST-COACH-B');
+  assert.deepEqual(historyRows(h).slice(0, original.length), original);
+});
+
+test('freely typed attribution cannot replace the signed device recorder or bypass owner and bridge authorization', () => {
+  const request = namedRequest(stripeRequest(), 'TEST Visiting Instructor');
+  const h = bridgeHarness();
+  const initial = historyRows(h);
+  expectFailure(h.call(request), 'UNAUTHORIZED');
+  const unsigned = bridgeEnvelope(request);
+  unsigned.signature = '0'.repeat(64);
+  expectFailure(h.post(unsigned), 'UNAUTHORIZED');
+  assert.equal(h.counters.opens, 0);
+  for (const changes of [
+    { recorderIdentity: OWNER }, { recorder: OWNER }, { recordedAtUTC: '2000-01-01T00:00:00Z' }, { approverLabel: 'forged label' }
+  ]) expectFailure(h.post(bridgeEnvelope({ ...request, ...changes })), 'VALIDATION');
+  assert.deepEqual(historyRows(h), initial);
+  const saved = expectSuccess(h.post(bridgeEnvelope(request)));
+  assert.match(saved.receipt.recorderIdentity, /^m1-test-device-/);
+  assert.equal(saved.receipt.approverLabel, request.approverName);
 });

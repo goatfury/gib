@@ -11,7 +11,16 @@ export const config = {
 };
 const OPERATIONS = new Set(['bootstrap', 'readStudent', 'checkSave', 'recordPromotion', 'confirmRank', 'registerStudent', 'correctLatest']);
 const WRITE_OPERATIONS = new Set(['recordPromotion', 'confirmRank', 'registerStudent', 'correctLatest']);
-const REQUEST_KEYS = new Set(['operation', 'studentId', 'requestId', 'expectedRevision', 'correctsEventId', 'action', 'belt', 'rank', 'approverId', 'reason', 'displayName', 'distinguishingLabel', 'historyNote']);
+const REQUEST_KEYS = new Set(['operation', 'studentId', 'requestId', 'expectedRevision', 'correctsEventId', 'action', 'belt', 'rank', 'approverId', 'approverName', 'reason', 'displayName', 'distinguishingLabel', 'historyNote']);
+
+function validAttribution(input) {
+  const hasName = Object.hasOwn(input, 'approverName');
+  const hasId = Object.hasOwn(input, 'approverId');
+  return hasName && !hasId
+    ? typeof input.approverName === 'string' && input.approverName.length <= 120
+      && Boolean(input.approverName.trim()) && !/[\u0000-\u001f\u007f-\u009f]/u.test(input.approverName)
+    : hasId && !hasName && ['TEST-COACH-A', 'TEST-COACH-B'].includes(input.approverId);
+}
 
 function respond(status, body, cookies = []) {
   const headers = new Headers({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
@@ -46,8 +55,8 @@ export async function handlePromotions(request, dependencies = {}) {
   if (!OPERATIONS.has(input.operation) || Object.keys(input).some(key => !REQUEST_KEYS.has(key))) {
     return failure(400, 'VALIDATION', 'Unsupported promotion request fields.');
   }
-  if (WRITE_OPERATIONS.has(input.operation) && !['TEST-COACH-A', 'TEST-COACH-B'].includes(input.approverId)) {
-    return failure(400, 'VALIDATION', 'Select the TEST instructor recording this entry.');
+  if (WRITE_OPERATIONS.has(input.operation) && !validAttribution(input)) {
+    return failure(400, 'VALIDATION', 'Enter a name in Promoted by.');
   }
   const envelope = createPromotionsEnvelope(runtime, credential, input, now, dependencies.randomBytes);
   try {

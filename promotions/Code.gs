@@ -85,11 +85,8 @@ function verifiedPromotionBridge_(event) {
   for (let index = 0; index < signature.length; index += 1) difference |= signature.charCodeAt(index) ^ envelope.signature.charCodeAt(index);
   if (difference) failPromotion_('UNAUTHORIZED', 'Invalid TEST bridge.');
   // Registration is a write too. The retained owner reference may still use
-  // its older registration form; every tablet write requires a selected name.
-  if (payload.request && payload.request.operation === 'registerStudent'
-    && !PROMOTION_APPROVERS_.some(item => item.id === payload.request.approverId)) {
-    failPromotion_('UNAUTHORIZED', 'A selected TEST instructor is required.');
-  }
+  // its older registration form; every tablet write requires attribution.
+  if (payload.request && payload.request.operation === 'registerStudent') promotionAttribution_(payload.request);
   return payload;
 }
 
@@ -237,6 +234,25 @@ function promotionText_(value, maximum, allowBlank) {
   return text;
 }
 
+function promotionAttribution_(request, allowMissing) {
+  const hasName = Object.prototype.hasOwnProperty.call(request, 'approverName');
+  const hasId = Object.prototype.hasOwnProperty.call(request, 'approverId');
+  if (hasName && !hasId) {
+    const value = request.approverName;
+    if (typeof value !== 'string' || value.length > 120 || /[\u0000-\u001f\u007f-\u009f]/.test(value) || !value.trim()) {
+      failPromotion_('VALIDATION', 'Enter a name in Promoted by.');
+    }
+    // Attribution is plain text, not authentication or a roster lookup. The
+    // existing literal-cell writer preserves punctuation and formula prefixes.
+    return { approverName: value.trim() };
+  }
+  if (hasId && !hasName && PROMOTION_APPROVERS_.some(item => item.id === request.approverId)) {
+    return { approverId: request.approverId }; // Retain exact older pending requests.
+  }
+  if (allowMissing && !hasName && !hasId) return {};
+  failPromotion_('VALIDATION', 'Enter one name in Promoted by.');
+}
+
 function promotionId_(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/.test(value)) {
     failPromotion_('VALIDATION', 'The record or request identity is invalid.');
@@ -265,29 +281,25 @@ function validatePromotionRequest_(request) {
     return { operation, requestId: promotionId_(request.requestId) };
   }
   if (operation === 'registerStudent') {
-    exactPromotionFields_(request, ['operation', 'requestId', 'displayName', 'distinguishingLabel'], ['historyNote', 'approverId']);
-    if (Object.prototype.hasOwnProperty.call(request, 'approverId') && !PROMOTION_APPROVERS_.some(item => item.id === request.approverId)) {
-      failPromotion_('VALIDATION', 'Choose one of the fictional TEST instructors.');
-    }
+    exactPromotionFields_(request, ['operation', 'requestId', 'displayName', 'distinguishingLabel'], ['historyNote', 'approverId', 'approverName']);
     return {
       operation, requestId: promotionId_(request.requestId),
       displayName: promotionText_(request.displayName, 120),
       distinguishingLabel: promotionText_(request.distinguishingLabel, 120),
       historyNote: promotionText_(request.historyNote || '', 500, true),
-      ...(request.approverId ? { approverId: request.approverId } : {})
+      ...promotionAttribution_(request, true)
     };
   }
-  const common = ['operation', 'requestId', 'studentId', 'expectedRevision', 'approverId'];
+  const common = ['operation', 'requestId', 'studentId', 'expectedRevision'];
   const extra = operation === 'recordPromotion' ? ['action']
     : operation === 'confirmRank' ? ['rank', 'reason']
       : operation === 'correctLatest' ? ['correctsEventId', 'rank', 'reason'] : null;
   if (!extra) failPromotion_('VALIDATION', 'This operation is not supported.');
-  exactPromotionFields_(request, common.concat(extra), operation === 'recordPromotion' ? ['belt'] : []);
+  exactPromotionFields_(request, common.concat(extra), ['approverName', 'approverId'].concat(operation === 'recordPromotion' ? ['belt'] : []));
   if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 1) failPromotion_('VALIDATION', 'Reload this student before saving.');
-  if (!PROMOTION_APPROVERS_.some(item => item.id === request.approverId)) failPromotion_('VALIDATION', 'Choose one of the fictional TEST approvers.');
   const intent = {
     operation, requestId: promotionId_(request.requestId), studentId: promotionId_(request.studentId),
-    expectedRevision: request.expectedRevision, approverId: request.approverId
+    expectedRevision: request.expectedRevision, ...promotionAttribution_(request)
   };
   if (operation === 'recordPromotion') {
     if (request.action !== 'stripe' && request.action !== 'belt') failPromotion_('VALIDATION', 'Choose Add stripe or Change belt.');
@@ -470,7 +482,7 @@ function buildPromotionEvent_(intent, state, recorder) {
   return {
     eventId, requestId: intent.requestId, studentId: after.studentId, revision: after.revision, eventKind: kind,
     eventDateNY: promotionToday_(), recordedAtUTC: new Date().toISOString(), before: previous ? rankSnapshot_(previous) : null,
-    after, approverId: approver ? approver.id : '', approverLabel: approver ? approver.label : '',
+    after, approverId: approver ? approver.id : '', approverLabel: intent.approverName || (approver ? approver.label : ''),
     recorderIdentity: recorder, correctsEventId: intent.correctsEventId || '', reason
   };
 }
