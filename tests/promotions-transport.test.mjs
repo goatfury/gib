@@ -519,11 +519,36 @@ test('authenticated TEST failures identify only fixed phases and numeric timing 
     assert.equal(value.headers.get('x-gib-test-upstream'), phase);
     assert.match(value.headers.get('x-gib-test-upstream-ms'), /^\d+$/u);
     assert.equal(value.headers.get('x-gib-test-upstream-status'), status);
-    assert.equal(diagnosticHeaders(response).length, status === null ? 2 : 3);
+    assert.equal(diagnosticHeaders(response).length, status === null ? 6 : 7);
     assert.equal(calls, 1, 'diagnosis must never automatically resend the request');
     const publicOutput = JSON.stringify({ body: value.body, headers: [...value.headers] });
     assert.equal(publicOutput.includes('SYNTHETIC_PRIVATE_ERROR'), false);
     noPrivateConfiguration(publicOutput);
+  }
+});
+
+test('TEST failure categories distinguish returned HTML, HTTP errors, authorization denials and envelope mismatch without revealing content', async () => {
+  const cases = [
+    { url:'https://script.google.com/macros/s/PRIVATE/exec?secret=PRIVATE', type:'text/html; charset=utf-8', status:200, redirected:false, text:'<html>PRIVATE</html>', expected:['json','html','google-script','0','none'] },
+    { url:'https://accounts.google.com/PRIVATE', type:'text/html', status:200, redirected:true, text:'<html>PRIVATE</html>', expected:['json','html','google-auth','1','none'] },
+    { url:'https://script.googleusercontent.com/PRIVATE', type:'application/json', status:200, redirected:true, text:JSON.stringify({ok:false,error:{code:'UNAUTHORIZED',message:'PRIVATE'}}), expected:['envelope','json','google-content','1','bare-auth-denial'] },
+    { url:'https://script.googleusercontent.com/PRIVATE', type:'application/json', status:200, redirected:true, text:JSON.stringify({bridge:'wrong',private:'PRIVATE'}), expected:['envelope','json','google-content','1','mismatch'] },
+    { url:'https://untrusted.example/PRIVATE', type:'application/octet-stream', status:502, redirected:false, text:'PRIVATE', expected:['http','other','other','0','none'] }
+  ];
+  for (const item of cases) {
+    let calls = 0;
+    const h = serverHarness({ fetch:async () => {
+      calls += 1;
+      const reply = new Response(item.text, {status:item.status, headers:{'content-type':item.type}});
+      Object.defineProperties(reply, {url:{value:item.url}, redirected:{value:item.redirected}});
+      return reply;
+    } });
+    const response = await h.run(request());
+    assert.equal(response.status, 503);
+    assert.deepEqual(['','-type','-host','-redirected','-envelope'].map(suffix => response.headers.get('x-gib-test-upstream'+suffix)), item.expected);
+    assert.equal(calls, 1);
+    assert.equal(JSON.stringify([...response.headers]).includes('PRIVATE'), false);
+    assert.equal((await response.text()).includes('PRIVATE'), false);
   }
 });
 

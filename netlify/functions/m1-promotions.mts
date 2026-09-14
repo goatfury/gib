@@ -64,6 +64,10 @@ export async function handlePromotions(request, dependencies = {}) {
   const envelope = createPromotionsEnvelope(runtime, credential, input, now, dependencies.randomBytes);
   let phase = 'fetch';
   let upstreamStatus = 0;
+  let upstreamType = 'missing';
+  let upstreamRedirected = false;
+  let upstreamHost = 'missing';
+  let envelopeFailure = 'none';
   const upstreamStarted = performance.now();
   try {
     const response = await (dependencies.fetch || fetch)(runtime.webhookUrl, {
@@ -71,6 +75,17 @@ export async function handlePromotions(request, dependencies = {}) {
       body: JSON.stringify(envelope), redirect: 'follow', signal: AbortSignal.timeout(25000)
     });
     upstreamStatus = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : 0;
+    if (runtime.target === 'test') {
+      const contentType = response.headers?.get('content-type')?.split(';')[0].trim().toLowerCase();
+      upstreamType = !contentType ? 'missing' : contentType === 'application/json' ? 'json' : contentType === 'text/html' ? 'html' : 'other';
+      upstreamRedirected = response.redirected === true;
+      if (response.url) {
+        try {
+          const host = new URL(response.url).hostname;
+          upstreamHost = host === 'script.googleusercontent.com' ? 'google-content' : host === 'script.google.com' ? 'google-script' : host === 'accounts.google.com' ? 'google-auth' : 'other';
+        } catch { upstreamHost = 'other'; }
+      }
+    }
     phase = 'body';
     const text = await response.text();
     if (!response.ok) { phase = 'http'; throw new Error('Unconfirmed promotion response.'); }
@@ -78,6 +93,7 @@ export async function handlePromotions(request, dependencies = {}) {
     phase = 'json';
     const body = JSON.parse(text);
     phase = 'envelope';
+    if (runtime.target === 'test') envelopeFailure = body?.ok === false && body?.error?.code === 'UNAUTHORIZED' ? 'bare-auth-denial' : 'mismatch';
     if (!body || Object.keys(body).length !== 5 || body.bridge !== runtime.mode || body.target !== runtime.target
       || body.installation !== 'rev' || body.requestNonce !== envelope.payload.nonce
       || !body.result || typeof body.result.ok !== 'boolean') throw new Error('Invalid promotion confirmation.');
@@ -85,12 +101,16 @@ export async function handlePromotions(request, dependencies = {}) {
   } catch {
     const response = respond(503, { ok: false, error: { code: 'UNAVAILABLE', message: `The ${runtime.target === 'test' ? 'TEST ' : ''}connection did not confirm this request. Keep the original entry and check or retry it.`, retryable: true },
       ...(typeof input.requestId === 'string' ? { requestId: input.requestId } : {}) });
-    // Authenticated TEST failures expose only fixed stages and numeric timing.
+    // Authenticated TEST failures expose only fixed categories and numeric timing.
     // Live responses never include diagnostic headers or private upstream data.
     if (runtime.target === 'test') {
       response.headers.set('X-GIB-TEST-Upstream', phase);
       response.headers.set('X-GIB-TEST-Upstream-Ms', String(Math.max(0, Math.round(performance.now() - upstreamStarted))));
       if (upstreamStatus) response.headers.set('X-GIB-TEST-Upstream-Status', String(upstreamStatus));
+      response.headers.set('X-GIB-TEST-Upstream-Type', upstreamType);
+      response.headers.set('X-GIB-TEST-Upstream-Redirected', upstreamRedirected ? '1' : '0');
+      response.headers.set('X-GIB-TEST-Upstream-Host', upstreamHost);
+      response.headers.set('X-GIB-TEST-Upstream-Envelope', envelopeFailure);
     }
     return response;
   }

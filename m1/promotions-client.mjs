@@ -1,21 +1,66 @@
-import { promotionsTemplate } from './promotions-template.mjs?v=2026-09-14-promotions-repair-a';
-import { promotionsEnabled, createPromotionsLifecycle } from './promotions-core.mjs?v=2026-09-14-promotions-repair-a';
+import { promotionsTemplate } from './promotions-template.mjs?v=2026-09-14-promotions-repair-b';
+import { promotionsEnabled, createPromotionsLifecycle } from './promotions-core.mjs?v=2026-09-14-promotions-repair-b';
 
-export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online = () => globalThis.navigator?.onLine !== false, testOnly = true } = {}) {
+export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online = () => globalThis.navigator?.onLine !== false, testOnly = true, onDiagnostic } = {}) {
+  const diagnose = testOnly === true && typeof onDiagnostic === 'function';
+  const operations = new Set(['bootstrap', 'readStudent', 'checkSave', 'recordPromotion', 'confirmRank', 'registerStudent', 'correctLatest']);
+  const errorCodes = new Set(['UNAVAILABLE', 'UNAUTHORIZED', 'VALIDATION', 'NOT_FOUND', 'ARCHIVED', 'RANK_UNKNOWN', 'RANK_ALREADY_KNOWN',
+    'STALE_REVISION', 'REQUEST_CONFLICT', 'DUPLICATE_STUDENT', 'CORRECTION_NOT_LATEST', 'TEST_DESTINATION_INVALID', 'LIVE_DESTINATION_INVALID', 'BUSY']);
+  const clock = () => globalThis.performance?.now?.() ?? Date.now();
+  const numericHeader = (value, minimum, maximum) => typeof value === 'string' && /^(0|[1-9][0-9]{0,8})$/u.test(value)
+    && Number(value) >= minimum && Number(value) <= maximum ? Number(value) : null;
   return payload => new Promise((resolve, reject) => {
-    if (!online()) { reject({ code:'UNAVAILABLE', message:'Connect to load a fresh record or send this entry.', retryable:true }); return; }
-    const abort = new AbortController();
+    const startedAt = diagnose ? new Date().toISOString() : null;
+    const startedMs = diagnose ? clock() : 0;
+    let phase = 'fetch';
+    let httpStatus = null;
+    let upstream = { upstreamPhase:null, upstreamMs:null, upstreamStatus:null, upstreamType:null, upstreamRedirected:null, upstreamHost:null, upstreamEnvelope:null };
     let settled = false;
-    const finish = (fn, value) => { if (settled) return; settled = true; clearTimeout(timer); fn(value); };
-    const timer = setTimeout(() => { finish(reject, { code:'UNAVAILABLE', message:'No confirmation arrived. Keep this entry and check or retry it.', retryable:true }); abort.abort(); }, timeoutMs);
+    let timer;
+    const finish = (fn, value, outcome) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); fn(value);
+      if (diagnose) {
+        try {
+          const record = {
+            operation:operations.has(payload?.operation) ? payload.operation : 'OTHER', startedAt,
+            browserElapsedMs:Math.max(0, Math.round(clock() - startedMs)), phase, httpStatus,
+            errorCode:outcome === 'success' ? null : errorCodes.has(value?.code) ? value.code : 'OTHER', outcome, ...upstream
+          };
+          // Observers receive only fixed categories/timing, never the input or
+          // reply. Their failure cannot alter settlement or trigger a retry.
+          Promise.resolve(onDiagnostic(record)).catch(() => {});
+        } catch (_) { /* TEST observation cannot affect the request. */ }
+      }
+    };
+    if (!online()) { phase = 'offline'; finish(reject, { code:'UNAVAILABLE', message:'Connect to load a fresh record or send this entry.', retryable:true }, 'error'); return; }
+    const abort = new AbortController();
+    timer = setTimeout(() => { phase = 'timeout'; finish(reject, { code:'UNAVAILABLE', message:'No confirmation arrived. Keep this entry and check or retry it.', retryable:true }, 'error'); abort.abort(); }, timeoutMs);
     Promise.resolve().then(() => fetcher('/api/m1-promotions', {
       method:'POST', credentials:'same-origin', cache:'no-store', signal:abort.signal,
       headers:{ 'Content-Type':'application/json', Accept:'application/json' }, body:JSON.stringify(payload)
     })).then(async response => {
+      phase = 'body';
+      if (diagnose) {
+        httpStatus = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : null;
+        try {
+          const header = name => response.headers?.get?.('X-GIB-TEST-Upstream' + name);
+          const category = (value, allowed) => allowed.includes(value) ? value : null;
+          upstream = {
+            upstreamPhase:category(header(''), ['fetch', 'body', 'http', 'json', 'envelope']),
+            upstreamMs:numericHeader(header('-Ms'), 0, 3600000), upstreamStatus:numericHeader(header('-Status'), 100, 599),
+            upstreamType:category(header('-Type'), ['json', 'html', 'other', 'missing']),
+            upstreamRedirected:numericHeader(header('-Redirected'), 0, 1),
+            upstreamHost:category(header('-Host'), ['google-content', 'google-script', 'google-auth', 'other', 'missing']),
+            upstreamEnvelope:category(header('-Envelope'), ['bare-auth-denial', 'mismatch', 'none'])
+          };
+        } catch (_) { /* Missing diagnostic headers do not change the reply. */ }
+      }
       const body = await response.json();
-      if (response.ok && body?.ok === true && body.data && typeof body.data === 'object') finish(resolve, body.data);
-      else finish(reject, body?.error || { code:response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : 'UNAVAILABLE', message:`The ${testOnly ? 'TEST ' : ''}log could not confirm this request.`, retryable:response.status >= 500 });
-    }).catch(() => finish(reject, { code:'UNAVAILABLE', message:'The connection was interrupted. This entry is not confirmed.', retryable:true }));
+      phase = 'application';
+      if (response.ok && body?.ok === true && body.data && typeof body.data === 'object') finish(resolve, body.data, 'success');
+      else finish(reject, body?.error || { code:response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : 'UNAVAILABLE', message:`The ${testOnly ? 'TEST ' : ''}log could not confirm this request.`, retryable:response.status >= 500 }, 'error');
+    }).catch(() => finish(reject, { code:'UNAVAILABLE', message:'The connection was interrupted. This entry is not confirmed.', retryable:true }, 'error'));
   });
 }
 
@@ -33,7 +78,9 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('modeBadge').textContent = ''; $('modeBadge').hidden = true;
     $('privacyNote').textContent = 'Lookups clear after 60 seconds without activity. Confirmed entries return to Sign-In after 3 seconds.';
   }
-  const transport = createPromotionsTransport(fetcher, { testOnly });
+  const transport = createPromotionsTransport(fetcher, { testOnly,
+    onDiagnostic:testOnly ? record => console.info('Promotions TEST lookup', JSON.stringify(record)) : undefined
+  });
   const lifecycle = createPromotionsLifecycle({ now, storage, onClear: clearPresentation });
   const state = {
     students: new Map(), approvers: [], recorderLabel: '', todayNY: '', selected: null,
