@@ -1,4 +1,30 @@
-# PR86 tablet checkpoint — 2026-09-14
+# PR86 response-delivery checkpoint — 2026-09-14
+
+**BLOCKED for release review. This checkpoint supersedes the earlier interpretation below; completed feature QA is frozen.** Phone coverage remains deferred, not failed. No layouts, repairs, promotion submissions, Sign-In/Staff Clock writes or manual full release gate were repeated.
+
+Application remote e5522380f5c5b51e9bfd90df753f9afe9170d9d0; local ebdb325b99813db4cf1d6cb6ff4b28227424d141; identical tree d05dc9001fed608df2a0bd241dbb6a76b86ee9d1. TEST deploy6aa8094b14b2f00008ce6a7f is ready for that commit; repair-d client and deployment identity were observed in the actual mounted kiosk. Existing authorized route: https://deploy-preview-86--gib-live.netlify.app/m1/ . Existing separate Google TEST endpoint updated to Version8; URL, identity and access settings preserved. Live remains Version5. Branch repair/promotion-book-20260914 was pushed; PR86 is draft/unmerged. Netlify skip marker preserves this diagnostic artifact during documentation-only pushes.
+
+Added TEST diagnostics: nonce-derived24hex correlation ID, Google entry/completion/intended response type, redirect method/status/host/path categories, received-body SHA256 fingerprint, and fixed HTML owner/auth/error/title/reason categories. No raw URLs, bodies, titles, tokens or student data are logged. Absolute allowed Google Location is followed without rewriting its opaque query. No replay, retries, timeout increases, authentication or validation changes. These are diagnostics, not a fix or mitigation.41/41 affected tests passed; diff check passed. The prior full gate is retained, not claimed for this diagnostic build.
+
+Budget: at most8 serial read-only requests or10minutes, starting14:50:55Z. Stopped after3 requests because two successive failures exposed the same boundary. All used the actual mounted authorized kiosk:
+
+| UTC start / operation | Trace ID | Browser result | Captured upstream hops |
+| --- | --- | --- | --- |
+|14:50:55.708 bootstrap|1bebab4d6067cb4d9e6de77d|HTTP200 /8.924s|POST web-app-exec302 /3.951s; GET content-response200JSON /4.041s; valid envelope; upstream8.000s.|
+|14:51:17.251 readStudent|fe8f4a3f338ed6d26ac276d1|HTTP503 /25.188s|POST web-app-exec302 /2.912s; GET content-response returned no headers for22.089s until the shared25second limit.|
+|14:53:38.143 bootstrap|fca9e453476f711ac8ccf609|HTTP503 /25.196s|POST web-app-exec302 /6.371s; GET content-response returned no headers for18.630s until the shared25second limit.|
+
+Success body fingerprint: b8d40221eb9ffb71c64b26c01ebff1f50fcebe982660838c1518d30780012af9. Failures received no body, so no fingerprint or HTML classification is available. Private evidence preserves every record and the earlier failures.
+
+Google lists nearby first-two doPost executions Completed at10:50:56NewYork/3.546s and10:51:17/2.432s. Detailed trace records/Expand are unavailable; Cloud logs is explicitly aria-disabled=true. These remain timestamp matches, not proven nonce-correlated completion records. Saved editor source matched local source exactly before TEST Version8 deployment; absence of visible records does not prove that logging succeeded. No account/project/permission expansion was attempted.
+
+The new failures are at Netlify's GET of Google's one-time content URL, after POST302 and before response headers. They are response-delivery timeouts, not received authorization denials or history-validation failures. This does not yet separate transport stalling from Google withholding/delaying the response. The earlier13:59:28.481Z HTTP200HTML response on google-script did not recur; its original title/body/fingerprint was not retained. Its identity remains unknown: owner page, Google auth/error page, or other HTML. Nearby POST/GET timestamps do not prove the path. Do not assume a faulty redirect; ContentService normally redirects to a one-time content URL: https://developers.google.com/apps-script/guides/content#redirects .
+
+**Single next experiment:** retain a short-lived, TEST-read-only diagnostic completion receipt in the already-used Google ScriptCache, keyed by the safe nonce hash and containing no input/output/identity/secret. Make one fresh signed kiosk lookup, then read its receipt through the existing authorized owner editor. This will correlate the exact POST's intended JSON completion with its response trace without a new Cloud project or permissions. Never replay the original signed envelope or one-time URL. No retry mitigation is supported yet while the prior HTML could be an access denial; any later recovery must exclude denials/writes and preserve freshness, cancellation, validation and next-person privacy.
+
+Completed repairs, later promotion, independent readback, tablet/laptop presentation and reconciled Sign-In/Staff Clock evidence are preserved where unchanged. All387 corrections across370students remain unapplied. No merge, production deployment, liveVersion5 change, Richmond change or new data write. No new permission grant, OAuth, account, sharing or pairing. If diagnostics need removal, restore only the prior TEST Netlify application b21846db and the same Google TEST deployment's Version7; preserve data and liveVersion5.
+
+## Preserved earlier tablet checkpoint — superseded above
 
 **BLOCKED: intermittent Google response handoff is not established as fixed. Tablet presentation checks are complete. Phone coverage is explicitly deferred and is not an acceptance blocker.** No further redesign, new setup, repeat repairs, or repeat Sign-In/Staff Clock writes.
 
