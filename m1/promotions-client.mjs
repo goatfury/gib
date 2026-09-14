@@ -1,5 +1,5 @@
-import { promotionsTemplate } from './promotions-template.mjs?v=2026-09-13-promotions-test-a';
-import { promotionsEnabled, createPromotionsLifecycle } from './promotions-core.mjs?v=2026-09-13-promotions-test-a';
+import { promotionsTemplate } from './promotions-template.mjs?v=2026-09-14-promotions-repair-a';
+import { promotionsEnabled, createPromotionsLifecycle } from './promotions-core.mjs?v=2026-09-14-promotions-repair-a';
 
 export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online = () => globalThis.navigator?.onLine !== false, testOnly = true } = {}) {
   return payload => new Promise((resolve, reject) => {
@@ -43,7 +43,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
   };
   const belts = ['White Belt', 'Blue Belt', 'Purple Belt', 'Brown Belt', 'Black Belt'];
   const mutationErrors = new Set(['VALIDATION', 'NOT_FOUND', 'ARCHIVED', 'RANK_UNKNOWN', 'RANK_ALREADY_KNOWN', 'STALE_REVISION', 'REQUEST_CONFLICT', 'DUPLICATE_STUDENT', 'CORRECTION_NOT_LATEST', 'TEST_DESTINATION_INVALID']);
-  const eventLabels = { REGISTER:'Student registered', RANK_CONFIRM:'Current rank confirmed', STRIPE:'Stripe or degree added', BELT:'Belt changed', CORRECTION:'Audited correction' };
+  const eventLabels = { REGISTER:'Student registered', RANK_CONFIRM:'Current rank confirmed', STRIPE:'Stripe or degree added', BELT:'Belt changed', CORRECTION:'Audited correction', REPAIR:'Data repair' };
 
   function node(tag, text, className) {
     const element = document.createElement(tag);
@@ -56,7 +56,18 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     const type = student.belt === 'Black Belt' ? 'degree' : 'stripe';
     return `${student.belt} · ${student.marks} ${type}${student.marks === 1 ? '' : 's'}`;
   }
-  function normalize(value) { return String(value || '').normalize('NFKC').toLocaleLowerCase().trim(); }
+  function normalize(value) { return String(value || '').normalize('NFKC').toLocaleLowerCase().replace(/\s+/gu, ' ').trim(); }
+  function dateLabel(value) {
+    if (!value) return 'Date not recorded';
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return String(value);
+    const date = new Date(`${value}T12:00:00Z`);
+    if (Number.isNaN(date.valueOf()) || date.toISOString().slice(0,10) !== value) return String(value);
+    return new Intl.DateTimeFormat('en-US', { timeZone:'UTC', year:'numeric', month:'long', day:'numeric' }).format(date);
+  }
+  function identityLabel(student) {
+    const label = String(student?.distinguishingLabel || '');
+    return /^Legacy .+ row \d+$/u.test(label) ? `Source record: ${label}` : label;
+  }
   function todayNY() {
     const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone:'America/New_York', year:'numeric', month:'2-digit', day:'2-digit' }).formatToParts(new Date()).map(part => [part.type, part.value]));
     return `${parts.year}-${parts.month}-${parts.day}`;
@@ -130,7 +141,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
       const option = node('button', undefined, 'search-option');
       option.type = 'button'; option.id = `promotions-student-result-${index}`;
       option.setAttribute('role', 'option'); option.setAttribute('aria-selected', 'false');
-      option.append(node('strong', student.displayName), node('span', `${student.distinguishingLabel}${student.status === 'archived' ? ' · Archived' : ''}`));
+      option.append(node('strong', student.displayName), node('span', `${identityLabel(student)}${student.status === 'archived' ? ' · Archived' : ''}`));
       option.addEventListener('click', () => selectStudent(student.studentId));
       $('searchResults').append(option);
     }
@@ -139,10 +150,10 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('studentSearch').setAttribute('aria-expanded', String(open));
     $('studentSearch').removeAttribute('aria-activedescendant');
     $('searchHint').textContent = !query
-      ? 'Use the identifying label to distinguish students with the same name.'
+      ? 'Search by first name, surname, or full name.'
       : matches.length === 0 ? 'No matching student. Add a separate student if they are missing.'
       : matches.length > 8 ? `Showing 8 of ${matches.length} matches. Type more to narrow the list.`
-      : 'Choose the correct identifying label. Matching names are separate students.';
+      : 'Choose the full name. Identical names remain separate records; check the details below each name.';
   }
   function closeSearch() {
     $('searchResults').hidden = true;
@@ -239,10 +250,11 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('historyCard').hidden = !student || !state.selectedFresh;
     if (!student) return;
     $('studentName').textContent = student.displayName;
-    $('studentIdentity').textContent = student.distinguishingLabel;
+    $('studentIdentity').textContent = identityLabel(student);
     $('studentRank').textContent = state.selectedFresh ? rankLabel(student) : 'Current rank not yet verified';
     const latestPromotion = [...state.history].sort((a,b) => b.revision - a.revision).find(event => ['STRIPE','BELT'].includes(event.eventKind) && event.eventDateNY);
-    $('studentDate').textContent = state.selectedFresh ? `Latest promotion: ${student.lastPromotionDateNY || latestPromotion?.eventDateNY || 'Date not recorded'}` : 'Connect and refresh to verify this record.';
+    const lastPromotionDate = typeof student.lastPromotionDateNY === 'string' ? student.lastPromotionDateNY : latestPromotion?.eventDateNY;
+    $('studentDate').textContent = state.selectedFresh ? `Latest promotion: ${dateLabel(lastPromotionDate)}` : 'Connect and refresh to verify this record.';
     $('studentState').hidden = student.status !== 'archived' && student.rankKnown;
     $('studentState').textContent = student.status === 'archived'
       ? 'Archived student. Their record and history are available to read; promotions are disabled.'
@@ -258,7 +270,9 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     renderBusy();
   }
   function latestCorrectable() {
-    return [...state.history].sort((left, right) => right.revision - left.revision).find(event => event.eventKind !== 'REGISTER') || null;
+    const latest = [...state.history].sort((left, right) => right.revision - left.revision)
+      .find(event => !(event.eventKind === 'REPAIR' && event.repair?.field === 'identity'));
+    return latest && ['RANK_CONFIRM', 'STRIPE', 'BELT', 'CORRECTION'].includes(latest.eventKind) ? latest : null;
   }
   function renderHistory() {
     $('historyList').replaceChildren();
@@ -267,12 +281,24 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     for (const event of history) {
       const article = node('article', undefined, 'history-item');
       article.append(node('h3', `${event.eventDateNY || 'Date not recorded'} · ${eventLabels[event.eventKind] || 'Recorded event'}`));
-      article.append(node('p', `${event.before ? rankLabel(event.before) : 'New identity'} → ${rankLabel(event.after)}`));
+      if (event.eventKind === 'REPAIR' && event.repair?.field === 'identity') {
+        article.append(node('p', `${event.repair.before.displayName} → ${event.repair.after.displayName}`));
+        if (event.repair.before.distinguishingLabel !== event.repair.after.distinguishingLabel) {
+          article.append(node('p', `Identifying label: ${event.repair.before.distinguishingLabel} → ${event.repair.after.distinguishingLabel}`, 'history-meta'));
+        }
+      } else {
+        article.append(node('p', `${event.before ? rankLabel(event.before) : 'New identity'} → ${rankLabel(event.after)}`));
+      }
+      if (event.eventKind === 'REPAIR') {
+        article.append(node('p', 'Source-supported data repair. This is not an instructor-awarded promotion.', 'history-meta'));
+        if (event.repair?.field === 'rank') article.append(node('p', `Historical promotion date: ${dateLabel(event.repair.after.lastPromotionDateNY)}`, 'history-meta'));
+        if (event.repair?.evidence?.interpretation) article.append(node('p', event.repair.evidence.interpretation, 'small'));
+      }
       const recordedThrough = /^m1-test-device-[a-f0-9]{24}$/u.test(event.recorderIdentity || '')
         ? 'Authorized TEST tablet' : /^m1-live-device-[a-f0-9]{24}$/u.test(event.recorderIdentity || '')
           ? 'Authorized Revolution tablet' : 'Earlier log';
-      article.append(node('p', `Promoted by: ${event.approverLabel || 'Not recorded'} · Recorded through: ${recordedThrough}`, 'history-meta'));
-      if (event.reason) article.append(node('p', event.reason, 'small'));
+      if (event.eventKind !== 'REPAIR') article.append(node('p', `Promoted by: ${event.approverLabel || 'Not recorded'} · Recorded through: ${recordedThrough}`, 'history-meta'));
+      if (event.eventKind !== 'REPAIR' && event.reason) article.append(node('p', event.reason, 'small'));
       if (event.correctsEventId) article.append(node('p', 'Corrects an earlier entry; the original is retained below.', 'history-meta'));
       $('historyList').append(article);
     }

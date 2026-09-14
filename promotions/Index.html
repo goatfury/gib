@@ -175,7 +175,7 @@
   };
   const belts = ['White Belt', 'Blue Belt', 'Purple Belt', 'Brown Belt', 'Black Belt'];
   const mutationErrors = new Set(['VALIDATION', 'NOT_FOUND', 'ARCHIVED', 'RANK_UNKNOWN', 'RANK_ALREADY_KNOWN', 'STALE_REVISION', 'REQUEST_CONFLICT', 'DUPLICATE_STUDENT', 'CORRECTION_NOT_LATEST', 'TEST_DESTINATION_INVALID']);
-  const eventLabels = { REGISTER:'Student registered', RANK_CONFIRM:'Current rank confirmed', STRIPE:'Stripe or degree added', BELT:'Belt changed', CORRECTION:'Audited correction' };
+  const eventLabels = { REGISTER:'Student registered', RANK_CONFIRM:'Current rank confirmed', STRIPE:'Stripe or degree added', BELT:'Belt changed', CORRECTION:'Audited correction', REPAIR:'Data repair' };
 
   function node(tag, text, className) {
     const element = document.createElement(tag);
@@ -365,7 +365,9 @@
     renderBusy();
   }
   function latestCorrectable() {
-    return [...state.history].sort((left, right) => right.revision - left.revision).find(event => event.eventKind !== 'REGISTER') || null;
+    const latest = [...state.history].sort((left, right) => right.revision - left.revision)
+      .find(event => !(event.eventKind === 'REPAIR' && event.repair?.field === 'identity'));
+    return latest && ['RANK_CONFIRM', 'STRIPE', 'BELT', 'CORRECTION'].includes(latest.eventKind) ? latest : null;
   }
   function renderHistory() {
     $('historyList').replaceChildren();
@@ -373,10 +375,21 @@
     $('historyEmpty').hidden = history.length > 0;
     for (const event of history) {
       const article = node('article', undefined, 'history-item');
-      article.append(node('h3', `${event.eventDateNY} · ${eventLabels[event.eventKind] || 'Recorded event'}`));
-      article.append(node('p', `${event.before ? rankLabel(event.before) : 'New identity'} → ${rankLabel(event.after)}`));
-      article.append(node('p', `Approver: ${event.approverLabel || 'Not applicable'} · Recorded by: ${event.recorderIdentity || state.recorderLabel}`, 'history-meta'));
-      if (event.reason) article.append(node('p', event.reason, 'small'));
+      article.append(node('h3', `${event.eventDateNY || 'Date not recorded'} · ${eventLabels[event.eventKind] || 'Recorded event'}`));
+      if (event.eventKind === 'REPAIR' && event.repair?.field === 'identity') {
+        article.append(node('p', `${event.repair.before.displayName} → ${event.repair.after.displayName}`));
+        if (event.repair.before.distinguishingLabel !== event.repair.after.distinguishingLabel) article.append(node('p', `Identifying label: ${event.repair.before.distinguishingLabel} → ${event.repair.after.distinguishingLabel}`, 'history-meta'));
+      } else {
+        article.append(node('p', `${event.before ? rankLabel(event.before) : 'New identity'} → ${rankLabel(event.after)}`));
+      }
+      if (event.eventKind === 'REPAIR') {
+        article.append(node('p', 'Source-supported data repair. This is not an instructor-awarded promotion.', 'history-meta'));
+        if (event.repair?.field === 'rank') article.append(node('p', `Historical promotion date: ${event.repair.after.lastPromotionDateNY || 'Date not recorded'}`, 'history-meta'));
+        if (event.repair?.evidence?.interpretation) article.append(node('p', event.repair.evidence.interpretation, 'small'));
+      } else {
+        article.append(node('p', `Approver: ${event.approverLabel || 'Not applicable'} · Recorded by: ${event.recorderIdentity || state.recorderLabel}`, 'history-meta'));
+        if (event.reason) article.append(node('p', event.reason, 'small'));
+      }
       if (event.correctsEventId) article.append(node('p', 'Corrects an earlier entry; the original is retained below.', 'history-meta'));
       $('historyList').append(article);
     }

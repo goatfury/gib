@@ -1,4 +1,10 @@
-# Promotions handoff: pre-merge import checkpoint
+# Promotions handoff: completed import and isolated repair work
+
+**2026-09-14 repair checkpoint:** PR #85 was merged and the Revolution pilot is live. The import below is complete; never restart it, recreate its tabs, or regenerate student identities. The isolated promotion-book repair branch adds source-supported full names and historical rank/date recovery through explicit owner-only audit events, plus scoped light-panel readability and TEST build-context validation. Live repair has NOT been applied and no production release is authorized by this checkpoint. TEST deployment and native verification are being completed separately; do not mistake local tests or a TEST repair for live completion. Private source comparisons, permanent identity bindings, exact repair requests, and release/recovery procedure remain outside the public repository.
+
+The existing live Google reader remains pinned to Version 5 while the new TEST reader uses a separate deployment. Before any future live REPAIR write, every reader of the live history must understand the explicit repair schema. Never roll back to an incompatible reader or restore an old workbook snapshot over newer entries. Repair requests carry exact source and revision preconditions checked under the same lock as the append; changed records must be skipped and reconsidered independently. Ordinary instructor actions cannot rename identities or execute these repairs. Preserve Sign-In, Staff Clock, offline/pending queues, and Richmond isolation.
+
+The following is the preserved pre-merge history, superseded by the verified PR #85 release receipt for launch status.
 
 **PRE-MERGE CHECKPOINT — 2026-09-13, 7:06 PM America/New_York.** The complete approved baseline import passed independent native verification and an actual Google runtime read. The Guide completion write/readback and visible instructions passed; the exact reviewed Version 5 editor source is restored. All pre-merge checks passed, with both activation gates still off at this checkpoint. No production publication is claimed here. This document is committed before the authorized merge; the PR #85 description is the authoritative later activation and published-verification receipt: https://github.com/goatfury/gib/pull/85.
 

@@ -27,7 +27,8 @@ if (promotionsTestEnabled && promotionsLiveEnabled) {
 }
 if (promotionsTestEnabled && (
   profile.installationId !== 'rev'
-  || !['deploy-preview', 'branch-deploy', 'dev'].includes(process.env.CONTEXT || '')
+  // TEST runtime accepts Deploy Preview and immutable deployment origins only.
+  || process.env.CONTEXT !== 'deploy-preview'
 )) {
   throw new Error('The Belt & Stripe Log can only be enabled in an explicit Revolution TEST build.');
 }

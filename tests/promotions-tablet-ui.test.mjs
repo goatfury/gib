@@ -225,6 +225,114 @@ test('actual typing extends lookup privacy and the mounted panel clears all pers
   assert.equal(h.calls.length, 2, 'privacy expiry causes no promotion mutation');
 });
 
+test('repaired full names are visible and searchable by first name, surname and spaced full name without merging identities', async t => {
+  const h = mountedHarness(t);
+  const records = [
+    { ...student('A'), displayName:'TEST Rowan O’Neill-Silva', distinguishingLabel:'Legacy Black Belt row 2' },
+    { ...student('B'), displayName:'TEST Rowan Park', distinguishingLabel:'Legacy Black Belt row 9' },
+    { ...student('C'), displayName:'TEST Rowan Park', distinguishingLabel:'Legacy Black Belt row 12', rankKnown:false, belt:'', marks:null, markType:'' },
+    { ...student('D'), displayName:'TEST Élodie Martin', status:'archived' }
+  ];
+  await h.bootstrap(records);
+  for (const [query, expected] of [
+    ['rowan', 3], ['o’neill-silva', 1], ['  test   ROWAN  O’Neill-Silva  ', 1], ['park', 2], ['ÉLODIE', 1]
+  ]) {
+    h.el('studentSearch').value = query; h.el('studentSearch').emit('input');
+    assert.equal(h.el('searchResults').children.length, expected, query);
+    if (expected === 1 && /neill/iu.test(query)) {
+      const result = h.el('searchResults').children[0];
+      assert.equal(result.children[0].textContent, 'TEST Rowan O’Neill-Silva');
+      assert.equal(result.children[1].textContent, 'Source record: Legacy Black Belt row 2');
+    }
+  }
+  h.el('studentSearch').value = 'park'; h.el('studentSearch').emit('input');
+  h.el('searchResults').children[1].emit('click'); await flush();
+  const selected = h.take('readStudent', records[2].studentId);
+  await h.success(selected, { student:records[2], history:[] });
+  assert.equal(h.el('studentName').textContent, records[2].displayName);
+  assert.match(h.el('studentRank').textContent, /Unknown/u);
+  assert.equal(h.el('approverChoice').value, '');
+  assert.ok(h.calls.every(call => ['bootstrap', 'readStudent'].includes(call.payload.operation)));
+});
+
+test('repair history explains name and historical rank changes without claiming an instructor award or offering ordinary repair correction', async t => {
+  const h = mountedHarness(t);
+  const original = { ...student('A'), displayName:'TEST Rowan', rankKnown:false, belt:'', marks:null, markType:'' };
+  const named = { ...original, revision:2, displayName:'TEST Rowan Park' };
+  const repaired = { ...named, revision:3, rankKnown:true, belt:'Black Belt', marks:4, markType:'degrees', lastPromotionDateNY:'2023-02-25' };
+  const history = [
+    { eventId:'fixture-original', revision:1, eventKind:'REGISTER', eventDateNY:'', before:null, after:original },
+    { eventId:'fixture-name-repair', revision:2, eventKind:'REPAIR', eventDateNY:'2026-09-13', before:original, after:named,
+      repair:{ field:'identity', before:{ displayName:original.displayName, distinguishingLabel:original.distinguishingLabel }, after:{ displayName:named.displayName, distinguishingLabel:named.distinguishingLabel }, evidence:{ interpretation:'The split name cells record the given name and surname.' } } },
+    { eventId:'fixture-rank-repair', revision:3, eventKind:'REPAIR', eventDateNY:'2026-09-13', before:named, after:repaired,
+      repair:{ field:'rank', before:named, after:repaired, evidence:{ interpretation:'The fourth labeled Black Belt award column records this historical date.' } } }
+  ];
+  for (const event of history.filter(event => event.eventKind === 'REPAIR')) event.reason = JSON.stringify({ ...event.repair, workbookId:'SYNTHETIC-PRIVATE-AUDIT-NOT-PRESENTATION' });
+  await h.bootstrap([repaired]); await h.choose('A', repaired, history);
+  assert.equal(h.el('studentName').textContent, repaired.displayName);
+  assert.equal(h.el('studentRank').textContent, 'Black Belt · 4 degrees');
+  assert.equal(h.el('studentDate').textContent, 'Latest promotion: February 25, 2023');
+  const rows = h.el('historyList').children.map(row => row.textContent);
+  assert.match(rows[0], /Data repair/u);
+  assert.match(rows[0], /Historical promotion date: February 25, 2023/u);
+  assert.match(rows[1], /TEST Rowan → TEST Rowan Park/u);
+  assert.ok(rows.slice(0,2).every(row => !row.includes('Promoted by:')));
+  assert.ok(rows.every(row => !row.includes('SYNTHETIC-PRIVATE-AUDIT-NOT-PRESENTATION')));
+  assert.equal(h.el('correctLatest').hidden, true);
+  assert.equal(h.el('promotionActions').hidden, false, 'a source-supported rank can receive a subsequent award');
+});
+
+test('a surname repair preserves correction of the latest instructor award with the current revision', async t => {
+  const h = mountedHarness(t);
+  const before = student('A', 1, 1), awarded = student('A', 2, 2);
+  const repaired = { ...awarded, displayName:'TEST Person A Fullname', revision:3, lastEventId:'fixture-name-repair' };
+  const award = { eventId:'fixture-award', revision:2, eventKind:'STRIPE', eventDateNY:'2026-09-12', before, after:awarded };
+  const repair = { eventId:repaired.lastEventId, revision:3, eventKind:'REPAIR', before:awarded, after:repaired,
+    repair:{ field:'identity', before:{ displayName:awarded.displayName, distinguishingLabel:awarded.distinguishingLabel }, after:{ displayName:repaired.displayName, distinguishingLabel:repaired.distinguishingLabel } } };
+  await h.bootstrap([repaired]); await h.choose('A', repaired, [award,repair]);
+  assert.equal(h.el('correctLatest').hidden, false);
+  h.el('correctLatest').emit('click');
+  h.el('entryReason').value = 'Correct the last awarded stripe.'; h.el('entryReason').emit('input');
+  h.el('approverChoice').value = 'TEST Coach Avery'; h.el('approverChoice').emit('input');
+  h.el('entryForm').emit('submit'); await flush();
+  const request = h.take('correctLatest');
+  assert.equal(request.payload.correctsEventId, award.eventId);
+  assert.equal(request.payload.expectedRevision, repaired.revision);
+  assert.equal(Object.hasOwn(request.payload,'displayName'), false, 'ordinary correction never sends an identity change');
+});
+
+test('a repaired historical date stays readable and an explicitly unknown date never falls back to an older award', async t => {
+  const h = mountedHarness(t);
+  const record = student('A');
+  const history = [{ eventId:'fixture-earlier-award',revision:1,eventKind:'STRIPE',eventDateNY:'2022-04-08',before:record,after:record }];
+  await h.bootstrap([record]);
+  for (const [lastPromotionDateNY, expected] of [
+    ['2023-02-25','February 25, 2023'], ['', 'Date not recorded'], [undefined, 'April 8, 2022']
+  ]) {
+    await h.choose('A',{ ...record,lastPromotionDateNY },history);
+    assert.equal(h.el('studentDate').textContent,`Latest promotion: ${expected}`);
+  }
+});
+
+test('identity repair cannot expose an older instructor award across a repaired rank or registration', async t => {
+  const h = mountedHarness(t);
+  const original = student('A'), current = { ...student('A',4), displayName:'TEST Person A Fullname' };
+  const named = { eventId:'fixture-name-repair', revision:4, eventKind:'REPAIR', before:original, after:current,
+    repair:{ field:'identity', before:{ displayName:original.displayName }, after:{ displayName:current.displayName } } };
+  await h.bootstrap([current]);
+  for (const blocker of [
+    { eventKind:'REPAIR', repair:{ field:'rank', before:original, after:original } },
+    { eventKind:'REGISTER' }
+  ]) {
+    await h.choose('A',current,[
+      { eventId:'fixture-old-award',revision:2,eventKind:'STRIPE',before:original,after:original },
+      { eventId:'fixture-blocker',revision:3,before:original,after:original,...blocker }, named
+    ]);
+    assert.equal(h.el('correctLatest').hidden, true, blocker.eventKind);
+  }
+  assert.ok(h.calls.every(call => ['bootstrap','readStudent'].includes(call.payload.operation)));
+});
+
 test('confirmed save locks duplicate submits and returns to clean Sign-In after three seconds without Done', async t => {
   const h = mountedHarness(t); await h.bootstrap(); await h.choose('A');
   const call = await h.beginStripe();

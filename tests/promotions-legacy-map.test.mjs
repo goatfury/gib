@@ -63,12 +63,12 @@ test('keeps native dates, literal dates, unknowns, annotations, headers, and exa
   assert.equal(blue.items.find(item => item.column === 10).type, 'blank');
   assert.equal(blue.items.find(item => item.column === 11).value, 'March 2018');
   assert.equal(blue.items.find(item => item.column === 11).unlabeled, true);
-  assert.equal(candidate(result, 'TEST Unlabeled Black').items.find(item => item.column === 9).value, 'Early 2014');
+  assert.equal(candidate(result, 'TEST Unlabeled Black Unresolved').items.find(item => item.column === 9).value, 'Early 2014');
 });
 
 test('retains repeated headers and unlabeled values rather than collapsing them by header name', () => {
   const result = mapLegacyBook({ sheets: fixture() });
-  const black = candidate(result, 'TEST Unlabeled Black');
+  const black = candidate(result, 'TEST Unlabeled Black Unresolved');
   const repeated = black.items.filter(item => item.header === '4 stripes');
   assert.equal(repeated.length, 2);
   assert.deepEqual(repeated.map(item => item.ref), ["'Black Belt'!E2", "'Black Belt'!J2"]);
@@ -78,13 +78,13 @@ test('retains repeated headers and unlabeled values rather than collapsing them 
   assert.equal(purple.items.find(item => item.column === 17).header, 'How they started?');
 });
 
-test('ambiguous Black and archived ranks need individual resolution while explicit ranks, degrees and zero map', () => {
+test('Black dated awards recover rank despite a blank summary while archived rank stays unresolved', () => {
   const result = mapLegacyBook({ sheets: fixture() });
-  const ambiguous = candidate(result, 'TEST Unlabeled Black');
-  assert.equal(ambiguous.currentRank.known, false);
-  assert.equal(ambiguous.currentRank.marks, null);
-  assert.equal(ambiguous.currentRank.reason, 'black_unlabeled_column_requires_resolution');
-  assert.equal(ambiguous.items.find(item => item.column === 2).value, 'Unresolved');
+  const recovered = candidate(result, 'TEST Unlabeled Black Unresolved');
+  assert.equal(recovered.currentRank.known, true);
+  assert.equal(recovered.currentRank.marks, 4);
+  assert.equal(recovered.currentRank.date.value, '2024-03-01');
+  assert.equal(recovered.items.find(item => item.column === 2).value, 'Unresolved');
   assert.equal(candidate(result, 'TEST Explicit Degree').currentRank.marks, 5);
   assert.equal(candidate(result, 'TEST Explicit Degree').currentRank.markType, 'degrees');
   assert.equal(candidate(result, 'TEST White').currentRank.marks, 0);
