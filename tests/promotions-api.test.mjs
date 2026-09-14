@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { handlePromotionsApiOAuth } from '../netlify/functions/m1-promotions-api-oauth.mts';
 import { createProductionDeviceCredential } from '../netlify/functions/_lib/m1-production-runtime.mjs';
 import { promotionsRuntimeConfig, createPromotionsEnvelope } from '../netlify/functions/_lib/promotions-runtime.mts';
@@ -27,6 +28,12 @@ const device=createProductionDeviceCredential(ENV.GIB_PROMOTIONS_TEST_DEVICE_SEC
 const privateAccess='SYNTHETIC_PRIVATE_ACCESS_TOKEN';
 const privateRefresh='SYNTHETIC_PRIVATE_REFRESH_TOKEN';
 const fingerprint=value=>createHash('sha256').update(value).digest('hex');
+test('Netlify can extract OAuth routes as literal strings without resolving runtime imports',()=>{
+  const source=readFileSync(new URL('../netlify/functions/m1-promotions-api-oauth.mts',import.meta.url),'utf8');
+  const pathLiteral=source.match(/export\s+const\s+config\s*=\s*\{\s*path\s*:\s*(\[[^\]]*\])/u)?.[1];
+  assert.ok(pathLiteral,'the exported configuration must contain a literal path array');
+  assert.deepEqual(JSON.parse(pathLiteral.replace(/'/gu,'"')),[API_OAUTH_PATH,API_CALLBACK_PATH]);
+});
 function memoryStore(){
   const records=new Map();const writes=[];let revision=0;
   return{records,writes,async getWithMetadata(key){return records.get(key)||null;},async set(key,value,condition){
