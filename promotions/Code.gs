@@ -349,12 +349,15 @@ function doPost(event) {
     trace = beginPromotionResponseTrace_(bridge);
     const result = promotionRequestWithRecorder_(bridge.request, bridge.deviceIdentity, bridge);
     const output = promotionJsonOutput_({ bridge: bridge.mode, target: bridge.target, installation: 'rev', requestNonce: bridge.nonce, result });
+    recordPromotionResponseReceipt_(trace, result, output, true);
     logPromotionResponseTrace_(trace, 'completion', result);
     return output;
   } catch (error) {
     const result = { ok: false, error: { code: 'UNAUTHORIZED', message: 'Authorized tablet access is required.', retryable: false } };
+    const output = promotionJsonOutput_(result);
+    recordPromotionResponseReceipt_(trace, result, output, false);
     logPromotionResponseTrace_(trace, 'completion', result);
-    return promotionJsonOutput_(result);
+    return output;
   }
 }
 
@@ -371,13 +374,53 @@ function logPromotionResponseTrace_(trace, stage, result) {
   if (!trace) return;
   try {
     const resultOK = stage === 'completion' && result && typeof result.ok === 'boolean' ? result.ok : null;
-    const code = resultOK === false && result.error && result.error.code;
-    const allowed = ['UNAVAILABLE', 'UNAUTHORIZED', 'VALIDATION', 'NOT_FOUND', 'ARCHIVED', 'RANK_UNKNOWN', 'RANK_ALREADY_KNOWN',
-      'STALE_REVISION', 'REQUEST_CONFLICT', 'DUPLICATE_STUDENT', 'CORRECTION_NOT_LATEST', 'TEST_DESTINATION_INVALID', 'LIVE_DESTINATION_INVALID', 'BUSY'];
-    console.info('GIB_TEST_RESPONSE_TRACE', JSON.stringify({ stage, traceId: trace.traceId, operation: trace.operation,
+    console.info(JSON.stringify({ kind: 'GIB_TEST_RESPONSE_TRACE', stage, traceId: trace.traceId, operation: trace.operation,
       elapsedMs: Math.max(0, Date.now() - trace.startedAt), intendedResponseType: 'application/json', resultOK,
-      errorCode: resultOK === false ? allowed.includes(code) ? code : 'OTHER' : null }));
+      errorCode: promotionResponseTraceErrorCode_(result) }));
   } catch (_) { /* TEST observation cannot change the response or authentication. */ }
+}
+
+function promotionResponseTraceErrorCode_(result) {
+  if (!result || result.ok !== false) return null;
+  const code = result.error && result.error.code;
+  return ['UNAVAILABLE', 'UNAUTHORIZED', 'VALIDATION', 'NOT_FOUND', 'ARCHIVED', 'RANK_UNKNOWN', 'RANK_ALREADY_KNOWN',
+    'STALE_REVISION', 'REQUEST_CONFLICT', 'DUPLICATE_STUDENT', 'CORRECTION_NOT_LATEST', 'TEST_DESTINATION_INVALID', 'LIVE_DESTINATION_INVALID', 'BUSY', 'OTHER'].includes(code) ? code : 'OTHER';
+}
+
+function recordPromotionResponseReceipt_(trace, result, output, wrappedResponse) {
+  if (!trace) return;
+  try {
+    const receipt = { traceId: trace.traceId, operation: trace.operation, processingMs: Math.max(0, Date.now() - trace.startedAt),
+      jsonPrepared: true, wrappedResponse, responseSha256: null, responseBytes: null,
+      resultOK: result && typeof result.ok === 'boolean' ? result.ok : null, errorCode: promotionResponseTraceErrorCode_(result) };
+    try {
+      const text = output.getContent();
+      receipt.responseSha256 = promotionRepairDigest_(text);
+      receipt.responseBytes = Utilities.newBlob(text).getBytes().length;
+    } catch (_) { /* JSON preparation remains useful evidence without a fingerprint. */ }
+    // Diagnostic receipt only: no records, request data, URLs or credentials.
+    // Cache absence is inconclusive and this is never a save confirmation.
+    CacheService.getScriptCache().put('promotions-test-response-trace:' + trace.traceId, JSON.stringify(receipt), 1800);
+  } catch (_) { /* Best-effort receipt must never affect the returned response. */ }
+}
+
+function readTestResponseTrace(traceId) {
+  authenticatedPromotionOwner_();
+  if (typeof traceId !== 'string' || !/^[0-9a-f]{24}$/.test(traceId)) failPromotion_('VALIDATION', 'Use a valid TEST response trace identifier.');
+  const absent = { status: 'absent', inconclusive: true };
+  try {
+    const receipt = JSON.parse(CacheService.getScriptCache().get('promotions-test-response-trace:' + traceId));
+    const fields = ['traceId', 'operation', 'processingMs', 'jsonPrepared', 'wrappedResponse', 'responseSha256', 'responseBytes', 'resultOK', 'errorCode'];
+    if (!plainPromotionObject_(receipt) || Object.keys(receipt).length !== fields.length
+      || !fields.every(field => Object.prototype.hasOwnProperty.call(receipt, field)) || receipt.traceId !== traceId
+      || !['bootstrap', 'readStudent'].includes(receipt.operation) || !Number.isSafeInteger(receipt.processingMs) || receipt.processingMs < 0 || receipt.processingMs > 3600000
+      || typeof receipt.jsonPrepared !== 'boolean' || typeof receipt.wrappedResponse !== 'boolean'
+      || !(receipt.responseSha256 === null || typeof receipt.responseSha256 === 'string' && /^[0-9a-f]{64}$/.test(receipt.responseSha256))
+      || !(receipt.responseBytes === null || Number.isSafeInteger(receipt.responseBytes) && receipt.responseBytes >= 0 && receipt.responseBytes <= 10000000)
+      || !(receipt.resultOK === null || typeof receipt.resultOK === 'boolean')
+      || receipt.errorCode !== promotionResponseTraceErrorCode_({ ok: receipt.resultOK, error: { code: receipt.errorCode } })) return absent;
+    return { status: 'present', receipt };
+  } catch (_) { return absent; }
 }
 
 function promotionJsonOutput_(value) {

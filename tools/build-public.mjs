@@ -33,6 +33,8 @@ export const PUBLIC_FILES = Object.freeze([
   'm1/promotions-core.mjs',
   'm1/promotions-template.mjs',
   'm1/promotions-test-setup.html',
+  'm1/promotions-transport-compare.html',
+  'm1/promotions-transport-compare.mjs',
   'm1/promotions.css',
   'm1/richmond-schedule.json',
   'm1/service-worker.js',

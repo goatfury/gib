@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { deploymentInstallationProfile } from './_lib/m1-installation.mjs';
 import {
+  comparisonMetadata, comparisonErrorCode, nextComparisonInvocation,
+  fetchComparisonAutomatic, fetchComparisonHttps, readComparisonBody
+} from './_lib/promotions-transport-compare.mts';
+import {
   PROMOTIONS_ENV_KEYS, PROMOTIONS_INSTALL_PATH,
   createPromotionsEnvelope, handlePromotionsInstall, promotionsDeviceCredential,
   promotionsRuntimeConfig, validPromotionsRequest
@@ -85,7 +89,7 @@ function htmlDiagnostics(text, type, host) {
 
 // Observe the TEST redirect chain instead of losing it inside fetch(). The
 // signed request is never retried; redirects share the original 25-second budget.
-async function fetchTestRedirects(fetcher, firstUrl, options, trace) {
+async function fetchTestRedirects(fetcher, firstUrl, options, trace, cleanupOnFailure = false) {
   let url = firstUrl;
   let method = options.method;
   let body = options.body;
@@ -103,7 +107,12 @@ async function fetchTestRedirects(fetcher, firstUrl, options, trace) {
     if (![301, 302, 303, 307, 308].includes(response.status)) return response;
     const location = response.headers.get('location');
     if (!location) return response;
-    const next = new URL(location, url);
+    let next;
+    try { next = new URL(location, url); }
+    catch (error) {
+      if (cleanupOnFailure) void response.body?.cancel().catch(() => {});
+      throw error;
+    }
     hop.destination = hostCategory(next.href);
     hop.destinationPath = pathCategory(next.href);
     // Only the already authorized Google service may receive a redirect. Never
@@ -120,6 +129,7 @@ async function fetchTestRedirects(fetcher, firstUrl, options, trace) {
 }
 
 export async function handlePromotions(request, dependencies = {}) {
+  const invocation = nextComparisonInvocation();
   const env = dependencies.env || Object.fromEntries(PROMOTIONS_ENV_KEYS.map(key => [key, globalThis.Netlify?.env?.get(key)]));
   const installationId = dependencies.installationId || deploymentInstallationProfile()?.installationId;
   const requestUrl = new URL(request.url);
@@ -151,6 +161,20 @@ export async function handlePromotions(request, dependencies = {}) {
     || (runtime.target === 'live' && !Object.hasOwn(input, 'approverName')))) {
     return failure(400, 'VALIDATION', 'Enter a name in Promoted by.');
   }
+  // The selector is diagnostic-only and cannot select a URL, a write, checkSave,
+  // another installation, or an unauthenticated request. LIVE ignores it.
+  const comparisonArm = runtime.target === 'test' ? request.headers.get('X-GIB-TEST-Transport') : null;
+  if (comparisonArm !== null && (!['preflight', 'A', 'B', 'C'].includes(comparisonArm)
+    || !['bootstrap', 'readStudent'].includes(input.operation))) {
+    return failure(400, 'VALIDATION', 'Transport comparison supports authorized TEST record reads only.');
+  }
+  const comparison = comparisonArm === null ? null : comparisonMetadata(comparisonArm, runtime.webhookUrl, invocation,
+    dependencies.comparisonEnvironment || Object.fromEntries(['CONTEXT', 'AWS_REGION', 'DEPLOY_ID'].map(key => [key, globalThis.Netlify?.env?.get(key) || process.env[key]])));
+  if (comparisonArm === 'preflight') {
+    const response = respond(200, { ok:true, data:{ diagnosticOnly:true, preflight:comparison } });
+    response.headers.set('X-GIB-TEST-Comparison', JSON.stringify(comparison));
+    return response;
+  }
   const envelope = createPromotionsEnvelope(runtime, credential, input, now, dependencies.randomBytes);
   let phase = 'fetch';
   let upstreamStatus = 0;
@@ -159,12 +183,15 @@ export async function handlePromotions(request, dependencies = {}) {
   let upstreamHost = 'missing';
   let envelopeFailure = 'none';
   const upstreamTrace = [];
+  const socketTrace = [];
   const upstreamStarted = performance.now();
   const traceId = runtime.target === 'test' ? responseDigest('gib-test-response-trace:v1\n' + envelope.payload.nonce).slice(0, 24) : '';
   let responseFingerprint = '';
   let html = { category:'missing', title:'missing', reason:'none' };
   function withTestDiagnostics(response) {
     if (runtime.target !== 'test') return response;
+    if (comparison) response.headers.set('X-GIB-TEST-Comparison', JSON.stringify(comparison));
+    if (comparisonArm === 'C') response.headers.set('X-GIB-TEST-Socket-Trace', JSON.stringify(socketTrace));
     response.headers.set('X-GIB-TEST-Trace-Id', traceId);
     response.headers.set('X-GIB-TEST-Upstream', phase);
     response.headers.set('X-GIB-TEST-Upstream-Ms', String(Math.max(0, Math.round(performance.now() - upstreamStarted))));
@@ -183,10 +210,15 @@ export async function handlePromotions(request, dependencies = {}) {
   try {
     const options = {
       method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(envelope), redirect: 'follow', signal: AbortSignal.timeout(25000)
+      body: JSON.stringify(envelope), redirect: 'follow', signal: comparison
+        ? AbortSignal.any([AbortSignal.timeout(25000), request.signal, ...(dependencies.comparisonSignal ? [dependencies.comparisonSignal] : [])])
+        : AbortSignal.timeout(25000)
     };
     const fetcher = dependencies.fetch || fetch;
-    const response = runtime.target === 'test' ? await fetchTestRedirects(fetcher, runtime.webhookUrl, options, upstreamTrace)
+    const diagnostics = { hostCategory, pathCategory, responseType };
+    const response = comparisonArm === 'B' ? await fetchComparisonAutomatic(fetcher, runtime.webhookUrl, options, upstreamTrace, diagnostics, dependencies.comparisonDispatcher)
+      : comparisonArm === 'C' ? await fetchComparisonHttps(runtime.webhookUrl, options, upstreamTrace, socketTrace, diagnostics, dependencies.httpsRequest)
+      : runtime.target === 'test' ? await fetchTestRedirects(fetcher, runtime.webhookUrl, options, upstreamTrace, Boolean(comparison))
       : await fetcher(runtime.webhookUrl, options);
     upstreamStatus = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : 0;
     if (runtime.target === 'test') {
@@ -195,7 +227,7 @@ export async function handlePromotions(request, dependencies = {}) {
       upstreamHost = response.url ? hostCategory(response.url) : upstreamTrace.at(-1)?.host || 'missing';
     }
     phase = 'body';
-    const text = await response.text();
+    const text = comparison ? await readComparisonBody(response, options.signal) : await response.text();
     if (runtime.target === 'test') {
       responseFingerprint = responseDigest(text);
       html = htmlDiagnostics(text, upstreamType, upstreamHost);
@@ -211,7 +243,8 @@ export async function handlePromotions(request, dependencies = {}) {
       || !body.result || typeof body.result.ok !== 'boolean') throw new Error('Invalid promotion confirmation.');
     if (runtime.target === 'test') envelopeFailure = 'none';
     return withTestDiagnostics(respond(200, body.result));
-  } catch {
+  } catch (error) {
+    if (comparison) comparison.errorCode = comparisonErrorCode(error);
     const response = respond(503, { ok: false, error: { code: 'UNAVAILABLE', message: `The ${runtime.target === 'test' ? 'TEST ' : ''}connection did not confirm this request. Keep the original entry and check or retry it.`, retryable: true },
       ...(typeof input.requestId === 'string' ? { requestId: input.requestId } : {}) });
     // Only authenticated TEST responses expose fixed categories and digests.
@@ -219,4 +252,10 @@ export async function handlePromotions(request, dependencies = {}) {
   }
 }
 
-export default (request, context) => handlePromotions(request, { siteId: context?.site?.id });
+export default (request, context) => handlePromotions(request, { siteId: context?.site?.id,
+  comparisonEnvironment:{
+    CONTEXT:context?.deploy?.context || globalThis.Netlify?.env?.get('CONTEXT') || process.env.CONTEXT,
+    DEPLOY_ID:context?.deploy?.id || globalThis.Netlify?.env?.get('DEPLOY_ID') || process.env.DEPLOY_ID,
+    AWS_REGION:process.env.AWS_REGION || globalThis.Netlify?.env?.get('AWS_REGION')
+  }
+});

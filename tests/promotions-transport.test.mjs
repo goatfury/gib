@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { handlePromotions } from '../netlify/functions/m1-promotions.mts';
 import * as runtime from '../netlify/functions/_lib/promotions-runtime.mts';
@@ -784,4 +786,123 @@ test('live dispatcher requires typed attribution and denies TEST credentials and
     assert.deepEqual(diagnosticHeaders(response), []);
   }
   assert.equal(h.calls.length, 0);
+});
+
+test('comparison preflight is authenticated, TEST-only and read-only, and never creates an envelope or calls Google', async () => {
+  const h = serverHarness({ comparisonEnvironment:{ CONTEXT:'deploy-preview', AWS_REGION:'us-east-2', DEPLOY_ID:'a'.repeat(24) },
+    randomBytes:() => { throw new Error('Preflight must not create an envelope'); } });
+  const response = await h.run(request(API, { extraHeaders:{ 'X-GIB-TEST-Transport':'preflight' } }));
+  assert.equal(response.status, 200);
+  const metadata = JSON.parse(response.headers.get('X-GIB-TEST-Comparison'));
+  const body = await response.json();
+  assert.deepEqual(body, { ok:true, data:{ diagnosticOnly:true, preflight:metadata } });
+  assert.equal(metadata.arm, 'preflight'); assert.equal(metadata.context, 'deploy-preview'); assert.equal(metadata.region, 'us-east-2');
+  assert.equal(metadata.deploymentId, 'a'.repeat(24)); assert.equal(metadata.deadlineMs, 25000); assert.equal(metadata.maxResponseBytes, 1000000);
+  assert.equal(metadata.endpointHash, createHash('sha256').update(ENV.GIB_PROMOTIONS_TEST_WEBHOOK_URL).digest('hex'));
+  assert.match(metadata.instanceId, /^[a-f0-9]{24}$/u); assert.ok(metadata.invocation > 0); assert.equal(typeof metadata.warm, 'boolean');
+  assert.equal(response.headers.has('X-GIB-TEST-Trace-Id'), false); assert.equal(h.calls.length, 0);
+  noPrivateConfiguration(metadata);
+  for (const arm of ['preflight','A','B','C','https://untrusted.invalid/','a','']) {
+    const denied = await h.run(request(API, { cookie:'', extraHeaders:{ 'X-GIB-TEST-Transport':arm } }));
+    assert.equal(denied.status, 401); assert.deepEqual(diagnosticHeaders(denied), []);
+  }
+  for (const body of [LOOKUPS[2], SAVE, namedRequest(SAVE)]) for (const arm of ['preflight','A','B','C']) {
+    const denied = await h.run(request(API, { body, extraHeaders:{ 'X-GIB-TEST-Transport':arm } }));
+    assert.equal(denied.status, 400); assert.deepEqual(diagnosticHeaders(denied), []);
+  }
+  for (const arm of ['','AB','https://untrusted.invalid/']) assert.equal((await h.run(request(API, { extraHeaders:{ 'X-GIB-TEST-Transport':arm } }))).status, 400);
+  assert.equal(h.calls.length, 0);
+});
+
+test('comparison A keeps one manual chain and fresh signed nonces while returning safe metadata on success and failure', async () => {
+  const nonces = [];
+  const h = serverHarness({ comparisonEnvironment:{CONTEXT:'PRIVATE_CONTEXT',AWS_REGION:'PRIVATE_REGION',DEPLOY_ID:'PRIVATE_DEPLOYMENT'}, fetch:async (_url, options) => {
+    assert.equal(options.redirect, 'manual');
+    const envelope = JSON.parse(options.body); nonces.push(envelope.payload.nonce);
+    if (nonces.length === 2) throw Object.assign(new Error('PRIVATE_ERROR'), {code:'ECONNRESET'});
+    return new Response(JSON.stringify({bridge:MODE,target:'test',installation:'rev',requestNonce:envelope.payload.nonce,result:{ok:true,data:{testOnly:true}}}),{headers:{'content-type':'application/json'}});
+  }});
+  for (const status of [200,503]) {
+    const response = await h.run(request(API, { extraHeaders:{'X-GIB-TEST-Transport':'A'} }));
+    assert.equal(response.status,status);
+    const meta=JSON.parse(response.headers.get('X-GIB-TEST-Comparison'));
+    assert.equal(meta.arm,'A'); assert.equal(meta.errorCode,status===200?'none':'ECONNRESET');
+    assert.equal(meta.context,'unknown'); assert.equal(meta.region,'unknown'); assert.equal(meta.deploymentId,'unknown');
+    assert.equal(response.headers.has('X-GIB-TEST-Socket-Trace'),false);
+    assert.equal(JSON.stringify(diagnosticHeaders(response)).includes('PRIVATE'),false); noPrivateConfiguration(meta);
+  }
+  assert.equal(nonces.length,2); assert.notEqual(nonces[0],nonces[1]);
+});
+
+test('comparison A cancels an oversized or stalled body at the shared limit without retrying the POST', async () => {
+  for (const variant of ['large','stalled']) {
+    let cancelled=false, calls=0;
+    const abort = new AbortController();
+    const h=serverHarness({comparisonSignal:abort.signal,fetch:async()=>{
+      calls++;
+      return new Response(new ReadableStream({ start(controller) {
+        if(variant==='large') controller.enqueue(new Uint8Array(1000001));
+        else setImmediate(()=>abort.abort(new DOMException('PRIVATE_TIMEOUT','TimeoutError')));
+      }, cancel(){cancelled=true;} }),{headers:{'content-type':'application/json'}});
+    }});
+    const response=await h.run(request(API,{extraHeaders:{'X-GIB-TEST-Transport':'A'}}));
+    assert.equal(response.status,503);assert.equal(calls,1);assert.equal(cancelled,true);
+    assert.equal(response.headers.get('X-GIB-TEST-Upstream'),'body');
+    assert.equal(JSON.parse(response.headers.get('X-GIB-TEST-Comparison')).errorCode,variant==='large'?'BODY_TOO_LARGE':'TIMEOUT');
+    assert.equal(response.headers.has('X-GIB-TEST-Response-Fingerprint'),false);
+    assert.equal(JSON.stringify(diagnosticHeaders(response)).includes('PRIVATE'),false);
+  }
+});
+
+test('LIVE ignores comparison selectors and keeps its existing automatic fetch contract without diagnostics', async () => {
+  for (const arm of ['preflight','A','B','C']) {
+    let calls=0;
+    const h=serverHarness({env:LIVE_ENV,comparisonDispatcher:()=>{throw new Error('Must not select a comparator on LIVE');},fetch:async(url,options)=>{
+      calls++;assert.equal(url,LIVE_ENV.GIB_PROMOTIONS_LIVE_WEBHOOK_URL);assert.equal(options.redirect,'follow');assert.equal(options.dispatcher,undefined);
+      const envelope=JSON.parse(options.body);
+      return new Response(JSON.stringify({bridge:envelope.payload.mode,target:'live',installation:'rev',requestNonce:envelope.payload.nonce,result:{ok:true,data:{testOnly:false}}}));
+    }});
+    const response=await h.run(liveRequest(LOOKUPS[0],{extraHeaders:{'X-GIB-TEST-Transport':arm}}));
+    assert.equal(response.status,200);assert.equal(calls,1);assert.deepEqual(diagnosticHeaders(response),[]);
+  }
+});
+
+test('B and C return only a valid nonce-bound TEST reply through the full authorized route', async () => {
+  for (const arm of ['B','C']) for (const variant of ['success','application','mismatch']) {
+    const calls=[];let envelope;
+    const reply = () => JSON.stringify({ bridge:MODE,target:'test',installation:'rev',requestNonce:variant==='mismatch'?'wrong':envelope.payload.nonce,
+      result:variant==='application'?{ok:false,error:{code:'NOT_FOUND',message:'Synthetic student was not found.',retryable:false}}:{ok:true,data:{testOnly:true}} });
+    const delegate = { dispatch(opts,handler) {
+      calls.push({method:opts.method});handler.onConnect(()=>{});
+      queueMicrotask(async()=>{
+        try {
+          if(opts.body){const chunks=[];for await(const chunk of opts.body)chunks.push(Buffer.from(chunk));envelope=JSON.parse(Buffer.concat(chunks).toString());}
+          const redirect=calls.length===1;
+          const headers=redirect?['location','https://script.googleusercontent.com/macros/echo?key=PRIVATE_RESPONSE']:['content-type','application/json'];
+          handler.onHeaders(redirect?302:200,headers.map(value=>Buffer.from(value)),()=>{},'OK');
+          if(!redirect)handler.onData(Buffer.from(reply()));handler.onComplete([]);
+        }catch(error){handler.onError(error);}
+      });return true;
+    }};
+    const httpsRequest = (_url,opts,callback) => {
+      const req=new EventEmitter();const incoming=new PassThrough();req.reusedSocket=false;
+      req.destroy=()=>{incoming.destroy();return req;};
+      req.end=body=>{
+        calls.push({method:opts.method});if(body)envelope=JSON.parse(body);
+        queueMicrotask(()=>{const redirect=calls.length===1;incoming.statusCode=redirect?302:200;
+          incoming.rawHeaders=redirect?['location','https://script.googleusercontent.com/macros/echo?key=PRIVATE_RESPONSE']:['content-type','application/json'];
+          callback(incoming);incoming.end(redirect?'':reply());});
+      };return req;
+    };
+    const h=serverHarness({fetch:globalThis.fetch,comparisonDispatcher:()=>delegate,httpsRequest});
+    const response=await h.run(request(API,{body:LOOKUPS[1],extraHeaders:{'X-GIB-TEST-Transport':arm}}));
+    const body=await response.json();
+    assert.equal(response.status,variant==='mismatch'?503:200);assert.equal(body.ok,variant==='success');
+    assert.equal(envelope.payload.target,'test');assert.deepEqual(envelope.payload.request,LOOKUPS[1]);assert.deepEqual(calls.map(call=>call.method),['POST','GET']);
+    assert.equal(JSON.parse(response.headers.get('X-GIB-TEST-Comparison')).arm,arm);
+    assert.equal(response.headers.get('X-GIB-TEST-Upstream-Envelope'),variant==='mismatch'?'mismatch':'none');
+    assert.equal(response.headers.get('X-GIB-TEST-Trace-Id'),createHash('sha256').update('gib-test-response-trace:v1\n'+envelope.payload.nonce).digest('hex').slice(0,24));
+    assert.equal(response.headers.has('X-GIB-TEST-Socket-Trace'),arm==='C');
+    assert.equal(JSON.stringify(diagnosticHeaders(response)).includes('PRIVATE_RESPONSE'),false);noPrivateConfiguration(diagnosticHeaders(response));
+  }
 });
