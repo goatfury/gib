@@ -4,7 +4,8 @@ import { createPromotionsTransport, mountPromotionsLog } from '../m1/promotions-
 
 const PRIVATE = 'SYNTHETIC_PRIVATE_NAME_ID_URL_MESSAGE';
 const keys = ['operation', 'startedAt', 'browserElapsedMs', 'phase', 'httpStatus', 'errorCode', 'outcome',
-  'upstreamPhase', 'upstreamMs', 'upstreamStatus', 'upstreamType', 'upstreamRedirected', 'upstreamHost', 'upstreamEnvelope', 'upstreamTrace'].sort();
+  'upstreamPhase', 'upstreamMs', 'upstreamStatus', 'upstreamType', 'upstreamRedirected', 'upstreamHost', 'upstreamEnvelope', 'upstreamTrace',
+  'traceId', 'responseFingerprint', 'htmlCategory', 'htmlTitle', 'htmlReason'].sort();
 const response = (body, { status = 200, headers = new Headers() } = {}) => ({ ok: status >= 200 && status < 300, status, headers, json: async () => body });
 const tick = async () => { for (let step = 0; step < 6; step += 1) await Promise.resolve(); };
 function inspect(record) {
@@ -59,21 +60,37 @@ test('unrecognized operations, codes and header contents cannot leak through the
 });
 
 test('TEST redirect traces accept only bounded exact safe hop records and reject private fields', async () => {
-  const hop = { method: 'POST', host: 'google-script', status: 302, type: 'html', ms: 4335, destination: 'google-content' };
-  const valid = [hop, { method: 'GET', host: 'google-content', status: null, type: 'missing', ms: 0, destination: 'none' }];
+  const hop = { method: 'POST', host: 'google-script', path: 'web-app-exec', status: 302, type: 'html', ms: 4335, destination: 'google-content', destinationPath: 'content-response' };
+  const valid = [hop, { method: 'GET', host: 'google-content', path: 'content-response', status: null, type: 'missing', ms: 0, destination: 'none', destinationPath: 'none' }];
   const malformed = [
-    PRIVATE, JSON.stringify({ ...hop }), JSON.stringify(Array(21).fill(hop)),
+    PRIVATE, JSON.stringify({ ...hop }), JSON.stringify(Array(22).fill(hop)),
     ...[{ ...hop, private: PRIVATE }, { ...hop, method: PRIVATE }, { ...hop, host: PRIVATE }, { ...hop, type: PRIVATE },
       { ...hop, destination: PRIVATE }, { ...hop, status: 99 }, { ...hop, status: 600 }, { ...hop, status: '302' },
-      { ...hop, ms: -1 }, { ...hop, ms: 3600001 }, { ...hop, ms: 0.5 }, { ...hop, destination: undefined }, null
+      { ...hop, ms: -1 }, { ...hop, ms: 3600001 }, { ...hop, ms: 0.5 }, { ...hop, destination: undefined },
+      { ...hop, path: PRIVATE }, { ...hop, destinationPath: PRIVATE }, null
     ].map(value => JSON.stringify([value]))
   ];
-  for (const [value, expected] of [[JSON.stringify(valid), valid], [JSON.stringify(Array(20).fill(hop)), Array(20).fill(hop)], ...malformed.map(value => [value, null])]) {
+  for (const [value, expected] of [[JSON.stringify(valid), valid], [JSON.stringify(Array(21).fill(hop)), Array(21).fill(hop)], ...malformed.map(value => [value, null])]) {
     const records = []; const error = { code: 'UNAVAILABLE', message: PRIVATE };
     const headers = new Headers({ 'X-GIB-TEST-Upstream-Trace': value });
     const transport = createPromotionsTransport(async () => response({ ok: false, error }, { status: 503, headers }), { onDiagnostic: item => records.push(item) });
     assert.equal(await transport({ operation: 'readStudent', studentId: PRIVATE }).catch(value => value), error);
     assert.equal(records.length, 1); inspect(records[0]); assert.deepEqual(records[0].upstreamTrace, expected);
+  }
+});
+
+test('TEST correlation and page identity accept only fixed categories and bounded hashes on success and failure', async () => {
+  const pairs = { traceId: ['Trace-Id', 'a'.repeat(24)], responseFingerprint: ['Response-Fingerprint', 'b'.repeat(64)],
+    htmlCategory: ['HTML-Category', 'google-error'], htmlTitle: ['HTML-Title', 'google-drive'], htmlReason: ['HTML-Reason', 'google-file-unavailable'] };
+  for (const ok of [true, false]) {
+    for (const invalid of [false, true]) {
+      const records = [];
+      const headers = new Headers(Object.values(pairs).map(([name, value]) => ['X-GIB-TEST-' + name, invalid ? PRIVATE : value]));
+      const body = ok ? { ok: true, data: {} } : { ok: false, error: { code: 'UNAVAILABLE' } };
+      await createPromotionsTransport(async () => response(body, { status: ok ? 200 : 503, headers }), { onDiagnostic: value => records.push(value) })({ operation: 'readStudent' }).catch(() => {});
+      inspect(records[0]);
+      for (const [key, [, value]] of Object.entries(pairs)) assert.equal(records[0][key], invalid ? null : value);
+    }
   }
 });
 

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { deploymentInstallationProfile } from './_lib/m1-installation.mjs';
 import {
   PROMOTIONS_ENV_KEYS, PROMOTIONS_INSTALL_PATH,
@@ -40,6 +41,47 @@ const hostCategory = url => {
     return host === 'script.googleusercontent.com' ? 'google-content' : host === 'script.google.com' ? 'google-script' : host === 'accounts.google.com' ? 'google-auth' : 'other';
   } catch { return 'other'; }
 };
+const pathCategory = url => {
+  if (!url) return 'missing';
+  try {
+    const path = new URL(url).pathname;
+    if (/^\/(?:a\/[^/]+\/)?macros\/s\/[^/]+\/exec\/?$/u.test(path)) return 'web-app-exec';
+    if (/^\/(?:a\/[^/]+\/)?macros\/s\/[^/]+\/dev\/?$/u.test(path)) return 'web-app-dev';
+    if (path === '/macros/echo') return 'content-response';
+    if (/^\/(?:ServiceLogin|AccountChooser)(?:\/|$)|^\/(?:v[0-9]+\/)?signin(?:\/|$)|^\/(?:o\/)?oauth2(?:\/|$)/u.test(path)) return 'accounts';
+    return 'other';
+  } catch { return 'other'; }
+};
+const responseDigest = text => createHash('sha256').update(text, 'utf8').digest('hex');
+const ownerTitles = ['Promotions · PRIVATE SYNTHETIC TEST', 'Promotions · TEST'];
+function htmlDiagnostics(text, type, host) {
+  if (!text.trim()) return { category:'missing', title:'missing', reason:'none' };
+  if (type === 'json' || type !== 'html' && !/^\s*<(?:!doctype\s+html|html|title)(?:\s|>)/iu.test(text)) return { category:'not-html', title:'missing', reason:'none' };
+  const rawTitle = text.match(/<title\b[^>]*>([\s\S]*?)<\/title\s*>/iu)?.[1];
+  const title = rawTitle?.replace(/<[^>]*>/gu, '').replace(/\s+/gu, ' ').trim();
+  const googleHost = ['google-script','google-content','google-auth'].includes(host);
+  const ownerPage = ownerTitles.includes(title)
+    || (/<(?:iframe|script)\b/iu.test(text) && /userHtml|google\.script/u.test(text) && ownerTitles.some(known => text.includes(known)));
+  const signInTitle = googleHost && ['sign in - google accounts','sign in – google accounts','google accounts'].includes(title?.toLowerCase());
+  const errorTitle = googleHost && ['error','google apps script - error','error - google apps script'].includes(title?.toLowerCase());
+  const titleCategory = !title ? 'missing' : ownerTitles.includes(title) ? 'owner-page' : signInTitle ? 'google-sign-in'
+    : googleHost && title === 'Google Drive' ? 'google-drive' : errorTitle ? 'google-error' : 'other';
+  if (text.includes('Private TEST access required') || text.includes('This promotion tool is available only to its configured TEST manager.')) {
+    return { category:'owner-denial', title:titleCategory, reason:'owner-access-required' };
+  }
+  if (ownerPage) return { category:'owner-page', title:titleCategory, reason:'none' };
+  if (signInTitle || googleHost && text.includes('Sign in to continue to Google Drive')) return { category:'google-auth', title:titleCategory, reason:'google-sign-in-required' };
+  if (googleHost && (text.includes('Sorry, unable to open the file at this time.') || text.includes('Sorry, the file you have requested does not exist.'))) {
+    return { category:'google-error', title:titleCategory, reason:'google-file-unavailable' };
+  }
+  if (googleHost && (text.includes('Script function not found:') || text.includes('The script completed but did not return anything.'))) {
+    return { category:'google-error', title:titleCategory, reason:'google-script-error' };
+  }
+  if (googleHost && /(?:<title\b[^>]*>|<h1\b[^>]*>)\s*(?:503\s+)?Service Unavailable\s*</iu.test(text)) {
+    return { category:'google-error', title:titleCategory, reason:'google-service-unavailable' };
+  }
+  return { category:errorTitle ? 'google-error' : 'other-html', title:titleCategory, reason:'unknown' };
+}
 
 // Observe the TEST redirect chain instead of losing it inside fetch(). The
 // signed request is never retried; redirects share the original 25-second budget.
@@ -50,7 +92,7 @@ async function fetchTestRedirects(fetcher, firstUrl, options, trace) {
   let headers = options.headers;
   for (let redirects = 0; redirects <= 20; redirects += 1) {
     const started = performance.now();
-    const hop = { method, host:hostCategory(url), status:null, type:'missing', ms:0, destination:'none' };
+    const hop = { method, host:hostCategory(url), path:pathCategory(url), status:null, type:'missing', ms:0, destination:'none', destinationPath:'none' };
     trace.push(hop);
     let response;
     try {
@@ -63,6 +105,7 @@ async function fetchTestRedirects(fetcher, firstUrl, options, trace) {
     if (!location) return response;
     const next = new URL(location, url);
     hop.destination = hostCategory(next.href);
+    hop.destinationPath = pathCategory(next.href);
     // Only the already authorized Google service may receive a redirect. Never
     // expose a signed envelope or a one-time response URL to another host.
     if (next.protocol !== 'https:' || next.username || next.password || (next.port && next.port !== '443')
@@ -71,7 +114,8 @@ async function fetchTestRedirects(fetcher, firstUrl, options, trace) {
     if (response.status === 303 || ([301, 302].includes(response.status) && method === 'POST')) {
       method = 'GET'; body = undefined; headers = { Accept:'application/json' };
     }
-    url = next.href;
+    // Validate with URL, but preserve an absolute one-time Location byte-for-byte.
+    url = /^https:\/\//iu.test(location) ? location : next.href;
   }
 }
 
@@ -116,6 +160,26 @@ export async function handlePromotions(request, dependencies = {}) {
   let envelopeFailure = 'none';
   const upstreamTrace = [];
   const upstreamStarted = performance.now();
+  const traceId = runtime.target === 'test' ? responseDigest('gib-test-response-trace:v1\n' + envelope.payload.nonce).slice(0, 24) : '';
+  let responseFingerprint = '';
+  let html = { category:'missing', title:'missing', reason:'none' };
+  function withTestDiagnostics(response) {
+    if (runtime.target !== 'test') return response;
+    response.headers.set('X-GIB-TEST-Trace-Id', traceId);
+    response.headers.set('X-GIB-TEST-Upstream', phase);
+    response.headers.set('X-GIB-TEST-Upstream-Ms', String(Math.max(0, Math.round(performance.now() - upstreamStarted))));
+    if (upstreamStatus) response.headers.set('X-GIB-TEST-Upstream-Status', String(upstreamStatus));
+    response.headers.set('X-GIB-TEST-Upstream-Type', upstreamType);
+    response.headers.set('X-GIB-TEST-Upstream-Redirected', upstreamRedirected ? '1' : '0');
+    response.headers.set('X-GIB-TEST-Upstream-Host', upstreamHost);
+    response.headers.set('X-GIB-TEST-Upstream-Envelope', envelopeFailure);
+    response.headers.set('X-GIB-TEST-Upstream-Trace', JSON.stringify(upstreamTrace));
+    if (responseFingerprint) response.headers.set('X-GIB-TEST-Response-Fingerprint', responseFingerprint);
+    response.headers.set('X-GIB-TEST-HTML-Category', html.category);
+    response.headers.set('X-GIB-TEST-HTML-Title', html.title);
+    response.headers.set('X-GIB-TEST-HTML-Reason', html.reason);
+    return response;
+  }
   try {
     const options = {
       method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -132,6 +196,10 @@ export async function handlePromotions(request, dependencies = {}) {
     }
     phase = 'body';
     const text = await response.text();
+    if (runtime.target === 'test') {
+      responseFingerprint = responseDigest(text);
+      html = htmlDiagnostics(text, upstreamType, upstreamHost);
+    }
     if (!response.ok) { phase = 'http'; throw new Error('Unconfirmed promotion response.'); }
     if (Buffer.byteLength(text, 'utf8') > 1000000) throw new Error('Unconfirmed promotion response.');
     phase = 'json';
@@ -141,23 +209,13 @@ export async function handlePromotions(request, dependencies = {}) {
     if (!body || Object.keys(body).length !== 5 || body.bridge !== runtime.mode || body.target !== runtime.target
       || body.installation !== 'rev' || body.requestNonce !== envelope.payload.nonce
       || !body.result || typeof body.result.ok !== 'boolean') throw new Error('Invalid promotion confirmation.');
-    return respond(200, body.result);
+    if (runtime.target === 'test') envelopeFailure = 'none';
+    return withTestDiagnostics(respond(200, body.result));
   } catch {
     const response = respond(503, { ok: false, error: { code: 'UNAVAILABLE', message: `The ${runtime.target === 'test' ? 'TEST ' : ''}connection did not confirm this request. Keep the original entry and check or retry it.`, retryable: true },
       ...(typeof input.requestId === 'string' ? { requestId: input.requestId } : {}) });
-    // Authenticated TEST failures expose only fixed categories and numeric timing.
-    // Live responses never include diagnostic headers or private upstream data.
-    if (runtime.target === 'test') {
-      response.headers.set('X-GIB-TEST-Upstream', phase);
-      response.headers.set('X-GIB-TEST-Upstream-Ms', String(Math.max(0, Math.round(performance.now() - upstreamStarted))));
-      if (upstreamStatus) response.headers.set('X-GIB-TEST-Upstream-Status', String(upstreamStatus));
-      response.headers.set('X-GIB-TEST-Upstream-Type', upstreamType);
-      response.headers.set('X-GIB-TEST-Upstream-Redirected', upstreamRedirected ? '1' : '0');
-      response.headers.set('X-GIB-TEST-Upstream-Host', upstreamHost);
-      response.headers.set('X-GIB-TEST-Upstream-Envelope', envelopeFailure);
-      response.headers.set('X-GIB-TEST-Upstream-Trace', JSON.stringify(upstreamTrace));
-    }
-    return response;
+    // Only authenticated TEST responses expose fixed categories and digests.
+    return withTestDiagnostics(response);
   }
 }
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import test from 'node:test';
 import { handlePromotions } from '../netlify/functions/m1-promotions.mts';
 import * as runtime from '../netlify/functions/_lib/promotions-runtime.mts';
@@ -505,9 +505,10 @@ test('TEST observes the one-time content redirect as GET with one signed POST an
     assert.equal(options.redirect, 'manual');
     if (calls.length === 1) {
       envelope = JSON.parse(options.body);
-      return new Response('', {status:302,headers:{location:'https://script.googleusercontent.com/PRIVATE_RESPONSE'}});
+      return new Response('', {status:302,headers:{location:'https://script.googleusercontent.com/macros/echo?user_content_key=PRIVATE%2f%2B+%252F&lib=OPAQUE&order=2&order=1#PRIVATE_fragment'}});
     }
     assert.equal(options.method,'GET'); assert.equal(options.body,undefined);
+    assert.equal(url,'https://script.googleusercontent.com/macros/echo?user_content_key=PRIVATE%2f%2B+%252F&lib=OPAQUE&order=2&order=1#PRIVATE_fragment');
     assert.deepEqual(options.headers,{Accept:'application/json'});
     assert.equal(options.signal,calls[0].options.signal);
     return new Response(JSON.stringify({bridge:MODE,target:'test',installation:'rev',requestNonce:envelope.payload.nonce,result:{ok:true,data:{testOnly:true}}}),{headers:{'content-type':'application/json'}});
@@ -515,7 +516,12 @@ test('TEST observes the one-time content redirect as GET with one signed POST an
   const response = await h.run(request());
   assert.equal(response.status,200); assert.equal(calls.length,2);
   assert.equal(calls.filter(call=>call.options.method==='POST').length,1);
-  assert.deepEqual(diagnosticHeaders(response),[]);
+  assert.match(response.headers.get('x-gib-test-trace-id'),/^[0-9a-f]{24}$/u);
+  assert.equal(response.headers.get('x-gib-test-upstream-envelope'),'none');
+  const trace=JSON.parse(response.headers.get('x-gib-test-upstream-trace'));
+  assert.deepEqual(trace.map(hop=>[hop.path,hop.destinationPath]),[['web-app-exec','content-response'],['content-response','none']]);
+  assert.equal(JSON.stringify(diagnosticHeaders(response)).includes('PRIVATE'),false);
+  assert.equal(JSON.stringify(diagnosticHeaders(response)).includes('OPAQUE'),false);
 });
 
 test('TEST failure trace exposes the unexpected GET return to Google script without exposing redirect URLs', async () => {
@@ -564,7 +570,8 @@ test('authenticated TEST failures identify only fixed phases and numeric timing 
   ];
   for (const [phase, status, fetchResult] of cases) {
     let calls = 0;
-    const h = serverHarness({ fetch: async (...args) => { calls += 1; return fetchResult(...args); } });
+    let requestNonce;
+    const h = serverHarness({ fetch: async (...args) => { calls += 1; requestNonce=JSON.parse(args[1].body).payload.nonce; return fetchResult(...args); } });
     const response = await h.run(request(API, { body: namedRequest(SAVE) }));
     const value = await result(response);
     assert.equal(value.status, 503);
@@ -574,7 +581,12 @@ test('authenticated TEST failures identify only fixed phases and numeric timing 
     assert.equal(value.headers.get('x-gib-test-upstream'), phase);
     assert.match(value.headers.get('x-gib-test-upstream-ms'), /^\d+$/u);
     assert.equal(value.headers.get('x-gib-test-upstream-status'), status);
-    assert.equal(diagnosticHeaders(response).length, status === null ? 7 : 8);
+    assert.match(value.headers.get('x-gib-test-trace-id'), /^[0-9a-f]{24}$/u);
+    assert.equal(value.headers.get('x-gib-test-trace-id'),createHash('sha256').update('gib-test-response-trace:v1\n'+requestNonce).digest('hex').slice(0,24));
+    if (phase === 'fetch' || phase === 'body' && fetchResult === cases[1][2]) {
+      assert.equal(value.headers.get('x-gib-test-response-fingerprint'),null);
+      assert.equal(value.headers.get('x-gib-test-html-category'),'missing');
+    } else assert.match(value.headers.get('x-gib-test-response-fingerprint'),/^[0-9a-f]{64}$/u);
     assert.equal(calls, 1, 'diagnosis must never automatically resend the request');
     const publicOutput = JSON.stringify({ body: value.body, headers: [...value.headers] });
     assert.equal(publicOutput.includes('SYNTHETIC_PRIVATE_ERROR'), false);
@@ -607,20 +619,97 @@ test('TEST failure categories distinguish returned HTML, HTTP errors, authorizat
   }
 });
 
-test('TEST diagnostic headers are absent before authorization and on valid application responses', async () => {
+test('TEST diagnostic headers are absent before authorization and before a valid request reaches Google', async () => {
   const h = serverHarness();
   const responses = [
     await h.run(request(API, { cookie: '' })),
     await serverHarness({ env: {} }).run(request()),
-    await h.run(request()),
-    await h.run(request(API, { body: namedRequest(SAVE, '') })),
-    await serverHarness({ fetch: async (_url, options) => {
-      const envelope = JSON.parse(options.body);
-      return new Response(JSON.stringify({ bridge: MODE, target: 'test', installation: 'rev', requestNonce: envelope.payload.nonce,
-        result: { ok: false, error: { code: 'STALE_REVISION', message: 'Reload the student.', retryable: false } } }));
-    } }).run(request(API, { body: namedRequest(SAVE) }))
+    await h.run(request(API, { body: namedRequest(SAVE, '') }))
   ];
   for (const response of responses) assert.deepEqual(diagnosticHeaders(response), []);
+});
+
+test('authenticated TEST successes and application errors carry the same nonce-derived correlation and exact body digest', async () => {
+  for (const ok of [true,false]) {
+    let envelope, upstreamBody, calls=0;
+    const appResult=ok ? {ok:true,data:{testOnly:true,private:'SYNTHETIC_PRIVATE_STUDENT',html:'<html><title>Private title</title></html>'}}
+      : {ok:false,error:{code:'STALE_REVISION',message:'Reload the student.',retryable:false}};
+    const h=serverHarness({randomBytes:size=>Buffer.alloc(size,ok?0x47:0x48),fetch:async(_url,options)=>{
+      calls++;envelope=JSON.parse(options.body);
+      upstreamBody=JSON.stringify({bridge:MODE,target:'test',installation:'rev',requestNonce:envelope.payload.nonce,result:appResult});
+      return new Response(upstreamBody,{headers:{'content-type':'application/json'}});
+    }});
+    const response=await h.run(request());
+    assert.equal(response.status,200);assert.deepEqual(await response.json(),appResult);assert.equal(calls,1);
+    assert.equal(response.headers.get('x-gib-test-trace-id'),createHash('sha256').update('gib-test-response-trace:v1\n'+envelope.payload.nonce).digest('hex').slice(0,24));
+    assert.equal(response.headers.get('x-gib-test-response-fingerprint'),createHash('sha256').update(upstreamBody).digest('hex'));
+    assert.equal(response.headers.get('x-gib-test-upstream'),'envelope');
+    assert.equal(response.headers.get('x-gib-test-upstream-envelope'),'none');
+    assert.equal(response.headers.get('x-gib-test-html-category'),'not-html');
+    assert.equal(response.headers.get('x-gib-test-html-title'),'missing');
+    assert.equal(response.headers.get('x-gib-test-html-reason'),'none');
+    const trace=JSON.parse(response.headers.get('x-gib-test-upstream-trace'));
+    assert.equal(trace.length,1);assert.equal(trace[0].method,'POST');assert.equal(trace[0].path,'web-app-exec');assert.equal(trace[0].destinationPath,'none');
+    const diagnostics=JSON.stringify(diagnosticHeaders(response));
+    for(const privateValue of [envelope.payload.nonce,envelope.signature,envelope.payload.deviceIdentity,'SYNTHETIC_PRIVATE_STUDENT','Private title'])assert.equal(diagnostics.includes(privateValue),false);
+    noPrivateConfiguration(diagnostics);
+  }
+});
+
+test('TEST HTML diagnostics use only recognized owner and Google categories, never raw titles or page content', async () => {
+  const cases=[
+    {text:'<!doctype html><html><body><h1>Private TEST access required</h1><p>This promotion tool is available only to its configured TEST manager.</p>PRIVATE_ROSTER</body></html>',expected:['owner-denial','missing','owner-access-required']},
+    {text:'<html><title>Promotions · TEST</title>PRIVATE_ROSTER</html>',expected:['owner-page','owner-page','none']},
+    {text:'<html><title>Promotions · PRIVATE SYNTHETIC TEST</title>PRIVATE_ROSTER</html>',expected:['owner-page','owner-page','none']},
+    {text:'<html><iframe></iframe><script>var userHtml="Promotions · TEST";</script>PRIVATE_ROSTER</html>',expected:['owner-page','missing','none']},
+    {text:'<html><title>Private TEST-ish title</title><script>var userHtml="PRIVATE_ROSTER";</script></html>',expected:['other-html','other','unknown']},
+    {text:'<html><title>Sign in - Google Accounts</title>PRIVATE_ROSTER</html>',host:'https://accounts.google.com/v3/signin/identifier?PRIVATE_QUERY',expected:['google-auth','google-sign-in','google-sign-in-required']},
+    {text:'<html><title>Google Drive</title>Sorry, unable to open the file at this time. PRIVATE_ROSTER</html>',expected:['google-error','google-drive','google-file-unavailable']},
+    {text:'<html><title>Google Drive</title>Sorry, the file you have requested does not exist. PRIVATE_ROSTER</html>',expected:['google-error','google-drive','google-file-unavailable']},
+    {text:'<html><title>Error</title>Script function not found: PRIVATE_FUNCTION</html>',expected:['google-error','google-error','google-script-error']},
+    {text:'<html><title>Private title</title><h1>503 Service Unavailable</h1>PRIVATE_ROSTER</html>',status:503,expected:['google-error','other','google-service-unavailable']},
+    {text:'<html><title>Google Drive</title>Unrecognized PRIVATE_ROSTER problem.</html>',expected:['other-html','google-drive','unknown']},
+    {text:'<html><title>Error</title>PRIVATE_ROSTER</html>',host:'https://unrelated.invalid/PRIVATE_PATH',expected:['other-html','other','unknown']},
+    {text:JSON.stringify({private:'<html><title>Promotions · TEST</title></html>'}),type:'application/json',expected:['not-html','missing','none']},
+    {text:'PRIVATE_TEXT is not HTML',type:'text/plain',expected:['not-html','missing','none']},
+    {text:'',expected:['missing','missing','none']}
+  ];
+  for(const item of cases){
+    let calls=0;
+    const h=serverHarness({fetch:async()=>{
+      calls++;const reply=new Response(item.text,{status:item.status||200,headers:{'content-type':item.type||'text/html'}});
+      Object.defineProperty(reply,'url',{value:item.host||'https://script.google.com/macros/s/PRIVATE_DEPLOYMENT/exec?PRIVATE_QUERY'});return reply;
+    }});
+    const response=await h.run(request());assert.equal(response.status,503);assert.equal(calls,1);
+    assert.deepEqual(['category','title','reason'].map(field=>response.headers.get('x-gib-test-html-'+field)),item.expected);
+    assert.equal(response.headers.get('x-gib-test-response-fingerprint'),createHash('sha256').update(item.text).digest('hex'));
+    const diagnostics=JSON.stringify(diagnosticHeaders(response));
+    for(const marker of ['PRIVATE_ROSTER','PRIVATE_QUERY','PRIVATE_FUNCTION','PRIVATE_DEPLOYMENT','PRIVATE_PATH','PRIVATE_TEXT','Private title','Private TEST-ish title'])assert.equal(diagnostics.includes(marker),false);
+    assert.equal((await response.text()).includes('PRIVATE'),false);noPrivateConfiguration(diagnostics);
+  }
+});
+
+test('TEST redirect path diagnostics ignore opaque query values and never fetch a denied destination', async () => {
+  const destinations=[
+    ['https://script.google.com/macros/s/PRIVATE/dev?key=%2f%2B+PRIVATE','web-app-dev',true],
+    ['https://script.google.com/macros/s/PRIVATE/exec?next=/ServiceLogin','web-app-exec',true],
+    ['https://script.googleusercontent.com/macros/echo?user_content_key=PRIVATE','content-response',true],
+    ['https://accounts.google.com/v3/signin/identifier?continue=PRIVATE','accounts',false],
+    ['https://accounts.google.com/ServiceLogin?continue=PRIVATE','accounts',false],
+    ['https://script.google.com/PRIVATE?next=/macros/echo','other',true]
+  ];
+  for(const [destination,category,followed] of destinations){
+    const calls=[];
+    const h=serverHarness({fetch:async(url,options)=>{
+      calls.push({url,options});return calls.length===1?new Response('',{status:302,headers:{location:destination}})
+        :new Response('<html>PRIVATE</html>',{headers:{'content-type':'text/html'}});
+    }});
+    const response=await h.run(request());assert.equal(response.status,503);assert.equal(calls.length,followed?2:1);
+    if(followed){assert.equal(calls[1].url,destination);assert.equal(calls[1].options.method,'GET');assert.equal(calls[1].options.body,undefined);assert.equal(calls[1].options.signal,calls[0].options.signal);}
+    const trace=JSON.parse(response.headers.get('x-gib-test-upstream-trace'));assert.equal(trace[0].path,'web-app-exec');assert.equal(trace[0].destinationPath,category);
+    if(followed)assert.equal(trace[1].path,category);
+    assert.equal(JSON.stringify(diagnosticHeaders(response)).includes('PRIVATE'),false);
+  }
 });
 
 const LIVE_ORIGIN = 'https://gib-live.netlify.app';

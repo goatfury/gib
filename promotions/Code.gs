@@ -343,13 +343,41 @@ function verifyPromotionRepairSource_(workbook, repair, previous) {
 
 function doPost(event) {
   let bridge;
+  let trace;
   try {
     bridge = verifiedPromotionBridge_(event);
+    trace = beginPromotionResponseTrace_(bridge);
     const result = promotionRequestWithRecorder_(bridge.request, bridge.deviceIdentity, bridge);
-    return promotionJsonOutput_({ bridge: bridge.mode, target: bridge.target, installation: 'rev', requestNonce: bridge.nonce, result });
+    const output = promotionJsonOutput_({ bridge: bridge.mode, target: bridge.target, installation: 'rev', requestNonce: bridge.nonce, result });
+    logPromotionResponseTrace_(trace, 'completion', result);
+    return output;
   } catch (error) {
-    return promotionJsonOutput_({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Authorized tablet access is required.', retryable: false } });
+    const result = { ok: false, error: { code: 'UNAUTHORIZED', message: 'Authorized tablet access is required.', retryable: false } };
+    logPromotionResponseTrace_(trace, 'completion', result);
+    return promotionJsonOutput_(result);
   }
+}
+
+function beginPromotionResponseTrace_(bridge) {
+  try {
+    if (bridge.target !== 'test' || !['bootstrap', 'readStudent'].includes(bridge.request && bridge.request.operation)) return null;
+    const trace = { traceId: promotionRepairDigest_('gib-test-response-trace:v1\n' + bridge.nonce).slice(0, 24), operation: bridge.request.operation, startedAt: Date.now() };
+    logPromotionResponseTrace_(trace, 'entry');
+    return trace;
+  } catch (_) { return null; }
+}
+
+function logPromotionResponseTrace_(trace, stage, result) {
+  if (!trace) return;
+  try {
+    const resultOK = stage === 'completion' && result && typeof result.ok === 'boolean' ? result.ok : null;
+    const code = resultOK === false && result.error && result.error.code;
+    const allowed = ['UNAVAILABLE', 'UNAUTHORIZED', 'VALIDATION', 'NOT_FOUND', 'ARCHIVED', 'RANK_UNKNOWN', 'RANK_ALREADY_KNOWN',
+      'STALE_REVISION', 'REQUEST_CONFLICT', 'DUPLICATE_STUDENT', 'CORRECTION_NOT_LATEST', 'TEST_DESTINATION_INVALID', 'LIVE_DESTINATION_INVALID', 'BUSY'];
+    console.info('GIB_TEST_RESPONSE_TRACE', JSON.stringify({ stage, traceId: trace.traceId, operation: trace.operation,
+      elapsedMs: Math.max(0, Date.now() - trace.startedAt), intendedResponseType: 'application/json', resultOK,
+      errorCode: resultOK === false ? allowed.includes(code) ? code : 'OTHER' : null }));
+  } catch (_) { /* TEST observation cannot change the response or authentication. */ }
 }
 
 function promotionJsonOutput_(value) {
