@@ -1,10 +1,23 @@
-import { promotionsTemplate } from './promotions-template.mjs?v=2026-09-14-promotions-repair-d';
-import { promotionsEnabled, createPromotionsLifecycle } from './promotions-core.mjs?v=2026-09-14-promotions-repair-d';
+import { promotionsTemplate } from './promotions-template.mjs?v=2026-09-14-promotions-repair-api-1';
+import { promotionsEnabled, createPromotionsLifecycle } from './promotions-core.mjs?v=2026-09-14-promotions-repair-api-1';
+
+export function apiLookupMetadata(value) {
+  if (typeof value !== 'string' || value.length > 512) return null;
+  try {
+    const data = JSON.parse(value);
+    const phases = ['configuration','storage','token','identity','api','envelope','complete'];
+    const errors = ['none','CONFIG','STORE','NOT_CONNECTED','TOKEN_REVOKED','TOKEN_RESPONSE','TOKEN_SCOPE','TOKEN_IDENTITY',
+      'ACCESS_DENIED','HTTP_ERROR','API_RESULT','INITIALIZE','SETUP_DISABLED','REDIRECT','RESPONSE_TOO_LARGE','INVALID_JSON','TIMEOUT','ABORTED','NETWORK','ENVELOPE'];
+    return data && Object.keys(data).sort().join(',') === 'attempts,errorCode,ms,phase' && data.attempts === 1
+      && phases.includes(data.phase) && errors.includes(data.errorCode) && Number.isInteger(data.ms) && data.ms >= 0 && data.ms <= 3600000
+      ? {phase:data.phase, ms:data.ms, errorCode:data.errorCode, attempts:1} : null;
+  } catch (_) { return null; }
+}
 
 export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online = () => globalThis.navigator?.onLine !== false, testOnly = true, onDiagnostic } = {}) {
   const diagnose = testOnly === true && typeof onDiagnostic === 'function';
   const operations = new Set(['bootstrap', 'readStudent', 'checkSave', 'recordPromotion', 'confirmRank', 'registerStudent', 'correctLatest']);
-  const errorCodes = new Set(['UNAVAILABLE', 'UNAUTHORIZED', 'VALIDATION', 'NOT_FOUND', 'ARCHIVED', 'RANK_UNKNOWN', 'RANK_ALREADY_KNOWN',
+  const errorCodes = new Set(['UNAVAILABLE', 'UNAUTHORIZED', 'CANCELLED', 'VALIDATION', 'NOT_FOUND', 'ARCHIVED', 'RANK_UNKNOWN', 'RANK_ALREADY_KNOWN',
     'STALE_REVISION', 'REQUEST_CONFLICT', 'DUPLICATE_STUDENT', 'CORRECTION_NOT_LATEST', 'TEST_DESTINATION_INVALID', 'LIVE_DESTINATION_INVALID', 'BUSY']);
   const clock = () => globalThis.performance?.now?.() ?? Date.now();
   const numericHeader = (value, minimum, maximum) => typeof value === 'string' && /^(0|[1-9][0-9]{0,8})$/u.test(value)
@@ -26,7 +39,7 @@ export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online =
       return trace.map(({ method, host, path, status, type, ms, destination, destinationPath }) => ({ method, host, path, status, type, ms, destination, destinationPath }));
     } catch (_) { return null; }
   };
-  return payload => new Promise((resolve, reject) => {
+  return (payload, { signal } = {}) => new Promise((resolve, reject) => {
     const startedAt = diagnose ? new Date().toISOString() : null;
     const startedMs = diagnose ? clock() : 0;
     let phase = 'fetch';
@@ -35,9 +48,13 @@ export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online =
       traceId:null, responseFingerprint:null, htmlCategory:null, htmlTitle:null, htmlReason:null };
     let settled = false;
     let timer;
+    const callerSignal = testOnly === true && ['bootstrap', 'readStudent'].includes(payload?.operation) ? signal : null;
+    let cancel;
     const finish = (fn, value, outcome) => {
       if (settled) return;
-      settled = true; clearTimeout(timer); fn(value);
+      settled = true; clearTimeout(timer);
+      if (cancel) callerSignal?.removeEventListener('abort', cancel);
+      fn(value);
       if (diagnose) {
         try {
           const record = {
@@ -51,13 +68,22 @@ export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online =
         } catch (_) { /* TEST observation cannot affect the request. */ }
       }
     };
-    if (!online()) { phase = 'offline'; finish(reject, { code:'UNAVAILABLE', message:'Connect to load a fresh record or send this entry.', retryable:true }, 'error'); return; }
     const abort = new AbortController();
+    cancel = () => {
+      if (settled) return;
+      phase = 'cancelled';
+      finish(reject, { code:'CANCELLED', message:'This lookup is no longer active.', retryable:false }, 'error');
+      abort.abort();
+    };
+    if (callerSignal?.aborted) { cancel(); return; }
+    callerSignal?.addEventListener('abort', cancel, { once:true });
+    if (!online()) { phase = 'offline'; finish(reject, { code:'UNAVAILABLE', message:'Connect to load a fresh record or send this entry.', retryable:true }, 'error'); return; }
     timer = setTimeout(() => { phase = 'timeout'; finish(reject, { code:'UNAVAILABLE', message:'No confirmation arrived. Keep this entry and check or retry it.', retryable:true }, 'error'); abort.abort(); }, timeoutMs);
-    Promise.resolve().then(() => fetcher('/api/m1-promotions', {
+    Promise.resolve().then(() => settled ? undefined : fetcher('/api/m1-promotions', {
       method:'POST', credentials:'same-origin', cache:'no-store', signal:abort.signal,
       headers:{ 'Content-Type':'application/json', Accept:'application/json' }, body:JSON.stringify(payload)
     })).then(async response => {
+      if (settled) { try { await response?.body?.cancel?.(); } catch (_) { /* A cancelled lookup cannot become current. */ } return; }
       phase = 'body';
       if (diagnose) {
         httpStatus = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : null;
@@ -71,7 +97,7 @@ export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online =
             upstreamMs:numericHeader(header('-Ms'), 0, 3600000), upstreamStatus:numericHeader(header('-Status'), 100, 599),
             upstreamType:category(header('-Type'), ['json', 'html', 'other', 'missing']),
             upstreamRedirected:numericHeader(header('-Redirected'), 0, 1),
-            upstreamHost:category(header('-Host'), ['google-content', 'google-script', 'google-auth', 'other', 'missing']),
+            upstreamHost:category(header('-Host'), ['google-content', 'google-script', 'google-auth', 'google-api', 'other', 'missing']),
             upstreamEnvelope:category(header('-Envelope'), ['bare-auth-denial', 'mismatch', 'none']),
             upstreamTrace:traceHeader(header('-Trace')),
             traceId:hex(diagnosticHeader('Trace-Id'), 24),
@@ -80,9 +106,14 @@ export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online =
             htmlTitle:category(diagnosticHeader('HTML-Title'), ['owner-page', 'google-sign-in', 'google-drive', 'google-error', 'other', 'missing']),
             htmlReason:category(diagnosticHeader('HTML-Reason'), ['owner-access-required', 'google-file-unavailable', 'google-sign-in-required', 'google-script-error', 'google-service-unavailable', 'unknown', 'none'])
           };
+          if (diagnosticHeader('Transport-Kind') === 'google-api') {
+            upstream.transportKind = 'google-api';
+            upstream.api = apiLookupMetadata(diagnosticHeader('API'));
+          }
         } catch (_) { /* Missing diagnostic headers do not change the reply. */ }
       }
       const body = await response.json();
+      if (settled) return;
       phase = 'application';
       if (response.ok && body?.ok === true && body.data && typeof body.data === 'object') finish(resolve, body.data, 'success');
       else finish(reject, body?.error || { code:response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : 'UNAVAILABLE', message:`The ${testOnly ? 'TEST ' : ''}log could not confirm this request.`, retryable:response.status >= 500 }, 'error');
@@ -114,6 +145,9 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     approverResults: [], activeApproverResult: -1,
     draft: null, drafts: new Map(), pending: null, authenticated: false, loadingStudent: false, selectedFresh: false
   };
+  let bootstrapGeneration = 0;
+  let bootstrapRead = null;
+  let selectedRead = null;
   const belts = ['White Belt', 'Blue Belt', 'Purple Belt', 'Brown Belt', 'Black Belt'];
   const mutationErrors = new Set(['VALIDATION', 'NOT_FOUND', 'ARCHIVED', 'RANK_UNKNOWN', 'RANK_ALREADY_KNOWN', 'STALE_REVISION', 'REQUEST_CONFLICT', 'DUPLICATE_STUDENT', 'CORRECTION_NOT_LATEST', 'TEST_DESTINATION_INVALID']);
   const eventLabels = { REGISTER:'Student registered', RANK_CONFIRM:'Current rank confirmed', STRIPE:'Stripe or degree added', BELT:'Belt changed', CORRECTION:'Audited correction', REPAIR:'Data repair' };
@@ -158,7 +192,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('message').hidden = !message;
   }
   function formError(message) { $('formError').textContent = message; $('formError').hidden = !message; }
-  function rpc(payload) { return transport(payload); }
+  function rpc(payload, options) { return transport(payload, options); }
   function accessFailure(error) {
     state.authenticated = false;
     $('app').hidden = true;
@@ -172,6 +206,12 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
   }
   async function bootstrap() {
     const viewToken = lifecycle.token();
+    const accessGeneration = ++bootstrapGeneration;
+    const requestAbort = testOnly ? new AbortController() : null;
+    if (testOnly) {
+      bootstrapRead?.abort(); bootstrapRead = requestAbort;
+      selectedRead?.abort(); selectedRead = null; state.readGeneration += 1;
+    }
     state.authenticated = false;
     $('app').hidden = true;
     $('retryAccess').hidden = true;
@@ -179,8 +219,8 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('accessStatus').className = 'notice';
     $('accessStatus').textContent = 'Checking secure access…';
     try {
-      const data = await rpc({ operation:'bootstrap' });
-      if (!lifecycle.isCurrent(viewToken)) return;
+      const data = await rpc({ operation:'bootstrap' }, requestAbort ? { signal:requestAbort.signal } : undefined);
+      if (!lifecycle.isCurrent(viewToken) || (testOnly && accessGeneration !== bootstrapGeneration)) return;
       if (data.testOnly !== testOnly || (data.target !== undefined && data.target !== target) || !Array.isArray(data.students)) {
         throw { code:testOnly ? 'TEST_DESTINATION_INVALID' : 'LIVE_DESTINATION_INVALID', message:`The ${testOnly ? 'TEST' : 'live'} destination could not be verified.` };
       }
@@ -196,7 +236,8 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
       $('app').hidden = false;
       renderSearch();
       renderBusy();
-    } catch (error) { if (lifecycle.isCurrent(viewToken)) accessFailure(error); }
+    } catch (error) { if (lifecycle.isCurrent(viewToken) && (!testOnly || accessGeneration === bootstrapGeneration)) accessFailure(error); }
+    finally { if (bootstrapRead === requestAbort) bootstrapRead = null; }
   }
 
   function renderSearch() {
@@ -293,10 +334,12 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     const selectedGeneration = state.selectedGeneration;
     const viewToken = lifecycle.token();
     const readGeneration = ++state.readGeneration;
+    const requestAbort = testOnly ? new AbortController() : null;
+    if (testOnly) { selectedRead?.abort(); selectedRead = requestAbort; }
     state.loadingStudent = true;
     renderBusy();
     try {
-      const data = await rpc({ operation:'readStudent', studentId });
+      const data = await rpc({ operation:'readStudent', studentId }, requestAbort ? { signal:requestAbort.signal } : undefined);
       if (!lifecycle.isCurrent(viewToken) || selectedGeneration !== state.selectedGeneration || readGeneration !== state.readGeneration || state.selected?.studentId !== studentId) return;
       if (!data.student || data.student.studentId !== studentId || !Array.isArray(data.history)) throw { message:'The student record could not be verified.' };
       if ((state.students.get(studentId)?.revision || 0) > data.student.revision) return;
@@ -308,12 +351,14 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
       renderStudent();
       renderEditor(false);
     } catch (error) {
-      if (!lifecycle.isCurrent(viewToken) || selectedGeneration !== state.selectedGeneration) return;
+      if (!lifecycle.isCurrent(viewToken) || selectedGeneration !== state.selectedGeneration
+        || (testOnly && (readGeneration !== state.readGeneration || state.selected?.studentId !== studentId))) return;
       state.selectedFresh = false;
       renderStudent();
       if (error?.code === 'UNAUTHORIZED') accessFailure(error);
       else showMessage(error?.message || 'The current record could not be loaded. Refresh before saving.', 'error');
     } finally {
+      if (selectedRead === requestAbort) selectedRead = null;
       if (lifecycle.isCurrent(viewToken) && selectedGeneration === state.selectedGeneration && readGeneration === state.readGeneration) { state.loadingStudent = false; renderBusy(); }
     }
   }
@@ -694,6 +739,11 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     document.getElementById('openPromotionsLog').setAttribute('aria-expanded', String(active));
   }
   function clearPresentation() {
+    if (testOnly) {
+      bootstrapGeneration += 1;
+      bootstrapRead?.abort(); bootstrapRead = null;
+      selectedRead?.abort(); selectedRead = null;
+    }
     state.selectedGeneration += 1;
     state.readGeneration += 1;
     state.searchGeneration += 1;

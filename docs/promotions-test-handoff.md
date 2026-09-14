@@ -1,5 +1,21 @@
 # PR86 decision — 2026-09-14
 
+## Approved API proof — implementation checkpoint
+
+Andrew approved the isolated read-only Apps Script API proof, separate TEST script and standard Cloud/OAuth project with the existing Ops account, broader Sheets scope and private server credentials. Google Cloud first-use Terms and Google API Services User Data Policy were separately approved and accepted. External/Testing status remains; only Ops is a test user. Seven-day refresh credential expiry remains a proof limitation, not a lasting pilot decision.
+
+The new reader preserves the strict existing history reader and nonce-bound five-field confirmation. It exposes only authenticated `readPromotions` and a configuration-only initializer. Promotion, repair, registration and `checkSave` entry points are absent. The API route is opt-in for TEST bootstrap/readStudent only; there is no retry, old-route fallback, cached result or automatic write replay. The 18-second shared deadline covers credentials, response and cancellation. The client cancels obsolete TEST reads and preserves pending writes. Setup uses one-use browser-bound state, PKCE, exact Ops identity/scopes, encrypted server-only credentials and a fixed callback; the ordinary tablet cookie stays Strict.
+
+Focused implementation checks passed (135 tests across API reader/server/routing/setup, mounted tablet logic, diagnostics and existing transport; public-build and optional-asset checks also pass). Independent review found one completion/cancellation race, fixed with pre/post-call signal checks and a deterministic regression. Completed feature/layout/data/Sign-In/Staff Clock evidence remains frozen; phone coverage is deferred.
+
+Isolated Google project: `gib-pr86-read-test-20260914`, number `978559258638`. New script `1BK9MnMfDJo7czq55X7tH64wWeryk-N1nlmoWhsNX3syuyLc2g9OIloJk`; API deployment `AKfycbz7YQlHTBrOEMFkqemcukdRsrtgp-uY3eTipu8fV6YsQETibsoVgLmaM7Jb1icwrkC-`, Version 1, access Only myself. Workbook, Ops owner and exact PR86 origin are pinned privately. TEST preview environment is prepared with API reads disabled until the private OAuth connection is complete. No API browser acceptance or full release gate is claimed at this checkpoint.
+
+After private credential setup, the single acceptance budget is eight serial fresh reads through two existing authorized browsers, or ten minutes, whichever comes first. Per browser: open log/bootstrap, full-name Juniper read, Fern read, clear/re-enter bootstrap. Record every success/failure and elapsed time, verify current repaired history, and stop if a new blocker needs a concrete remedy. No promotion, Sign-In or Staff Clock writes are needed. Run the full gate once only if this produces a release candidate.
+
+The following completed comparison is retained as historical evidence. Its recommendation has now been approved; its failures have not been erased or called fixed. Existing Google TEST Version 9 and LIVE Version 5 are unchanged; all 387 live corrections across 370 students remain unapplied. No merge, production, Richmond or business-data change.
+
+## Historical comparison decision
+
 **BLOCKED — CONNECTION CHANGE RECOMMENDED.** The bounded comparison is complete. Manual fetch, automatic fetch and an independent HTTPS client each succeeded on three of four requests and failed on one. Successful browser requests took 2.676–15.647 seconds; the median across all twelve was 9.528 seconds and the worst was 25.168 seconds. This does not meet the intended instructor experience. No release candidate or reliable connection fix is claimed, and the probe budget will not be restarted.
 
 Recommend one isolated, read-only TEST proof using the Apps Script Execution API (`scripts.run`) instead of the ContentService web-app response route. It removes the one-time content-URL delivery step implicated by two captured failures. It does not establish that Google execution or the unexplained initial-POST stall will become fast or reliable. The exact approval and proof boundary are below; no replacement has been implemented.

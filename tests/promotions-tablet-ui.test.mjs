@@ -225,6 +225,101 @@ test('actual typing extends lookup privacy and the mounted panel clears all pers
   assert.equal(h.calls.length, 2, 'privacy expiry causes no promotion mutation');
 });
 
+test('TEST bootstrap supersession aborts the earlier same-interaction lookup and ignores its late access denial', async t => {
+  const h = mountedHarness(t);
+  const opening = h.mounted.open(); await flush(); const earlier = h.take('bootstrap');
+  h.el('retryAccess').emit('click'); await flush(); const current = h.take('bootstrap');
+  assert.equal(earlier.options.signal.aborted, true); assert.equal(current.options.signal.aborted, false);
+  await h.success(current, { testOnly:true, students:[student('B')], approvers:[], todayNY:'2026-09-13' });
+  await h.respond(earlier, { ok:false, error:{ code:'UNAUTHORIZED', message:'Earlier denial' } }, 403);
+  await opening;
+  assert.equal(h.el('app').hidden, false); assert.equal(h.el('accessStatus').hidden, true);
+  h.el('studentSearch').value = 'TEST Person'; h.el('studentSearch').emit('input');
+  assert.equal(h.el('searchResults').children.length, 1);
+  assert.match(h.el('searchResults').textContent, /TEST Person B/u);
+  assert.deepEqual(h.calls.map(call => call.payload.operation), ['bootstrap', 'bootstrap']);
+});
+
+test('TEST changing student aborts the obsolete lookup without showing its late record', async t => {
+  const h = mountedHarness(t); await h.bootstrap();
+  h.el('studentSearch').value = student('A').displayName; h.el('studentSearch').emit('input');
+  h.el('searchResults').children[0].emit('click'); await flush(); const earlier = h.take('readStudent');
+  await h.choose('B');
+  assert.equal(earlier.options.signal.aborted, true);
+  await h.success(earlier, { student:student('A'), history:[] });
+  assert.equal(h.mounted.snapshot().selectedId, student('B').studentId);
+  assert.equal(h.el('studentName').textContent, student('B').displayName);
+  assert.equal(h.mounted.snapshot().selectedFresh, true);
+  assert.equal(h.calls.length, 3, 'replacing a read starts only the user-selected new read');
+});
+
+test('TEST repeated refresh keeps the newer record when the cancelled same-student request later fails', async t => {
+  const h = mountedHarness(t); await h.bootstrap(); await h.choose('A');
+  h.el('refreshStudent').emit('click'); await flush(); const earlier = h.take('readStudent');
+  h.el('refreshStudent').emit('click'); await flush(); const current = h.take('readStudent');
+  assert.equal(earlier.options.signal.aborted, true);
+  await h.success(current, { student:student('A', 3, 3), history:[] });
+  earlier.settled = true; earlier.reject(new Error('Obsolete read failed')); await flush();
+  assert.equal(h.mounted.snapshot().selectedFresh, true);
+  assert.match(h.el('studentRank').textContent, /3 stripes/u);
+  assert.equal(h.el('message').hidden, true);
+  assert.equal(h.calls.length, 4);
+});
+
+for (const leaveBy of ['clear', 'idle', 'pagehide', 'destroy']) {
+  test(`TEST ${leaveBy} aborts outstanding lookup work and never restores private presentation from a late response`, async t => {
+    const h = mountedHarness(t); await h.bootstrap();
+    h.el('studentSearch').value = student('A').displayName; h.el('studentSearch').emit('input');
+    h.el('searchResults').children[0].emit('click'); await flush(); const read = h.take('readStudent');
+    if (leaveBy === 'clear') h.el('clearBack').emit('click');
+    if (leaveBy === 'idle') h.tick(60_000);
+    if (leaveBy === 'pagehide') h.windowTarget.emit('pagehide');
+    if (leaveBy === 'destroy') h.mounted.destroy();
+    assert.equal(read.options.signal.aborted, true); h.neutral();
+    await h.success(read, { student:student('A'), history:[] });
+    h.neutral(); assert.equal(h.calls.length, 2);
+  });
+}
+
+test('TEST leaving during bootstrap aborts it and a fresh re-entry cannot accept the old roster', async t => {
+  const h = mountedHarness(t);
+  const opening = h.mounted.open(); await flush(); const earlier = h.take('bootstrap');
+  h.el('clearBack').emit('click'); assert.equal(earlier.options.signal.aborted, true); await opening; h.neutral();
+  await h.bootstrap([student('B')]);
+  await h.success(earlier, { testOnly:true, students:[student('A')], approvers:[], todayNY:'2026-09-13' });
+  h.el('studentSearch').value = 'TEST Person'; h.el('studentSearch').emit('input');
+  assert.equal(h.el('searchResults').children.length, 1); assert.match(h.el('searchResults').textContent, /TEST Person B/u);
+  assert.equal(h.calls.length, 2);
+});
+
+test('TEST clearing aborts a lookup but preserves the pending write and deliberate checkSave identity', async t => {
+  const h = mountedHarness(t); await h.bootstrap(); await h.choose('A');
+  const save = await h.beginStripe(); const pendingRaw = h.stored.get('gib_m1_promotions_pending_v1');
+  h.el('studentSearch').value = student('B').displayName; h.el('studentSearch').emit('input');
+  h.el('searchResults').children[0].emit('click'); await flush(); const read = h.take('readStudent');
+  h.el('clearBack').emit('click'); h.neutral();
+  assert.equal(read.options.signal.aborted, true); assert.equal(save.options.signal.aborted, false);
+  assert.equal(h.stored.get('gib_m1_promotions_pending_v1'), pendingRaw);
+  await h.respond(save, { ok:false, error:{ code:'UNAVAILABLE', message:'Confirmation unavailable', retryable:true } }, 503);
+  await h.bootstrap();
+  h.el('checkSave').emit('click'); await flush(); const check = h.take('checkSave');
+  assert.deepEqual(check.payload, { operation:'checkSave', requestId:save.payload.requestId });
+  h.el('clearBack').emit('click'); h.neutral();
+  assert.equal(check.options.signal.aborted, false); assert.equal(h.stored.get('gib_m1_promotions_pending_v1'), pendingRaw);
+  await h.success(check, { status:'not_found' });
+  assert.equal(h.calls.filter(call => call.payload.operation === 'recordPromotion').length, 1);
+  assert.equal(h.calls.filter(call => call.payload.operation === 'checkSave').length, 1);
+  assert.equal(h.stored.get('gib_m1_promotions_pending_v1'), pendingRaw);
+});
+
+test('LIVE leaving still ignores a late bootstrap without applying TEST request cancellation', async t => {
+  const h = mountedHarness(t, { logConfig:liveConfig });
+  const opening = h.mounted.open(); await flush(); const read = h.take('bootstrap');
+  h.el('clearBack').emit('click'); assert.equal(read.options.signal.aborted, false);
+  await h.success(read, { testOnly:false, students:[student('A')], approvers:[], todayNY:'2026-09-13' });
+  await opening; h.neutral(); assert.equal(h.calls.length, 1);
+});
+
 test('repaired full names are visible and searchable by first name, surname and spaced full name without merging identities', async t => {
   const h = mountedHarness(t);
   const records = [

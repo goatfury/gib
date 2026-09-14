@@ -28,6 +28,8 @@ export const PUBLIC_FILES = Object.freeze([
   'm1/kiosk-enhancements.css',
   'm1/kiosk-enhancements.mjs',
   'm1/production-diagnostic.html',
+  'm1/promotions-api-setup.html',
+  'm1/promotions-api-setup.mjs',
   'm1/promotions-client.mjs',
   'm1/promotions-config.generated.js',
   'm1/promotions-core.mjs',

@@ -126,6 +126,51 @@ test('the existing 30-second timeout settles and observes once even when a late 
   assert.equal(records.length, 1); assert.equal(records[0].phase, 'timeout'); assert.equal(calls.length, 1);
 });
 
+test('TEST read cancellation stops before dispatch and settles a pending fetch only once without retry', async () => {
+  for (const operation of ['bootstrap', 'readStudent']) {
+    const caller = new AbortController(); const calls = []; const records = []; let reply;
+    const transport = createPromotionsTransport((...args) => { calls.push(args); return new Promise(resolve => { reply = resolve; }); }, { onDiagnostic: record => records.push(record) });
+    const pending = transport({ operation, studentId: PRIVATE }, { signal:caller.signal }).catch(error => error);
+    await tick(); assert.equal(calls.length, 1);
+    caller.abort(PRIVATE);
+    assert.deepEqual(await pending, { code:'CANCELLED', message:'This lookup is no longer active.', retryable:false });
+    assert.equal(calls[0][1].signal.aborted, true);
+    assert.equal(records.length, 1); inspect(records[0]); assert.equal(records[0].phase, 'cancelled');
+    let cancelledBody = false;
+    reply({ ...response({ ok:true, data:{ studentId:PRIVATE } }), body:{ async cancel() { cancelledBody = true; } } });
+    await tick(); assert.equal(cancelledBody, true); assert.equal(records.length, 1); assert.equal(calls.length, 1);
+
+    const alreadyCancelled = await transport({ operation }, { signal:caller.signal }).catch(error => error);
+    assert.equal(alreadyCancelled.code, 'CANCELLED'); assert.equal(calls.length, 1, 'an obsolete read must never start another request');
+  }
+});
+
+test('cancellation while a TEST read body is pending rejects late data and never retries', async () => {
+  const caller = new AbortController(); let deliverBody; let calls = 0;
+  const transport = createPromotionsTransport(async () => {
+    calls += 1;
+    return { ...response(null), json:() => new Promise(resolve => { deliverBody = resolve; }) };
+  });
+  const pending = transport({ operation:'readStudent', studentId:PRIVATE }, { signal:caller.signal }).catch(error => error);
+  await tick(); caller.abort();
+  assert.equal((await pending).code, 'CANCELLED');
+  deliverBody({ ok:true, data:{ studentId:PRIVATE } }); await tick();
+  assert.equal(calls, 1);
+});
+
+test('caller cancellation cannot cancel LIVE reads, checkSave or any pending mutation', async () => {
+  for (const [testOnly, operation] of [[false, 'bootstrap'], [false, 'readStudent'],
+    ...['checkSave', 'recordPromotion', 'confirmRank', 'registerStudent', 'correctLatest'].map(operation => [true, operation])]) {
+    const caller = new AbortController(); caller.abort();
+    const payload = { operation, requestId:'original-pending-identity', studentId:PRIVATE };
+    const calls = []; const data = { unchanged:true };
+    const transport = createPromotionsTransport(async (...args) => { calls.push(args); return response({ ok:true, data }); }, { testOnly });
+    assert.equal(await transport(payload, { signal:caller.signal }), data);
+    assert.equal(calls.length, 1); assert.equal(calls[0][1].signal.aborted, false);
+    assert.deepEqual(JSON.parse(calls[0][1].body), payload);
+  }
+});
+
 test('throwing or rejecting observers and unreadable diagnostic headers cannot affect result objects', async () => {
   for (const observer of [() => { throw new Error(PRIVATE); }, () => Promise.reject(new Error(PRIVATE))]) {
     const data = { studentId: PRIVATE }; const error = { code: 'NOT_FOUND', message: PRIVATE };

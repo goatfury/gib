@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { deploymentInstallationProfile } from './_lib/m1-installation.mjs';
+import { PROMOTIONS_API_ENV_KEYS, promotionsApiConfig, runPromotionsApiRead } from './_lib/promotions-api.mts';
 import {
   comparisonMetadata, comparisonErrorCode, nextComparisonInvocation,
   fetchComparisonAutomatic, fetchComparisonHttps, readComparisonBody
@@ -130,7 +131,7 @@ async function fetchTestRedirects(fetcher, firstUrl, options, trace, cleanupOnFa
 
 export async function handlePromotions(request, dependencies = {}) {
   const invocation = nextComparisonInvocation();
-  const env = dependencies.env || Object.fromEntries(PROMOTIONS_ENV_KEYS.map(key => [key, globalThis.Netlify?.env?.get(key)]));
+  const env = dependencies.env || Object.fromEntries([...PROMOTIONS_ENV_KEYS, ...PROMOTIONS_API_ENV_KEYS].map(key => [key, globalThis.Netlify?.env?.get(key)]));
   const installationId = dependencies.installationId || deploymentInstallationProfile()?.installationId;
   const requestUrl = new URL(request.url);
   const runtime = promotionsRuntimeConfig(env, { siteId: dependencies.siteId, installationId, requestOrigin: requestUrl.origin });
@@ -175,6 +176,9 @@ export async function handlePromotions(request, dependencies = {}) {
     response.headers.set('X-GIB-TEST-Comparison', JSON.stringify(comparison));
     return response;
   }
+  const apiSelected = runtime.target === 'test' && env.GIB_PROMOTIONS_TEST_API_ENABLED === 'true'
+    && ['bootstrap', 'readStudent'].includes(input.operation);
+  if (apiSelected && comparisonArm !== null) return failure(400, 'VALIDATION', 'The completed transport comparison is not part of the API proof.');
   const envelope = createPromotionsEnvelope(runtime, credential, input, now, dependencies.randomBytes);
   let phase = 'fetch';
   let upstreamStatus = 0;
@@ -188,6 +192,11 @@ export async function handlePromotions(request, dependencies = {}) {
   const traceId = runtime.target === 'test' ? responseDigest('gib-test-response-trace:v1\n' + envelope.payload.nonce).slice(0, 24) : '';
   let responseFingerprint = '';
   let html = { category:'missing', title:'missing', reason:'none' };
+  let apiDiagnostics = null;
+  let apiSignal;
+  const validConfirmation = body => body && Object.keys(body).length === 5 && body.bridge === runtime.mode
+    && body.target === runtime.target && body.installation === 'rev' && body.requestNonce === envelope.payload.nonce
+    && body.result && typeof body.result.ok === 'boolean';
   function withTestDiagnostics(response) {
     if (runtime.target !== 'test') return response;
     if (comparison) response.headers.set('X-GIB-TEST-Comparison', JSON.stringify(comparison));
@@ -205,9 +214,33 @@ export async function handlePromotions(request, dependencies = {}) {
     response.headers.set('X-GIB-TEST-HTML-Category', html.category);
     response.headers.set('X-GIB-TEST-HTML-Title', html.title);
     response.headers.set('X-GIB-TEST-HTML-Reason', html.reason);
+    if (apiSelected) {
+      response.headers.set('X-GIB-TEST-Transport-Kind', 'google-api');
+      if (apiDiagnostics) response.headers.set('X-GIB-TEST-API', JSON.stringify(apiDiagnostics));
+    }
     return response;
   }
   try {
+    if (apiSelected) {
+      const apiConfig = promotionsApiConfig(env, runtime);
+      if (!apiConfig) throw new Error('TEST API configuration is incomplete.');
+      apiSignal = AbortSignal.any([AbortSignal.timeout(18000), request.signal]);
+      apiSignal.throwIfAborted();
+      const result = await (dependencies.apiRead || runPromotionsApiRead)(envelope, apiConfig, {
+        signal:apiSignal,
+        ...(dependencies.fetch ? {fetch:dependencies.fetch} : {}),
+        ...(dependencies.apiStore ? {store:dependencies.apiStore} : {})
+      });
+      apiSignal.throwIfAborted();
+      apiDiagnostics = result.diagnostics;
+      phase = 'envelope'; upstreamType = 'json'; upstreamHost = 'google-api';
+      responseFingerprint = responseDigest(JSON.stringify(result.wrapper));
+      html = {category:'not-html', title:'missing', reason:'none'};
+      envelopeFailure = 'mismatch';
+      if (!validConfirmation(result.wrapper)) throw new Error('Invalid promotion confirmation.');
+      envelopeFailure = 'none';
+      return withTestDiagnostics(respond(200, result.wrapper.result));
+    }
     const options = {
       method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(envelope), redirect: 'follow', signal: comparison
@@ -238,13 +271,17 @@ export async function handlePromotions(request, dependencies = {}) {
     const body = JSON.parse(text);
     phase = 'envelope';
     if (runtime.target === 'test') envelopeFailure = body?.ok === false && body?.error?.code === 'UNAUTHORIZED' ? 'bare-auth-denial' : 'mismatch';
-    if (!body || Object.keys(body).length !== 5 || body.bridge !== runtime.mode || body.target !== runtime.target
-      || body.installation !== 'rev' || body.requestNonce !== envelope.payload.nonce
-      || !body.result || typeof body.result.ok !== 'boolean') throw new Error('Invalid promotion confirmation.');
+    if (!validConfirmation(body)) throw new Error('Invalid promotion confirmation.');
     if (runtime.target === 'test') envelopeFailure = 'none';
     return withTestDiagnostics(respond(200, body.result));
   } catch (error) {
     if (comparison) comparison.errorCode = comparisonErrorCode(error);
+    if (apiSelected) {
+      apiDiagnostics = apiSignal?.aborted
+        ? {phase:'api', ms:Math.max(0, Math.round(performance.now() - upstreamStarted)), errorCode:apiSignal.reason?.name === 'TimeoutError' ? 'TIMEOUT' : 'ABORTED', attempts:1}
+        : error?.diagnostics || {phase:phase === 'envelope' ? 'envelope' : 'configuration', ms:Math.max(0, Math.round(performance.now() - upstreamStarted)), errorCode:phase === 'envelope' ? 'ENVELOPE' : 'CONFIG', attempts:1};
+      return withTestDiagnostics(failure(503, 'UNAVAILABLE', 'The TEST reader could not confirm a current record. Sign-In is still available.', false));
+    }
     const response = respond(503, { ok: false, error: { code: 'UNAVAILABLE', message: `The ${runtime.target === 'test' ? 'TEST ' : ''}connection did not confirm this request. Keep the original entry and check or retry it.`, retryable: true },
       ...(typeof input.requestId === 'string' ? { requestId: input.requestId } : {}) });
     // Only authenticated TEST responses expose fixed categories and digests.

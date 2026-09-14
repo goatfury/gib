@@ -1,0 +1,10 @@
+{
+  "timeZone": "America/New_York",
+  "runtimeVersion": "V8",
+  "dependencies": {},
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/userinfo.email"
+  ],
+  "executionApi": { "access": "MYSELF" }
+}
