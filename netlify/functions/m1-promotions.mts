@@ -29,6 +29,52 @@ function respond(status, body, cookies = []) {
 }
 const failure = (status, code, message, retryable = false) => respond(status, { ok: false, error: { code, message, retryable } });
 
+const responseType = response => {
+  const type = response.headers?.get('content-type')?.split(';')[0].trim().toLowerCase();
+  return !type ? 'missing' : type === 'application/json' ? 'json' : type === 'text/html' ? 'html' : 'other';
+};
+const hostCategory = url => {
+  if (!url) return 'missing';
+  try {
+    const host = new URL(url).hostname;
+    return host === 'script.googleusercontent.com' ? 'google-content' : host === 'script.google.com' ? 'google-script' : host === 'accounts.google.com' ? 'google-auth' : 'other';
+  } catch { return 'other'; }
+};
+
+// Observe the TEST redirect chain instead of losing it inside fetch(). The
+// signed request is never retried; redirects share the original 25-second budget.
+async function fetchTestRedirects(fetcher, firstUrl, options, trace) {
+  let url = firstUrl;
+  let method = options.method;
+  let body = options.body;
+  let headers = options.headers;
+  for (let redirects = 0; redirects <= 20; redirects += 1) {
+    const started = performance.now();
+    const hop = { method, host:hostCategory(url), status:null, type:'missing', ms:0, destination:'none' };
+    trace.push(hop);
+    let response;
+    try {
+      response = await fetcher(url, { ...options, method, headers, body, redirect:'manual' });
+      hop.status = response.status;
+      hop.type = responseType(response);
+    } finally { hop.ms = Math.max(0, Math.round(performance.now() - started)); }
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    const location = response.headers.get('location');
+    if (!location) return response;
+    const next = new URL(location, url);
+    hop.destination = hostCategory(next.href);
+    // Only the already authorized Google service may receive a redirect. Never
+    // expose a signed envelope or a one-time response URL to another host.
+    if (next.protocol !== 'https:' || next.username || next.password || (next.port && next.port !== '443')
+      || !['google-script', 'google-content'].includes(hop.destination) || redirects === 20) return response;
+    await response.body?.cancel();
+    if (response.status === 303 || ([301, 302].includes(response.status) && method === 'POST')) {
+      method = 'GET'; body = undefined; headers = { Accept:'application/json' };
+    }
+    url = next.href;
+  }
+}
+
 export async function handlePromotions(request, dependencies = {}) {
   const env = dependencies.env || Object.fromEntries(PROMOTIONS_ENV_KEYS.map(key => [key, globalThis.Netlify?.env?.get(key)]));
   const installationId = dependencies.installationId || deploymentInstallationProfile()?.installationId;
@@ -68,23 +114,21 @@ export async function handlePromotions(request, dependencies = {}) {
   let upstreamRedirected = false;
   let upstreamHost = 'missing';
   let envelopeFailure = 'none';
+  const upstreamTrace = [];
   const upstreamStarted = performance.now();
   try {
-    const response = await (dependencies.fetch || fetch)(runtime.webhookUrl, {
+    const options = {
       method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(envelope), redirect: 'follow', signal: AbortSignal.timeout(25000)
-    });
+    };
+    const fetcher = dependencies.fetch || fetch;
+    const response = runtime.target === 'test' ? await fetchTestRedirects(fetcher, runtime.webhookUrl, options, upstreamTrace)
+      : await fetcher(runtime.webhookUrl, options);
     upstreamStatus = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : 0;
     if (runtime.target === 'test') {
-      const contentType = response.headers?.get('content-type')?.split(';')[0].trim().toLowerCase();
-      upstreamType = !contentType ? 'missing' : contentType === 'application/json' ? 'json' : contentType === 'text/html' ? 'html' : 'other';
-      upstreamRedirected = response.redirected === true;
-      if (response.url) {
-        try {
-          const host = new URL(response.url).hostname;
-          upstreamHost = host === 'script.googleusercontent.com' ? 'google-content' : host === 'script.google.com' ? 'google-script' : host === 'accounts.google.com' ? 'google-auth' : 'other';
-        } catch { upstreamHost = 'other'; }
-      }
+      upstreamType = responseType(response);
+      upstreamRedirected = response.redirected === true || upstreamTrace.length > 1;
+      upstreamHost = response.url ? hostCategory(response.url) : upstreamTrace.at(-1)?.host || 'missing';
     }
     phase = 'body';
     const text = await response.text();
@@ -111,6 +155,7 @@ export async function handlePromotions(request, dependencies = {}) {
       response.headers.set('X-GIB-TEST-Upstream-Redirected', upstreamRedirected ? '1' : '0');
       response.headers.set('X-GIB-TEST-Upstream-Host', upstreamHost);
       response.headers.set('X-GIB-TEST-Upstream-Envelope', envelopeFailure);
+      response.headers.set('X-GIB-TEST-Upstream-Trace', JSON.stringify(upstreamTrace));
     }
     return response;
   }

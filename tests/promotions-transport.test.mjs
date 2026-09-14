@@ -497,6 +497,61 @@ test('a consumed capability stays burned when approval-state confirmation fails'
 
 const diagnosticHeaders = response => [...response.headers].filter(([name]) => name.startsWith('x-gib-test-'));
 
+test('TEST observes the one-time content redirect as GET with one signed POST and the same timeout signal', async () => {
+  const calls = [];
+  let envelope;
+  const h = serverHarness({fetch:async (url, options) => {
+    calls.push({url,options});
+    assert.equal(options.redirect, 'manual');
+    if (calls.length === 1) {
+      envelope = JSON.parse(options.body);
+      return new Response('', {status:302,headers:{location:'https://script.googleusercontent.com/PRIVATE_RESPONSE'}});
+    }
+    assert.equal(options.method,'GET'); assert.equal(options.body,undefined);
+    assert.deepEqual(options.headers,{Accept:'application/json'});
+    assert.equal(options.signal,calls[0].options.signal);
+    return new Response(JSON.stringify({bridge:MODE,target:'test',installation:'rev',requestNonce:envelope.payload.nonce,result:{ok:true,data:{testOnly:true}}}),{headers:{'content-type':'application/json'}});
+  }});
+  const response = await h.run(request());
+  assert.equal(response.status,200); assert.equal(calls.length,2);
+  assert.equal(calls.filter(call=>call.options.method==='POST').length,1);
+  assert.deepEqual(diagnosticHeaders(response),[]);
+});
+
+test('TEST failure trace exposes the unexpected GET return to Google script without exposing redirect URLs', async () => {
+  let calls = 0;
+  const h = serverHarness({fetch:async (_url, options) => {
+    calls += 1;
+    if (calls === 1) return new Response('',{status:302,headers:{location:'https://script.googleusercontent.com/PRIVATE_RESPONSE'}});
+    assert.equal(options.method,'GET'); assert.equal(options.body,undefined);
+    if (calls === 2) return new Response('',{status:302,headers:{location:'https://script.google.com/macros/s/PRIVATE/exec'}});
+    return new Response('<html>PRIVATE owner page</html>',{headers:{'content-type':'text/html'}});
+  }});
+  const response = await h.run(request());
+  assert.equal(response.status,503); assert.equal(calls,3);
+  const trace = JSON.parse(response.headers.get('x-gib-test-upstream-trace'));
+  assert.deepEqual(trace.map(({method,host,status,type,destination})=>({method,host,status,type,destination})),[
+    {method:'POST',host:'google-script',status:302,type:'other',destination:'google-content'},
+    {method:'GET',host:'google-content',status:302,type:'other',destination:'google-script'},
+    {method:'GET',host:'google-script',status:200,type:'html',destination:'none'}
+  ]);
+  assert.ok(trace.every(hop=>Number.isInteger(hop.ms)&&hop.ms>=0));
+  assert.equal(response.headers.get('x-gib-test-upstream'),'json');
+  assert.equal(JSON.stringify([...response.headers]).includes('PRIVATE'),false);
+});
+
+test('TEST redirect tracing refuses other destinations and stops at the existing fetch redirect limit without retries', async () => {
+  for (const target of ['https://accounts.google.com/PRIVATE','https://evil.example/PRIVATE','http://script.google.com/PRIVATE','https://script.googleusercontent.com/LOOP']) {
+    let calls=0;
+    const h=serverHarness({fetch:async()=>{calls+=1;return new Response('',{status:302,headers:{location:target}});}});
+    const response=await h.run(request());
+    assert.equal(response.status,503);
+    assert.equal(calls,target.endsWith('/LOOP')?21:1);
+    assert.equal(response.headers.get('x-gib-test-upstream'),'http');
+    assert.equal(JSON.stringify([...response.headers]).includes('PRIVATE'),false);
+  }
+});
+
 test('authenticated TEST failures identify only fixed phases and numeric timing without losing original intent', async () => {
   const privateText = `SYNTHETIC_PRIVATE_ERROR ${ENV.GIB_PROMOTIONS_TEST_WEBHOOK_URL} ${ENV.GIB_PROMOTIONS_TEST_BRIDGE_SECRET}`;
   const cases = [
@@ -519,7 +574,7 @@ test('authenticated TEST failures identify only fixed phases and numeric timing 
     assert.equal(value.headers.get('x-gib-test-upstream'), phase);
     assert.match(value.headers.get('x-gib-test-upstream-ms'), /^\d+$/u);
     assert.equal(value.headers.get('x-gib-test-upstream-status'), status);
-    assert.equal(diagnosticHeaders(response).length, status === null ? 6 : 7);
+    assert.equal(diagnosticHeaders(response).length, status === null ? 7 : 8);
     assert.equal(calls, 1, 'diagnosis must never automatically resend the request');
     const publicOutput = JSON.stringify({ body: value.body, headers: [...value.headers] });
     assert.equal(publicOutput.includes('SYNTHETIC_PRIVATE_ERROR'), false);

@@ -1,5 +1,5 @@
-import { promotionsTemplate } from './promotions-template.mjs?v=2026-09-14-promotions-repair-b';
-import { promotionsEnabled, createPromotionsLifecycle } from './promotions-core.mjs?v=2026-09-14-promotions-repair-b';
+import { promotionsTemplate } from './promotions-template.mjs?v=2026-09-14-promotions-repair-c';
+import { promotionsEnabled, createPromotionsLifecycle } from './promotions-core.mjs?v=2026-09-14-promotions-repair-c';
 
 export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online = () => globalThis.navigator?.onLine !== false, testOnly = true, onDiagnostic } = {}) {
   const diagnose = testOnly === true && typeof onDiagnostic === 'function';
@@ -9,12 +9,28 @@ export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online =
   const clock = () => globalThis.performance?.now?.() ?? Date.now();
   const numericHeader = (value, minimum, maximum) => typeof value === 'string' && /^(0|[1-9][0-9]{0,8})$/u.test(value)
     && Number(value) >= minimum && Number(value) <= maximum ? Number(value) : null;
+  const traceHeader = value => {
+    if (typeof value !== 'string' || value.length > 10000) return null;
+    try {
+      const trace = JSON.parse(value);
+      const fields = ['method', 'host', 'status', 'type', 'ms', 'destination'];
+      const hosts = ['google-content', 'google-script', 'google-auth', 'other', 'missing'];
+      if (!Array.isArray(trace) || trace.length > 20 || !trace.every(hop => hop && typeof hop === 'object' && !Array.isArray(hop)
+        && Object.keys(hop).length === fields.length && fields.every(field => Object.hasOwn(hop, field))
+        && ['POST', 'GET'].includes(hop.method) && hosts.includes(hop.host)
+        && (hop.status === null || (Number.isInteger(hop.status) && hop.status >= 100 && hop.status <= 599))
+        && ['json', 'html', 'other', 'missing'].includes(hop.type)
+        && Number.isInteger(hop.ms) && hop.ms >= 0 && hop.ms <= 3600000
+        && [...hosts, 'none'].includes(hop.destination))) return null;
+      return trace.map(({ method, host, status, type, ms, destination }) => ({ method, host, status, type, ms, destination }));
+    } catch (_) { return null; }
+  };
   return payload => new Promise((resolve, reject) => {
     const startedAt = diagnose ? new Date().toISOString() : null;
     const startedMs = diagnose ? clock() : 0;
     let phase = 'fetch';
     let httpStatus = null;
-    let upstream = { upstreamPhase:null, upstreamMs:null, upstreamStatus:null, upstreamType:null, upstreamRedirected:null, upstreamHost:null, upstreamEnvelope:null };
+    let upstream = { upstreamPhase:null, upstreamMs:null, upstreamStatus:null, upstreamType:null, upstreamRedirected:null, upstreamHost:null, upstreamEnvelope:null, upstreamTrace:null };
     let settled = false;
     let timer;
     const finish = (fn, value, outcome) => {
@@ -52,7 +68,8 @@ export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online =
             upstreamType:category(header('-Type'), ['json', 'html', 'other', 'missing']),
             upstreamRedirected:numericHeader(header('-Redirected'), 0, 1),
             upstreamHost:category(header('-Host'), ['google-content', 'google-script', 'google-auth', 'other', 'missing']),
-            upstreamEnvelope:category(header('-Envelope'), ['bare-auth-denial', 'mismatch', 'none'])
+            upstreamEnvelope:category(header('-Envelope'), ['bare-auth-denial', 'mismatch', 'none']),
+            upstreamTrace:traceHeader(header('-Trace'))
           };
         } catch (_) { /* Missing diagnostic headers do not change the reply. */ }
       }

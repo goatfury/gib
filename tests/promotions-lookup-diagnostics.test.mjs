@@ -4,7 +4,7 @@ import { createPromotionsTransport, mountPromotionsLog } from '../m1/promotions-
 
 const PRIVATE = 'SYNTHETIC_PRIVATE_NAME_ID_URL_MESSAGE';
 const keys = ['operation', 'startedAt', 'browserElapsedMs', 'phase', 'httpStatus', 'errorCode', 'outcome',
-  'upstreamPhase', 'upstreamMs', 'upstreamStatus', 'upstreamType', 'upstreamRedirected', 'upstreamHost', 'upstreamEnvelope'].sort();
+  'upstreamPhase', 'upstreamMs', 'upstreamStatus', 'upstreamType', 'upstreamRedirected', 'upstreamHost', 'upstreamEnvelope', 'upstreamTrace'].sort();
 const response = (body, { status = 200, headers = new Headers() } = {}) => ({ ok: status >= 200 && status < 300, status, headers, json: async () => body });
 const tick = async () => { for (let step = 0; step < 6; step += 1) await Promise.resolve(); };
 function inspect(record) {
@@ -55,6 +55,25 @@ test('unrecognized operations, codes and header contents cannot leak through the
     assert.equal(await transport({ operation: PRIVATE, studentId: PRIVATE }).catch(value => value), error);
     inspect(records[0]); assert.equal(records[0].operation, 'OTHER'); assert.equal(records[0].errorCode, 'OTHER');
     for (const key of keys.filter(key => key.startsWith('upstream'))) assert.equal(records[0][key], null, key);
+  }
+});
+
+test('TEST redirect traces accept only bounded exact safe hop records and reject private fields', async () => {
+  const hop = { method: 'POST', host: 'google-script', status: 302, type: 'html', ms: 4335, destination: 'google-content' };
+  const valid = [hop, { method: 'GET', host: 'google-content', status: null, type: 'missing', ms: 0, destination: 'none' }];
+  const malformed = [
+    PRIVATE, JSON.stringify({ ...hop }), JSON.stringify(Array(21).fill(hop)),
+    ...[{ ...hop, private: PRIVATE }, { ...hop, method: PRIVATE }, { ...hop, host: PRIVATE }, { ...hop, type: PRIVATE },
+      { ...hop, destination: PRIVATE }, { ...hop, status: 99 }, { ...hop, status: 600 }, { ...hop, status: '302' },
+      { ...hop, ms: -1 }, { ...hop, ms: 3600001 }, { ...hop, ms: 0.5 }, { ...hop, destination: undefined }, null
+    ].map(value => JSON.stringify([value]))
+  ];
+  for (const [value, expected] of [[JSON.stringify(valid), valid], [JSON.stringify(Array(20).fill(hop)), Array(20).fill(hop)], ...malformed.map(value => [value, null])]) {
+    const records = []; const error = { code: 'UNAVAILABLE', message: PRIVATE };
+    const headers = new Headers({ 'X-GIB-TEST-Upstream-Trace': value });
+    const transport = createPromotionsTransport(async () => response({ ok: false, error }, { status: 503, headers }), { onDiagnostic: item => records.push(item) });
+    assert.equal(await transport({ operation: 'readStudent', studentId: PRIVATE }).catch(value => value), error);
+    assert.equal(records.length, 1); inspect(records[0]); assert.deepEqual(records[0].upstreamTrace, expected);
   }
 });
 
