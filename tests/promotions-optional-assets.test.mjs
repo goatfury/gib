@@ -82,6 +82,14 @@ test('optional assets are absent from parser-blocking tags and loader registrati
   assert.doesNotMatch(loaderSource(), /\bawait\s+importModule\s*\(/u, 'core startup must never await optional assets');
 });
 
+test('optional repair assets use one matching version across loader and client dependencies', () => {
+  const client = readFileSync(new URL('../m1/promotions-client.mjs', import.meta.url), 'utf8');
+  const versions = [...`${html}\n${client}`.matchAll(/promotions(?:-config\.generated\.js|\.css|-client\.mjs|-template\.mjs|-core\.mjs)\?v=([^'"]+)/gu)].map(match => match[1]);
+  assert.equal(versions.length,5);
+  assert.equal(new Set(versions).size,1);
+  assert.match(versions[0],/promotions-repair/u);
+});
+
 test('pending config starts only after DOMContentLoaded and cannot load CSS/client or expose the log', async () => {
   const h = harness();
   assert.equal(h.imports.length, 0);

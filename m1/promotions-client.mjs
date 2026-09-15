@@ -1,21 +1,123 @@
-import { promotionsTemplate } from './promotions-template.mjs?v=2026-09-13-promotions-test-a';
-import { promotionsEnabled, createPromotionsLifecycle } from './promotions-core.mjs?v=2026-09-13-promotions-test-a';
+import { promotionsTemplate } from './promotions-template.mjs?v=2026-09-14-promotions-repair-api-1';
+import { promotionsEnabled, createPromotionsLifecycle } from './promotions-core.mjs?v=2026-09-14-promotions-repair-api-1';
 
-export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online = () => globalThis.navigator?.onLine !== false, testOnly = true } = {}) {
-  return payload => new Promise((resolve, reject) => {
-    if (!online()) { reject({ code:'UNAVAILABLE', message:'Connect to load a fresh record or send this entry.', retryable:true }); return; }
-    const abort = new AbortController();
+export function apiLookupMetadata(value) {
+  if (typeof value !== 'string' || value.length > 512) return null;
+  try {
+    const data = JSON.parse(value);
+    const phases = ['configuration','storage','token','identity','api','envelope','complete'];
+    const errors = ['none','CONFIG','STORE','NOT_CONNECTED','TOKEN_REVOKED','TOKEN_RESPONSE','TOKEN_SCOPE','TOKEN_IDENTITY',
+      'ACCESS_DENIED','HTTP_ERROR','API_RESULT','INITIALIZE','SETUP_DISABLED','REDIRECT','RESPONSE_TOO_LARGE','INVALID_JSON','TIMEOUT','ABORTED','NETWORK','ENVELOPE'];
+    return data && Object.keys(data).sort().join(',') === 'attempts,errorCode,ms,phase' && data.attempts === 1
+      && phases.includes(data.phase) && errors.includes(data.errorCode) && Number.isInteger(data.ms) && data.ms >= 0 && data.ms <= 3600000
+      ? {phase:data.phase, ms:data.ms, errorCode:data.errorCode, attempts:1} : null;
+  } catch (_) { return null; }
+}
+
+export function createPromotionsTransport(fetcher, { timeoutMs = 30000, online = () => globalThis.navigator?.onLine !== false, testOnly = true, onDiagnostic } = {}) {
+  const diagnose = testOnly === true && typeof onDiagnostic === 'function';
+  const operations = new Set(['bootstrap', 'readStudent', 'checkSave', 'recordPromotion', 'confirmRank', 'registerStudent', 'correctLatest']);
+  const errorCodes = new Set(['UNAVAILABLE', 'UNAUTHORIZED', 'CANCELLED', 'VALIDATION', 'NOT_FOUND', 'ARCHIVED', 'RANK_UNKNOWN', 'RANK_ALREADY_KNOWN',
+    'STALE_REVISION', 'REQUEST_CONFLICT', 'DUPLICATE_STUDENT', 'CORRECTION_NOT_LATEST', 'TEST_DESTINATION_INVALID', 'LIVE_DESTINATION_INVALID', 'BUSY']);
+  const clock = () => globalThis.performance?.now?.() ?? Date.now();
+  const numericHeader = (value, minimum, maximum) => typeof value === 'string' && /^(0|[1-9][0-9]{0,8})$/u.test(value)
+    && Number(value) >= minimum && Number(value) <= maximum ? Number(value) : null;
+  const traceHeader = value => {
+    if (typeof value !== 'string' || value.length > 10000) return null;
+    try {
+      const trace = JSON.parse(value);
+      const fields = ['method', 'host', 'path', 'status', 'type', 'ms', 'destination', 'destinationPath'];
+      const hosts = ['google-content', 'google-script', 'google-auth', 'other', 'missing'];
+      const paths = ['web-app-exec', 'web-app-dev', 'content-response', 'accounts', 'other', 'missing', 'none'];
+      if (!Array.isArray(trace) || trace.length > 21 || !trace.every(hop => hop && typeof hop === 'object' && !Array.isArray(hop)
+        && Object.keys(hop).length === fields.length && fields.every(field => Object.hasOwn(hop, field))
+        && ['POST', 'GET'].includes(hop.method) && hosts.includes(hop.host) && paths.includes(hop.path) && paths.includes(hop.destinationPath)
+        && (hop.status === null || (Number.isInteger(hop.status) && hop.status >= 100 && hop.status <= 599))
+        && ['json', 'html', 'other', 'missing'].includes(hop.type)
+        && Number.isInteger(hop.ms) && hop.ms >= 0 && hop.ms <= 3600000
+        && [...hosts, 'none'].includes(hop.destination))) return null;
+      return trace.map(({ method, host, path, status, type, ms, destination, destinationPath }) => ({ method, host, path, status, type, ms, destination, destinationPath }));
+    } catch (_) { return null; }
+  };
+  return (payload, { signal } = {}) => new Promise((resolve, reject) => {
+    const startedAt = diagnose ? new Date().toISOString() : null;
+    const startedMs = diagnose ? clock() : 0;
+    let phase = 'fetch';
+    let httpStatus = null;
+    let upstream = { upstreamPhase:null, upstreamMs:null, upstreamStatus:null, upstreamType:null, upstreamRedirected:null, upstreamHost:null, upstreamEnvelope:null, upstreamTrace:null,
+      traceId:null, responseFingerprint:null, htmlCategory:null, htmlTitle:null, htmlReason:null };
     let settled = false;
-    const finish = (fn, value) => { if (settled) return; settled = true; clearTimeout(timer); fn(value); };
-    const timer = setTimeout(() => { finish(reject, { code:'UNAVAILABLE', message:'No confirmation arrived. Keep this entry and check or retry it.', retryable:true }); abort.abort(); }, timeoutMs);
-    Promise.resolve().then(() => fetcher('/api/m1-promotions', {
+    let timer;
+    const callerSignal = testOnly === true && ['bootstrap', 'readStudent'].includes(payload?.operation) ? signal : null;
+    let cancel;
+    const finish = (fn, value, outcome) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer);
+      if (cancel) callerSignal?.removeEventListener('abort', cancel);
+      fn(value);
+      if (diagnose) {
+        try {
+          const record = {
+            operation:operations.has(payload?.operation) ? payload.operation : 'OTHER', startedAt,
+            browserElapsedMs:Math.max(0, Math.round(clock() - startedMs)), phase, httpStatus,
+            errorCode:outcome === 'success' ? null : errorCodes.has(value?.code) ? value.code : 'OTHER', outcome, ...upstream
+          };
+          // Observers receive only fixed categories/timing, never the input or
+          // reply. Their failure cannot alter settlement or trigger a retry.
+          Promise.resolve(onDiagnostic(record)).catch(() => {});
+        } catch (_) { /* TEST observation cannot affect the request. */ }
+      }
+    };
+    const abort = new AbortController();
+    cancel = () => {
+      if (settled) return;
+      phase = 'cancelled';
+      finish(reject, { code:'CANCELLED', message:'This lookup is no longer active.', retryable:false }, 'error');
+      abort.abort();
+    };
+    if (callerSignal?.aborted) { cancel(); return; }
+    callerSignal?.addEventListener('abort', cancel, { once:true });
+    if (!online()) { phase = 'offline'; finish(reject, { code:'UNAVAILABLE', message:'Connect to load a fresh record or send this entry.', retryable:true }, 'error'); return; }
+    timer = setTimeout(() => { phase = 'timeout'; finish(reject, { code:'UNAVAILABLE', message:'No confirmation arrived. Keep this entry and check or retry it.', retryable:true }, 'error'); abort.abort(); }, timeoutMs);
+    Promise.resolve().then(() => settled ? undefined : fetcher('/api/m1-promotions', {
       method:'POST', credentials:'same-origin', cache:'no-store', signal:abort.signal,
       headers:{ 'Content-Type':'application/json', Accept:'application/json' }, body:JSON.stringify(payload)
     })).then(async response => {
+      if (settled) { try { await response?.body?.cancel?.(); } catch (_) { /* A cancelled lookup cannot become current. */ } return; }
+      phase = 'body';
+      if (diagnose) {
+        httpStatus = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : null;
+        try {
+          const header = name => response.headers?.get?.('X-GIB-TEST-Upstream' + name);
+          const diagnosticHeader = name => response.headers?.get?.('X-GIB-TEST-' + name);
+          const category = (value, allowed) => allowed.includes(value) ? value : null;
+          const hex = (value, length) => typeof value === 'string' && value.length === length && /^[a-f0-9]+$/u.test(value) ? value : null;
+          upstream = {
+            upstreamPhase:category(header(''), ['fetch', 'body', 'http', 'json', 'envelope']),
+            upstreamMs:numericHeader(header('-Ms'), 0, 3600000), upstreamStatus:numericHeader(header('-Status'), 100, 599),
+            upstreamType:category(header('-Type'), ['json', 'html', 'other', 'missing']),
+            upstreamRedirected:numericHeader(header('-Redirected'), 0, 1),
+            upstreamHost:category(header('-Host'), ['google-content', 'google-script', 'google-auth', 'google-api', 'other', 'missing']),
+            upstreamEnvelope:category(header('-Envelope'), ['bare-auth-denial', 'mismatch', 'none']),
+            upstreamTrace:traceHeader(header('-Trace')),
+            traceId:hex(diagnosticHeader('Trace-Id'), 24),
+            responseFingerprint:hex(diagnosticHeader('Response-Fingerprint'), 64),
+            htmlCategory:category(diagnosticHeader('HTML-Category'), ['owner-denial', 'owner-page', 'google-auth', 'google-error', 'other-html', 'not-html', 'missing']),
+            htmlTitle:category(diagnosticHeader('HTML-Title'), ['owner-page', 'google-sign-in', 'google-drive', 'google-error', 'other', 'missing']),
+            htmlReason:category(diagnosticHeader('HTML-Reason'), ['owner-access-required', 'google-file-unavailable', 'google-sign-in-required', 'google-script-error', 'google-service-unavailable', 'unknown', 'none'])
+          };
+          if (diagnosticHeader('Transport-Kind') === 'google-api') {
+            upstream.transportKind = 'google-api';
+            upstream.api = apiLookupMetadata(diagnosticHeader('API'));
+          }
+        } catch (_) { /* Missing diagnostic headers do not change the reply. */ }
+      }
       const body = await response.json();
-      if (response.ok && body?.ok === true && body.data && typeof body.data === 'object') finish(resolve, body.data);
-      else finish(reject, body?.error || { code:response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : 'UNAVAILABLE', message:`The ${testOnly ? 'TEST ' : ''}log could not confirm this request.`, retryable:response.status >= 500 });
-    }).catch(() => finish(reject, { code:'UNAVAILABLE', message:'The connection was interrupted. This entry is not confirmed.', retryable:true }));
+      if (settled) return;
+      phase = 'application';
+      if (response.ok && body?.ok === true && body.data && typeof body.data === 'object') finish(resolve, body.data, 'success');
+      else finish(reject, body?.error || { code:response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : 'UNAVAILABLE', message:`The ${testOnly ? 'TEST ' : ''}log could not confirm this request.`, retryable:response.status >= 500 }, 'error');
+    }).catch(() => finish(reject, { code:'UNAVAILABLE', message:'The connection was interrupted. This entry is not confirmed.', retryable:true }, 'error'));
   });
 }
 
@@ -33,7 +135,9 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('modeBadge').textContent = ''; $('modeBadge').hidden = true;
     $('privacyNote').textContent = 'Lookups clear after 60 seconds without activity. Confirmed entries return to Sign-In after 3 seconds.';
   }
-  const transport = createPromotionsTransport(fetcher, { testOnly });
+  const transport = createPromotionsTransport(fetcher, { testOnly,
+    onDiagnostic:testOnly ? record => console.info('Promotions TEST lookup', JSON.stringify(record)) : undefined
+  });
   const lifecycle = createPromotionsLifecycle({ now, storage, onClear: clearPresentation });
   const state = {
     students: new Map(), approvers: [], recorderLabel: '', todayNY: '', selected: null,
@@ -41,9 +145,12 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     approverResults: [], activeApproverResult: -1,
     draft: null, drafts: new Map(), pending: null, authenticated: false, loadingStudent: false, selectedFresh: false
   };
+  let bootstrapGeneration = 0;
+  let bootstrapRead = null;
+  let selectedRead = null;
   const belts = ['White Belt', 'Blue Belt', 'Purple Belt', 'Brown Belt', 'Black Belt'];
   const mutationErrors = new Set(['VALIDATION', 'NOT_FOUND', 'ARCHIVED', 'RANK_UNKNOWN', 'RANK_ALREADY_KNOWN', 'STALE_REVISION', 'REQUEST_CONFLICT', 'DUPLICATE_STUDENT', 'CORRECTION_NOT_LATEST', 'TEST_DESTINATION_INVALID']);
-  const eventLabels = { REGISTER:'Student registered', RANK_CONFIRM:'Current rank confirmed', STRIPE:'Stripe or degree added', BELT:'Belt changed', CORRECTION:'Audited correction' };
+  const eventLabels = { REGISTER:'Student registered', RANK_CONFIRM:'Current rank confirmed', STRIPE:'Stripe or degree added', BELT:'Belt changed', CORRECTION:'Audited correction', REPAIR:'Data repair' };
 
   function node(tag, text, className) {
     const element = document.createElement(tag);
@@ -56,7 +163,18 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     const type = student.belt === 'Black Belt' ? 'degree' : 'stripe';
     return `${student.belt} · ${student.marks} ${type}${student.marks === 1 ? '' : 's'}`;
   }
-  function normalize(value) { return String(value || '').normalize('NFKC').toLocaleLowerCase().trim(); }
+  function normalize(value) { return String(value || '').normalize('NFKC').toLocaleLowerCase().replace(/\s+/gu, ' ').trim(); }
+  function dateLabel(value) {
+    if (!value) return 'Date not recorded';
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return String(value);
+    const date = new Date(`${value}T12:00:00Z`);
+    if (Number.isNaN(date.valueOf()) || date.toISOString().slice(0,10) !== value) return String(value);
+    return new Intl.DateTimeFormat('en-US', { timeZone:'UTC', year:'numeric', month:'long', day:'numeric' }).format(date);
+  }
+  function identityLabel(student) {
+    const label = String(student?.distinguishingLabel || '');
+    return /^Legacy .+ row \d+$/u.test(label) ? `Source record: ${label}` : label;
+  }
   function todayNY() {
     const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone:'America/New_York', year:'numeric', month:'2-digit', day:'2-digit' }).formatToParts(new Date()).map(part => [part.type, part.value]));
     return `${parts.year}-${parts.month}-${parts.day}`;
@@ -74,7 +192,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('message').hidden = !message;
   }
   function formError(message) { $('formError').textContent = message; $('formError').hidden = !message; }
-  function rpc(payload) { return transport(payload); }
+  function rpc(payload, options) { return transport(payload, options); }
   function accessFailure(error) {
     state.authenticated = false;
     $('app').hidden = true;
@@ -88,6 +206,12 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
   }
   async function bootstrap() {
     const viewToken = lifecycle.token();
+    const accessGeneration = ++bootstrapGeneration;
+    const requestAbort = testOnly ? new AbortController() : null;
+    if (testOnly) {
+      bootstrapRead?.abort(); bootstrapRead = requestAbort;
+      selectedRead?.abort(); selectedRead = null; state.readGeneration += 1;
+    }
     state.authenticated = false;
     $('app').hidden = true;
     $('retryAccess').hidden = true;
@@ -95,8 +219,8 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('accessStatus').className = 'notice';
     $('accessStatus').textContent = 'Checking secure access…';
     try {
-      const data = await rpc({ operation:'bootstrap' });
-      if (!lifecycle.isCurrent(viewToken)) return;
+      const data = await rpc({ operation:'bootstrap' }, requestAbort ? { signal:requestAbort.signal } : undefined);
+      if (!lifecycle.isCurrent(viewToken) || (testOnly && accessGeneration !== bootstrapGeneration)) return;
       if (data.testOnly !== testOnly || (data.target !== undefined && data.target !== target) || !Array.isArray(data.students)) {
         throw { code:testOnly ? 'TEST_DESTINATION_INVALID' : 'LIVE_DESTINATION_INVALID', message:`The ${testOnly ? 'TEST' : 'live'} destination could not be verified.` };
       }
@@ -112,7 +236,8 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
       $('app').hidden = false;
       renderSearch();
       renderBusy();
-    } catch (error) { if (lifecycle.isCurrent(viewToken)) accessFailure(error); }
+    } catch (error) { if (lifecycle.isCurrent(viewToken) && (!testOnly || accessGeneration === bootstrapGeneration)) accessFailure(error); }
+    finally { if (bootstrapRead === requestAbort) bootstrapRead = null; }
   }
 
   function renderSearch() {
@@ -130,7 +255,7 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
       const option = node('button', undefined, 'search-option');
       option.type = 'button'; option.id = `promotions-student-result-${index}`;
       option.setAttribute('role', 'option'); option.setAttribute('aria-selected', 'false');
-      option.append(node('strong', student.displayName), node('span', `${student.distinguishingLabel}${student.status === 'archived' ? ' · Archived' : ''}`));
+      option.append(node('strong', student.displayName), node('span', `${identityLabel(student)}${student.status === 'archived' ? ' · Archived' : ''}`));
       option.addEventListener('click', () => selectStudent(student.studentId));
       $('searchResults').append(option);
     }
@@ -139,10 +264,10 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('studentSearch').setAttribute('aria-expanded', String(open));
     $('studentSearch').removeAttribute('aria-activedescendant');
     $('searchHint').textContent = !query
-      ? 'Use the identifying label to distinguish students with the same name.'
+      ? 'Search by first name, surname, or full name.'
       : matches.length === 0 ? 'No matching student. Add a separate student if they are missing.'
       : matches.length > 8 ? `Showing 8 of ${matches.length} matches. Type more to narrow the list.`
-      : 'Choose the correct identifying label. Matching names are separate students.';
+      : 'Choose the full name. Identical names remain separate records; check the details below each name.';
   }
   function closeSearch() {
     $('searchResults').hidden = true;
@@ -209,10 +334,12 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     const selectedGeneration = state.selectedGeneration;
     const viewToken = lifecycle.token();
     const readGeneration = ++state.readGeneration;
+    const requestAbort = testOnly ? new AbortController() : null;
+    if (testOnly) { selectedRead?.abort(); selectedRead = requestAbort; }
     state.loadingStudent = true;
     renderBusy();
     try {
-      const data = await rpc({ operation:'readStudent', studentId });
+      const data = await rpc({ operation:'readStudent', studentId }, requestAbort ? { signal:requestAbort.signal } : undefined);
       if (!lifecycle.isCurrent(viewToken) || selectedGeneration !== state.selectedGeneration || readGeneration !== state.readGeneration || state.selected?.studentId !== studentId) return;
       if (!data.student || data.student.studentId !== studentId || !Array.isArray(data.history)) throw { message:'The student record could not be verified.' };
       if ((state.students.get(studentId)?.revision || 0) > data.student.revision) return;
@@ -224,12 +351,14 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
       renderStudent();
       renderEditor(false);
     } catch (error) {
-      if (!lifecycle.isCurrent(viewToken) || selectedGeneration !== state.selectedGeneration) return;
+      if (!lifecycle.isCurrent(viewToken) || selectedGeneration !== state.selectedGeneration
+        || (testOnly && (readGeneration !== state.readGeneration || state.selected?.studentId !== studentId))) return;
       state.selectedFresh = false;
       renderStudent();
       if (error?.code === 'UNAUTHORIZED') accessFailure(error);
       else showMessage(error?.message || 'The current record could not be loaded. Refresh before saving.', 'error');
     } finally {
+      if (selectedRead === requestAbort) selectedRead = null;
       if (lifecycle.isCurrent(viewToken) && selectedGeneration === state.selectedGeneration && readGeneration === state.readGeneration) { state.loadingStudent = false; renderBusy(); }
     }
   }
@@ -239,10 +368,11 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     $('historyCard').hidden = !student || !state.selectedFresh;
     if (!student) return;
     $('studentName').textContent = student.displayName;
-    $('studentIdentity').textContent = student.distinguishingLabel;
+    $('studentIdentity').textContent = identityLabel(student);
     $('studentRank').textContent = state.selectedFresh ? rankLabel(student) : 'Current rank not yet verified';
     const latestPromotion = [...state.history].sort((a,b) => b.revision - a.revision).find(event => ['STRIPE','BELT'].includes(event.eventKind) && event.eventDateNY);
-    $('studentDate').textContent = state.selectedFresh ? `Latest promotion: ${student.lastPromotionDateNY || latestPromotion?.eventDateNY || 'Date not recorded'}` : 'Connect and refresh to verify this record.';
+    const lastPromotionDate = typeof student.lastPromotionDateNY === 'string' ? student.lastPromotionDateNY : latestPromotion?.eventDateNY;
+    $('studentDate').textContent = state.selectedFresh ? `Latest promotion: ${dateLabel(lastPromotionDate)}` : 'Connect and refresh to verify this record.';
     $('studentState').hidden = student.status !== 'archived' && student.rankKnown;
     $('studentState').textContent = student.status === 'archived'
       ? 'Archived student. Their record and history are available to read; promotions are disabled.'
@@ -258,7 +388,9 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     renderBusy();
   }
   function latestCorrectable() {
-    return [...state.history].sort((left, right) => right.revision - left.revision).find(event => event.eventKind !== 'REGISTER') || null;
+    const latest = [...state.history].sort((left, right) => right.revision - left.revision)
+      .find(event => !(event.eventKind === 'REPAIR' && event.repair?.field === 'identity'));
+    return latest && ['RANK_CONFIRM', 'STRIPE', 'BELT', 'CORRECTION'].includes(latest.eventKind) ? latest : null;
   }
   function renderHistory() {
     $('historyList').replaceChildren();
@@ -267,12 +399,24 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     for (const event of history) {
       const article = node('article', undefined, 'history-item');
       article.append(node('h3', `${event.eventDateNY || 'Date not recorded'} · ${eventLabels[event.eventKind] || 'Recorded event'}`));
-      article.append(node('p', `${event.before ? rankLabel(event.before) : 'New identity'} → ${rankLabel(event.after)}`));
+      if (event.eventKind === 'REPAIR' && event.repair?.field === 'identity') {
+        article.append(node('p', `${event.repair.before.displayName} → ${event.repair.after.displayName}`));
+        if (event.repair.before.distinguishingLabel !== event.repair.after.distinguishingLabel) {
+          article.append(node('p', `Identifying label: ${event.repair.before.distinguishingLabel} → ${event.repair.after.distinguishingLabel}`, 'history-meta'));
+        }
+      } else {
+        article.append(node('p', `${event.before ? rankLabel(event.before) : 'New identity'} → ${rankLabel(event.after)}`));
+      }
+      if (event.eventKind === 'REPAIR') {
+        article.append(node('p', 'Source-supported data repair. This is not an instructor-awarded promotion.', 'history-meta'));
+        if (event.repair?.field === 'rank') article.append(node('p', `Historical promotion date: ${dateLabel(event.repair.after.lastPromotionDateNY)}`, 'history-meta'));
+        if (event.repair?.evidence?.interpretation) article.append(node('p', event.repair.evidence.interpretation, 'small'));
+      }
       const recordedThrough = /^m1-test-device-[a-f0-9]{24}$/u.test(event.recorderIdentity || '')
         ? 'Authorized TEST tablet' : /^m1-live-device-[a-f0-9]{24}$/u.test(event.recorderIdentity || '')
           ? 'Authorized Revolution tablet' : 'Earlier log';
-      article.append(node('p', `Promoted by: ${event.approverLabel || 'Not recorded'} · Recorded through: ${recordedThrough}`, 'history-meta'));
-      if (event.reason) article.append(node('p', event.reason, 'small'));
+      if (event.eventKind !== 'REPAIR') article.append(node('p', `Promoted by: ${event.approverLabel || 'Not recorded'} · Recorded through: ${recordedThrough}`, 'history-meta'));
+      if (event.eventKind !== 'REPAIR' && event.reason) article.append(node('p', event.reason, 'small'));
       if (event.correctsEventId) article.append(node('p', 'Corrects an earlier entry; the original is retained below.', 'history-meta'));
       $('historyList').append(article);
     }
@@ -595,6 +739,11 @@ export function mountPromotionsLog({ document = globalThis.document, profile = g
     document.getElementById('openPromotionsLog').setAttribute('aria-expanded', String(active));
   }
   function clearPresentation() {
+    if (testOnly) {
+      bootstrapGeneration += 1;
+      bootstrapRead?.abort(); bootstrapRead = null;
+      selectedRead?.abort(); selectedRead = null;
+    }
     state.selectedGeneration += 1;
     state.readGeneration += 1;
     state.searchGeneration += 1;

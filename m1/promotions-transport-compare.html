@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PR86 TEST transport comparison</title>
+<style>body{font:18px system-ui;margin:24px;max-width:1100px;background:#f6f8fa;color:#17212b}button{font:inherit;padding:12px 18px;margin:6px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px ui-monospace;background:white;padding:16px;border:1px solid #cad1d8}p{line-height:1.5}</style></head>
+<body><h1>PR86 TEST transport comparison</h1><p>Engineering check only. Existing tablet authorization is required. Serial bootstrap reads only; no student records are displayed or saved.</p>
+<p>Budget: 12 requests or 15 minutes after the first probe. Preflight makes no Google request. No polling or automatic retry.</p>
+<button id="preflight">Run preflight once</button><button data-arm="A" disabled>A — manual fetch</button><button data-arm="B" disabled>B — automatic fetch</button><button data-arm="C" disabled>C — fresh HTTPS</button>
+<p id="status" role="status">Preflight required.</p><pre id="results" aria-label="Sanitized comparison evidence"></pre>
+<script type="module" src="./promotions-transport-compare.mjs?v=20260914-compare-1"></script></body></html>

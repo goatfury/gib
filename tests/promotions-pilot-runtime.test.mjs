@@ -97,6 +97,22 @@ test('live requires its own bridge destination and existing production key, with
     'a shared dual-target receiver is permitted; signing keys and modes remain separate');
 });
 
+test('TEST runtime retains exact Deploy Preview and immutable routes while rejecting branch and local origins', () => {
+  for (const origin of [TEST, 'https://0123456789abcdef01234567--gib-live.netlify.app']) {
+    const ready = config(origin, { GIB_PROMOTIONS_TEST_ORIGIN: origin });
+    assert.equal(ready.target, 'test');
+    assert.equal(ready.origin, origin);
+    for (const path of [API, INSTALL]) {
+      assert.equal(validPromotionsRequest(request(origin, path), ready), true, `${origin}${path}`);
+    }
+    assert.equal(validPromotionsRequest(request(origin, '/api/m1-kiosk-sync'), ready), false);
+  }
+  for (const origin of ['https://repair-promotions--gib-live.netlify.app', 'http://localhost:8888',
+    'https://deploy-preview-85--gib-richmond-test.netlify.app', `${TEST}/`]) {
+    assert.equal(config(origin, { GIB_PROMOTIONS_TEST_ORIGIN: origin }), null, origin);
+  }
+});
+
 test('reusing device or bridge secrets across targets rejects both affected runtime selections', () => {
   const testFields = ['GIB_PROMOTIONS_TEST_BRIDGE_SECRET', 'GIB_PROMOTIONS_TEST_DEVICE_SECRET', 'GIB_PROMOTIONS_TEST_INSTALL_SECRET'];
   for (const liveField of ['GIB_PROMOTIONS_LIVE_BRIDGE_SECRET', 'GIB_M1_PRODUCTION_DEVICE_TOKEN']) {

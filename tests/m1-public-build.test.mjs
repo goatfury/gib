@@ -55,6 +55,20 @@ function buildEnvironment(overrides = {}) {
   return { ...env, ...overrides };
 }
 
+async function runFixtureBuild(root, env) {
+  const options = { cwd: root, env: buildEnvironment(env), stdio: 'pipe', timeout: 20000, windowsHide: true };
+  if (process.platform !== 'win32') {
+    execFileSync(process.execPath, ['--run', 'build'], options);
+    return;
+  }
+  // The Windows sandbox's shell launch can fail before `node --run` starts the
+  // build. Execute the same checked package command as sequential Node steps.
+  const steps = ['tools/build-m1-installation-profile.mjs', 'tools/build-public.mjs'];
+  const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+  assert.equal(manifest.scripts.build, steps.map(file => `node ${file}`).join(' && '));
+  for (const file of steps) execFileSync(process.execPath, [file], options);
+}
+
 async function assertGeneratedCopies(root) {
   for (const file of ['m1/installation-profile.generated.js', 'm1/promotions-config.generated.js']) {
     assert.deepEqual(await readFile(path.join(root, 'public', file)), await readFile(path.join(root, file)));
@@ -77,7 +91,7 @@ for (const scenario of [
     const root = await fixture(t);
     await put(root, 'm1/installation-profile.generated.js', 'stale profile');
     await put(root, 'm1/promotions-config.generated.js', 'stale config');
-    execFileSync(process.execPath, ['--run', 'build'], { cwd: root, env: buildEnvironment(scenario.env), stdio: 'pipe', timeout: 20000 });
+    await runFixtureBuild(root, scenario.env);
     const context = await assertGeneratedCopies(root);
     assert.equal(context.M1_INSTALLATION_PROFILE.installationId, scenario.installation);
     assert.equal(context.M1_INSTALLATION_PROFILE.backend.transportTarget, scenario.target);

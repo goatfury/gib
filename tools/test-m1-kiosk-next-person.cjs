@@ -141,10 +141,29 @@ function validateSynthetic(row) {
   }
 }
 
+function savedLedgerPayload(row) {
+  if (suite !== 'instructor') return row;
+  const hasResult = Object.hasOwn(row, '__syncResult');
+  const hasTime = Object.hasOwn(row, '__syncedAt');
+  assert.equal(hasResult, hasTime, 'Ledger acknowledgment metadata must be complete');
+  if (hasResult) {
+    assert.ok(['added', 'already exists'].includes(row.__syncResult), 'Synthetic ledger acknowledgment must confirm receipt');
+    assert.equal(typeof row.__syncedAt, 'string', 'Ledger acknowledgment time must be an ISO timestamp');
+    const time = Date.parse(row.__syncedAt);
+    assert.ok(Number.isFinite(time), 'Ledger acknowledgment time must be valid');
+    assert.equal(new Date(time).toISOString(), row.__syncedAt, 'Ledger acknowledgment time must be an exact ISO timestamp');
+  }
+  // applyAcknowledgements adds only these receipt fields to the local ledger.
+  // Keep every other saved field, and every queued/uploaded field, exact.
+  const { __syncResult, __syncedAt, ...payload } = row;
+  return payload;
+}
+
 function adopt(row) {
   validateSynthetic(row);
   const id = idOf(row);
-  if (owned.has(id)) assert.deepEqual(row, owned.get(id), 'A saved identity must keep its exact payload');
+  const payload = savedLedgerPayload(row);
+  if (owned.has(id)) assert.deepEqual(payload, savedLedgerPayload(owned.get(id)), 'A saved identity must keep its exact payload');
   else {
     assert.ok(mayAdoptNewRows, 'An unexpected new row appeared outside the test action');
     assert.ok(mode !== 'recover', 'Recovery must never adopt replacement rows');

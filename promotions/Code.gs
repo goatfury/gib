@@ -41,15 +41,386 @@ function promotionRequest(request) {
   }
 }
 
+// Deliberately separate from promotionRequest/doPost: selecting an instructor
+// never authorizes a data migration. The live gate approves one exact reviewed
+// request, and is not enabled by deploying this reader or enabling the pilot.
+function promotionRepair(request) {
+  let lock;
+  let locked = false;
+  let appendAttempted = false;
+  try {
+    const owner = authenticatedPromotionOwner_();
+    exactPromotionFields_(request, ['operation', 'repair']);
+    if (request.operation !== 'applyRepair') failPromotion_('VALIDATION', 'Choose an explicitly reviewed data repair.');
+    const repair = validatePromotionRepair_(request.repair);
+    const fingerprint = promotionRepairFingerprint_(request);
+    if (repair.target === 'live' && PropertiesService.getScriptProperties().getProperty('LIVE_REPAIR_APPROVED_FINGERPRINT') !== fingerprint) {
+      failPromotion_('REPAIR_NOT_APPROVED', 'This exact live repair has not been approved.');
+    }
+    lock = LockService.getScriptLock();
+    locked = lock.tryLock(10000);
+    if (!locked) failPromotion_('BUSY', 'Another save is finishing. Retry this exact repair.', true);
+    if (repair.target === 'live' && PropertiesService.getScriptProperties().getProperty('LIVE_REPAIR_APPROVED_FINGERPRINT') !== fingerprint) {
+      failPromotion_('REPAIR_NOT_APPROVED', 'This exact live repair is no longer approved.');
+    }
+    const workbook = verifiedPromotionWorkbook_(repair.target);
+    if (workbook.getId() !== repair.workbookId) failPromotion_('REPAIR_DESTINATION_CHANGED', 'The reviewed repair belongs to a different workbook.');
+    const state = readPromotionHistory_(workbook);
+    const requestId = 'req-' + repair.repairId;
+    const prior = state.requests.get(requestId);
+    // A lost confirmation remains reconcilable after newer events or source
+    // edits. Never append again, and rebuild Students from all current history.
+    if (prior) {
+      if (prior.fingerprint !== fingerprint || prior.receipt.eventKind !== 'REPAIR') failPromotion_('REQUEST_CONFLICT', 'This repair identity belongs to different contents.');
+      return promotionSuccess_(confirmedPromotionResult_(workbook, state, prior.receipt));
+    }
+    const previous = requirePromotionStudent_(state, repair.studentId);
+    validatePromotionRepairTransition_(repair, previous, state.events);
+    verifyPromotionRepairSource_(workbook, repair, previous);
+    const after = { ...previous, ...repair.after, revision: previous.revision + 1, lastEventId: 'evt-' + repair.repairId };
+    const event = {
+      eventId: after.lastEventId, requestId, studentId: previous.studentId, revision: after.revision,
+      eventKind: 'REPAIR', eventDateNY: promotionToday_(), recordedAtUTC: new Date().toISOString(),
+      before: rankSnapshot_(previous), after, approverId: '', approverLabel: '',
+      recorderIdentity: 'OWNER DATA REPAIR: ' + owner, correctsEventId: '',
+      reason: canonicalPromotionRepairJson_(repair), repair
+    };
+    appendAttempted = true;
+    requirePromotionSheet_(workbook, 'Promotion History', PROMOTION_HISTORY_HEADERS_).appendRow(literalPromotionRow_(promotionEventRow_(event, fingerprint)));
+    SpreadsheetApp.flush();
+    const committed = readPromotionHistory_(workbook);
+    const receipt = committed.requests.get(requestId);
+    if (!receipt || receipt.fingerprint !== fingerprint || promotionRepairFingerprint_(receipt.receipt) !== promotionRepairFingerprint_(event)) {
+      failPromotion_('UNAVAILABLE', 'Repair confirmation is unavailable. Retry this exact repair.', true);
+    }
+    return promotionSuccess_(confirmedPromotionResult_(workbook, committed, receipt.receipt));
+  } catch (error) {
+    return { ok: false, error: {
+      code: !appendAttempted && error && error.promotionCode || 'UNAVAILABLE',
+      message: !appendAttempted && error && error.promotionCode ? error.message : 'The connection could not confirm this repair. Retry the exact reviewed request.',
+      retryable: appendAttempted || !(error && error.promotionCode) || error.promotionRetryable === true
+    } };
+  } finally {
+    if (locked) lock.releaseLock();
+  }
+}
+
+function canonicalPromotionRepairJson_(value) {
+  function ordered(item) {
+    if (Array.isArray(item)) return item.map(ordered);
+    if (!plainPromotionObject_(item)) return item;
+    return Object.keys(item).sort().reduce((result, key) => { result[key] = ordered(item[key]); return result; }, {});
+  }
+  return JSON.stringify(ordered(value));
+}
+
+function promotionRepairDigest_(text) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text, Utilities.Charset.UTF_8)
+    .map(byte => ((byte + 256) % 256).toString(16).padStart(2, '0')).join('');
+}
+
+function promotionRepairFingerprint_(value) { return promotionRepairDigest_(canonicalPromotionRepairJson_(value)); }
+
+function promotionRepairDate_(value) {
+  if (value === '') return value;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)
+    || Number.isNaN(Date.parse(value + 'T12:00:00.000Z'))
+    || new Date(value + 'T12:00:00.000Z').toISOString().slice(0, 10) !== value) {
+    failPromotion_('VALIDATION', 'A repair date must be an exact source-supported date or blank.');
+  }
+  return value;
+}
+
+function promotionRepairFieldSnapshot_(student, field) {
+  return field === 'identity' ? { displayName: student.displayName, distinguishingLabel: student.distinguishingLabel }
+    : { rankKnown: student.rankKnown, belt: student.belt, marks: student.marks, markType: student.markType, lastPromotionDateNY: student.lastPromotionDateNY };
+}
+
+function validatePromotionRepair_(repair) {
+  exactPromotionFields_(repair, ['schema', 'manifestId', 'repairId', 'target', 'workbookId', 'studentId', 'expectedRevision',
+    'expectedLastEventId', 'expectedSourceFingerprint', 'field', 'before', 'after', 'evidence']);
+  if (repair.schema !== 'promotions-data-repair-v1' || !['test', 'live'].includes(repair.target)
+    || !['identity', 'rank'].includes(repair.field) || !Number.isSafeInteger(repair.expectedRevision) || repair.expectedRevision < 1
+    || !/^[0-9a-f]{64}$/.test(repair.expectedSourceFingerprint || '')) failPromotion_('VALIDATION', 'The reviewed repair schema is invalid.');
+  for (const key of ['manifestId', 'studentId', 'expectedLastEventId', 'workbookId']) promotionId_(repair[key]);
+  for (const snapshot of [repair.before, repair.after]) {
+    if (repair.field === 'identity') {
+      exactPromotionFields_(snapshot, ['displayName', 'distinguishingLabel']);
+      for (const key of ['displayName', 'distinguishingLabel']) {
+        if (snapshot === repair.before) {
+          // The imported snapshot is immutable and may retain whitespace or
+          // control characters. Compare it exactly to history at the transition
+          // check; do not normalize it into a different historical identity.
+          if (typeof snapshot[key] !== 'string' || !snapshot[key] || snapshot[key].length > 2000) {
+            failPromotion_('VALIDATION', 'Preserve the exact bounded historical identity text.');
+          }
+        } else if (promotionText_(snapshot[key], 120) !== snapshot[key]) failPromotion_('VALIDATION', 'Use the exact reviewed identity text.');
+      }
+    } else {
+      exactPromotionFields_(snapshot, ['rankKnown', 'belt', 'marks', 'markType', 'lastPromotionDateNY']);
+      if (typeof snapshot.rankKnown !== 'boolean') failPromotion_('VALIDATION', 'A repair rank must state its certainty explicitly.');
+      const rank = storedPromotionRank_(snapshot.rankKnown, snapshot.belt, snapshot.marks === null ? '' : snapshot.marks, snapshot.markType);
+      if (promotionRepairFingerprint_({ ...rank, lastPromotionDateNY: promotionRepairDate_(snapshot.lastPromotionDateNY) }) !== promotionRepairFingerprint_(snapshot)) {
+        failPromotion_('VALIDATION', 'A repair rank snapshot is invalid.');
+      }
+    }
+  }
+  if (promotionRepairFingerprint_(repair.before) === promotionRepairFingerprint_(repair.after)) failPromotion_('VALIDATION', 'A repair must change its one reviewed field.');
+  if (repair.field === 'rank' && repair.after.lastPromotionDateNY && repair.after.lastPromotionDateNY > promotionToday_()) {
+    failPromotion_('VALIDATION', 'A rank repair cannot invent a future award.');
+  }
+  exactPromotionFields_(repair.evidence, ['interpretation', 'headerRefs', 'cells'], ['rankConflict']);
+  const rankConflict = Object.prototype.hasOwnProperty.call(repair.evidence, 'rankConflict');
+  if (repair.field === 'rank' && !repair.after.rankKnown) {
+    if (!repair.before.rankKnown || repair.after.lastPromotionDateNY !== '' || !rankConflict) {
+      failPromotion_('VALIDATION', 'An uncertain rank repair requires a known original rank and explicit conflicting source evidence.');
+    }
+    exactPromotionFields_(repair.evidence.rankConflict, ['summaryRef', 'awardRefs']);
+    if (typeof repair.evidence.rankConflict.summaryRef !== 'string'
+      || !Array.isArray(repair.evidence.rankConflict.awardRefs) || !repair.evidence.rankConflict.awardRefs.length
+      || repair.evidence.rankConflict.awardRefs.length > 5
+      || new Set(repair.evidence.rankConflict.awardRefs).size !== repair.evidence.rankConflict.awardRefs.length) {
+      failPromotion_('VALIDATION', 'Identify the explicit summary and conflicting dated award cells.');
+    }
+  } else if (rankConflict) failPromotion_('VALIDATION', 'Conflict evidence is only valid for a known-to-unknown rank repair.');
+  promotionText_(repair.evidence.interpretation, 2000);
+  if (!Array.isArray(repair.evidence.headerRefs) || !repair.evidence.headerRefs.length
+    || repair.evidence.headerRefs.length > 10 || repair.evidence.headerRefs.some(ref => typeof ref !== 'string' || ref.length > 120)
+    || new Set(repair.evidence.headerRefs).size !== repair.evidence.headerRefs.length) {
+    failPromotion_('VALIDATION', 'Identify the original header block for every source row.');
+  }
+  promotionRepairSourceRanges_(JSON.stringify(repair.evidence.headerRefs.map(range => ({ range }))));
+  if (!Array.isArray(repair.evidence.cells) || !repair.evidence.cells.length || repair.evidence.cells.length > 200) {
+    failPromotion_('VALIDATION', 'Provide bounded original source-cell evidence.');
+  }
+  const cells = new Set();
+  for (const cell of repair.evidence.cells) {
+    exactPromotionFields_(cell, ['sheet', 'cell', 'value', 'display', 'numberFormat']);
+    if (!['Black Belt', 'Brown Belt', 'Purple Belt', 'Blue Belt', 'White Belt', 'Former student'].includes(cell.sheet)
+      || !/^[A-Z]{1,2}[1-9][0-9]{0,5}$/.test(cell.cell || '') || cells.has(cell.sheet + '!' + cell.cell)) failPromotion_('VALIDATION', 'Source-cell evidence is invalid or duplicated.');
+    cells.add(cell.sheet + '!' + cell.cell);
+    exactPromotionFields_(cell.value, ['type', 'value']);
+    const { type, value } = cell.value;
+    // Native Sheets CellData can omit default formatting for inert text/blank
+    // cells. Do not invent a default pattern; date/numeric evidence must retain
+    // an explicit pattern, and every cell still requires an exact display.
+    if (typeof cell.display !== 'string' || cell.display.length > 2000
+      || !(typeof cell.numberFormat === 'string' && cell.numberFormat.length <= 200 && (type !== 'date' || cell.numberFormat.trim())
+        || cell.numberFormat === null && ['blank', 'string', 'boolean'].includes(type))) {
+      failPromotion_('VALIDATION', 'Preserve the original displayed value and number format.');
+    }
+    if (!(type === 'blank' && value === '' || type === 'string' && typeof value === 'string' && value.length <= 2000
+      || type === 'number' && typeof value === 'number' && Number.isFinite(value)
+      || type === 'boolean' && typeof value === 'boolean'
+      || type === 'date' && typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+        && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value)) failPromotion_('VALIDATION', 'Preserve the original typed source value.');
+  }
+  if (rankConflict) validatePromotionRepairRankConflict_(repair);
+  const { repairId, ...identity } = repair;
+  if (repairId !== 'repair-' + promotionRepairFingerprint_(identity) || canonicalPromotionRepairJson_(repair).length > 30000) {
+    failPromotion_('VALIDATION', 'The deterministic repair identity does not match the reviewed contents.');
+  }
+  return repair;
+}
+
+function validatePromotionRepairRankConflict_(repair) {
+  const cells = new Map(repair.evidence.cells.map(cell => [cell.sheet + '!' + cell.cell, cell]));
+  const reference = ref => {
+    const match = typeof ref === 'string' && ref.match(/^'((?:[^']|'')+)'!([A-Z]{1,2}[1-9][0-9]{0,5})$/);
+    if (!match) failPromotion_('VALIDATION', 'A rank conflict must reference explicit reviewed source cells.');
+    const sheet = match[1].replace(/''/g, "'");
+    const cell = cells.get(sheet + '!' + match[2]);
+    if (!cell) failPromotion_('VALIDATION', 'Rank conflict evidence is missing from the reviewed source snapshot.');
+    return { sheet, address: match[2], ...promotionRepairCellPosition_(match[2]), cell };
+  };
+  const summary = reference(repair.evidence.rankConflict.summaryRef);
+  const black = repair.before.belt === 'Black Belt';
+  const header = promotionRepairSourceRanges_(JSON.stringify(repair.evidence.headerRefs.map(range => ({ range }))))
+    .find(item => item.sheet === summary.sheet && item.row < summary.row);
+  const summaryHeader = header && cells.get(summary.sheet + '!' + summary.address.replace(/[0-9]+$/, String(header.row)));
+  const summaryLabel = summary.cell.value.type === 'string'
+    ? summary.cell.value.value.trim().match(black ? /^(\d+)\s+degrees?$/i : /^(\d+)\s+stripes?$/i) : null;
+  const marks = summary.cell.value.type === 'number' ? summary.cell.value.value : summaryLabel ? Number(summaryLabel[1]) : null;
+  if (summary.sheet !== repair.before.belt || summary.column !== (black ? 4 : 2)
+    || !summaryHeader || !['rank awarded', 'current rank awarded'].includes(String(summaryHeader.value.value).trim().toLowerCase())
+    || !Number.isSafeInteger(marks) || marks < 0 || marks !== repair.before.marks) {
+    failPromotion_('VALIDATION', 'The conflicting source summary must explicitly match the untouched original rank.');
+  }
+  for (const ref of repair.evidence.rankConflict.awardRefs) {
+    const award = reference(ref);
+    const label = cells.get(award.sheet + '!' + award.address.replace(/[0-9]+$/, String(header.row)));
+    const awardedMarks = label && label.value.type === 'string' && label.value.value.trim().match(/^(\d+)\s+stripes?$/i);
+    const firstColumn = black ? 5 : repair.before.belt === 'White Belt' ? 4 : 3;
+    const lastColumn = black ? 9 : 7;
+    if (award.sheet !== summary.sheet || award.row !== summary.row || award.column < firstColumn || award.column > lastColumn
+      || !awardedMarks || Number(awardedMarks[1]) <= marks || award.cell.value.type !== 'date'
+      || Utilities.formatDate(new Date(award.cell.value.value), PROMOTION_TIME_ZONE_, 'yyyy-MM-dd') > promotionToday_()) {
+      failPromotion_('VALIDATION', 'The conflict must contain a dated higher-mark award within the same current-belt block.');
+    }
+  }
+}
+
+function validatePromotionRepairTransition_(repair, previous, events) {
+  const baseline = events.find(event => event.studentId === previous.studentId);
+  if (!baseline || baseline.eventKind !== 'REGISTER' || baseline.recorderIdentity !== 'LEGACY BASELINE IMPORT') {
+    failPromotion_('REPAIR_NOT_LEGACY', 'Only an existing imported identity can receive this source repair.');
+  }
+  if (previous.revision !== repair.expectedRevision || previous.lastEventId !== repair.expectedLastEventId
+    || promotionRepairDigest_(previous.legacyRefs) !== repair.expectedSourceFingerprint
+    || promotionRepairFingerprint_(promotionRepairFieldSnapshot_(previous, repair.field)) !== promotionRepairFingerprint_(repair.before)) {
+    failPromotion_('STALE_REPAIR', 'This student or source binding changed. Skip this repair and review a new proposal.');
+  }
+  if (repair.field === 'rank' && (previous.status === 'archived' || events.some(event => event.studentId === previous.studentId
+    && event.eventKind !== 'REGISTER' && !(event.eventKind === 'REPAIR' && event.repair.field === 'identity')))) {
+    failPromotion_('RANK_REPAIR_CONFLICT', 'Later application rank history or an archived record prevents replacing this baseline.');
+  }
+}
+
+function promotionRepairCellPosition_(cell) {
+  const match = cell.match(/^([A-Z]+)([0-9]+)$/);
+  return { row: Number(match[2]), column: match[1].split('').reduce((number, letter) => number * 26 + letter.charCodeAt(0) - 64, 0) };
+}
+
+function promotionRepairSourceRanges_(legacyRefs) {
+  let references;
+  try { references = JSON.parse(legacyRefs); } catch (_) { failPromotion_('VALIDATION', 'The imported source binding is invalid.'); }
+  return references.map(reference => {
+    const match = reference.range.match(/^'((?:[^']|'')+)'!([A-Z]{1,2}[1-9][0-9]*):([A-Z]{1,2}[1-9][0-9]*)$/);
+    if (!match) failPromotion_('VALIDATION', 'The imported source range is not supported for repair.');
+    const first = promotionRepairCellPosition_(match[2]); const last = promotionRepairCellPosition_(match[3]);
+    if (first.row !== last.row || first.column !== 1 || last.column < first.column) failPromotion_('VALIDATION', 'Repair evidence must bind one original source row.');
+    return { sheet: match[1].replace(/''/g, "'"), row: first.row, width: last.column };
+  });
+}
+
+function validatePromotionRepairEvidenceBinding_(repair, previous) {
+  const ranges = promotionRepairSourceRanges_(previous.legacyRefs);
+  const headers = promotionRepairSourceRanges_(JSON.stringify(repair.evidence.headerRefs.map(range => ({ range }))));
+  const evidence = new Map(repair.evidence.cells.map(cell => [cell.sheet + '!' + cell.cell, cell]));
+  if (headers.length !== ranges.length || ranges.some((range, index) => headers[index].sheet !== range.sheet || headers[index].row >= range.row)) {
+    failPromotion_('VALIDATION', 'Each reviewed header must precede its corresponding original source row on the same tab.');
+  }
+  // Archived tabs contain repeated blocks: their header is explicitly reviewed,
+  // never assumed to be row 1. Preserve every source/header cell so summaries,
+  // previous-belt blocks, label changes and changed date precision are checked.
+  for (const range of ranges.concat(headers)) for (let column = 1; column <= range.width; column += 1) {
+    const address = (column > 26 ? String.fromCharCode(64 + Math.floor((column - 1) / 26)) : '') + String.fromCharCode(65 + (column - 1) % 26) + range.row;
+    if (!evidence.has(range.sheet + '!' + address)) failPromotion_('VALIDATION', 'Evidence must include the complete original source row and its headers.');
+  }
+  if (headers.some(header => {
+    const cell = evidence.get(header.sheet + '!A' + header.row);
+    return cell.value.type !== 'string' || cell.value.value.trim().toLowerCase() !== 'name';
+  })) failPromotion_('VALIDATION', 'The reviewed header must identify a recognized name block.');
+  for (const cell of repair.evidence.cells) {
+    const position = promotionRepairCellPosition_(cell.cell);
+    if (!ranges.concat(headers).some(range => range.sheet === cell.sheet && range.row === position.row && position.column <= range.width)) {
+      failPromotion_('VALIDATION', 'Repair evidence must belong to this existing identity and its headers.');
+    }
+  }
+}
+
+function verifyPromotionRepairSource_(workbook, repair, previous) {
+  validatePromotionRepairEvidenceBinding_(repair, previous);
+  for (const cell of repair.evidence.cells) {
+    const position = promotionRepairCellPosition_(cell.cell);
+    const sheet = workbook.getSheetByName(cell.sheet);
+    const range = sheet.getRange(position.row, position.column, 1, 1);
+    const value = range.getValues()[0][0];
+    if (range.getFormulas()[0][0]) failPromotion_('SOURCE_CHANGED', 'Formula-derived source cells require explicit resolution.');
+    // This bounded repair schema covers the reviewed no-note source snapshot.
+    // A note can change an award's meaning without changing its cell value.
+    if (range.getNotes()[0][0]) failPromotion_('SOURCE_CHANGED', 'Source-cell notes require explicit resolution before repair.');
+    const actual = value === '' ? { type: 'blank', value: '' }
+      : Object.prototype.toString.call(value) === '[object Date]' ? { type: 'date', value: value.toISOString() }
+        : { type: typeof value, value };
+    if (promotionRepairFingerprint_(actual) !== promotionRepairFingerprint_(cell.value)
+      || range.getDisplayValues()[0][0] !== cell.display
+      || (cell.numberFormat !== null && range.getNumberFormats()[0][0] !== cell.numberFormat)) {
+      failPromotion_('SOURCE_CHANGED', 'The original source values, display or date precision changed. Skip this repair and review their current values.');
+    }
+  }
+}
+
 function doPost(event) {
   let bridge;
+  let trace;
   try {
     bridge = verifiedPromotionBridge_(event);
+    trace = beginPromotionResponseTrace_(bridge);
     const result = promotionRequestWithRecorder_(bridge.request, bridge.deviceIdentity, bridge);
-    return promotionJsonOutput_({ bridge: bridge.mode, target: bridge.target, installation: 'rev', requestNonce: bridge.nonce, result });
+    const output = promotionJsonOutput_({ bridge: bridge.mode, target: bridge.target, installation: 'rev', requestNonce: bridge.nonce, result });
+    recordPromotionResponseReceipt_(trace, result, output, true);
+    logPromotionResponseTrace_(trace, 'completion', result);
+    return output;
   } catch (error) {
-    return promotionJsonOutput_({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Authorized tablet access is required.', retryable: false } });
+    const result = { ok: false, error: { code: 'UNAUTHORIZED', message: 'Authorized tablet access is required.', retryable: false } };
+    const output = promotionJsonOutput_(result);
+    recordPromotionResponseReceipt_(trace, result, output, false);
+    logPromotionResponseTrace_(trace, 'completion', result);
+    return output;
   }
+}
+
+function beginPromotionResponseTrace_(bridge) {
+  try {
+    if (bridge.target !== 'test' || !['bootstrap', 'readStudent'].includes(bridge.request && bridge.request.operation)) return null;
+    const trace = { traceId: promotionRepairDigest_('gib-test-response-trace:v1\n' + bridge.nonce).slice(0, 24), operation: bridge.request.operation, startedAt: Date.now() };
+    logPromotionResponseTrace_(trace, 'entry');
+    return trace;
+  } catch (_) { return null; }
+}
+
+function logPromotionResponseTrace_(trace, stage, result) {
+  if (!trace) return;
+  try {
+    const resultOK = stage === 'completion' && result && typeof result.ok === 'boolean' ? result.ok : null;
+    console.info(JSON.stringify({ kind: 'GIB_TEST_RESPONSE_TRACE', stage, traceId: trace.traceId, operation: trace.operation,
+      elapsedMs: Math.max(0, Date.now() - trace.startedAt), intendedResponseType: 'application/json', resultOK,
+      errorCode: promotionResponseTraceErrorCode_(result) }));
+  } catch (_) { /* TEST observation cannot change the response or authentication. */ }
+}
+
+function promotionResponseTraceErrorCode_(result) {
+  if (!result || result.ok !== false) return null;
+  const code = result.error && result.error.code;
+  return ['UNAVAILABLE', 'UNAUTHORIZED', 'VALIDATION', 'NOT_FOUND', 'ARCHIVED', 'RANK_UNKNOWN', 'RANK_ALREADY_KNOWN',
+    'STALE_REVISION', 'REQUEST_CONFLICT', 'DUPLICATE_STUDENT', 'CORRECTION_NOT_LATEST', 'TEST_DESTINATION_INVALID', 'LIVE_DESTINATION_INVALID', 'BUSY', 'OTHER'].includes(code) ? code : 'OTHER';
+}
+
+function recordPromotionResponseReceipt_(trace, result, output, wrappedResponse) {
+  if (!trace) return;
+  try {
+    const receipt = { traceId: trace.traceId, operation: trace.operation, processingMs: Math.max(0, Date.now() - trace.startedAt),
+      jsonPrepared: true, wrappedResponse, responseSha256: null, responseBytes: null,
+      resultOK: result && typeof result.ok === 'boolean' ? result.ok : null, errorCode: promotionResponseTraceErrorCode_(result) };
+    try {
+      const text = output.getContent();
+      receipt.responseSha256 = promotionRepairDigest_(text);
+      receipt.responseBytes = Utilities.newBlob(text).getBytes().length;
+    } catch (_) { /* JSON preparation remains useful evidence without a fingerprint. */ }
+    // Diagnostic receipt only: no records, request data, URLs or credentials.
+    // Cache absence is inconclusive and this is never a save confirmation.
+    CacheService.getScriptCache().put('promotions-test-response-trace:' + trace.traceId, JSON.stringify(receipt), 1800);
+  } catch (_) { /* Best-effort receipt must never affect the returned response. */ }
+}
+
+function readTestResponseTrace(traceId) {
+  authenticatedPromotionOwner_();
+  if (typeof traceId !== 'string' || !/^[0-9a-f]{24}$/.test(traceId)) failPromotion_('VALIDATION', 'Use a valid TEST response trace identifier.');
+  const absent = { status: 'absent', inconclusive: true };
+  try {
+    const receipt = JSON.parse(CacheService.getScriptCache().get('promotions-test-response-trace:' + traceId));
+    const fields = ['traceId', 'operation', 'processingMs', 'jsonPrepared', 'wrappedResponse', 'responseSha256', 'responseBytes', 'resultOK', 'errorCode'];
+    if (!plainPromotionObject_(receipt) || Object.keys(receipt).length !== fields.length
+      || !fields.every(field => Object.prototype.hasOwnProperty.call(receipt, field)) || receipt.traceId !== traceId
+      || !['bootstrap', 'readStudent'].includes(receipt.operation) || !Number.isSafeInteger(receipt.processingMs) || receipt.processingMs < 0 || receipt.processingMs > 3600000
+      || typeof receipt.jsonPrepared !== 'boolean' || typeof receipt.wrappedResponse !== 'boolean'
+      || !(receipt.responseSha256 === null || typeof receipt.responseSha256 === 'string' && /^[0-9a-f]{64}$/.test(receipt.responseSha256))
+      || !(receipt.responseBytes === null || Number.isSafeInteger(receipt.responseBytes) && receipt.responseBytes >= 0 && receipt.responseBytes <= 10000000)
+      || !(receipt.resultOK === null || typeof receipt.resultOK === 'boolean')
+      || receipt.errorCode !== promotionResponseTraceErrorCode_({ ok: receipt.resultOK, error: { code: receipt.errorCode } })) return absent;
+    return { status: 'present', receipt };
+  } catch (_) { return absent; }
 }
 
 function promotionJsonOutput_(value) {
@@ -433,22 +804,28 @@ function readPromotionHistory_(workbook) {
       ? Utilities.formatDate(entry.event_date_ny, PROMOTION_TIME_ZONE_, 'yyyy-MM-dd') : promotionCellText_(entry.event_date_ny);
     if (state.eventIds.has(eventId) || state.requests.has(requestId) || !Number.isSafeInteger(revision)
       || revision !== (previous ? previous.revision + 1 : 1) || !['active', 'archived'].includes(status)
-      || !['REGISTER', 'RANK_CONFIRM', 'STRIPE', 'BELT', 'CORRECTION'].includes(kind)
+      || !['REGISTER', 'RANK_CONFIRM', 'STRIPE', 'BELT', 'CORRECTION', 'REPAIR'].includes(kind)
       || (!previous && kind !== 'REGISTER') || (previous && kind === 'REGISTER')) {
       failPromotion_('TEST_DESTINATION_INVALID', 'Promotion history has an inconsistent record identity or revision.');
+    }
+    let repair = null;
+    if (kind === 'REPAIR') {
+      try { repair = validatePromotionRepair_(JSON.parse(entry.reason)); }
+      catch (_) { failPromotion_('TEST_DESTINATION_INVALID', 'A data repair record is invalid.'); }
     }
     const student = {
       studentId, displayName: promotionCellText_(entry.display_name), distinguishingLabel: promotionCellText_(entry.distinguishing_label),
       status, ...storedPromotionRank_(entry.after_rank_known, entry.after_belt, entry.after_marks, entry.after_mark_type),
       revision, lastEventId: eventId, legacyRefs: promotionCellText_(entry.legacy_refs), historyNote: promotionCellText_(entry.history_note),
-      lastPromotionDateNY: kind === 'STRIPE' || kind === 'BELT' ? date : previous ? previous.lastPromotionDateNY : ''
+      lastPromotionDateNY: repair && repair.field === 'rank' ? repair.after.lastPromotionDateNY
+        : kind === 'STRIPE' || kind === 'BELT' ? date : previous ? previous.lastPromotionDateNY : ''
     };
     if (!student.displayName || !student.distinguishingLabel) failPromotion_('TEST_DESTINATION_INVALID', 'A historical student identity is incomplete.');
     let before = null;
     if (previous) {
       before = { status: entry.before_status, ...storedPromotionRank_(entry.before_rank_known, entry.before_belt, entry.before_marks, entry.before_mark_type) };
-      if (JSON.stringify(before) !== JSON.stringify(rankSnapshot_(previous)) || previous.status === 'archived'
-        || student.displayName !== previous.displayName || student.distinguishingLabel !== previous.distinguishingLabel
+      if (JSON.stringify(before) !== JSON.stringify(rankSnapshot_(previous)) || (previous.status === 'archived' && !(repair && repair.field === 'identity'))
+        || (!(repair && repair.field === 'identity') && (student.displayName !== previous.displayName || student.distinguishingLabel !== previous.distinguishingLabel))
         || student.legacyRefs !== previous.legacyRefs || student.historyNote !== previous.historyNote) {
         failPromotion_('TEST_DESTINATION_INVALID', 'Promotion history does not preserve its previous snapshot.');
       }
@@ -456,6 +833,24 @@ function readPromotionHistory_(workbook) {
       failPromotion_('TEST_DESTINATION_INVALID', 'The initial registration has an unexpected before-rank.');
     }
     const fingerprint = promotionCellText_(entry.payload_fingerprint);
+    if (repair) {
+      try {
+        validatePromotionRepairTransition_(repair, previous, state.events);
+        validatePromotionRepairEvidenceBinding_(repair, previous);
+        const expected = { ...previous, ...repair.after, revision, lastEventId: eventId };
+        if (repair.studentId !== studentId || repair.workbookId !== workbook.getId()
+          || eventId !== 'evt-' + repair.repairId || requestId !== 'req-' + repair.repairId
+          || fingerprint !== promotionRepairFingerprint_({ operation: 'applyRepair', repair })
+          || entry.reason !== canonicalPromotionRepairJson_(repair)
+          || promotionRepairFingerprint_(student) !== promotionRepairFingerprint_(expected)
+          || entry.approver_id !== '' || entry.approver_label !== '' || entry.corrects_event_id !== ''
+          || !/^OWNER DATA REPAIR: [^\s@]+@[^\s@]+\.[^\s@]+$/.test(entry.recorder_identity)
+          || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(promotionCellText_(entry.recorded_at_utc))
+          || (repair.field === 'rank' && repair.after.lastPromotionDateNY > date)) {
+          failPromotion_('TEST_DESTINATION_INVALID', 'A data repair does not match its explicit audit.');
+        }
+      } catch (_) { failPromotion_('TEST_DESTINATION_INVALID', 'A data repair does not match its explicit audit.'); }
+    }
     const syntheticSeed = !previous && kind === 'REGISTER' && entry.recorder_identity === 'SYNTHETIC FIXTURE';
     const legacyImport = entry.recorder_identity === 'LEGACY BASELINE IMPORT';
     const legacySeed = legacyImport && validLegacyPromotionBaseline_(entry, previous, student);
@@ -469,7 +864,7 @@ function readPromotionHistory_(workbook) {
       recordedAtUTC: promotionCellText_(entry.recorded_at_utc), before, after: student,
       approverId: promotionCellText_(entry.approver_id), approverLabel: promotionCellText_(entry.approver_label),
       recorderIdentity: promotionCellText_(entry.recorder_identity), correctsEventId: promotionCellText_(entry.corrects_event_id),
-      reason: promotionCellText_(entry.reason)
+      reason: promotionCellText_(entry.reason), ...(repair ? { repair } : {})
     };
     state.students.set(studentId, student);
     state.requests.set(requestId, { fingerprint, receipt });
@@ -514,8 +909,12 @@ function buildPromotionEvent_(intent, state, recorder, target = 'test') {
       Object.assign(after, promotionRank_(intent.rank));
       reason = intent.reason;
     } else if (intent.operation === 'correctLatest') {
-      const latest = state.events.find(event => event.eventId === previous.lastEventId);
-      if (intent.correctsEventId !== previous.lastEventId || !latest || latest.eventKind === 'REGISTER') {
+      // A name repair does not award rank or prevent correction of the latest
+      // instructor rank entry. The current head revision still guards the save;
+      // neither a source rank repair nor any later instructor event is crossed.
+      const latest = state.events.filter(event => event.studentId === previous.studentId).reverse()
+        .find(event => !(event.eventKind === 'REPAIR' && event.repair.field === 'identity'));
+      if (!latest || intent.correctsEventId !== latest.eventId || !['RANK_CONFIRM', 'STRIPE', 'BELT', 'CORRECTION'].includes(latest.eventKind)) {
         failPromotion_('CORRECTION_NOT_LATEST', 'Only the latest recorded rank entry can be corrected here. Reload its history first.');
       }
       kind = 'CORRECTION';
