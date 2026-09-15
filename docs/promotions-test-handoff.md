@@ -1,4 +1,20 @@
-# PR86 decision — 2026-09-14
+# PR86 paused — 2026-09-15
+
+## Current checkpoint — preserve; do not resume automatically
+
+Andrew paused this work because the pilot is unlikely to be used. This draft remains unmerged. Preserve the code, all earlier evidence, pending requests and all newer records. No further connection attempt, acceptance sequence, full release gate, deployment or live repair is scheduled. Resume only after a new user request.
+
+The last deployed TEST source remains `209090d8ec70471ac1a5b984d4c59f9903f02368`, Netlify deploy `6aa84e4997870b7392c94d8b`, at https://deploy-preview-86--gib-live.netlify.app/m1/ . This is an unfinished TEST checkpoint, not a working-review invitation. The replacement client secret was entered privately by Andrew; its value was not read by the agent. One subsequent Google consent returned to setup, but authenticated status remained `configured:true, connected:false`. The separate API project's execution list showed zero executions. The exact callback failure boundary was not captured; no successful API connection or acceptance read is claimed.
+
+The final source change adds sanitized TEST OAuth callback failure details: enumerated phase/code, bounded elapsed time, optional HTTP status and scope-presence facts. It passed all 25 focused API/setup tests and independent read-only privacy review. This diagnostic has **not been deployed or exercised against Google**. It changes neither scope validation nor connection authority. Local diagnostic commit: `6efc44f08ce1a905388dd412e4d4925b0ece518d`; tree `47747f8c299485b7512059acb55fdd7d2a6db91a`. Preservation commits retain `[skip netlify]` so the deployed artifact is not replaced.
+
+API reads remain disabled. The new Google TEST API executable (Version 1), old Google TEST web deployment (Version 9), Cloud/OAuth project and server credential remain retained; no usable refresh credential was confirmed. The earlier seven-day External/Testing limitation still applies if this proof is resumed. No account or permission expansion was added during this pause.
+
+If Andrew later requests continuation, the next bounded step is to deploy the already-tested diagnostic to the existing isolated PR86 preview and make **one** fresh authorization attempt to identify the callback boundary. Do not repeat the completed A/B/C comparison or feature QA. The eight-read/two-browser acceptance budget has not started, and the full final gate has not run because there is no release candidate.
+
+Completed repair, subsequent promotion, independent readback, tablet/laptop and reconciled Sign-In/Staff Clock evidence is retained. Phone coverage is deferred. All 387 proposed live corrections across 370 students remain unapplied. No merge, production, Richmond, Google LIVE Version 5 or business-data change occurred. Earlier sections below are historical evidence, not instructions to restart work.
+
+# Historical PR86 decision — 2026-09-14
 
 ## Approved API proof — implementation checkpoint
 

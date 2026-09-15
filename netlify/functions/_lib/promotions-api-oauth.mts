@@ -8,6 +8,22 @@ import {
 
 const STATE_COOKIE = '__Host-gib_m1_promotions_api_state';
 const NONCE = /^[A-Za-z0-9_-]{43}$/u;
+const FAILURE_PHASES = ['token','identity','api','state','storage','configuration','setup','authorization','other'];
+const FAILURE_CODES = ['STATE','STORE','TOKEN_RESPONSE','TOKEN_SCOPE','TOKEN_IDENTITY','ACCESS_DENIED','TOKEN_REVOKED','REDIRECT',
+  'INVALID_JSON','RESPONSE_TOO_LARGE','HTTP_ERROR','API_RESULT','INITIALIZE','SETUP_DISABLED','TIMEOUT','ABORTED','NETWORK','CONFIG','NOT_CONNECTED','OTHER'];
+export function safeOAuthFailureDiagnostic(error, phase, elapsedMs) {
+  const safe = safeApiError(error,phase);
+  const record = { phase:FAILURE_PHASES.includes(safe.phase) ? safe.phase : 'other', code:FAILURE_CODES.includes(safe.code) ? safe.code : 'OTHER',
+    ms:Number.isFinite(elapsedMs) ? Math.min(3600000,Math.max(0,Math.round(elapsedMs))) : 0 };
+  if (Number.isInteger(safe.httpStatus) && safe.httpStatus >= 100 && safe.httpStatus <= 599) record.httpStatus = safe.httpStatus;
+  if (record.code === 'TOKEN_SCOPE' && typeof safe.expectedScopesPresent === 'boolean' && typeof safe.openidPresent === 'boolean'
+    && Number.isInteger(safe.unexpectedScopeCount) && safe.unexpectedScopeCount >= 0 && safe.unexpectedScopeCount <= 20) {
+    record.expectedScopesPresent = safe.expectedScopesPresent;
+    record.unexpectedScopeCount = safe.unexpectedScopeCount;
+    record.openidPresent = safe.openidPresent;
+  }
+  return record;
+}
 const stateKey = state => 'rev/test/oauth-state/' + apiHash(state);
 function responseHeaders() {
   return new Headers({ 'Cache-Control':'no-store', 'Referrer-Policy':'no-referrer', 'X-Content-Type-Options':'nosniff',
@@ -22,8 +38,11 @@ function stateCookie(request) {
   const values = (request.headers.get('cookie') || '').split(';').map(value => value.trim()).filter(value => value.startsWith(STATE_COOKIE + '='));
   return values.length === 1 && NONCE.test(values[0].slice(STATE_COOKIE.length + 1)) ? values[0].slice(STATE_COOKIE.length + 1) : '';
 }
-function cleanRedirect(config, result) {
-  const headers = responseHeaders(); headers.set('Location',config.origin + API_SETUP_PATH + '?result=' + result); headers.set('Set-Cookie',cookie('',0));
+function cleanRedirect(config, result, diagnostic) {
+  const query = new URLSearchParams();
+  if (diagnostic) for (const [key,value] of Object.entries(diagnostic)) query.set(key,String(value));
+  query.set('result',result);
+  const headers = responseHeaders(); headers.set('Location',config.origin + API_SETUP_PATH + '?' + query); headers.set('Set-Cookie',cookie('',0));
   return new Response(null, { status:303, headers });
 }
 function correctHost(request, config, url) {
@@ -49,12 +68,15 @@ export async function handleApiOAuth(request, runtime, config, dependencies = {}
   if (callback) {
     if (!config.setupEnabled || !correctHost(request, config, url) || request.method !== 'GET' || url.search.length > 8192) return oauthJson(403,{ok:false,error:{code:'UNAUTHORIZED'}});
     const signal = AbortSignal.any([request.signal, dependencies.signal || AbortSignal.timeout(25000)]);
+    const started = performance.now();
+    let phase = 'state';
     try {
       const now = dependencies.now ?? Date.now();
       const state = url.searchParams.get('state');
       const binder = stateCookie(request);
       if (!NONCE.test(state || '') || !binder || url.searchParams.getAll('state').length !== 1
         || url.searchParams.getAll('code').length > 1 || url.searchParams.getAll('error').length > 1) throw apiError('STATE','state');
+      phase = 'storage';
       const store = await apiStore(dependencies,signal);
       const key = stateKey(state);
       const saved = await readApiRecord(store, config, key);
@@ -63,20 +85,24 @@ export async function handleApiOAuth(request, runtime, config, dependencies = {}
         || value.origin !== config.origin || value.clientId !== config.clientId || !NONCE.test(value.verifier || '')
         || !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now || value.expiresAt > now + 600000) throw apiError('STATE','state');
       if (!await writeApiRecord(store, config, key, { ...value, status:'consumed', verifier:'' }, { onlyIfMatch:saved.etag })) throw apiError('STATE','state');
-      if (url.searchParams.has('error')) return cleanRedirect(config,'denied');
+      if (url.searchParams.has('error')) throw apiError('ACCESS_DENIED','authorization');
       const code = url.searchParams.get('code');
       if (typeof code !== 'string' || !code || code.length > 2048 || /[\u0000-\u001f\u007f]/u.test(code)) throw apiError('STATE','state');
       if (await currentCredential(store,config)) return cleanRedirect(config,'already-connected');
+      phase = 'token';
       const token = await exchangeApiCode(code,value.verifier,config,dependencies,signal);
+      phase = 'api';
       await initializePromotionsApi(config,token.accessToken,dependencies,signal);
       const credential = { version:1, initialized:true, ownerEmail:config.ownerEmail, origin:config.origin,
         clientId:config.clientId, deploymentId:config.deploymentId, workbookId:config.workbookId,
         refreshToken:token.refreshToken, scope:token.scope, createdAt:now };
+      phase = 'storage';
       if (!await writeApiRecord(store,config,API_CREDENTIAL_KEY,credential,{onlyIfNew:true})) return cleanRedirect(config,'already-connected');
       return cleanRedirect(config,'connected');
     } catch (error) {
-      const safe = safeApiError(error,'setup');
-      return cleanRedirect(config,safe.code === 'STATE' ? 'expired' : ['TOKEN_IDENTITY','TOKEN_SCOPE','ACCESS_DENIED'].includes(safe.code) ? 'denied' : 'failed');
+      const diagnostic = safeOAuthFailureDiagnostic(error,phase,performance.now() - started);
+      try { console.info(JSON.stringify({ kind:'GIB_TEST_API_OAUTH_FAILURE', ...diagnostic })); } catch (_) { /* Diagnostics cannot change callback handling. */ }
+      return cleanRedirect(config,diagnostic.code === 'STATE' ? 'expired' : ['TOKEN_IDENTITY','TOKEN_SCOPE','ACCESS_DENIED'].includes(diagnostic.code) ? 'denied' : 'failed',diagnostic);
     }
   }
   if (!authorizedApiSetupRequest(request,runtime,dependencies.now ?? Date.now())) return oauthJson(401,{ok:false,error:{code:'UNAUTHORIZED'}});

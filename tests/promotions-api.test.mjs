@@ -7,8 +7,9 @@ import { createProductionDeviceCredential } from '../netlify/functions/_lib/m1-p
 import { promotionsRuntimeConfig, createPromotionsEnvelope } from '../netlify/functions/_lib/promotions-runtime.mts';
 import {
   API_TEST_ORIGIN, API_OAUTH_PATH, API_CALLBACK_PATH, API_CREDENTIAL_KEY, API_SCOPES,
-  promotionsApiConfig, encryptApiRecord, decryptApiRecord, runPromotionsApiRead, apiStore
+  promotionsApiConfig, encryptApiRecord, decryptApiRecord, runPromotionsApiRead, apiStore, apiError
 } from '../netlify/functions/_lib/promotions-api.mts';
+import { safeOAuthFailureDiagnostic } from '../netlify/functions/_lib/promotions-api-oauth.mts';
 
 const NOW=Date.parse('2026-09-14T15:00:00Z');
 const SITE='synthetic-test-site';
@@ -243,4 +244,50 @@ test('callback cancellation before initialization confirmation cannot store a cr
     return original(url,options);
   };
   const response=await h.run(callback(pending));assert.match(response.headers.get('location'),/result=failed$/u);assert.equal(h.store.records.has(API_CREDENTIAL_KEY),false);
+});
+
+test('callback failure preserves only safe phase/code/time, scope facts and HTTP status in log and redirect',async t=>{
+  const logs=[];t.mock.method(console,'info',value=>logs.push(JSON.parse(value)));
+  for(const variant of ['scope','api-http','state','identity','token-network']){
+    const h=harness();const original=h.deps.fetch;
+    h.deps.fetch=async(url,options)=>{
+      if(variant==='api-http'&&url.includes(':run'))return new Response(JSON.stringify({message:privateAccess,url:privateRefresh}),{status:403});
+      if(variant==='token-network'&&url.includes('/token'))throw new Error(privateAccess);
+      const response=await original(url,options);const value=await response.json();
+      if(variant==='scope'&&url.includes('/token'))value.scope+=' openid '+privateAccess;
+      if(variant==='identity'&&url.includes('/userinfo'))value.email=privateAccess;
+      return new Response(JSON.stringify(value));
+    };
+    const pending=await start(h);const response=await h.run(callback(pending,variant==='state'?{query:{state:null}}:{}));
+    const query=new URL(response.headers.get('location')).searchParams;const record=logs.at(-1);
+    assert.equal(record.kind,'GIB_TEST_API_OAUTH_FAILURE');assert.equal(response.status,303);assertNoPrivate([...response.headers]);assertNoPrivate(record);
+    assert.ok(Number.isInteger(record.ms)&&record.ms>=0&&record.ms<=3600000);assert.equal(query.get('ms'),String(record.ms));
+    assert.equal(query.get('phase'),record.phase);assert.equal(query.get('code'),record.code);assert.equal(h.store.records.has(API_CREDENTIAL_KEY),false);
+    assert.equal(response.headers.get('cache-control'),'no-store');assert.equal(response.headers.get('referrer-policy'),'no-referrer');
+    if(variant==='scope'){
+      assert.equal(record.phase,'token');assert.equal(record.code,'TOKEN_SCOPE');assert.equal(record.expectedScopesPresent,true);assert.equal(record.unexpectedScopeCount,2);assert.equal(record.openidPresent,true);
+      assert.equal(query.get('expectedScopesPresent'),'true');assert.equal(query.get('unexpectedScopeCount'),'2');assert.equal(query.get('openidPresent'),'true');
+      assert.equal(h.calls.some(call=>call.url.includes('/userinfo')||call.url.includes(':run')),false,'scope validation still blocks before identity/initialization');
+    }
+    if(variant==='api-http'){assert.equal(record.phase,'api');assert.equal(record.code,'ACCESS_DENIED');assert.equal(record.httpStatus,403);assert.equal(query.get('httpStatus'),'403');}
+    if(variant==='state'){assert.equal(record.phase,'state');assert.equal(record.code,'STATE');assert.equal(h.calls.length,0);}
+    if(variant==='identity'){assert.equal(record.phase,'identity');assert.equal(record.code,'TOKEN_IDENTITY');}
+    if(variant==='token-network'){assert.equal(record.phase,'token');assert.equal(record.code,'NETWORK');}
+    for(const name of ['state','cookie','url','scope','message','accessToken','refreshToken'])assert.equal(query.has(name),false);
+  }
+  assert.equal(logs.length,5);
+});
+
+test('diagnostic formatter rejects unknown error properties and logging failure cannot change callback handling',async t=>{
+  const malformed=Object.assign(apiError(privateAccess,privateRefresh),{httpStatus:privateAccess,scope:privateRefresh,message:privateAccess,unexpectedScopeCount:privateAccess});
+  assert.deepEqual(safeOAuthFailureDiagnostic(malformed,'setup',Infinity),{phase:'other',code:'OTHER',ms:0});
+  for(const patch of [{unexpectedScopeCount:21},{openidPresent:privateAccess},{expectedScopesPresent:'true'},{httpStatus:600}]){
+    const error=Object.assign(apiError('TOKEN_SCOPE','token'),{expectedScopesPresent:true,unexpectedScopeCount:1,openidPresent:true,...patch,private:privateAccess});
+    const record=safeOAuthFailureDiagnostic(error,'setup',-10);assertNoPrivate(record);assert.equal(record.ms,0);assert.equal(record.httpStatus,undefined);
+    if(!Object.hasOwn(patch,'httpStatus'))assert.deepEqual(Object.keys(record).sort(),['code','ms','phase']);
+  }
+  t.mock.method(console,'info',()=>{throw new Error(privateAccess);});
+  const h=harness();const pending=await start(h);const response=await h.run(callback(pending,{query:{state:null}}));
+  assert.equal(response.status,303);assert.equal(new URL(response.headers.get('location')).searchParams.get('code'),'STATE');
+  assert.equal(h.calls.length,0);assert.equal(h.store.records.has(API_CREDENTIAL_KEY),false);
 });

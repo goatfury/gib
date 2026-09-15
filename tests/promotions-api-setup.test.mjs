@@ -20,7 +20,7 @@ function harness(t, { origin = ORIGIN, search = '', pathname = '/m1/promotions-a
     document:{ getElementById:id => elements[id] },
     location:{ origin, search, pathname, assign:value => assignments.push(value) },
     history:{ replaceState(...args) { events.push('replace'); replacements.push(args); } },
-    AbortController, URL,
+    AbortController, URL, URLSearchParams,
     fetch(url, options) {
       events.push('fetch');
       return new Promise((resolve, reject) => {
@@ -164,5 +164,28 @@ test('the fifteen-second request deadline fails closed without retry or backgrou
     assert.equal(h.calls.length, expectedCalls); assert.equal(h.timers.size, 0);
     assert.equal(h.assignments.length, 0); h.assertPrivate();
     await h.click('connect'); assert.equal(h.calls.length, expectedCalls);
+  }
+});
+
+test('safe callback failure facts remain reviewable after scrubbing but never establish connection or enable actions',async t=>{
+  const query='?phase=token&code=TOKEN_SCOPE&ms=1824&expectedScopesPresent=true&unexpectedScopeCount=1&openidPresent=true&result=denied';
+  const h=harness(t,{search:query});assert.deepEqual(h.events,['replace','fetch']);assert.equal(h.elements.connect.disabled,true);
+  await h.respond(0,ready);
+  assert.match(h.elements.status.textContent,/token \/ TOKEN_SCOPE after 1824 ms/u);assert.match(h.elements.status.textContent,/expected scopes present: true; unexpected scopes: 1; OpenID present: true/u);
+  assert.match(h.elements.status.textContent,/does not establish connection status/u);assert.equal(h.calls.length,1);
+  await h.click('check');await h.respond(1,{configured:true,connected:true,setupEnabled:true});
+  assert.match(h.elements.status.textContent,/Google is connected/u);assert.doesNotMatch(h.elements.status.textContent,/TOKEN_SCOPE/u);assert.equal(h.elements.connect.disabled,true);
+  const failed=harness(t,{search:'?phase=api&code=ACCESS_DENIED&ms=19&httpStatus=403&result=denied'});
+  await failed.respond(0,ready,{status:503});assert.match(failed.elements.status.textContent,/No successful connection is being claimed/u);
+  assert.match(failed.elements.status.textContent,/api \/ ACCESS_DENIED after 19 ms \(HTTP 403\)/u);assert.equal(failed.elements.connect.disabled,true);
+});
+
+test('callback display rejects private, duplicate, unsupported and out-of-range facts while status remains authoritative',async t=>{
+  const valid='?phase=token&code=TOKEN_SCOPE&ms=10&result=denied';
+  for(const search of [valid+'&phase=api',valid+'&token='+PRIVATE,valid.replace('TOKEN_SCOPE',PRIVATE),valid.replace('phase=token','phase='+PRIVATE),
+    valid.replace('ms=10','ms=3600001'),valid+'&httpStatus=700',valid+'&expectedScopesPresent=true&unexpectedScopeCount=21&openidPresent=true',
+    valid+'&expectedScopesPresent=true',valid.replace('result=denied','result=connected')]){
+    const h=harness(t,{search});await h.respond(0,ready);assert.doesNotMatch(h.elements.status.textContent,/Last connection attempt/u);h.assertPrivate();
+    assert.equal(h.calls.length,1);assert.equal(h.assignments.length,0);assert.equal(h.elements.connect.disabled,false,'only the authenticated ready status enables Connect');
   }
 });

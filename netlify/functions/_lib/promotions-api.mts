@@ -129,6 +129,14 @@ export function validApiScopes(value) {
   const scopes = value.trim().split(/\s+/u);
   return scopes.length === API_SCOPES.length && API_SCOPES.every(scope => scopes.includes(scope));
 }
+function scopeApiError(value) {
+  const scopes = typeof value === 'string' ? value.trim().split(/\s+/u).filter(Boolean) : [];
+  const error = apiError('TOKEN_SCOPE','token');
+  error.expectedScopesPresent = API_SCOPES.every(scope => scopes.includes(scope));
+  error.unexpectedScopeCount = Math.min(20,scopes.filter(scope => !API_SCOPES.includes(scope)).length);
+  error.openidPresent = scopes.includes('openid');
+  return error;
+}
 export function validApiCredential(value, config) {
   return value && value.version === 1 && value.initialized === true && value.ownerEmail === config.ownerEmail
     && value.clientId === config.clientId && value.deploymentId === config.deploymentId && value.origin === config.origin
@@ -170,9 +178,11 @@ async function boundedJson(response, signal, maximum, phase) {
 }
 export async function apiJson(url, options, dependencies, maximum, phase) {
   const signal = options.signal;
+  let httpStatus;
   try {
     signal.throwIfAborted();
     const response = await (dependencies.fetch || globalThis.fetch)(url, { ...options, redirect:'manual' });
+    httpStatus = response.status;
     if (response.status >= 300 && response.status < 400) { void response.body?.cancel().catch(() => {}); throw apiError('REDIRECT', phase); }
     const body = await boundedJson(response, signal, maximum, phase);
     if (!response.ok) {
@@ -181,7 +191,11 @@ export async function apiJson(url, options, dependencies, maximum, phase) {
       throw apiError('HTTP_ERROR', phase);
     }
     return body;
-  } catch (error) { throw safeApiError(error, phase); }
+  } catch (error) {
+    const safe = safeApiError(error, phase);
+    if (Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599) safe.httpStatus = httpStatus;
+    throw safe;
+  }
 }
 function validToken(token) {
   return token && bounded(token.access_token, 1, 8192) && token.token_type === 'Bearer'
@@ -194,7 +208,7 @@ export async function exchangeApiCode(code, verifier, config, dependencies, sign
       redirect_uri:config.redirectUri, code, code_verifier:verifier }).toString()
   }, dependencies, 65536, 'token');
   if (!validToken(token) || !bounded(token.refresh_token, 1, 4096)) throw apiError('TOKEN_RESPONSE', 'token');
-  if (!validApiScopes(token.scope)) throw apiError('TOKEN_SCOPE', 'token');
+  if (!validApiScopes(token.scope)) throw scopeApiError(token.scope);
   const identity = await apiJson(USERINFO_URL, { method:'GET', signal,
     headers:{ Authorization:'Bearer ' + token.access_token, Accept:'application/json' }
   }, dependencies, 16384, 'identity');
@@ -208,7 +222,7 @@ async function refreshApiToken(credential, config, dependencies, signal) {
   }, dependencies, 65536, 'token');
   if (!validToken(token)) throw apiError('TOKEN_RESPONSE', 'token');
   // OAuth permits scope omission on refresh: it then retains the verified grant.
-  if (token.scope !== undefined && !validApiScopes(token.scope)) throw apiError('TOKEN_SCOPE', 'token');
+  if (token.scope !== undefined && !validApiScopes(token.scope)) throw scopeApiError(token.scope);
   return token.access_token;
 }
 async function executeApiFunction(name, parameters, config, accessToken, dependencies, signal) {
