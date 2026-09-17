@@ -1,0 +1,17 @@
+name: Jane Game deployment diagnostic
+on:
+  push:
+    branches: ['jane-game/bpl-publish-20260917']
+    paths: ['.github/workflows/jane-game-deploy-diagnostic.yml']
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read sanitized publication report
+        run: |
+          curl --max-time 45 --fail --silent --show-error 'https://6aac0d2ef57ff800085ce870--gib-live.netlify.app/deployment-report.json'
+          printf '\nHost status on isolated preview:\n'
+          curl --max-time 45 --fail --silent --show-error 'https://6aac0d2ef57ff800085ce870--gib-live.netlify.app/api/host'
