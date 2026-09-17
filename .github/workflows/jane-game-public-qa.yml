@@ -1,0 +1,30 @@
+name: Jane Game public browser checks
+on:
+  pull_request:
+    branches: [main]
+    paths: ['jane-game-publish/**', '.github/workflows/jane-game-public-qa.yml', 'netlify.toml']
+permissions:
+  contents: read
+jobs:
+  jane-public-qa:
+    if: github.head_ref == 'jane-game/bpl-publish-20260917'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated browser test dependency
+        run: npm install --prefix /tmp/jane-browser-qa --no-audit --no-fund puppeteer-core@24.16.0
+      - name: Test the exact public game in a real browser
+        run: |
+          export CHROME_PATH="$(command -v google-chrome || command -v chromium)"
+          node jane-game-publish/public-qa.cjs
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jane-game-public-qa
+          path: qa
+          retention-days: 7
+          if-no-files-found: warn
