@@ -1,13 +1,10 @@
+# TEMPORARY, UNMERGED JANE GAME BRANCH. Never merge into GiB main.
+# The build refuses production context and publishes only jane-game-play.
 [build]
-  command = "npm run build"
-  publish = "public"
-  functions = "netlify/functions"
-
+  command = "node jane-game-publish/bootstrap.mjs"
+  publish = "jane-game-artifact/dist"
+  functions = "jane-game-artifact/netlify/functions"
+[build.environment]
+  NODE_VERSION = "22"
 [functions]
   node_bundler = "esbuild"
-
-[functions."m1-schedule"]
-  included_files = ["m1/shared-schedule.json", "m1/richmond-schedule.json"]
-
-[context."agent/m1-richmond-installation-preview".environment]
-  GIB_M1_INSTALLATION = "richmond"
