@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { sanitizeDailyReviewPayload } from '../netlify/functions/_lib/m1-admin-contracts.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 const wrapperSource = readFileSync(new URL(
@@ -457,4 +458,5 @@ test('baseline Admin reads remain usable after a removal and configured kiosk la
   assert.deepEqual(legacy.auditHistory, []);
   assert.deepEqual(legacy.warnings, []);
   assert.equal(dailyReview(h).auditHistory.length, 1);
+  assert.ok(sanitizeDailyReviewPayload(dailyReview(h), '2026-08-26', { allowRevolutionRemoval: true }), JSON.stringify(dailyReview(h)));
 });
