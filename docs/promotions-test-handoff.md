@@ -1,4 +1,173 @@
-# Promotions handoff: pre-merge import checkpoint
+# PR86 paused — 2026-09-15
+
+## Current checkpoint — preserve; do not resume automatically
+
+Andrew paused this work because the pilot is unlikely to be used. This draft remains unmerged. Preserve the code, all earlier evidence, pending requests and all newer records. No further connection attempt, acceptance sequence, full release gate, deployment or live repair is scheduled. Resume only after a new user request.
+
+The last deployed TEST source remains `209090d8ec70471ac1a5b984d4c59f9903f02368`, Netlify deploy `6aa84e4997870b7392c94d8b`, at https://deploy-preview-86--gib-live.netlify.app/m1/ . This is an unfinished TEST checkpoint, not a working-review invitation. The replacement client secret was entered privately by Andrew; its value was not read by the agent. One subsequent Google consent returned to setup, but authenticated status remained `configured:true, connected:false`. The separate API project's execution list showed zero executions. The exact callback failure boundary was not captured; no successful API connection or acceptance read is claimed.
+
+The final source change adds sanitized TEST OAuth callback failure details: enumerated phase/code, bounded elapsed time, optional HTTP status and scope-presence facts. It passed all 25 focused API/setup tests and independent read-only privacy review. This diagnostic has **not been deployed or exercised against Google**. It changes neither scope validation nor connection authority. Local diagnostic commit: `6efc44f08ce1a905388dd412e4d4925b0ece518d`; tree `47747f8c299485b7512059acb55fdd7d2a6db91a`. Preservation commits retain `[skip netlify]` so the deployed artifact is not replaced.
+
+API reads remain disabled. The new Google TEST API executable (Version 1), old Google TEST web deployment (Version 9), Cloud/OAuth project and server credential remain retained; no usable refresh credential was confirmed. The earlier seven-day External/Testing limitation still applies if this proof is resumed. No account or permission expansion was added during this pause.
+
+If Andrew later requests continuation, the next bounded step is to deploy the already-tested diagnostic to the existing isolated PR86 preview and make **one** fresh authorization attempt to identify the callback boundary. Do not repeat the completed A/B/C comparison or feature QA. The eight-read/two-browser acceptance budget has not started, and the full final gate has not run because there is no release candidate.
+
+Completed repair, subsequent promotion, independent readback, tablet/laptop and reconciled Sign-In/Staff Clock evidence is retained. Phone coverage is deferred. All 387 proposed live corrections across 370 students remain unapplied. No merge, production, Richmond, Google LIVE Version 5 or business-data change occurred. Earlier sections below are historical evidence, not instructions to restart work.
+
+# Historical PR86 decision — 2026-09-14
+
+## Approved API proof — implementation checkpoint
+
+Andrew approved the isolated read-only Apps Script API proof, separate TEST script and standard Cloud/OAuth project with the existing Ops account, broader Sheets scope and private server credentials. Google Cloud first-use Terms and Google API Services User Data Policy were separately approved and accepted. External/Testing status remains; only Ops is a test user. Seven-day refresh credential expiry remains a proof limitation, not a lasting pilot decision.
+
+The new reader preserves the strict existing history reader and nonce-bound five-field confirmation. It exposes only authenticated `readPromotions` and a configuration-only initializer. Promotion, repair, registration and `checkSave` entry points are absent. The API route is opt-in for TEST bootstrap/readStudent only; there is no retry, old-route fallback, cached result or automatic write replay. The 18-second shared deadline covers credentials, response and cancellation. The client cancels obsolete TEST reads and preserves pending writes. Setup uses one-use browser-bound state, PKCE, exact Ops identity/scopes, encrypted server-only credentials and a fixed callback; the ordinary tablet cookie stays Strict.
+
+Focused implementation checks passed (135 tests across API reader/server/routing/setup, mounted tablet logic, diagnostics and existing transport; public-build and optional-asset checks also pass). Independent review found one completion/cancellation race, fixed with pre/post-call signal checks and a deterministic regression. Completed feature/layout/data/Sign-In/Staff Clock evidence remains frozen; phone coverage is deferred.
+
+Isolated Google project: `gib-pr86-read-test-20260914`, number `978559258638`. New script `1BK9MnMfDJo7czq55X7tH64wWeryk-N1nlmoWhsNX3syuyLc2g9OIloJk`; API deployment `AKfycbz7YQlHTBrOEMFkqemcukdRsrtgp-uY3eTipu8fV6YsQETibsoVgLmaM7Jb1icwrkC-`, Version 1, access Only myself. Workbook, Ops owner and exact PR86 origin are pinned privately. TEST preview environment is prepared with API reads disabled until the private OAuth connection is complete. No API browser acceptance or full release gate is claimed at this checkpoint.
+
+After private credential setup, the single acceptance budget is eight serial fresh reads through two existing authorized browsers, or ten minutes, whichever comes first. Per browser: open log/bootstrap, full-name Juniper read, Fern read, clear/re-enter bootstrap. Record every success/failure and elapsed time, verify current repaired history, and stop if a new blocker needs a concrete remedy. No promotion, Sign-In or Staff Clock writes are needed. Run the full gate once only if this produces a release candidate.
+
+The following completed comparison is retained as historical evidence. Its recommendation has now been approved; its failures have not been erased or called fixed. Existing Google TEST Version 9 and LIVE Version 5 are unchanged; all 387 live corrections across 370 students remain unapplied. No merge, production, Richmond or business-data change.
+
+## Historical comparison decision
+
+**BLOCKED — CONNECTION CHANGE RECOMMENDED.** The bounded comparison is complete. Manual fetch, automatic fetch and an independent HTTPS client each succeeded on three of four requests and failed on one. Successful browser requests took 2.676–15.647 seconds; the median across all twelve was 9.528 seconds and the worst was 25.168 seconds. This does not meet the intended instructor experience. No release candidate or reliable connection fix is claimed, and the probe budget will not be restarted.
+
+Recommend one isolated, read-only TEST proof using the Apps Script Execution API (`scripts.run`) instead of the ContentService web-app response route. It removes the one-time content-URL delivery step implicated by two captured failures. It does not establish that Google execution or the unexplained initial-POST stall will become fast or reliable. The exact approval and proof boundary are below; no replacement has been implemented.
+
+## Preserved application and environment
+
+Repository `goatfury/gib`, branch `repair/promotion-book-20260914`, draft PR #86, unmerged. Application source `bfbee38ac929b5b7498955dbdb272e7f3321679c`, tree `c26db25f516d167908653094a4089c4a8ad74728`, TEST Netlify deployment `6aa83524ff7a67000855447a`. The twelve application/test files were pushed and that TEST artifact was deployed. Authorized review route: https://deploy-preview-86--gib-live.netlify.app/m1/ . This is a preserved diagnostic build, not a release-ready review invitation. Keep the Netlify skip marker for documentation-only changes so this exact artifact remains available.
+
+The separate Google TEST deployment is Version 9 at the existing URL, with its identity/access settings preserved. Google LIVE remains Version 5. The temporary owner-editor receipt retrieval wrapper ran at `2026-09-14T18:12:34Z`; afterward the editor was restored to the reviewed source, matching exactly after normalizing Windows line endings, with no temporary helper retained.
+
+Preflight and every trial reported Node `22.23.2`, bundled Undici `6.28.0`, context `deploy-preview`, region `us-east-2`, the same deployment ID and instance hash `c00ecd70e885dbbb6105af93`. Preflight was invocation 1, reported cold; the twelve requests were warm invocations 2–13 in that same instance. Pinned TEST endpoint hash: `0847f070f27894741534ff5a3a340e0525f557e1d0350fb6ed468c94e4893ea9`. Each trial kept the 25,000 ms end-to-end upstream deadline, 1,000,000-byte response limit, twenty-redirect limit, destination restrictions and complete JSON/envelope validation. No longer diagnostic deadline was used, and no platform-timeout increase is claimed.
+
+The browser limit remained 30,000 ms. Netlify documents a 60-second synchronous execution limit for this function type; the observed failure occurred at our shorter 25-second deadline, not a demonstrated platform termination. Reference: https://docs.netlify.com/build/functions/configuration/ .
+
+## Completed controlled comparison
+
+All twelve logical requests were authorized synthetic `bootstrap` reads through the same remote Netlify TEST function, using a fresh signed envelope and nonce for each request. There were no parallel requests, automatic retries, reused one-time URLs, promotions, repairs, registration, corrections, `checkSave`, payroll or sign-in submissions. The actual operation branches were verified to leave promotion records unchanged; only the existing nonce cache and short-lived diagnostic receipt are written.
+
+Arm A used the current explicit/manual fetch redirects. Arm B used standard automatic fetch redirects with the TEST promotion endpoint and signed contract, equivalent to LIVE's redirect mode without calling LIVE. Arm C used independent `node:https` requests with fresh connections and explicit redirects. A/B were interleaved first; the remaining budget included C and final A/B observations. All three arms ran in one prepared TEST build. Raw opaque Location values remained in memory for their own redirect chain; no URLs, queries, request bodies, credentials or student records are included here.
+
+The predeclared limit was twelve logical requests or fifteen minutes, whichever came first. First request: `18:01:39.174Z`; last request: `18:11:09.378Z`; final completion: `18:11:17.204Z` on 2026-09-14. Total probe window was 9 minutes 38.030 seconds, **12/12 requests used, four per arm**, with no reset or extra trial after the result was known.
+
+Times below are seconds except the Google receipt processing column, which is milliseconds. `POST` means the Google script web-app endpoint; `content GET` means its newly returned content URL; `script GET` means a redirect back to the web-app endpoint. Hop measurements are recorded stages, not estimates of Google execution time; their sums can differ from total elapsed time because of surrounding transport work.
+
+| Trial / arm | UTC start | Browser / upstream seconds | Google processing ms | Observed stages and result | Safe trace ID |
+| --- | --- | --- | --- | --- | --- |
+| 1 / A | 18:01:39.174 | 4.574 / 4.336 | 1684 | POST 302, 3.964s → content GET 200 JSON, 0.355s; success | `0ae7262ffd01e80b5b2a758f` |
+| 2 / B | 18:02:06.395 | 3.394 / 3.117 | 1246 | POST 302, 2.492s → content GET 200 JSON, 0.177s; success | `5d114d2a0b4e897999a52beb` |
+| 3 / A | 18:02:33.637 | 2.676 / 2.495 | 1190 | POST 302, 2.227s → content GET 200 JSON, 0.266s; success | `23f0db91743897267825daec` |
+| 4 / B | 18:03:02.646 | 9.546 / 9.395 | 2184 | POST 302, 9.076s → content GET 200 JSON, 0.313s; success | `eb80b52f883da63b3b099121` |
+| 5 / A | 18:07:30.429 | 13.028 / 12.503 | 1960 | POST 302, 12.044s → content GET 200 JSON, 0.451s; success | `1b22b1480cadc69318d9c35f` |
+| 6 / B | 18:08:02.649 | 25.168 / 25.002 | 1886 | Initial POST supplied no headers for 24.998s; shared deadline; browser HTTP 503 | `2b06fe19acff109424f06367` |
+| 7 / C | 18:08:45.726 | 13.541 / 13.234 | 2569 | POST 302, 4.289s → content GET 302 back to script, 7.927s → script GET 200 owner-denial HTML, 1.012s; rejected, browser HTTP 503 | `451c5c38c3efa0de2af52969` |
+| 8 / C | 18:09:12.715 | 15.647 / 15.355 | 850 | POST 302, 15.070s → content GET 200 JSON, 0.282s; success | `52de4520e526ef5ae5c322a8` |
+| 9 / C | 18:09:39.685 | 7.477 / 7.313 | 1050 | POST 302, 2.434s → content GET 200 JSON, 4.877s; success | `c34e6820aa53178e3c04bf9c` |
+| 10 / A | 18:10:03.400 | 24.671 / 24.420 | 984 | POST 302, 2.593s → content GET 302 back to script, 20.756s → script GET 200 owner-denial HTML, 1.064s; rejected, browser HTTP 503 | `c4b7beb0b1e58ab9dc173f83` |
+| 11 / B | 18:10:40.202 | 9.510 / 9.263 | 1459 | POST 302, 8.040s → content GET 200 JSON, 1.217s; success | `c8407aeebedbfc3a2d973f54` |
+| 12 / C | 18:11:09.378 | 7.826 / 7.477 | 2167 | POST 302, 4.029s → content GET 200 JSON, 3.446s; success | `f65081ccd1c6b4a5f1c8063b` |
+
+| Population | Successful / attempted | Browser median, all | Browser worst, all | Browser median, successful only | Browser worst, successful only |
+| --- | --- | --- | --- | --- | --- |
+| A: manual fetch | 3 / 4 | 8.801s | 24.671s | 4.574s | 13.028s |
+| B: automatic fetch | 3 / 4 | 9.528s | 25.168s | 9.510s | 9.546s |
+| C: fresh HTTPS | 3 / 4 | 10.6835s | 15.647s | 7.826s | 15.647s |
+| All | 9 / 12 | 9.528s | 25.168s | 7.826s | 15.647s |
+
+For C, all nine observed sockets reported `reused:false` and socket error category `none`. DNS/connect/TLS/first-header measurements, in milliseconds from the corresponding hop start, were: trial 7 `(4/26/50/4289), (3/14/40/7927), (2/24/47/1012)`; trial 8 `(3/26/51/15070), (1/10/32/282)`; trial 9 `(2/24/48/2434), (1/12/35/4877)`; trial 12 `(3/11/31/4029), (2/11/31/3446)`. The independent fresh-connection client also encountered the content-to-script HTML outcome. These observations do not demonstrate a connection-pooling defect, nor establish any arm as reliably superior from four trials.
+
+## Exact Google completion evidence
+
+The existing authorized owner route retrieved all twelve cache receipts at `18:12:34Z`. Every safe nonce-derived trace ID matched its trial; every receipt recorded `jsonPrepared:true`, `wrappedResponse:true`, `resultOK:true`, no error category, and a 5,744-byte JSON response. Recorded processing durations were 850–2,569 ms. All nine delivered JSON response SHA-256 fingerprints matched their exact prepared Google response fingerprints. Receipt presence proves that preparation was reached for that request; it does not prove delivery, the time spent before processing began, or a committed promotion. Cache absence would have remained inconclusive.
+
+The three failed deliveries are distinct:
+
+- Trial 6/B prepared JSON fingerprint `45d5d66bb31867bca6739ae7f792aca7b9a8ad9c6e720ee7f5d58fff0ca19176`, but Netlify received no initial POST response headers before its deadline. The receipt does not locate the delay within queueing, response delivery or transport.
+- Trial 7/C prepared JSON fingerprint `2f650c58f44fc7d400f211bd6f65ffa0e54dd66047b25e89d5ac02abbcd6563e`, while the delivered HTML fingerprint was `2b19f14a7ae21da224d70b014d2987776b2219bff6b7376d919abaf456c5e100`.
+- Trial 10/A prepared JSON fingerprint `08e73d2564c817965a52119305c556a193cb05ddd00b9a68e426d15e5d296830`, while the delivered HTML fingerprint was `1fceb33c8680c40c845e53eeef0c422a304bc99c2f0eb9639922721bbc2293b9`.
+
+The last two bodies were positively classified as the existing owner-access-denial page (`owner-denial`, `owner-access-required`) after the content URL redirected back to a script GET. They were correctly rejected. This identifies those two new HTML failures, not the unretained historical HTML response. It neither authorizes bypassing the owner check nor explains why the content service sent those redirects. Normal ContentService redirects are documented behavior: https://developers.google.com/apps-script/guides/content#redirects .
+
+Detailed sanitized observations and full success fingerprints remain in the task's private `pr86-controlled-comparison.private.json` and `pr86-comparison-google-receipts.private.json`; they contain no credentials, response URLs or student records. The comparison and receipts replace timestamp-only inferences in the historical sections below.
+
+## Decision and one proposed proof
+
+No narrowly supported client correction emerged: automatic fetch and fresh HTTPS did not eliminate the failures. A timeout-only recovery could not handle the two identified HTML denials, which must remain ineligible. The nine successful requests themselves ranged from 2.676 to 15.647 seconds, leaving no well-supported attempt split for one retry inside a short total instructor wait. This sample does not prove bounded recovery impossible; it does not support an acceptable recovery candidate now. No server retry was implemented or deployed, no stacked retry exists, and the ordinary kiosk deadline was not increased. A prospective client-cancellation patch passed 100 local tests but was privately exported and restored; it is not in this deployed artifact and is not a mitigation claim.
+
+The recommended proof is a **separate TEST Apps Script API executable containing only the existing validated read logic and a narrowly allowed `bootstrap`/`readStudent` adapter**, called from the existing TEST Netlify function with the dedicated Ops account's OAuth authorization. Preserve the tablet interface, device authorization, signed request/envelope checks, fresh nonce rules, workbook identity/schema checks, strict history replay and stable student/event identities. Keep promotions, repairs, registration, corrections and `checkSave` excluded from the adapter. Existing writes remain on their present route and retain a single authoritative writer; do not copy publicly callable write functions into the proof or migrate writes implicitly. Sign-In and Staff Clock remain untouched.
+
+`scripts.run` returns execution results through the API rather than the ContentService one-time content URL, removing that specific delivery boundary. It still depends on Apps Script execution and Google's API, so the observed initial-POST stall and processing/queue latency remain risks to measure. The proof must first demonstrate exact response equivalence against the same synthetic TEST workbook and preserved history, then a short predeclared serial lookup/re-entry acceptance sequence from two independently authorized TEST browser sessions. Record first-attempt failures and browser total times, median and worst; correct data arriving repeatedly after 20–30 seconds is not an acceptable result. Do not adopt or expand the proof unless its observed behavior meets the instructor need.
+
+This route requires a new isolated TEST script attached to a standard Google Cloud project, an API executable deployment, the Apps Script API enabled, and an OAuth client from that same project. Use the existing Ops account, with explicit consent for the scopes required by the read-only script, and keep its refresh credential only in private server configuration. Apps Script API execution does not support substituting a service account. These are new setup and consent requirements, not existing authorizations or a request to alter the live script's project. Official requirements: https://developers.google.com/apps-script/api/how-tos/execute and https://developers.google.com/apps-script/api/reference/rest/v1/scripts/run . OAuth credentials require secure storage and revocation/expiry handling; an external OAuth consent configuration left in Testing can expire refresh tokens after seven days for these non-basic scopes. A durable rollout needs a separate consent/publication and maintenance decision: https://developers.google.com/identity/protocols/oauth2 .
+
+The current reader's manifest uses `spreadsheets` and `userinfo.email`; retain those existing scope names for the proposed isolated script unless verified implementation permits narrower ones. This still creates a new OAuth grant, and the Sheets credential is broader than the pinned TEST workbook even though the adapter is constrained to that workbook. API calls must use the API-executable deployment ID with `devMode:false`, preserve response binding, and test credential renewal, cancellation and rejected responses. Script locks and nonce caches are scoped to a script project: the copy must never become a second writer. The minimum hosted proof is eight predeclared fresh reads across the two existing authorized browsers, covering opening, full-name selection, a second student and re-entry after clearing.
+
+**Exact approval requested:** approve one isolated, read-only TEST proof using a new TEST Apps Script/standard Cloud project, the existing Ops account's OAuth consent and privately stored server refresh credentials. This does not approve a new account, switching the live project's configuration, write migration, production release, live repairs or an architectural rollout. Andrew should only need to approve the new scope and provide the unavoidable consent; engineering, configuration and verification remain with Codex.
+
+## Verification and unchanged live state
+
+The comparator, Google receipt, page and build checks passed **56 affected tests**. This investigation produced no fix/mitigation candidate, so a manual full release gate and two-session hosted candidate acceptance were not repeated or claimed. Earlier repair/save/readback, presentation, Sign-In and Staff Clock evidence remains valid where the code is unchanged; phone coverage remains deferred. No repeated business writes were used to inflate verification counts.
+
+Nothing was merged or deployed to production. Google LIVE Version 5, Richmond, live properties, accounts, account permissions and business data remain unchanged. One turn-scoped network-only grant permitted installing the pinned diagnostic dependency; no new OAuth, sharing or pairing was performed. All **387 proposed live corrections across 370 students remain unapplied**; no import or identity generation was repeated. Compatible history readers must precede separately approved live repairs, and no rollback may overwrite later promotions with an older workbook. Only the existing TEST diagnostic deployment and short-lived TEST receipts changed in this comparison. The replacement proof remains unimplemented pending the exact approval above.
+
+## Historical response-delivery checkpoint — superseded by the decision above
+
+The following checkpoints are retained as evidence history, not instructions to restart completed comparisons, repeat probes, or revive their earlier proposed next steps.
+
+**BLOCKED for release review. This checkpoint supersedes the earlier interpretation below; completed feature QA is frozen.** Phone coverage remains deferred, not failed. No layouts, repairs, promotion submissions, Sign-In/Staff Clock writes or manual full release gate were repeated.
+
+Application remote e5522380f5c5b51e9bfd90df753f9afe9170d9d0; local ebdb325b99813db4cf1d6cb6ff4b28227424d141; identical tree d05dc9001fed608df2a0bd241dbb6a76b86ee9d1. TEST deploy6aa8094b14b2f00008ce6a7f is ready for that commit; repair-d client and deployment identity were observed in the actual mounted kiosk. Existing authorized route: https://deploy-preview-86--gib-live.netlify.app/m1/ . Existing separate Google TEST endpoint updated to Version8; URL, identity and access settings preserved. Live remains Version5. Branch repair/promotion-book-20260914 was pushed; PR86 is draft/unmerged. Netlify skip marker preserves this diagnostic artifact during documentation-only pushes.
+
+Added TEST diagnostics: nonce-derived24hex correlation ID, Google entry/completion/intended response type, redirect method/status/host/path categories, received-body SHA256 fingerprint, and fixed HTML owner/auth/error/title/reason categories. No raw URLs, bodies, titles, tokens or student data are logged. Absolute allowed Google Location is followed without rewriting its opaque query. No replay, retries, timeout increases, authentication or validation changes. These are diagnostics, not a fix or mitigation.41/41 affected tests passed; diff check passed. The prior full gate is retained, not claimed for this diagnostic build.
+
+Budget: at most8 serial read-only requests or10minutes, starting14:50:55Z. Stopped after3 requests because two successive failures exposed the same boundary. All used the actual mounted authorized kiosk:
+
+| UTC start / operation | Trace ID | Browser result | Captured upstream hops |
+| --- | --- | --- | --- |
+|14:50:55.708 bootstrap|1bebab4d6067cb4d9e6de77d|HTTP200 /8.924s|POST web-app-exec302 /3.951s; GET content-response200JSON /4.041s; valid envelope; upstream8.000s.|
+|14:51:17.251 readStudent|fe8f4a3f338ed6d26ac276d1|HTTP503 /25.188s|POST web-app-exec302 /2.912s; GET content-response returned no headers for22.089s until the shared25second limit.|
+|14:53:38.143 bootstrap|fca9e453476f711ac8ccf609|HTTP503 /25.196s|POST web-app-exec302 /6.371s; GET content-response returned no headers for18.630s until the shared25second limit.|
+
+Success body fingerprint: b8d40221eb9ffb71c64b26c01ebff1f50fcebe982660838c1518d30780012af9. Failures received no body, so no fingerprint or HTML classification is available. Private evidence preserves every record and the earlier failures.
+
+Google lists nearby first-two doPost executions Completed at10:50:56NewYork/3.546s and10:51:17/2.432s. Detailed trace records/Expand are unavailable; Cloud logs is explicitly aria-disabled=true. These remain timestamp matches, not proven nonce-correlated completion records. Saved editor source matched local source exactly before TEST Version8 deployment; absence of visible records does not prove that logging succeeded. No account/project/permission expansion was attempted.
+
+The new failures are at Netlify's GET of Google's one-time content URL, after POST302 and before response headers. They are response-delivery timeouts, not received authorization denials or history-validation failures. This does not yet separate transport stalling from Google withholding/delaying the response. The earlier13:59:28.481Z HTTP200HTML response on google-script did not recur; its original title/body/fingerprint was not retained. Its identity remains unknown: owner page, Google auth/error page, or other HTML. Nearby POST/GET timestamps do not prove the path. Do not assume a faulty redirect; ContentService normally redirects to a one-time content URL: https://developers.google.com/apps-script/guides/content#redirects .
+
+**Single next experiment:** retain a short-lived, TEST-read-only diagnostic completion receipt in the already-used Google ScriptCache, keyed by the safe nonce hash and containing no input/output/identity/secret. Make one fresh signed kiosk lookup, then read its receipt through the existing authorized owner editor. This will correlate the exact POST's intended JSON completion with its response trace without a new Cloud project or permissions. Never replay the original signed envelope or one-time URL. No retry mitigation is supported yet while the prior HTML could be an access denial; any later recovery must exclude denials/writes and preserve freshness, cancellation, validation and next-person privacy.
+
+Completed repairs, later promotion, independent readback, tablet/laptop presentation and reconciled Sign-In/Staff Clock evidence are preserved where unchanged. All387 corrections across370students remain unapplied. No merge, production deployment, liveVersion5 change, Richmond change or new data write. No new permission grant, OAuth, account, sharing or pairing. If diagnostics need removal, restore only the prior TEST Netlify application b21846db and the same Google TEST deployment's Version7; preserve data and liveVersion5.
+
+## Preserved earlier tablet checkpoint — superseded above
+
+**BLOCKED: intermittent Google response handoff is not established as fixed. Tablet presentation checks are complete. Phone coverage is explicitly deferred and is not an acceptance blocker.** No further redesign, new setup, repeat repairs, or repeat Sign-In/Staff Clock writes.
+
+Current application: remote b21846db914eae0bc7752f93d461b5a787cba813; local 1f5f588233f3bee223c405271385dbd4d6ee1f9d; identical tree 48b99ce3f31cb023d8f8d299199b400cffa3f38a. Branch repair/promotion-book-20260914, draft PR86, unmerged. Exact TEST deploy 6aa8002f03f5de000818687c. Authorized route https://deploy-preview-86--gib-live.netlify.app/m1/ ; immutable artifact https://6aa8002f03f5de000818687c--gib-live.netlify.app/m1/ is not an authorized alternative origin. Preserve the artifact with the draft title's Netlify skip marker during documentation-only pushes; remove it deliberately for a later application build.
+
+The TEST client now records only safe request category/status/timing and failure redirect categories. Netlify TEST redirects are explicit so failures can expose each hop; one shared 25-second timeout, normal POST-to-GET redirect semantics, up to 20 redirects, Google-only destinations, no automatic retry. LIVE transport behavior remains unchanged. Confirmation/envelope validation and original pending-write intent remain intact. This is diagnostic instrumentation, not evidence that the intermittent fault was corrected.
+
+Controlled actual tablet-browser sequence, all real uncached service requests, no saves:
+- 13:56:29.328Z bootstrap: HTTP200, 4884ms.
+- 13:56:56.244Z Juniper read: HTTP200, 3111ms, correct newer Black Belt5/date and preserved repairs.
+- 13:59:28.481Z Fern read: HTTP503, 17011ms; Netlify upstream16813ms, HTTP200 HTML, redirected=true, final host category google-script, JSON parse failure. Not timeout, ordinary tablet authorization rejection, or history-validation failure. Google Version7 doPost at09:59:28 New York completed2.4s; later doGet at09:59:42 completed2.619s. Timestamp correlation, not nonce-correlated server logs.
+- One supporting direct manual redirect trace at14:01:04Z: same synthetic Fern read, script POST302→content GET200 valid JSON; 4652+284ms. It did not reproduce the failing redirect and is not browser-connection proof.
+- Latest explicit-hop build: 14:11:38.475Z bootstrap8500ms; 14:12:10.791Z Fern3531ms; 14:13:05.846Z whitespace-normalized full-name Juniper8094ms; 14:14:52.313Z fresh bootstrap after automatic privacy clearing4186ms. All HTTP200. No failure hop was captured on this bounded follow-up. Earlier failures remain unresolved evidence; do not label the connection fixed.
+
+Specific remaining unknown: which intermediate redirect returned the earlier response to the Google HTML web-app route, and why. The TEST hop tracer is installed and ready to capture that transition on the next failing mounted request. Next executable repair path: inspect that captured status/method/destination transition, correct only the faulty TEST response handoff, then run a short serial mounted acceptance sequence. Do not repeat blind browser cycles, lengthen timeouts, weaken validation, or infer a correction from intermittent success. No supported corrective patch is currently identified.
+
+Tablet presentation: the same successfully loaded synthetic Juniper record was reused at820x1180 portrait and1180x820 landscape, plus820x590 and1180x410 explicitly simulated keyboard working areas. Root visually inspected readable full name/rank/date,18px controls,48.23px buttons/50.23px inputs, focus, scrolling, and visible blank-Promoted-by validation. Opening/closing the editor and blank validation generated no promotion request. The light panel and small entry below Sign-In are unchanged. Keyboard dimensions are simulated; physical hardware testing is not claimed. Prior laptop evidence remains valid. Netlify's optional collaboration drawer was dismissed with its normal keyboard control. The authorized Codex kiosk tab6 was verified selected/visible; no spreadsheet is the delivery target.
+
+Final checks:1088/1088 local tests pass, no skips; GitHub M1 Required run34853804268 passed for the application commit. Frozen source76/public36 hashes match;68 served comparisons passed (59exact+9exact reviewed Netlify drawer additions),44 excluded paths404. Earlier1075-test baseline and all completed repair/promotion/readback/Sign-In/Staff Clock evidence are retained wherever source is unchanged. No additional synthetic data writes this pass.
+
+Preserved completed data proof:12TEST students/37history events/3REPAIR; the one subsequent promotion remains revision4/Black5; exact repair retries did not duplicate or revert it. All nine synthetic instructor submissions and12staff punches/sixclosed pairs were independently reconciled previously; no pending queue or open pair was created here. Google TEST Version7 and live Version5 unchanged. No live workbook or Richmond change. The387 proposed corrections across370live students remain unapplied, manifestSHA2e15dbf7f602c283a5bd4291c58966535349cdd718fdf3a6abddbdcb6bd45604.
+
+Permissions receipt:one additional network-only grant in this pass, turn-limited; seven recorded grant requests across retained work, all turn-limited.154inherited command rules unchanged in retained snapshots; earlier full approval history unknown. Existing Google revbjjops@gmail.com TEST endpoint remains externally reachable with signed application authorization; Netlify goatfury@gmail.com TEST build/function/origin settings and two host-only TEST browser pairings persist (cookies up to400days). No new OAuth/sharing/account/credential expansion recorded; full account histories unavailable. No permission was revoked.
+
+The following is the preserved pre-merge history, superseded by the verified PR #85 release receipt for launch status.
 
 **PRE-MERGE CHECKPOINT — 2026-09-13, 7:06 PM America/New_York.** The complete approved baseline import passed independent native verification and an actual Google runtime read. The Guide completion write/readback and visible instructions passed; the exact reviewed Version 5 editor source is restored. All pre-merge checks passed, with both activation gates still off at this checkpoint. No production publication is claimed here. This document is committed before the authorized merge; the PR #85 description is the authoritative later activation and published-verification receipt: https://github.com/goatfury/gib/pull/85.
 

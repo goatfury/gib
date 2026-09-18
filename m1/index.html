@@ -4892,15 +4892,15 @@ function refreshNameDatalist() {
   // OPTIONAL_PROMOTIONS_LOADER_START
   // Optional assets load only after the core kiosk and Staff Clock have initialized.
   function startOptionalPromotions() {
-    import('./promotions-config.generated.js?v=2026-09-13-promotions-test-a').then(() => {
+    import('./promotions-config.generated.js?v=2026-09-14-promotions-repair-api-1').then(() => {
       if (globalThis.M1_PROMOTIONS_TEST_CONFIG?.enabled !== true) return;
       const stylesheet = document.createElement('link');
       stylesheet.rel = 'stylesheet';
-      stylesheet.href = './promotions.css?v=2026-09-13-promotions-test-a';
+      stylesheet.href = './promotions.css?v=2026-09-14-promotions-repair-api-1';
       stylesheet.media = 'not all';
       stylesheet.addEventListener('load', () => {
         stylesheet.media = 'all';
-        import('./promotions-client.mjs?v=2026-09-13-promotions-test-a').catch(() => {});
+        import('./promotions-client.mjs?v=2026-09-14-promotions-repair-api-1').catch(() => {});
       }, { once: true });
       document.head.appendChild(stylesheet);
     }).catch(() => {});

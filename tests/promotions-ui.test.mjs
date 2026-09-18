@@ -6,7 +6,7 @@ import { webcrypto } from 'node:crypto';
 
 // Execute the shipped client, with only the browser DOM and Google RPC boundary
 // replaced. These ordering tests complement the real browser layout/input checks.
-const html = readFileSync(new URL('../promotions/Index.html', import.meta.url), 'utf8');
+const html = readFileSync(new URL('../promotions/Index.html', import.meta.url), 'utf8').replace(/\r\n/gu, '\n');
 const source = html.match(/<script>([\s\S]*?)<\/script>/u)[1];
 const formIds = [...html.match(/<form id="entryForm"[\s\S]*?<\/form>/u)[0].matchAll(/\bid="([^"]+)"/gu)].map(match => match[1]);
 const student = (id, revision = 1, marks = 1) => ({
@@ -145,4 +145,22 @@ test('closing and reopening missing-student entry preserves the identifying draf
   assert.equal(h.elements.get('newName').value, 'TEST New Student');
   assert.equal(h.elements.get('newIdentity').value, 'Evening group');
   assert.equal(h.elements.get('newHistoryNote').value, 'Earlier date unknown');
+});
+
+test('retained owner view reads repairs concisely and corrects only across identity repairs', async () => {
+  const h = createHarness(); await h.flush();
+  const original = student('A',2,2), repaired = { ...student('A',4,2), displayName:'TEST Student A Fullname' };
+  const repair = { eventId:'fixture-name-repair', revision:4, eventKind:'REPAIR', before:original, after:repaired,
+    reason:'SYNTHETIC-RAW-AUDIT-MUST-NOT-DISPLAY', repair:{ field:'identity', before:{ displayName:original.displayName }, after:{ displayName:repaired.displayName }, evidence:{ interpretation:'Split name cells preserve the complete name.' } } };
+  const award = { eventId:'fixture-award',revision:2,eventKind:'STRIPE',before:student('A'),after:original };
+  await h.choose('A',repaired,[award,repair]);
+  assert.equal(h.elements.get('correctLatest').hidden,false);
+  assert.match(h.elements.get('historyList').textContent,/TEST Student A → TEST Student A Fullname/u);
+  assert.equal(h.elements.get('historyList').textContent.includes(repair.reason),false);
+  h.context.client.openDraft('correct');
+  assert.equal(h.context.client.state.draft.correctsEventId,award.eventId);
+  assert.equal(h.context.client.state.draft.expectedRevision,4);
+  const rankRepair = { eventId:'fixture-rank-repair',revision:3,eventKind:'REPAIR',before:original,after:original,repair:{ field:'rank',before:original,after:original } };
+  await h.choose('A',repaired,[award,rankRepair,repair]);
+  assert.equal(h.elements.get('correctLatest').hidden,true);
 });

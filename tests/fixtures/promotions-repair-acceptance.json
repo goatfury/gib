@@ -1,0 +1,30 @@
+{
+  "marker": "SYNTHETIC REPAIR FIXTURE 20260914",
+  "sheetName": "Black Belt",
+  "header": ["Name", "", "Date", "Rank awarded", "4 stripes", "3 stripes", "2 stripes", "1 stripe", "Black Belt", "4 stripes", "3 stripes", "2 stripes", "1 stripe"],
+  "records": [
+    {
+      "key": "dated-split",
+      "studentId": "fixture-repair-20260914-avery-juniper",
+      "firstName": "TEST Avery",
+      "surname": "Juniper-O'Neill",
+      "sourceValues": [
+        "TEST Avery", "Juniper-O'Neill", "", "",
+        {
+          "userEnteredValue": { "numberValue": 44982 },
+          "effectiveValue": { "numberValue": 44982 },
+          "formattedValue": "2/25/2023",
+          "effectiveFormat": { "numberFormat": { "type": "DATE", "pattern": "m/d/yyyy" } }
+        },
+        "", "", "", "", "", "", "", ""
+      ]
+    },
+    {
+      "key": "unknown-split",
+      "studentId": "fixture-repair-20260914-avery-fern",
+      "firstName": "TEST Avery",
+      "surname": "Fern",
+      "sourceValues": ["TEST Avery", "Fern", "", "", "", "", "", "", "", "", "", "", ""]
+    }
+  ]
+}

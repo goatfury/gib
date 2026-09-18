@@ -313,12 +313,11 @@ test('another session changing pending storage cannot be overwritten or removed 
   assert.equal(storage.data.get(KEY), changed);
 });
 
-async function installationBuild(env) {
+async function installationBuild(env, writes = new Map()) {
   const buildUrl = new URL('../tools/build-m1-installation-profile.mjs', import.meta.url).href;
   const buildSource = readFileSync(new URL(buildUrl), 'utf8')
     .replace(/^import[\s\S]*?;\r?\n/gmu, '')
     .replaceAll('import.meta.url', 'buildUrl');
-  const writes = new Map();
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const run = new AsyncFunction('process', 'writeFile', 'installationProfile', 'browserInstallationProfileSource', 'buildUrl', buildSource);
   await run({ env }, async (url, contents) => writes.set(new URL(url).pathname.split('/').at(-1), contents), installationProfile, browserInstallationProfileSource, buildUrl);
@@ -352,6 +351,16 @@ test('the explicit Revolution TEST build exposes only a fixed public endpoint an
   assert.deepEqual(clone(context.M1_PROMOTIONS_TEST_CONFIG), { enabled: true, endpoint: '/api/m1-promotions', testOnly: true });
   assert.equal(Object.isFrozen(context.M1_PROMOTIONS_TEST_CONFIG), true);
   assert.doesNotMatch(publicSource, /private-test-script|synthetic-secret-not-public|synthetic-workbook-not-public/u);
+});
+
+test('TEST builds reject unsupported branch and local contexts before generating output', async () => {
+  for (const context of ['branch-deploy', 'dev', 'preview-server', 'custom-branch']) {
+    const writes = new Map();
+    await assert.rejects(installationBuild({
+      GIB_M1_INSTALLATION: 'rev', GIB_PROMOTIONS_TEST_ENABLED: 'true', CONTEXT: context
+    }, writes), /Revolution TEST build/u, context);
+    assert.equal(writes.size, 0, `${context} must not emit an enabled browser config`);
+  }
 });
 
 test('only an explicit Revolution production build emits live configuration without private integration settings', async () => {
