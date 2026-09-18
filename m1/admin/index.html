@@ -1074,6 +1074,7 @@
       <div class="removal-actions">
         <button id="removalConfirm" type="submit" class="btn warn">Confirm removal</button>
         <button id="removalCheck" type="button" class="btn" hidden>Check saved removal</button>
+        <button id="removalLeave" type="button" class="btn" hidden>Leave for record review</button>
         <button id="removalCancel" type="button" class="btn">Cancel</button>
       </div>
     </form>
@@ -1108,6 +1109,7 @@
       let savedRemoval = null;
       let removalWorking = false;
       let removalResubmitAllowed = false;
+      let removalConflictConfirmed = false;
       const removalNotice = document.createElement('div');
       removalNotice.className = 'removal-notice';
       removalNotice.setAttribute('role', 'status');
@@ -4951,6 +4953,8 @@
         }
         removalSelection = savedRemoval ? savedRemoval.record : record;
         removalResubmitAllowed = !savedRemoval;
+        removalConflictConfirmed = false;
+        $('#removalLeave').hidden = true;
         if (!validReviewRecord(removalSelection, '', { allowRevolutionRemoval: true })
           || (!removalSelection.removal.eligible && !removalSelection.removal.pending)) return;
         $('#removalDetails').replaceChildren(
@@ -5011,6 +5015,8 @@
         const requestTokenAtStart = adminRequestToken;
         removalResubmitAllowed = false;
         removalWorking = true;
+        removalConflictConfirmed = false;
+        $('#removalLeave').hidden = true;
         savedRemovalNotice();
         $('#removalReason').readOnly = true;
         ['#removalConfirm', '#removalCheck', '#removalCancel'].forEach(selector => { $(selector).disabled = true; });
@@ -5050,6 +5056,8 @@
           }
           $('#removalConfirm').hidden = true;
           $('#removalCheck').hidden = false;
+          removalConflictConfirmed = operation === 'check' && error.status === 409 && error.data?.code === 'REMOVAL_CONFLICT';
+          $('#removalLeave').hidden = !removalConflictConfirmed;
           showMessage($('#removalStatus'), error.status === 401 || error.status === 403
             ? 'Sign in again, then check this saved removal. Its result is not confirmed.'
             : 'Removal is not confirmed. Check the saved result before retrying. ' + (error.data?.code === 'REMOVAL_CONFLICT' ? 'The record or its history changed and needs review.' : ''));
@@ -5060,6 +5068,22 @@
         }
       }
 
+      async function leaveConflictedRemoval() {
+        if (removalWorking || !removalConflictConfirmed || !savedRemoval || savedRemoval.unreadable) return;
+        const record = savedRemoval.record;
+        try { removalJournal.clear(); }
+        catch { showMessage($('#removalStatus'), 'The saved request could not be closed safely.'); return; }
+        savedRemoval = null;
+        removalSelection = null;
+        removalResubmitAllowed = false;
+        removalConflictConfirmed = false;
+        $('#removalLeave').hidden = true;
+        $('#removalDialog').close();
+        removalNotice.textContent = `Removal remains unconfirmed for ${record.instructor} · ${record.date} · ${record.classLabel} and was left for record review. This action did not change attendance or saved history.`;
+        await loadReview(record.date);
+        if (!$('#searchResults').hidden) await searchInstructor();
+      }
+
       function closeRemovalForLogout() {
         $('#removalDialog').close();
         $('#removalDetails').replaceChildren();
@@ -5067,6 +5091,8 @@
         showMessage($('#removalStatus'), '');
         removalSelection = null;
         removalResubmitAllowed = false;
+        removalConflictConfirmed = false;
+        $('#removalLeave').hidden = true;
       }
 
       function signinVoidEligible(record) {
@@ -6838,6 +6864,7 @@
 
       $('#removalForm').addEventListener('submit', event => { event.preventDefault(); void runRemoval('remove'); });
       $('#removalCheck').addEventListener('click', () => { void runRemoval('check'); });
+      $('#removalLeave').addEventListener('click', () => { void leaveConflictedRemoval(); });
       $('#removalCancel').addEventListener('click', () => { if (!removalWorking) $('#removalDialog').close(); });
       $('#removalDialog').addEventListener('cancel', event => { if (removalWorking) event.preventDefault(); });
       $('#loginButton').addEventListener('click', () => login(false));

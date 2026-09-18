@@ -121,3 +121,36 @@ test('browser journal retains only the exact attendance operation and cannot sto
   journal.clear();
   assert.equal(journal.read(), null);
 });
+
+test('only a read-only confirmed conflict permits leaving a saved request without further writes', async () => {
+  const html = readFileSync(new URL('../m1/admin/index.html', import.meta.url), 'utf8');
+  const source = html.slice(html.indexOf('      async function runRemoval('), html.indexOf('      function closeRemovalForLogout('));
+  for (const [operation, status, code, mayLeave] of [
+    ['remove', 409, 'REMOVAL_CONFLICT', false], ['check', 502, 'REMOVAL_UNCONFIRMED', false],
+    ['check', 409, 'REMOVAL_CONFLICT', true]
+  ]) {
+    const controls = new Map(); let cleared = 0; const requests = []; const refreshes = [];
+    const selected = { request: requestValue, record: publicRecord, adminName: 'Stuart Turner' };
+    const context = vm.createContext({
+      removalWorking: false, REV_REMOVAL_ENABLED: true, removalSelection: publicRecord,
+      removalResubmitAllowed: true, removalConflictConfirmed: false, savedRemoval: selected,
+      adminRequestToken: 'session-proof', currentAdminName: 'Stuart Turner', API: { void: '/api/m1-admin-void' },
+      $: selector => { if (!controls.has(selector)) controls.set(selector, { hidden: true, close() {} }); return controls.get(selector); },
+      savedRemovalNotice() {}, showMessage() {}, setLoggedOut() {},
+      removalJournal: { clear() { cleared++; } }, removalNotice: { textContent: '' },
+      requestJson: async (_url, body) => { requests.push(body); throw Object.assign(new Error('Conflict'), { status, data: { code } }); },
+      loadReview: async date => { refreshes.push(date); }, searchInstructor: async () => {}
+    });
+    vm.runInContext(source, context);
+    await context.runRemoval(operation);
+    assert.equal(context.removalConflictConfirmed, mayLeave);
+    assert.equal(controls.get('#removalLeave').hidden, !mayLeave);
+    await context.leaveConflictedRemoval();
+    assert.equal(cleared, mayLeave ? 1 : 0);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].fingerprint, requestValue.fingerprint);
+    assert.equal(context.savedRemoval, mayLeave ? null : selected);
+    assert.deepEqual(refreshes, mayLeave ? [publicRecord.date] : []);
+    if (mayLeave) assert.match(context.removalNotice.textContent, /remains unconfirmed/);
+  }
+});

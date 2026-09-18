@@ -2613,7 +2613,7 @@ function revolutionRemovalFingerprint_(record, context) {
   // Hash stored cell values, including the original creation time and full
   // notes. Status and physical row position are deliberately excluded.
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
-    JSON.stringify(row.slice(0, 10)), Utilities.Charset.UTF_8)
+    JSON.stringify(row.slice(0, 10)), Utilities.Charset['UTF_8'])
     .map(function(byte) { return ('0' + ((byte + 256) % 256).toString(16)).slice(-2); }).join('');
 }
 
