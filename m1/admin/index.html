@@ -1052,11 +1052,38 @@
     </section>
   </main>
 
+  <style>
+    .removal-dialog { width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; box-sizing: border-box; padding: 24px; border: 1px solid var(--line); border-radius: 16px; color: var(--text); background: var(--panel); }
+    .removal-dialog::backdrop { background: rgb(15 35 29 / 55%); }
+    .removal-dialog h2 { margin-top: 0; }
+    .removal-dialog input { width: 100%; box-sizing: border-box; }
+    .removal-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+    .removal-actions .btn, .remove-signin { min-height: 44px; }
+    .removal-notice { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 12px; }
+    .removal-notice:empty { display: none; }
+    .remove-signin { margin-top: 12px; }
+  </style>
+  <dialog id="removalDialog" class="removal-dialog" aria-labelledby="removalTitle">
+    <form id="removalForm">
+      <h2 id="removalTitle">Remove sign-in</h2>
+      <div id="removalDetails"></div>
+      <p>This removes one sign-in from active records and keeps its original details and audit history.</p>
+      <label for="removalReason">Required short reason</label>
+      <input id="removalReason" maxlength="240" minlength="3" required autocomplete="off">
+      <div id="removalStatus" class="message" role="status" aria-live="polite"></div>
+      <div class="removal-actions">
+        <button id="removalConfirm" type="submit" class="btn warn">Confirm removal</button>
+        <button id="removalCheck" type="button" class="btn" hidden>Check saved removal</button>
+        <button id="removalCancel" type="button" class="btn">Cancel</button>
+      </div>
+    </form>
+  </dialog>
   <div id="toast" class="toast" role="status">Saved</div>
 
   <script src="../installation-profile.generated.js"></script>
   <script src="../temporary-classes-core.js"></script>
   <script src="./added-classes.js"></script>
+  <script src="./removal-journal.js"></script>
   <script>
     (() => {
       'use strict';
@@ -1070,6 +1097,21 @@
         return;
       }
       const IS_RICHMOND = INSTALLATION.installationId === 'richmond';
+      const REV_REMOVAL_ENABLED = INSTALLATION.installationId === 'rev'
+        && location.protocol === 'https:'
+        && /^(?:gib-live|deploy-preview-\d+--gib-live|[0-9a-f]{24}--gib-live)\.netlify\.app$/.test(location.hostname)
+        && !location.port;
+      const REV_REMOVAL_VERSION = 'revolution-instructor-removal-v1';
+      const removalJournal = window.M1RemovalJournal;
+      const REV_REMOVAL_ID = /^(?:gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|gib-admin-m1-\d{4}-\d{2}-\d{2}-[0-9a-f]{24})$/;
+      let removalSelection = null;
+      let savedRemoval = null;
+      let removalWorking = false;
+      let removalResubmitAllowed = false;
+      const removalNotice = document.createElement('div');
+      removalNotice.className = 'removal-notice';
+      removalNotice.setAttribute('role', 'status');
+      document.getElementById('appPanel').prepend(removalNotice);
       const IS_RICHMOND_PRODUCTION = IS_RICHMOND && INSTALLATION.environment === 'production';
       const IS_RICHMOND_PRODUCTION_ORIGIN = IS_RICHMOND_PRODUCTION
         && location.origin === 'https://gib-richmond-live.netlify.app'
@@ -1771,6 +1813,7 @@
 
       function validReviewRecord(value, expectedDate = '', options = {}) {
         const includeVoidEligibility = options.allowInstructorSigninVoid === true;
+        const includeRemoval = options.allowRevolutionRemoval === true;
         const expectedKeys = [
           'displayId',
           'recordId',
@@ -1786,7 +1829,9 @@
           'reviewMessage'
         ];
         if (includeVoidEligibility) expectedKeys.push('voidEligible');
+        if (includeRemoval) expectedKeys.push('removal');
         if (!exactObjectKeys(value, expectedKeys)) return false;
+        if (includeRemoval && !validRemovalEligibility(value)) return false;
         return validReviewDisplayId(value.displayId)
           && typeof value.recordId === 'string'
           && value.recordId.length <= 240
@@ -1887,6 +1932,7 @@
           && ['added', 'already exists', 'voided'].includes(value.result)
           && (
             value.result !== 'voided'
+            || (typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED)
             || (
               typeof IS_RICHMOND_PRODUCTION !== 'undefined'
               && IS_RICHMOND_PRODUCTION
@@ -1897,7 +1943,9 @@
             value.result === 'added'
               ? value.linkedRecordId.startsWith('gib-admin-')
               : value.result === 'voided'
-                ? RICHMOND_PRODUCTION_ROW_ID_PATTERN.test(value.linkedRecordId)
+                ? (typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED
+                  ? value.site === 'Rev' && REV_REMOVAL_ID.test(value.linkedRecordId)
+                  : RICHMOND_PRODUCTION_ROW_ID_PATTERN.test(value.linkedRecordId))
                 : true
           )
           && value.linkedRecordId.length <= 240;
@@ -1922,6 +1970,7 @@
         const displayIds = new Set();
         for (const record of value.records) {
           if (!validReviewRecord(record, expectedDate, {
+            allowRevolutionRemoval: typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED,
             allowInstructorSigninVoid:
               typeof IS_RICHMOND_PRODUCTION !== 'undefined'
               && IS_RICHMOND_PRODUCTION
@@ -2069,7 +2118,7 @@
         const selectedIds = new Set();
         for (const record of value.selectedDateRecords) {
           if (
-            !validReviewRecord(record, expectedDate)
+            !validReviewRecord(record, expectedDate, { allowRevolutionRemoval: typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED })
             || normalize(record.instructor) !== expectedInstructorKey
             || selectedIds.has(record.displayId)
           ) return false;
@@ -2078,7 +2127,7 @@
         const recentIds = new Set();
         for (const record of value.recentRecords) {
           if (
-            !validReviewRecord(record)
+            !validReviewRecord(record, '', { allowRevolutionRemoval: typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED })
             || record.date > nyDate()
             || normalize(record.instructor) !== expectedInstructorKey
             || recentIds.has(record.displayId)
@@ -3691,6 +3740,7 @@
       }
 
       function setLoggedOut(message = '') {
+        if (typeof closeRemovalForLogout === 'function') closeRemovalForLogout();
         reviewLoaded = false;
         if (addedClasses) addedClasses.setActive(false);
         clearDiagnosticRun(true);
@@ -3797,6 +3847,7 @@
         testMode = data.test === true;
         $('#loginPanel').hidden = true;
         $('#appPanel').hidden = false;
+        if (typeof restoreSavedRemoval === 'function') restoreSavedRemoval();
         clearTabletPairingReview({ clearCode: true });
         showMessage($('#tabletPairingMessage'), '');
         $('#sessionLabel').textContent = `${currentAdminName} · ${IS_RICHMOND
@@ -4831,6 +4882,193 @@
         return form.dataset.staffRequestId;
       }
 
+      function validRemovalEligibility(record) {
+        const value = record.removal;
+        return exactObjectKeys(value, ['eligible', 'fingerprint', 'explanation', 'pending'])
+          && typeof value.eligible === 'boolean'
+          && (value.eligible
+            ? value.pending === null && /^[0-9a-f]{64}$/.test(value.fingerprint) && value.explanation === ''
+              && REV_REMOVAL_ID.test(record.recordId) && record.site === 'Rev'
+              && ['Kiosk', 'Admin-added'].includes(record.source) && !record.reviewRequired
+            : typeof value.explanation === 'string' && value.explanation.length > 0 && value.explanation.length <= 240
+              && (value.pending === null ? value.fingerprint === ''
+                : exactObjectKeys(value.pending, ['requestId', 'adminName', 'reason'])
+                  && value.pending.requestId === 'gib-m1-admin-void-' + record.recordId
+                  && ['Andrew Smith', 'Stuart Turner'].includes(value.pending.adminName)
+                  && typeof value.pending.reason === 'string' && value.pending.reason.length >= 3 && value.pending.reason.length <= 240
+                  && /^[0-9a-f]{64}$/.test(value.fingerprint) && REV_REMOVAL_ID.test(record.recordId)
+                  && record.site === 'Rev' && ['Kiosk', 'Admin-added'].includes(record.source) && !record.reviewRequired));
+      }
+
+      function validSavedRemoval(value) {
+        return exactObjectKeys(value, ['request', 'record', 'adminName'])
+          && ['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
+          && validReviewRecord(value.record, '', { allowRevolutionRemoval: true })
+          && (value.record.removal.eligible || value.record.removal.pending !== null)
+          && exactObjectKeys(value.request, ['removalVersion', 'operation', 'requestId', 'rowId', 'fingerprint', 'reason'])
+          && value.request.removalVersion === REV_REMOVAL_VERSION && value.request.operation === 'remove'
+          && value.request.rowId === value.record.recordId
+          && value.request.requestId === 'gib-m1-admin-void-' + value.record.recordId
+          && value.request.fingerprint === value.record.removal.fingerprint
+          && typeof value.request.reason === 'string' && value.request.reason.length >= 3
+          && value.request.reason.length <= 240;
+      }
+
+      function savedRemovalNotice() {
+        if (!savedRemoval) return;
+        const resume = makeElement('button', 'btn small', 'Check saved removal');
+        resume.type = 'button';
+        resume.addEventListener('click', () => openRemoval(savedRemoval.record));
+        removalNotice.replaceChildren(
+          makeElement('p', '', `Removal is not confirmed for ${savedRemoval.record.instructor} · ${savedRemoval.record.date} · ${savedRemoval.record.classLabel}. Check this saved request before submitting another removal.`), resume);
+      }
+
+      function restoreSavedRemoval() {
+        if (!REV_REMOVAL_ENABLED || savedRemoval) return;
+        try {
+          const raw = removalJournal.read();
+          if (!raw) return;
+          const value = JSON.parse(raw);
+          if (!validSavedRemoval(value)) throw new Error('Invalid saved request');
+          savedRemoval = value;
+          savedRemovalNotice();
+        } catch {
+          removalNotice.textContent = 'The saved removal could not be read. Removal is unavailable until this record history is reviewed.';
+          savedRemoval = { unreadable: true };
+        }
+      }
+
+      function openRemoval(record) {
+        if (!REV_REMOVAL_ENABLED || removalWorking) return;
+        if (savedRemoval?.unreadable) { toast('The saved removal needs a record review.'); return; }
+        if (!savedRemoval && record.removal?.pending && validReviewRecord(record, '', { allowRevolutionRemoval: true })) {
+          const pending = record.removal.pending;
+          const value = { request: { removalVersion: REV_REMOVAL_VERSION, operation: 'remove',
+            requestId: pending.requestId, rowId: record.recordId, fingerprint: record.removal.fingerprint,
+            reason: pending.reason }, record, adminName: pending.adminName };
+          try { removalJournal.save(value); savedRemoval = value; savedRemovalNotice(); }
+          catch { toast('The saved removal cannot be opened safely in this browser.'); return; }
+        }
+        removalSelection = savedRemoval ? savedRemoval.record : record;
+        removalResubmitAllowed = !savedRemoval;
+        if (!validReviewRecord(removalSelection, '', { allowRevolutionRemoval: true })
+          || (!removalSelection.removal.eligible && !removalSelection.removal.pending)) return;
+        $('#removalDetails').replaceChildren(
+          makeElement('strong', '', removalSelection.instructor),
+          makeElement('p', '', `${removalSelection.date} · ${removalSelection.classLabel} · ${removalSelection.duration} hour${removalSelection.duration === 1 ? '' : 's'}`));
+        $('#removalReason').value = savedRemoval ? savedRemoval.request.reason : '';
+        $('#removalReason').readOnly = Boolean(savedRemoval);
+        $('#removalConfirm').hidden = Boolean(savedRemoval);
+        $('#removalConfirm').textContent = 'Confirm removal';
+        $('#removalCheck').hidden = !savedRemoval;
+        $('#removalCancel').textContent = savedRemoval ? 'Close' : 'Cancel';
+        showMessage($('#removalStatus'), savedRemoval ? 'Check the saved result first. This check does not change the record.' : '', 'working');
+        $('#removalDialog').showModal();
+        (savedRemoval ? $('#removalCheck') : $('#removalReason')).focus();
+      }
+
+      function validRemovalReceipt(value, pending) {
+        if (!exactObjectKeys(value, ['ok', 'test', 'removalVersion', 'requestId', 'rowId', 'fingerprint', 'state', 'record', 'audit', 'operationRecord'])
+          || value.ok !== true || value.test !== testMode
+          || value.removalVersion !== REV_REMOVAL_VERSION
+          || value.requestId !== pending.request.requestId || value.rowId !== pending.request.rowId
+          || value.fingerprint !== pending.request.fingerprint
+          || !['removed', 'pending', 'not started'].includes(value.state)
+          || !exactObjectKeys(value.record, ['timestamp', 'date', 'classLabel', 'duration', 'instructor', 'site', 'device', 'build', 'notes', 'status'])
+          || !['timestamp', 'date', 'classLabel', 'duration', 'instructor', 'site', 'notes'].every(key => value.record[key] === pending.record[key])
+          || value.record.status !== (value.state === 'removed' ? 'VOID' : 'OK')) return false;
+        if (value.state === 'not started') return value.audit === null && value.operationRecord === null;
+        if (!exactObjectKeys(value.operationRecord, ['adminName', 'reason'])
+          || !['Andrew Smith', 'Stuart Turner'].includes(value.operationRecord.adminName)
+          || typeof value.operationRecord.reason !== 'string' || value.operationRecord.reason.length < 3 || value.operationRecord.reason.length > 240) return false;
+        return value.audit === null ? value.state === 'pending'
+          : exactObjectKeys(value.audit, ['actionNumber', 'adminName', 'actionTime', 'reason'])
+            && Number.isSafeInteger(value.audit.actionNumber) && value.audit.actionNumber > 0
+            && value.audit.adminName === value.operationRecord.adminName && value.audit.reason === value.operationRecord.reason
+            && value.audit.actionTime !== '' && validReviewTimestamp(value.audit.actionTime)
+            && typeof value.audit.reason === 'string' && value.audit.reason.length >= 3 && value.audit.reason.length <= 240;
+      }
+
+      async function runRemoval(operation) {
+        if (removalWorking || !REV_REMOVAL_ENABLED || !removalSelection) return;
+        if (operation === 'remove' && savedRemoval && !removalResubmitAllowed) return;
+        if (!savedRemoval) {
+          if (operation !== 'remove') return;
+          const reason = $('#removalReason').value.normalize('NFKC').trim().replace(/\s+/g, ' ');
+          if (reason.length < 3 || reason.length > 240 || /^[=+\-@]/.test(reason) || /[\u0000-\u001f\u007f-\u009f]/.test(reason)) {
+            showMessage($('#removalStatus'), 'Enter a short reason of at least three characters.'); return;
+          }
+          const value = { request: { removalVersion: REV_REMOVAL_VERSION, operation: 'remove',
+            requestId: 'gib-m1-admin-void-' + removalSelection.recordId, rowId: removalSelection.recordId,
+            fingerprint: removalSelection.removal.fingerprint, reason }, record: removalSelection, adminName: currentAdminName };
+          try {
+            removalJournal.save(value);
+            savedRemoval = value;
+          } catch { showMessage($('#removalStatus'), 'The removal request could not be saved safely in this browser. Nothing was submitted.'); return; }
+        }
+        if (savedRemoval.unreadable) return;
+        const pending = savedRemoval;
+        const requestTokenAtStart = adminRequestToken;
+        removalResubmitAllowed = false;
+        removalWorking = true;
+        savedRemovalNotice();
+        $('#removalReason').readOnly = true;
+        ['#removalConfirm', '#removalCheck', '#removalCancel'].forEach(selector => { $(selector).disabled = true; });
+        showMessage($('#removalStatus'), operation === 'check' ? 'Checking the saved result…' : 'Removing this sign-in…', 'working');
+        try {
+          const result = await requestJson(API.void, { ...pending.request, operation }, { timeoutMs: 35000 });
+          if (adminRequestToken !== requestTokenAtStart) return;
+          if (!validRemovalReceipt(result, pending)) throw new Error('The saved removal result is incomplete.');
+          if (result.state === 'removed') {
+            removalJournal.clear();
+            savedRemoval = null;
+            $('#removalDialog').close();
+            const message = `Sign-in removed: ${pending.record.instructor} · ${pending.record.date} · ${pending.record.classLabel}. History retained in audit #${result.audit.actionNumber} by ${result.audit.adminName}.`;
+            removalNotice.textContent = message;
+            toast('Sign-in removed. History retained.');
+            const refreshed = await loadReview(pending.record.date, {
+              verifyResponse: data => !data.records.some(record => record.recordId === pending.request.rowId)
+                && data.auditHistory.some(audit => audit.actionNumber === result.audit.actionNumber && audit.linkedRecordId === pending.request.rowId && audit.result === 'voided')
+            });
+            if (!$('#searchResults').hidden) await searchInstructor();
+            if (!refreshed) removalNotice.textContent = message + ' The view could not refresh; reopen this date to load current records.';
+          } else {
+            const canFinish = !result.operationRecord || (result.operationRecord.adminName === currentAdminName && result.operationRecord.reason === pending.request.reason);
+            removalResubmitAllowed = canFinish;
+            $('#removalConfirm').hidden = !canFinish;
+            $('#removalConfirm').textContent = result.state === 'pending' ? 'Finish saved removal' : 'Retry removal';
+            $('#removalCheck').hidden = false;
+            showMessage($('#removalStatus'), result.state === 'pending'
+              ? canFinish ? 'The removal request is saved, but the sign-in is still active. Finish this same removal request.' : `The saved request belongs to ${result.operationRecord.adminName}. That Admin must finish the original request.`
+              : 'No removal has started. You can retry the same saved request.', 'working');
+          }
+        } catch (error) {
+          if (adminRequestToken !== requestTokenAtStart) return;
+          if (error.status === 401 || error.status === 403) {
+            setLoggedOut('Sign in again, then check the saved removal. Its result is not confirmed.');
+            return;
+          }
+          $('#removalConfirm').hidden = true;
+          $('#removalCheck').hidden = false;
+          showMessage($('#removalStatus'), error.status === 401 || error.status === 403
+            ? 'Sign in again, then check this saved removal. Its result is not confirmed.'
+            : 'Removal is not confirmed. Check the saved result before retrying. ' + (error.data?.code === 'REMOVAL_CONFLICT' ? 'The record or its history changed and needs review.' : ''));
+        } finally {
+          removalWorking = false;
+          ['#removalConfirm', '#removalCheck', '#removalCancel'].forEach(selector => { $(selector).disabled = false; });
+          $('#removalCancel').textContent = savedRemoval ? 'Close' : 'Cancel';
+        }
+      }
+
+      function closeRemovalForLogout() {
+        $('#removalDialog').close();
+        $('#removalDetails').replaceChildren();
+        $('#removalReason').value = '';
+        showMessage($('#removalStatus'), '');
+        removalSelection = null;
+        removalResubmitAllowed = false;
+      }
+
       function signinVoidEligible(record) {
         return IS_RICHMOND_PRODUCTION_ORIGIN
           && ADMIN_MUTATIONS_ENABLED
@@ -4888,6 +5126,23 @@
         }
         if (options.allowSigninVoid === true && signinVoidEligible(record)) {
           wrapper.append(buildSigninVoidForm(record));
+        }
+        if (typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED && record.removal) {
+          if (record.removal.eligible) {
+            const remove = makeElement('button', 'btn small remove-signin', 'Remove sign-in');
+            remove.type = 'button';
+            remove.setAttribute('aria-label', `Remove sign-in for ${record.instructor}, ${record.classLabel}`);
+            remove.addEventListener('click', () => openRemoval(record));
+            wrapper.append(remove);
+          } else {
+            wrapper.append(makeElement('div', 'record-detail', record.removal.explanation));
+            if (record.removal.pending) {
+              const resume = makeElement('button', 'btn small remove-signin', 'Check saved removal');
+              resume.type = 'button';
+              resume.addEventListener('click', () => openRemoval(record));
+              wrapper.append(resume);
+            }
+          }
         }
         if (options.allowRecordFix === true) {
           const action = makeElement('button', 'btn small record-action', 'Open this class');
@@ -5066,8 +5321,8 @@
         row.append(main);
         if (
           matches.length
-          && typeof IS_RICHMOND_PRODUCTION_ORIGIN !== 'undefined'
-          && IS_RICHMOND_PRODUCTION_ORIGIN
+          && ((typeof IS_RICHMOND_PRODUCTION_ORIGIN !== 'undefined' && IS_RICHMOND_PRODUCTION_ORIGIN)
+            || (typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED))
           && ADMIN_MUTATIONS_ENABLED
         ) {
           const recordList = makeElement('div', 'class-records');
@@ -5211,7 +5466,8 @@
           showMessage($('#reviewMessage'), `Loading Daily sign-ins for ${formatDateHeading(dateString)}…`, 'working');
         }
         try {
-          const data = await requestJson(API.review, { date: dateString });
+          const data = await requestJson(API.review, { date: dateString,
+            ...(typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED ? { removalVersion: REV_REMOVAL_VERSION } : {}) });
           if (generation !== reviewLoadGeneration) return false;
           if (
             Number.isInteger(expectedAdditionInteraction)
@@ -6430,7 +6686,8 @@
         $('#searchResults').hidden = true;
         showMessage($('#searchMessage'), 'Finding instructor sign-ins…', 'working');
         try {
-          const data = await requestJson(API.search, { instructor, date });
+          const data = await requestJson(API.search, { instructor, date,
+            ...(typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED ? { removalVersion: REV_REMOVAL_VERSION } : {}) });
           if (!validInstructorSearchResponse(data, instructor, date)) {
             throw new Error('Instructor search returned an incomplete response.');
           }
@@ -6579,6 +6836,10 @@
         }
       }
 
+      $('#removalForm').addEventListener('submit', event => { event.preventDefault(); void runRemoval('remove'); });
+      $('#removalCheck').addEventListener('click', () => { void runRemoval('check'); });
+      $('#removalCancel').addEventListener('click', () => { if (!removalWorking) $('#removalDialog').close(); });
+      $('#removalDialog').addEventListener('cancel', event => { if (removalWorking) event.preventDefault(); });
       $('#loginButton').addEventListener('click', () => login(false));
       $('#testLoginButton').addEventListener('click', () => login(true));
       $('#loginPassphrase').addEventListener('keydown', event => {
