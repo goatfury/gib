@@ -1,6 +1,7 @@
 const DISPLAY_ID_PATTERN = /^sheet-row-[1-9][0-9]*$/u;
 const AUDIT_ID_PATTERN = /^audit-row-[1-9][0-9]*$/u;
 const SIGNIN_ROW_ID_PATTERN = /^gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const REMOVABLE_ROW_ID_PATTERN = /^(?:gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|gib-admin-m1-\d{4}-\d{2}-\d{2}-[0-9a-f]{24})$/u;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/u;
 const REVIEW_NOTES_MAX_LENGTH = 800;
@@ -96,7 +97,8 @@ function normalizedEventText(value) {
 
 export function sanitizeReviewRecord(input, expectedDate = '', options = {}) {
   const includeVoidEligibility = options.allowInstructorSigninVoid === true;
-  if (!exactKeys(input, includeVoidEligibility
+  const includeRemoval = options.allowRevolutionRemoval === true;
+  if (!exactKeys(input, includeRemoval ? [...REVIEW_RECORD_KEYS, 'removal'] : includeVoidEligibility
     ? [...REVIEW_RECORD_KEYS, 'voidEligible']
     : REVIEW_RECORD_KEYS)) return null;
 
@@ -113,8 +115,24 @@ export function sanitizeReviewRecord(input, expectedDate = '', options = {}) {
     source: text(input.source, 40),
     reviewRequired: input.reviewRequired,
     reviewMessage: text(input.reviewMessage, 240, true),
-    ...(includeVoidEligibility ? { voidEligible: input.voidEligible } : {})
+    ...(includeVoidEligibility ? { voidEligible: input.voidEligible } : {}),
+    ...(includeRemoval ? { removal: input.removal } : {})
   };
+  if (includeRemoval && (!exactKeys(input.removal, ['eligible', 'fingerprint', 'explanation', 'pending'])
+    || typeof input.removal.eligible !== 'boolean'
+    || (input.removal.eligible
+      ? input.removal.pending !== null || !/^[0-9a-f]{64}$/u.test(input.removal.fingerprint) || input.removal.explanation !== ''
+        || !REMOVABLE_ROW_ID_PATTERN.test(value.recordId) || value.site !== 'Rev'
+        || !['Kiosk', 'Admin-added'].includes(value.source) || value.reviewRequired
+      : !text(input.removal.explanation, 240) || (input.removal.pending === null
+        ? input.removal.fingerprint !== ''
+        : !exactKeys(input.removal.pending, ['requestId', 'adminName', 'reason'])
+          || input.removal.pending.requestId !== 'gib-m1-admin-void-' + value.recordId
+          || !ADMIN_NAMES.has(input.removal.pending.adminName)
+          || !exactCanonicalText(input.removal.pending.reason, 240) || input.removal.pending.reason.length < 3
+          || !/^[0-9a-f]{64}$/u.test(input.removal.fingerprint)
+          || !REMOVABLE_ROW_ID_PATTERN.test(value.recordId) || value.site !== 'Rev'
+          || !['Kiosk', 'Admin-added'].includes(value.source) || value.reviewRequired)))) return null;
   if (
     !DISPLAY_ID_PATTERN.test(value.displayId || '')
     || !validDate(value.date)
@@ -205,8 +223,10 @@ export function sanitizeAuditRecord(input, expectedDate = '', options = {}) {
     || (
       value.result === 'voided'
       && (
-        options.allowInstructorSigninVoid !== true
-        || !SIGNIN_ROW_ID_PATTERN.test(value.linkedRecordId || '')
+        options.allowRevolutionRemoval === true
+          ? !REMOVABLE_ROW_ID_PATTERN.test(value.linkedRecordId || '') || value.site !== 'Rev'
+          : options.allowInstructorSigninVoid !== true
+            || !SIGNIN_ROW_ID_PATTERN.test(value.linkedRecordId || '')
       )
     )
     || Object.values(value).some(item => item == null)
@@ -259,7 +279,7 @@ export function sanitizeDailyReviewPayload(input, expectedDate, options = {}) {
   return Object.freeze({ records, warnings, auditHistory });
 }
 
-export function sanitizeInstructorSearchPayload(input, expectedInstructor, expectedDate, latestDate) {
+export function sanitizeInstructorSearchPayload(input, expectedInstructor, expectedDate, latestDate, options = {}) {
   if (!exactKeys(input, [
     'ok',
     'instructor',
@@ -270,14 +290,14 @@ export function sanitizeInstructorSearchPayload(input, expectedInstructor, expec
   if (input.ok !== true || input.instructor !== expectedInstructor || input.date !== expectedDate) return null;
   const selectedDateRecords = sanitizeUniqueArray(
     input.selectedDateRecords,
-    value => sanitizeReviewRecord(value, expectedDate),
+    value => sanitizeReviewRecord(value, expectedDate, options),
     new Set(),
     'displayId'
   );
   if (!selectedDateRecords) return null;
   const recentRecords = sanitizeUniqueArray(
     input.recentRecords,
-    value => sanitizeReviewRecord(value),
+    value => sanitizeReviewRecord(value, '', options),
     new Set(),
     'displayId'
   );

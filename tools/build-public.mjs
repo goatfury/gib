@@ -15,6 +15,7 @@ export const PUBLIC_FILES = Object.freeze([
   'm1/added-classes-kiosk.js',
   'm1/admin/added-classes.css',
   'm1/admin/added-classes.js',
+  'm1/admin/removal-journal.js',
   'm1/admin/index.html',
   'm1/assets/logo-sources.json',
   'm1/assets/revolution-bjj-logo.webp',

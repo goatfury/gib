@@ -218,6 +218,7 @@ function adReceiverV2_(e) {
       || action === 'instructorSearch'
       || action === 'addMissedInstructor'
       || action === 'voidInstructorSignin'
+      || action === 'revolutionSigninRemoval'
     ) {
       if (!adminActionAuthorized_(body)) return rejectedAuthResult_();
     }
@@ -225,6 +226,7 @@ function adReceiverV2_(e) {
     if (action === 'instructorSearch') return instructorSearchAction_(body);
     if (action === 'addMissedInstructor') return addMissedInstructorAction_(body);
     if (action === 'voidInstructorSignin') return voidInstructorSigninAction_(body);
+    if (action === 'revolutionSigninRemoval') return revolutionSigninRemovalAction_(body);
     if (
       action === 'recoveryList'
       || action === 'recoverSignins'
@@ -868,7 +870,9 @@ function readSignins_(sheet, options) {
       || record.classLabel
       || record.instructor;
   });
-  return { headers: headers, map: map, indexes: indexes, records: records };
+  var state = { headers: headers, map: map, indexes: indexes, records: records };
+  if (options.removal === true) state.rawRows = values;
+  return state;
 }
 
 function activeRecord_(record) {
@@ -1753,6 +1757,9 @@ function publicRecord_(record, options) {
         options.allRecords
       );
   }
+  if (options && options.revolutionRemoval) {
+    value.removal = revolutionRemovalEligibility_(record, options.revolutionRemoval);
+  }
   return value;
 }
 
@@ -1762,7 +1769,8 @@ function dailyReviewAction_(body) {
     return jsonResult_({ ok: false, result: 'rejected', message: 'Choose a non-future date.' });
   }
   var spreadsheet = openExpectedSpreadsheet_(body);
-  var state = readSignins_(signinsSheet_(spreadsheet), { tolerantReview: true });
+  var state = readSignins_(signinsSheet_(spreadsheet), { tolerantReview: true, removal: true });
+  var revolutionRemoval = revolutionRemovalReadContext_(body, spreadsheet, state);
   var includeRichmondVoidEligibility = richmondProductionDailyReviewVoidEligibilityContext_(
     body,
     spreadsheet
@@ -1785,10 +1793,11 @@ function dailyReviewAction_(body) {
     records.push(publicRecord_(record, {
       includeRichmondVoidEligibility: includeRichmondVoidEligibility,
       richmondWritesEnabled: richmondWritesEnabled,
+      revolutionRemoval: revolutionRemoval,
       allRecords: state.records
     }));
   });
-  var audit = readAdminAuditHistory_(spreadsheet, date);
+  var audit = readAdminAuditHistory_(spreadsheet, date, { revolutionRemoval: Boolean(revolutionRemoval) });
   warnings = warnings.concat(audit.warnings);
   return jsonResult_({
     ok: true,
@@ -1809,7 +1818,8 @@ function instructorSearchAction_(body) {
     return jsonResult_({ ok: false, result: 'rejected', message: 'Use fake TEST instructor information.' });
   }
   var spreadsheet = openExpectedSpreadsheet_(body);
-  var state = readSignins_(signinsSheet_(spreadsheet), { tolerantReview: true });
+  var state = readSignins_(signinsSheet_(spreadsheet), { tolerantReview: true, removal: true });
+  var revolutionRemoval = revolutionRemovalReadContext_(body, spreadsheet, state);
   var key = normalizeEventText_(instructor);
   var matches = state.records.filter(function(record) {
     return activeRecord_(record)
@@ -1819,10 +1829,10 @@ function instructorSearchAction_(body) {
   });
   var selectedDateRecords = matches
     .filter(function(record) { return record.date === date; })
-    .map(publicRecord_);
+    .map(function(record) { return publicRecord_(record, { revolutionRemoval: revolutionRemoval }); });
   var recentRecords = matches.slice().sort(function(a, b) {
     return cleanText_(b.timestamp).localeCompare(cleanText_(a.timestamp));
-  }).slice(0, 5).map(publicRecord_);
+  }).slice(0, 5).map(function(record) { return publicRecord_(record, { revolutionRemoval: revolutionRemoval }); });
   return jsonResult_({
     ok: true,
     instructor: instructor,
@@ -1866,7 +1876,7 @@ function adminAuditValues_(sheet) {
   return values;
 }
 
-function readAdminAuditHistory_(spreadsheet, date) {
+function readAdminAuditHistory_(spreadsheet, date, options) {
   var sheet = spreadsheet.getSheetByName(GIB_M1_AUDIT_SHEET_);
   if (!sheet) return { history: [], warnings: [] };
   try {
@@ -1881,6 +1891,7 @@ function readAdminAuditHistory_(spreadsheet, date) {
       var actionTime = canonicalAdminAuditTimestamp_(row[2]);
       var duration = Number(row[7]);
       var result = cleanText_(row[9]).toLowerCase();
+      if (result === 'voided' && revolutionRemovalEnabled_() && !(options && options.revolutionRemoval)) return;
       var auditId = 'audit-row-' + (offset + 2);
       if (
         !isFinite(actionNumber)
@@ -1903,11 +1914,13 @@ function readAdminAuditHistory_(spreadsheet, date) {
         || (
           result !== 'added'
           && result !== 'already exists'
-          && !(result === 'voided' && richmondInstructorVoidAuditContractEnabled_())
+          && !(result === 'voided' && (richmondInstructorVoidAuditContractEnabled_() || revolutionRemovalEnabled_()))
         )
         || exactText_(row[10]).length > GIB_M1_RECORD_ID_MAX_
         || (result === 'added' && exactText_(row[10]).indexOf('gib-admin-') !== 0)
-        || (result === 'voided' && !GIB_M1_PRODUCTION_ROW_ID_PATTERN_.test(exactText_(row[10])))
+        || (result === 'voided' && !(revolutionRemovalEnabled_()
+          ? revolutionRemovalId_(exactText_(row[10])) && revolutionRemovalHistoryComplete_(spreadsheet, row)
+          : GIB_M1_PRODUCTION_ROW_ID_PATTERN_.test(exactText_(row[10]))))
       ) {
         warnings.push({
           displayId: auditId,
@@ -1982,7 +1995,7 @@ function appendAdminAudit_(sheet, value, result, linkedRecordId) {
     (
       result !== 'added'
       && result !== 'already exists'
-      && !(result === 'voided' && richmondInstructorVoidAuditContractEnabled_())
+      && !(result === 'voided' && (richmondInstructorVoidAuditContractEnabled_() || revolutionRemovalEnabled_()))
     )
     || linkedId !== exactText_(linkedRecordId)
   ) {
@@ -2544,6 +2557,234 @@ function voidInstructorSigninAction_(body) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// Revolution removal is an additive, versioned contract. Richmond retains its
+// existing wrapper, request shape, eligibility and audit behavior above.
+function revolutionRemovalEnabled_() {
+  var target = configuredDeploymentTarget_();
+  return typeof GIB_M1_REVOLUTION_REMOVAL_ENABLED !== 'undefined'
+    && GIB_M1_REVOLUTION_REMOVAL_ENABLED === true
+    && (target === 'test' || target === 'production')
+    && typeof EXPECTED_SPREADSHEET_NAME !== 'undefined'
+    && EXPECTED_SPREADSHEET_NAME === (target === 'test' ? 'RBJJ M1 — TEST' : 'RBJJ M1 — PRODUCTION');
+}
+
+function revolutionRemovalEnvelope_(body) {
+  return revolutionRemovalEnabled_()
+    && body.removalVersion === 'revolution-instructor-removal-v1'
+    && body.installation === 'rev'
+    && body.environment === configuredDeploymentTarget_()
+    && body.target === configuredDeploymentTarget_();
+}
+
+function revolutionRemovalId_(id) {
+  return /^(?:gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|gib-admin-m1-\d{4}-\d{2}-\d{2}-[0-9a-f]{24})$/.test(id);
+}
+
+function revolutionRemovalAuditRows_(sheet) {
+  if (!sheet || sheet.getLastColumn() !== GIB_M1_AUDIT_HEADERS_.length) throw new Error('Audit schema conflict.');
+  var rows = adminAuditValues_(sheet).slice(1);
+  var seen = {};
+  rows.forEach(function(row) {
+    var number = Number(row[0]);
+    if (!Number.isSafeInteger(number) || number < 1 || seen[number]) throw new Error('Audit identity conflict.');
+    seen[number] = true;
+  });
+  return rows;
+}
+
+function revolutionRemovalReadContext_(body, spreadsheet, state) {
+  if (!body.removalVersion) return null;
+  if (!revolutionRemovalEnvelope_(body)) throw new Error('Removal environment conflict.');
+  var context = { state: state, auditRows: [], notes: [], valid: false };
+  try {
+    if (state.headers.length !== GIB_M1_SIGNINS_HEADERS_.length
+      || state.headers.join('|') !== GIB_M1_SIGNINS_HEADERS_.join('|')) return context;
+    context.auditRows = revolutionRemovalAuditRows_(spreadsheet.getSheetByName(GIB_M1_AUDIT_SHEET_));
+    context.notes = signinsSheet_(spreadsheet).getRange(1, state.indexes.rowId + 1, state.rawRows.length, 1).getNotes();
+    context.valid = true;
+  } catch (error) { /* Keep ordinary review available; removal fails closed. */ }
+  return context;
+}
+
+function revolutionRemovalFingerprint_(record, context) {
+  var row = context.state.rawRows[record.sheetRow - 1];
+  // Hash stored cell values, including the original creation time and full
+  // notes. Status and physical row position are deliberately excluded.
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+    JSON.stringify(row.slice(0, 10)), Utilities.Charset['UTF_8'])
+    .map(function(byte) { return ('0' + ((byte + 256) % 256).toString(16)).slice(-2); }).join('');
+}
+
+function revolutionRemovalAuditValue_(record, adminName, reason) {
+  return { adminName: adminName, reason: reason, instructor: record.instructor,
+    date: record.date, classLabel: record.classLabel, site: record.site, duration: record.duration };
+}
+
+function revolutionRemovalBase_(record, context) {
+  if (!context.valid || !record || !revolutionRemovalId_(record.rowId)
+    || context.state.records.filter(function(item) { return item.rowId === record.rowId; }).length !== 1
+    || (record.status !== 'OK' && record.status !== 'VOID')
+    || !canonicalTimestamp_(record.timestamp) || !validCalendarDate_(record.date)
+    || record.date > todayNewYork_() || record.timestamp.slice(0, 10) > todayNewYork_()
+    || reviewRecordIssue_(record) || collisionReviewRecord_(record) || manualRecord_(record)
+    || record.site !== 'Rev'
+    || safeText_(record.classLabel, 200, false) !== record.classLabel
+    || safeText_(record.instructor, 100, false) !== record.instructor
+    || safeText_(record.device, 120, false) !== record.device
+    || safeText_(record.build, 120, false) !== record.build
+    || exactText_(record.notes).length > 800 || /\u0000/.test(record.notes)
+    || (configuredDeploymentTarget_() === 'test' && !obviousTestValue_(record.instructor))) return false;
+  var raw = context.state.rawRows[record.sheetRow - 1];
+  if (!raw || raw.length !== 11 || raw[0] !== record.rowId || raw[7] !== record.device
+    || raw[8] !== record.build || raw[10] !== record.status) return false;
+  if (GIB_M1_PRODUCTION_ROW_ID_PATTERN_.test(record.rowId)) {
+    return !adminAddedRecord_(record) && record.timestamp.slice(0, 10) === record.date
+      && !/staff.*clock|manual|collision/i.test(record.device);
+  }
+  var attribution = adminAttribution_(record);
+  if (!attribution || record.device !== 'Admin Daily Review'
+    || record.rowId.slice(13, 23) !== record.date) return false;
+  var additions = context.auditRows.filter(function(row) {
+    return exactText_(row[10]) === record.rowId && cleanText_(row[9]).toLowerCase() === 'added';
+  });
+  return additions.length === 1 && sameExactAdminAudit_(additions[0],
+    revolutionRemovalAuditValue_(record, attribution.adminName, attribution.reason), 'added', record.rowId);
+}
+
+function revolutionRemovalSavedAudit_(record, context) {
+  var rows = context.auditRows.filter(function(row) {
+    return exactText_(row[10]) === record.rowId
+      && /^(?:voided|already voided)$/.test(cleanText_(row[9]).toLowerCase());
+  });
+  if (!rows.length) return null;
+  var row = rows[0];
+  if (rows.length !== 1 || GIB_M1_ADMIN_NAMES_.indexOf(exactText_(row[1])) === -1
+    || safeText_(row[8], 240, false) !== row[8] || row[8].length < 3
+    || !sameExactAdminAudit_(row, revolutionRemovalAuditValue_(record, row[1], row[8]), 'voided', record.rowId)) {
+    throw new Error('Removal audit conflict.');
+  }
+  return { actionNumber: Number(row[0]), adminName: row[1],
+    actionTime: canonicalAdminAuditTimestamp_(row[2]), reason: row[8] };
+}
+
+function revolutionRemovalEligibility_(record, context) {
+  var reason = 'This entry needs a record review before it can be removed.';
+  try {
+    if (revolutionRemovalBase_(record, context) && record.status === 'OK') {
+      var operation = revolutionRemovalOperation_(record, context);
+      var audit = revolutionRemovalSavedAudit_(record, context);
+      if (operation) return { eligible: false, fingerprint: operation.fingerprint,
+        explanation: 'A saved removal needs confirmation.',
+        pending: { requestId: operation.requestId, adminName: operation.adminName, reason: operation.reason } };
+      if (!audit) return {
+        eligible: true, fingerprint: revolutionRemovalFingerprint_(record, context), explanation: '', pending: null
+      };
+      reason = 'A removal is awaiting confirmation. Continue the original removal request.';
+    }
+  } catch (error) { /* Ambiguous history is protected. */ }
+  return { eligible: false, fingerprint: '', explanation: reason, pending: null };
+}
+
+function revolutionRemovalOperation_(record, context) {
+  var text = context.notes[record.sheetRow - 1][0];
+  if (!text) return null;
+  if (text.length > 2000) throw new Error('Existing record note is protected.');
+  var value = JSON.parse(text);
+  if (!value || Object.keys(value).sort().join('|') !== 'adminName|fingerprint|reason|removalVersion|requestId|rowId'
+    || value.removalVersion !== 'revolution-instructor-removal-v1'
+    || value.rowId !== record.rowId || value.requestId !== 'gib-m1-admin-void-' + record.rowId
+    || !/^[0-9a-f]{64}$/.test(value.fingerprint) || GIB_M1_ADMIN_NAMES_.indexOf(value.adminName) === -1
+    || typeof value.reason !== 'string' || value.reason.length < 3 || safeText_(value.reason, 240, false) !== value.reason) {
+    throw new Error('Existing record note is protected.');
+  }
+  return value;
+}
+
+function revolutionRemovalHistoryComplete_(spreadsheet, row) {
+  var state = readSignins_(signinsSheet_(spreadsheet));
+  var records = state.records.filter(function(record) { return record.rowId === exactText_(row[10]); });
+  return records.length === 1 && records[0].status === 'VOID'
+    && sameExactAdminAudit_(row, revolutionRemovalAuditValue_(records[0], row[1], row[8]), 'voided', records[0].rowId);
+}
+
+function revolutionRemovalSnapshot_(body, spreadsheet) {
+  var state = readSignins_(signinsSheet_(spreadsheet), { removal: true });
+  var context = revolutionRemovalReadContext_(body, spreadsheet, state);
+  var matches = state.records.filter(function(record) { return record.rowId === body.rowId; });
+  var record = matches.length === 1 ? matches[0] : null;
+  if (!revolutionRemovalBase_(record, context)
+    || revolutionRemovalFingerprint_(record, context) !== body.fingerprint) throw new Error('Selected record changed.');
+  var audit = revolutionRemovalSavedAudit_(record, context);
+  var operation = revolutionRemovalOperation_(record, context);
+  if (operation && operation.fingerprint !== body.fingerprint) throw new Error('Original removal target changed.');
+  if (audit && (!operation || operation.adminName !== audit.adminName || operation.reason !== audit.reason)) throw new Error('Removal operation and audit disagree.');
+  if (record.status === 'VOID' && !audit) throw new Error('Removal audit missing.');
+  return { state: state, record: record, audit: audit, operation: operation };
+}
+
+function revolutionRemovalReceipt_(body, snapshot) {
+  var record = snapshot.record;
+  return jsonResult_({ ok: true, removalVersion: body.removalVersion, requestId: body.requestId,
+    rowId: body.rowId, fingerprint: body.fingerprint,
+    state: record.status === 'VOID' ? 'removed' : snapshot.operation ? 'pending' : 'not started',
+    record: { timestamp: record.timestamp, date: record.date, classLabel: record.classLabel,
+      duration: record.duration, instructor: record.instructor, site: record.site,
+      device: record.device, build: record.build, notes: record.notes, status: record.status },
+    audit: snapshot.audit,
+    operationRecord: snapshot.operation ? { adminName: snapshot.operation.adminName, reason: snapshot.operation.reason } : null });
+}
+
+function revolutionSigninRemovalAction_(body) {
+  if (!adminActionAuthorized_(body) || !revolutionRemovalEnvelope_(body)) return rejectedAuthResult_();
+  var keys = ['action', 'adminActionToken', 'adminName', 'environment', 'fingerprint', 'installation',
+    'operation', 'reason', 'removalVersion', 'requestId', 'rowId', 'target', 'token'];
+  if (Object.keys(body).sort().join('|') !== keys.sort().join('|')
+    || !revolutionRemovalId_(body.rowId) || body.requestId !== 'gib-m1-admin-void-' + body.rowId
+    || !/^[0-9a-f]{64}$/.test(body.fingerprint)
+    || (body.operation !== 'remove' && body.operation !== 'check')
+    || GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) === -1
+    || safeText_(body.reason, 240, false) !== body.reason || body.reason.length < 3) return rejectedAuthResult_();
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return jsonResult_({ ok: false, result: 'failed', message: 'Removal not confirmed.' });
+  var writeAttempted = false;
+  try {
+    if (!adminActionAuthorized_(body) || !revolutionRemovalEnvelope_(body)) return rejectedAuthResult_();
+    var spreadsheet = openExpectedSpreadsheet_(body);
+    var snapshot = revolutionRemovalSnapshot_(body, spreadsheet);
+    if (body.operation === 'check' || snapshot.record.status === 'VOID') return revolutionRemovalReceipt_(body, snapshot);
+    if (snapshot.operation && (snapshot.operation.adminName !== body.adminName || snapshot.operation.reason !== body.reason)) {
+      throw new Error('A different removal request is pending.');
+    }
+    writeAttempted = true;
+    if (!snapshot.operation) {
+      // Store the immutable operation in a note on its RowID cell. This adds no
+      // export column and never replaces a pre-existing unrelated note.
+      var operation = { removalVersion: body.removalVersion, requestId: body.requestId,
+        rowId: body.rowId, fingerprint: body.fingerprint, adminName: body.adminName, reason: body.reason };
+      signinsSheet_(spreadsheet).getRange(snapshot.record.sheetRow, snapshot.state.indexes.rowId + 1, 1, 1).setNote(JSON.stringify(operation));
+      SpreadsheetApp.flush();
+      snapshot = revolutionRemovalSnapshot_(body, spreadsheet);
+      if (!snapshot.operation) throw new Error('Removal operation not confirmed.');
+    }
+    if (!snapshot.audit) {
+      appendAdminAudit_(spreadsheet.getSheetByName(GIB_M1_AUDIT_SHEET_),
+        revolutionRemovalAuditValue_(snapshot.record, body.adminName, body.reason), 'voided', body.rowId);
+      SpreadsheetApp.flush();
+    }
+    // Re-read after the audit write; a retry must keep the original target and
+    // first actor/reason. Never rewrite original attendance or addition fields.
+    snapshot = revolutionRemovalSnapshot_(body, spreadsheet);
+    if (!snapshot.audit) throw new Error('Removal audit not confirmed.');
+    signinsSheet_(spreadsheet).getRange(snapshot.record.sheetRow, snapshot.state.indexes.status + 1, 1, 1).setValue('VOID');
+    SpreadsheetApp.flush();
+    snapshot = revolutionRemovalSnapshot_(body, spreadsheet);
+    if (snapshot.record.status !== 'VOID' || !snapshot.audit) throw new Error('Removal not confirmed.');
+    return revolutionRemovalReceipt_(body, snapshot);
+  } catch (error) {
+    return jsonResult_({ ok: false, result: writeAttempted ? 'failed' : 'conflict', message: 'Removal not confirmed. Check the saved request.' });
+  } finally { lock.releaseLock(); }
 }
 
 function staffClockDeploymentConfiguration_() {

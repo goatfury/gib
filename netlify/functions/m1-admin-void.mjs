@@ -13,6 +13,7 @@ import {
 } from './_lib/m1-admin-contracts.mjs';
 import { deploymentInstallationProfile } from './_lib/m1-installation.mjs';
 import { validExactRichmondProductionRequest } from './_lib/m1-richmond-production-runtime.mjs';
+import { handleRevolutionRemoval } from './_lib/m1-revolution-removal.mjs';
 
 export const ADMIN_VOID_PATH = '/.netlify/functions/m1-admin-void';
 
@@ -70,6 +71,7 @@ export async function handleAdminVoid(request, dependencies = {}) {
     dependencies.environment,
     dependencies.activation
   );
+  if (profile.installationId === 'rev') return handleRevolutionRemoval(request, dependencies);
   if (!exactActiveRichmondProfile(profile)) {
     return jsonResponse(404, {
       ok: false,

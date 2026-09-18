@@ -13,6 +13,8 @@ import {
   validNonFutureDate
 } from './_lib/m1-common.mjs';
 import { sanitizeInstructorSearchPayload } from './_lib/m1-admin-contracts.mjs';
+import { deploymentInstallationProfile } from './_lib/m1-installation.mjs';
+import { removalReadEnvelope } from './_lib/m1-revolution-removal.mjs';
 
 function searchFailureResponse(google) {
   const failureClass = googleFailureClass(google);
@@ -30,11 +32,11 @@ function searchFailureResponse(google) {
   });
 }
 
-function exactSearchRequest(value) {
+function exactSearchRequest(value, removal) {
   return value
     && typeof value === 'object'
     && !Array.isArray(value)
-    && Object.keys(value).length === 2
+    && Object.keys(value).length === (removal ? 3 : 2)
     && Object.hasOwn(value, 'instructor')
     && Object.hasOwn(value, 'date')
     && typeof value.instructor === 'string'
@@ -55,7 +57,8 @@ export async function handleAdminSearch(request, dependencies = {}) {
   const auth = requireAdmin(request, config, dependencies.now || Date.now());
   if (auth.response) return auth.response;
 
-  if (!exactSearchRequest(parsed.value)) {
+  const removal = removalReadEnvelope(parsed.value, deploymentInstallationProfile(dependencies.installationId, dependencies.environment, dependencies.activation), config);
+  if (!exactSearchRequest(parsed.value, removal)) {
     return jsonResponse(400, { ok: false, message: 'Enter an instructor and choose a non-future date.' });
   }
   const instructor = safeText(parsed.value.instructor, 100);
@@ -82,7 +85,7 @@ export async function handleAdminSearch(request, dependencies = {}) {
   const google = await postGoogle(
     config,
     'instructorSearch',
-    { instructor, date },
+    { instructor, date, ...(removal || {}) },
     dependencies.fetch || fetch
   );
   const search = google.readable && google.value && google.value.ok === true
@@ -90,7 +93,8 @@ export async function handleAdminSearch(request, dependencies = {}) {
       google.value,
       instructor,
       date,
-      nyDate(dependencies.dateNow || new Date())
+      nyDate(dependencies.dateNow || new Date()),
+      { allowRevolutionRemoval: Boolean(removal) }
     )
     : null;
   if (!search) return searchFailureResponse(google);

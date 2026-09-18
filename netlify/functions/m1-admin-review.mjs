@@ -12,6 +12,8 @@ import {
   RICHMOND_INSTRUCTOR_SIGNIN_VOID_ELIGIBILITY_VERSION,
   sanitizeDailyReviewPayload
 } from './_lib/m1-admin-contracts.mjs';
+import { deploymentInstallationProfile } from './_lib/m1-installation.mjs';
+import { removalReadEnvelope } from './_lib/m1-revolution-removal.mjs';
 
 function reviewFailureResponse(google) {
   const failureClass = googleFailureClass(google);
@@ -30,11 +32,11 @@ function reviewFailureResponse(google) {
   });
 }
 
-function exactDateRequest(value) {
+function exactDateRequest(value, removal) {
   return value
     && typeof value === 'object'
     && !Array.isArray(value)
-    && Object.keys(value).length === 1
+    && Object.keys(value).length === (removal ? 2 : 1)
     && Object.hasOwn(value, 'date')
     && typeof value.date === 'string';
 }
@@ -53,7 +55,8 @@ export async function handleAdminReview(request, dependencies = {}) {
   const auth = requireAdmin(request, config, dependencies.now || Date.now());
   if (auth.response) return auth.response;
 
-  if (!exactDateRequest(parsed.value)) {
+  const removal = removalReadEnvelope(parsed.value, deploymentInstallationProfile(dependencies.installationId, dependencies.environment, dependencies.activation), config);
+  if (!exactDateRequest(parsed.value, removal)) {
     return jsonResponse(400, { ok: false, message: 'Choose today or an earlier valid date.' });
   }
   const date = parsed.value.date;
@@ -68,6 +71,7 @@ export async function handleAdminReview(request, dependencies = {}) {
     'dailyReview',
     {
       date,
+      ...(removal || {}),
       ...(allowInstructorSigninVoid ? {
         voidEligibilityVersion: RICHMOND_INSTRUCTOR_SIGNIN_VOID_ELIGIBILITY_VERSION
       } : {})
@@ -76,7 +80,7 @@ export async function handleAdminReview(request, dependencies = {}) {
   );
   const review = google.readable && google.value && google.value.ok === true
     ? sanitizeDailyReviewPayload(google.value, date, {
-      allowInstructorSigninVoid
+      allowInstructorSigninVoid, allowRevolutionRemoval: Boolean(removal)
     })
     : null;
   if (!review) return reviewFailureResponse(google);

@@ -7,6 +7,7 @@
  * persisted production target lock in Script Properties.
  */
 var GIB_M1_ALLOWED_TARGET = 'production';
+var GIB_M1_REVOLUTION_REMOVAL_ENABLED = true;
 var GIB_M1_REQUIRE_PERSISTED_TARGET_LOCK = true;
 var GIB_M1_ALLOW_RECEIVER_TOKEN_OVERRIDE = false;
 var GIB_M1_REQUIRE_EXACT_SIGNINS_SCHEMA = true;

@@ -337,7 +337,7 @@ test('wrong origin, installation, profile phase, or Netlify gate fails closed be
       installationId: 'rev',
       environment: undefined,
       activation: undefined
-    }, 404],
+    }, 403],
     ['pending Richmond profile', request(), {
       ...ACTIVE_DEPENDENCIES,
       activation: 'pending'

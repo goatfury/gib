@@ -8,6 +8,7 @@
  * override for incident recovery without changing source.
  */
 var GIB_M1_ALLOWED_TARGET = 'test';
+var GIB_M1_REVOLUTION_REMOVAL_ENABLED = true;
 var GIB_M1_TEST_SPREADSHEET_PROPERTY_ = 'GIB_M1_TEST_SPREADSHEET_ID';
 var GIB_M1_TEST_SPREADSHEET_TITLE_ = 'RBJJ M1 — TEST';
 var GIB_M1_TEST_SIGNINS_SHEET_ = 'Signins';
