@@ -58,6 +58,7 @@
         busy = false; render(); message(data ? (current()?.complete ? 'This day is saved complete centrally.' : 'Saved centrally. Unresolved items keep this day pending.') : 'Save confirmed; the updated review still needs a fresh central read.', Boolean(data));
       } catch (error) {
         busy = false;
+        console.warn('M1 TEST review save unconfirmed', error.status || 'network', error.data?.code || 'no receipt');
         if (error.status === 409) { remember(null); await load(); }
         render(error.message);
         if (error.status === 401) onUnauthorized();

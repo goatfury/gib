@@ -180,3 +180,28 @@ test('production origins and incomplete or stale backend reads never report caug
     assert.doesNotMatch(await response.text(), /pendingDays/);
   }
 });
+
+test('save returns only a confirmed receipt, with the updated view read separately', async () => {
+  const r = receiver();
+  const ledger = r.call({ action: 'managerReviewRead' });
+  const d = ledger.days.find(day => day.date === '2026-09-21');
+  const runtime = runtimeConfig(env, { admin: true, requestUrl: origin });
+  const requestToken = 'x'.repeat(43);
+  const cookie = createAdminSession('Andrew Smith', runtime.sessionSecret, +now, requestToken);
+  const headers = { 'Content-Type': 'application/json', Origin: origin, Cookie: `${ADMIN_COOKIE}=${encodeURIComponent(cookie)}`, [ADMIN_REQUEST_HEADER]: requestToken };
+  const actions = [];
+  const deps = { ...dependencies, fetch: async (url, init) => {
+    const body = JSON.parse(init.body);
+    actions.push(body.action);
+    return new Response(JSON.stringify(r.call({ ...body, token: 'synthetic' })));
+  } };
+  const saved = await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { method: 'POST', headers, body: JSON.stringify(request(d)) }), deps);
+  const receipt = await saved.json();
+  assert.equal(saved.status, 200);
+  assert.equal(receipt.receipt.saved, true);
+  assert.equal(receipt.days, undefined);
+  assert.deepEqual(actions, ['managerReviewRead', 'managerReviewSave']);
+  assert.equal(r.sheets.get('Manager Reviews').rows.length, 2);
+  const view = await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { method: 'POST', headers, body: '{"action":"read"}' }), deps);
+  assert.equal((await view.json()).days.find(day => day.date === d.date).complete, true);
+});

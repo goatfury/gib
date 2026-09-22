@@ -60,7 +60,10 @@ export async function handleManagerReview(request, dependencies = {}) {
       if (typeof input.recordId !== 'string' || typeof input.fingerprint !== 'string' || typeof input.reason !== 'string' || input.reason.trim().length < 3 || input.reason.length > 240) throw new Error('Select one TEST record and enter a reason.');
       receipt = await call('managerReviewVoid', { adminName, date: input.date, recordId: input.recordId, fingerprint: input.fingerprint, reason: input.reason });
       if (receipt.removed !== true || receipt.recordId !== input.recordId) throw new Error('The correction was not confirmed.');
-      loaded = await load();
+      // The receiver has already read back the permanent status and audit under its lock.
+      // Let the browser fetch the new view separately instead of risking a third
+      // Apps Script round trip inside one bounded hosting request.
+      return jsonResponse(200, { ok: true, test: true, receipt });
     } else if (['partial', 'complete'].includes(input.action)) {
       // A lost response can be checked using the original request, even after later changes.
       if (loaded.ledger.receipt?.requestId === input.requestId && loaded.ledger.receipt.saved === true) receipt = loaded.ledger.receipt;
@@ -72,7 +75,7 @@ export async function handleManagerReview(request, dependencies = {}) {
         catch (error) { error.status = 409; throw error; }
         receipt = await call('managerReviewSave', { date: input.date, adminName, review });
         if (receipt.saved !== true || receipt.requestId !== input.requestId || !Number.isInteger(receipt.revision)) throw new Error('The review save was not confirmed.');
-        loaded = await load();
+        return jsonResponse(200, { ok: true, test: true, receipt });
       }
     }
     const count = loaded.days.filter(day => !day.complete).length;
