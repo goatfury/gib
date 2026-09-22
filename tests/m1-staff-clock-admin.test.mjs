@@ -1462,6 +1462,7 @@ test('TEST Admin entry preserves the direct Staff Clock hash and activates only 
     calls: [],
     events: [],
     addedClasses: null,
+    managerDayReview: null,
     openWorkspaceTask() {},
     window: { requestAnimationFrame(callback) { callback(); } }
   });
@@ -1593,7 +1594,7 @@ test('repeated Arrow, Home, and End navigation keeps focus on the manager mode t
 
 test('#staff-time starts Staff Clock loading without waiting for Daily sign-ins', async () => {
   const loginSource = sourceBetween(adminHtml, 'async function login(', 'async function logout(');
-  const context = vm.createContext({ events: [], releaseDaily: null, addedClasses: null, openWorkspaceTask() {} });
+  const context = vm.createContext({ events: [], releaseDaily: null, addedClasses: null, managerDayReview: null, openWorkspaceTask() {} });
   new vm.Script(`
     const API = { login: '/login' };
     const IS_RICHMOND_PRODUCTION = false;

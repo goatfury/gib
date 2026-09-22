@@ -49,7 +49,7 @@ async function inventory(root, prefix = '') {
 function buildEnvironment(overrides = {}) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (/^(?:GIB_PROMOTIONS_|GIB_M1_INSTALLATION$|GIB_M1_ENVIRONMENT$|GIB_RICHMOND_PRODUCTION_|CONTEXT$)/u.test(key)) delete env[key];
+    if (/^(?:GIB_PROMOTIONS_|GIB_M1_MANAGER_REVIEW_|GIB_M1_INSTALLATION$|GIB_M1_ENVIRONMENT$|GIB_RICHMOND_PRODUCTION_|CONTEXT$)/u.test(key)) delete env[key];
   }
   env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${env.PATH || ''}`;
   return { ...env, ...overrides };
@@ -77,7 +77,10 @@ for (const scenario of [
     const root = await fixture(t);
     await put(root, 'm1/installation-profile.generated.js', 'stale profile');
     await put(root, 'm1/promotions-config.generated.js', 'stale config');
-    execFileSync(process.execPath, ['--run', 'build'], { cwd: root, env: buildEnvironment(scenario.env), stdio: 'pipe', timeout: 20000 });
+    // Run the two actual build stages directly: Node --run crashes in restricted Windows processes.
+    for (const stage of ['tools/build-m1-installation-profile.mjs', 'tools/build-public.mjs']) {
+      execFileSync(process.execPath, [stage], { cwd: root, env: buildEnvironment(scenario.env), stdio: 'pipe', timeout: 20000 });
+    }
     const context = await assertGeneratedCopies(root);
     assert.equal(context.M1_INSTALLATION_PROFILE.installationId, scenario.installation);
     assert.equal(context.M1_INSTALLATION_PROFILE.backend.transportTarget, scenario.target);

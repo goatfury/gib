@@ -157,6 +157,10 @@ function adReceiverV2_(e) {
     }
 
     var action = cleanText_(body.action);
+    if (action === 'managerReviewRead' || action === 'managerReviewSave' || action === 'managerReviewVoid') {
+      if (typeof managerReviewAction_ !== 'function') return rejectedAuthResult_();
+      return managerReviewAction_(body);
+    }
     var legacyKioskRequest = !action && Array.isArray(body.rows);
     if (!action && Array.isArray(body.rows)) action = 'kioskSignIn';
 
@@ -1995,7 +1999,7 @@ function appendAdminAudit_(sheet, value, result, linkedRecordId) {
     (
       result !== 'added'
       && result !== 'already exists'
-      && !(result === 'voided' && (richmondInstructorVoidAuditContractEnabled_() || revolutionRemovalEnabled_()))
+      && !(result === 'voided' && (richmondInstructorVoidAuditContractEnabled_() || revolutionRemovalEnabled_() || (typeof managerReviewEnabled_ === 'function' && managerReviewEnabled_())))
     )
     || linkedId !== exactText_(linkedRecordId)
   ) {

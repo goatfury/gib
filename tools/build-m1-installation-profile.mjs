@@ -20,6 +20,12 @@ if (!profile) {
 }
 
 const source = browserInstallationProfileSource(profile);
+const managerReviewEnabled = process.env.GIB_M1_MANAGER_REVIEW_PILOT === 'true';
+if (managerReviewEnabled && (!['deploy-preview', 'branch-deploy', 'dev'].includes(process.env.CONTEXT || '') || (profile.installationId === 'richmond' && profile.environment !== 'test'))) {
+  throw new Error('Manager day review requires an explicit TEST preview build.');
+}
+await writeFile(new URL('../m1/manager-review-config.generated.js', import.meta.url), `globalThis.M1_MANAGER_REVIEW_CONFIG = Object.freeze(${JSON.stringify({ enabled: managerReviewEnabled })});\n`);
+await writeFile(new URL('../netlify/functions/_lib/m1-manager-review.generated.mjs', import.meta.url), `export const MANAGER_REVIEW_ENABLED = ${managerReviewEnabled};\n`);
 const promotionsTestEnabled = process.env.GIB_PROMOTIONS_TEST_ENABLED === 'true';
 const promotionsLiveEnabled = process.env.GIB_PROMOTIONS_LIVE_ENABLED === 'true';
 if (promotionsTestEnabled && promotionsLiveEnabled) {

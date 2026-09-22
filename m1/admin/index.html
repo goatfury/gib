@@ -7,6 +7,7 @@
   <link rel="icon" href="data:,">
   <title>Admin — Daily Sign-in Review</title>
   <link rel="stylesheet" href="./added-classes.css">
+  <link rel="stylesheet" href="./manager-review.css">
   <style>
     :root {
       color-scheme: dark;
@@ -1085,6 +1086,8 @@
   <script src="../temporary-classes-core.js"></script>
   <script src="./added-classes.js"></script>
   <script src="./removal-journal.js"></script>
+  <script src="../manager-review-config.generated.js"></script>
+  <script src="./manager-review.js"></script>
   <script>
     (() => {
       'use strict';
@@ -1255,6 +1258,7 @@
       let scheduleRenderPending = false;
       let reviewLoaded = false;
       let addedClasses = null;
+      let managerDayReview = null;
       let currentDate = '';
       let currentRecords = [];
       let currentWarnings = [];
@@ -3742,6 +3746,7 @@
       }
 
       function setLoggedOut(message = '') {
+        if (managerDayReview) managerDayReview.clear();
         if (typeof closeRemovalForLogout === 'function') closeRemovalForLogout();
         reviewLoaded = false;
         if (addedClasses) addedClasses.setActive(false);
@@ -3896,12 +3901,13 @@
           }
           if (requestedManagerMode() === 'staff-time') {
             const staffLoad = loadStaffTime();
-            const dailyLoad = loadReview(defaultYesterday());
+            const dailyLoad = managerDayReview ? managerDayReview.open() : loadReview(defaultYesterday());
             await staffLoad;
             applyManagerMode({ focus: true });
             await dailyLoad;
           } else {
-            await loadReview(defaultYesterday());
+            if (managerDayReview) await managerDayReview.open();
+            else await loadReview(defaultYesterday());
             if (STAFF_CLOCK_ENABLED) await loadStaffTime();
           }
           openWorkspaceTask();
@@ -7103,6 +7109,7 @@
           await loadReview(date);
         }
       });
+      managerDayReview = globalThis.GIBM1ManagerReview?.create({ request: requestJson, site: SITE, openLegacy: date => loadReview(date), onUnauthorized: () => setLoggedOut('Admin login required.') });
       initialize();
     })();
   </script>
