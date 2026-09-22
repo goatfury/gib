@@ -120,6 +120,36 @@ test('wrong gym, production target and unauthenticated receiver actions are deni
   assert.equal(r.call({ action: 'managerReviewRead' }).ok, false);
 });
 
+test('ambiguous permanent IDs keep an otherwise complete day pending', () => {
+  const r = receiver();
+  r.records.push({ rowId: 'same-id', date: '2026-09-21', instructor: 'TEST One', classLabel: '9:00 AM TEST BJJ', duration: 1, status: 'OK' });
+  r.records.push({ ...r.records[0], instructor: 'TEST Two' });
+  const d = r.call({ action: 'managerReviewRead' }).days.find(d => d.date === '2026-09-21');
+  assert.equal(d.records.length, 2);
+  assert.equal(d.records.every(record => !record.correctable), true);
+  assert.equal(dayPlan(d, schedule, added, now).canComplete, false);
+});
+
+test('TEST correction binds its date and preserves a conflicting existing audit', () => {
+  const r = receiver();
+  const original = { rowId: 'test-correction', date: '2026-09-21', instructor: 'TEST One', classLabel: '9:00 AM TEST BJJ', duration: 1, status: 'OK', site: 'Rev' };
+  r.records.push(original);
+  r.context.safeText_ = value => String(value).trim();
+  r.context.exactText_ = r.context.cleanText_ = value => String(value ?? '').trim();
+  r.context.GIB_M1_AUDIT_SHEET_ = 'Admin Audit';
+  const audit = sheet([[], [1, 'Stuart Turner', '2026-09-22T15:00:00Z', 'TEST One', original.date, original.classLabel, 'Rev', 1, 'Prior reason', 'voided', original.rowId]]);
+  r.sheets.set('Admin Audit', audit);
+  r.context.adminAuditValues_ = value => value.rows;
+  r.context.sameExactAdminAudit_ = (row, value) => row[1] === value.adminName && row[8] === value.reason;
+  r.context.readSignins_ = () => ({ records: r.records, indexes: { status: 10 } });
+  r.context.appendAdminAudit_ = () => { throw new Error('Existing audit must not be changed'); };
+  const input = { action: 'managerReviewVoid', date: original.date, recordId: original.rowId, reason: 'Different reason', fingerprint: r.context.managerAttendanceHash_([original]) };
+  assert.equal(r.call({ ...input, date: '2026-09-20' }).ok, false);
+  assert.equal(r.call(input).conflict, true);
+  assert.equal(original.status, 'OK');
+  assert.equal(audit.rows.length, 2);
+});
+
 const origin = 'https://deploy-preview-999--gib-live.netlify.app';
 const env = { GIB_TEST_WEBHOOK_URL: 'https://script.google.com/macros/s/SYNTHETIC_TEST_RECEIVER/exec', GIB_TEST_WEBHOOK_TOKEN: 'synthetic-test-transport-1234567890', GIB_TEST_ADMIN_ACTION_TOKEN: 'synthetic-test-admin-1234567890abcdef' };
 const dependencies = { enabled: true, env, now: +now, context: { site: { id: 'f748e737-11e3-4fab-8e8c-bf185eab29ff', name: 'gib-live' }, deploy: { context: 'deploy-preview', published: false } }, schedule, addedStore: { getWithMetadata: async () => null } };

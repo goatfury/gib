@@ -1,7 +1,7 @@
 import { addedClassesScope } from './m1-added-classes.mjs';
 import { handleM1Schedule } from './m1-schedule.mjs';
 import { defaultAddedClassesStore, publicAddedClasses, readAddedClasses } from './_lib/m1-added-classes.mjs';
-import { jsonResponse, readJson, requireAdmin, runtimeConfig, postGoogle } from './_lib/m1-common.mjs';
+import { jsonResponse, readJson, requireAdmin, runtimeConfig, postGoogle, googleFailureClass } from './_lib/m1-common.mjs';
 import { MANAGER_REVIEW_ENABLED } from './_lib/m1-manager-review.generated.mjs';
 import { REVIEW_START, TIMEZONE, localNow, periodFor, validateRead, dayPlan, proposedReview } from './_lib/m1-manager-review.mjs';
 import temporaryClasses from '../../m1/temporary-classes-core.js';
@@ -33,6 +33,7 @@ export async function handleManagerReview(request, dependencies = {}) {
     if (!google.readable || google.value?.ok !== true) {
       const error = new Error(google.value?.conflict ? 'Attendance or another review changed. Refresh this day.' : 'Central saving or reading could not be confirmed. Retry safely; do not assume the day is complete.');
       if (google.value?.conflict) error.status = 409;
+      error.code = googleFailureClass(google);
       throw error;
     }
     return google.value;
@@ -79,7 +80,7 @@ export async function handleManagerReview(request, dependencies = {}) {
     if (request.method === 'GET') return jsonResponse(200, { ok: true, pendingDays: count, asOf: now.toISOString() });
     return jsonResponse(200, { ok: true, test: true, gym: profile.installationId, site: profile.siteCode, timezone: TIMEZONE, today, cleanupStart: REVIEW_START, period: periodFor(today), asOf: new Date().toISOString(), pendingDays: count, days: loaded.days, ...(receipt ? { receipt } : {}) });
   } catch (error) {
-    return jsonResponse(error.status || 503, { ok: false, message: error.message || 'Review unavailable. Nothing is being marked caught up.' });
+    return jsonResponse(error.status || 503, { ok: false, message: error.message || 'Review unavailable. Nothing is being marked caught up.', ...(error.code ? { code: error.code } : {}) });
   }
 }
 export default (request, context) => handleManagerReview(request, { context });

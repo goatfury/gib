@@ -43,6 +43,9 @@ function managerDay_(date, state, events) {
     if (!validCalendarDate_(r.date)) { warnings.push(unreadableDateWarning_(r)); return; }
     if (r.date !== date) return;
     if (reviewRecordIssue_(r)) { warnings.push(unreadableWarning_(r)); return; }
+    if (!r.rowId || state.records.filter(function(other) { return other.rowId === r.rowId; }).length !== 1) {
+      warnings.push({ code: 'RECORD_ID_CONFLICT', message: 'An attendance record has an ambiguous permanent ID.' });
+    }
     var value = publicRecord_(r);
     value.fingerprint = managerAttendanceHash_([r]);
     value.correctable = Boolean(r.rowId) && obviousTestValue_(r.instructor)
@@ -117,10 +120,13 @@ function managerReviewVoid_(body, spreadsheet, state) {
   var reason = safeText_(body.reason, 240, false);
   if (matches.length !== 1 || !reason || reason.length < 3 || !obviousTestValue_(matches[0].instructor)) return rejectedAuthResult_();
   var record = matches[0];
+  if (record.date !== body.date) return rejectedAuthResult_();
   var audit = spreadsheet.getSheetByName(GIB_M1_AUDIT_SHEET_);
   if (!audit || state.indexes.status < 0 || reviewRecordIssue_(record)) return rejectedAuthResult_();
   var value = { adminName: body.adminName, instructor: record.instructor, date: record.date, classLabel: record.classLabel, site: record.site, duration: record.duration, reason: reason };
-  var matching = adminAuditValues_(audit).slice(1).filter(function(row) { return sameExactAdminAudit_(row, value, 'voided', record.rowId); });
+  var linked = adminAuditValues_(audit).slice(1).filter(function(row) { return exactText_(row[10]) === record.rowId && /^(?:voided|already voided)$/.test(cleanText_(row[9]).toLowerCase()); });
+  var matching = linked.filter(function(row) { return sameExactAdminAudit_(row, value, 'voided', record.rowId); });
+  if (linked.length > 1 || linked.length !== matching.length) return jsonResult_({ ok: false, conflict: true, message: 'An existing correction must be confirmed before this record can change.' });
   if (!activeRecord_(record)) return jsonResult_({ ok: matching.length === 1, removed: matching.length === 1, recordId: record.rowId });
   if (body.fingerprint !== managerAttendanceHash_([record]) || matching.length > 1) return jsonResult_({ ok: false, conflict: true, message: 'The record changed. Refresh before correcting it.' });
   if (!matching.length) { appendAdminAudit_(audit, value, 'voided', record.rowId); SpreadsheetApp.flush(); }
@@ -128,4 +134,12 @@ function managerReviewVoid_(body, spreadsheet, state) {
   SpreadsheetApp.flush();
   var readback = readSignins_(signinsSheet_(spreadsheet)).records.filter(function(r) { return r.rowId === record.rowId; });
   return jsonResult_({ ok: readback.length === 1 && readback[0].status === 'VOID', removed: readback.length === 1 && readback[0].status === 'VOID', recordId: record.rowId });
+}
+
+function managerReviewHistoryComplete_(spreadsheet, row) {
+  if (!managerReviewEnabled_()) return false;
+  var records = readSignins_(signinsSheet_(spreadsheet)).records.filter(function(record) { return record.rowId === exactText_(row[10]); });
+  if (records.length !== 1 || records[0].status !== 'VOID' || !obviousTestValue_(records[0].instructor)) return false;
+  var r = records[0];
+  return sameExactAdminAudit_(row, { adminName: row[1], instructor: r.instructor, date: r.date, classLabel: r.classLabel, site: r.site, duration: r.duration, reason: row[8] }, 'voided', r.rowId);
 }

@@ -1918,13 +1918,15 @@ function readAdminAuditHistory_(spreadsheet, date, options) {
         || (
           result !== 'added'
           && result !== 'already exists'
-          && !(result === 'voided' && (richmondInstructorVoidAuditContractEnabled_() || revolutionRemovalEnabled_()))
+          && !(result === 'voided' && (richmondInstructorVoidAuditContractEnabled_() || revolutionRemovalEnabled_() || (typeof managerReviewEnabled_ === 'function' && managerReviewEnabled_())))
         )
         || exactText_(row[10]).length > GIB_M1_RECORD_ID_MAX_
         || (result === 'added' && exactText_(row[10]).indexOf('gib-admin-') !== 0)
-        || (result === 'voided' && !(revolutionRemovalEnabled_()
-          ? revolutionRemovalId_(exactText_(row[10])) && revolutionRemovalHistoryComplete_(spreadsheet, row)
-          : GIB_M1_PRODUCTION_ROW_ID_PATTERN_.test(exactText_(row[10]))))
+        || (result === 'voided' && !((typeof managerReviewEnabled_ === 'function' && managerReviewEnabled_())
+          ? managerReviewHistoryComplete_(spreadsheet, row)
+          : revolutionRemovalEnabled_()
+            ? revolutionRemovalId_(exactText_(row[10])) && revolutionRemovalHistoryComplete_(spreadsheet, row)
+            : GIB_M1_PRODUCTION_ROW_ID_PATTERN_.test(exactText_(row[10]))))
       ) {
         warnings.push({
           displayId: auditId,
