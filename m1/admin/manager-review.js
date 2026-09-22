@@ -40,7 +40,7 @@
       const own = ++generation;
       data = null; render('Reading central records…');
       try {
-        const result = await request(endpoint, { action: 'read' });
+        const result = await request(endpoint, { action: 'read' }, { timeoutMs: 35000, timeoutMessage: 'Central records could not be read in time. Retry the read; the day remains unconfirmed.' });
         if (!active || own !== generation) return;
         if (result?.ok !== true || result.test !== true || !Array.isArray(result.days) || !result.days.length || !Number.isInteger(result.pendingDays)) throw new Error('Incomplete central read.');
         data = result; render();
@@ -50,7 +50,7 @@
       if (busy) return;
       busy = true; remember({ url, body: requestData }); render('Saving centrally…');
       try {
-        const result = await request(url, requestData);
+        const result = await request(url, requestData, { timeoutMs: 65000, timeoutMessage: 'Central saving could not be confirmed in time. Retry / check the same save safely.' });
         if (result?.ok !== true || (url === endpoint && !result.receipt) || (url !== endpoint && !result.linkedRecordId)) throw new Error('Central saving was not confirmed.');
         remember(null); close();
         if (url === endpoint && Array.isArray(result.days)) data = result;
@@ -132,6 +132,6 @@
         d.querySelector('form').addEventListener('submit', e => { e.preventDefault(); const reason = new FormData(e.target).get('reason'); close(); void save({ action: 'void', date: selected, recordId: record.recordId, fingerprint: record.fingerprint, reason }); });
       }
     });
-    return { async open() { active = true; try { const stored = JSON.parse(sessionStorage.getItem(storageKey) || 'null'); if (stored?.url && stored?.body) pending = stored; } catch {} await load(); }, clear() { active = false; generation++; data = null; close(); root.replaceChildren(); }, refresh: load };
+    return { async open() { active = true; try { const stored = JSON.parse(sessionStorage.getItem(storageKey) || 'null'); if (stored?.url && stored?.body) { pending = stored; selected = stored.body.date || selected; } } catch {} await load(); }, clear() { active = false; generation++; data = null; close(); root.replaceChildren(); }, refresh: load };
   } });
 })();
