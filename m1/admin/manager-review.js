@@ -78,7 +78,7 @@
       d.querySelector('form').addEventListener('submit', e => {
         e.preventDefault(); const values = Object.fromEntries(new FormData(e.target));
         const requestData = { ...values, duration: Number(values.duration), date: selected, requestId: `manager-add-${crypto.randomUUID()}`, site, notes: '' };
-        close(); void save(requestData, '/api/m1-admin-add');
+        close(); void save(requestData, '/.netlify/functions/m1-admin-add');
       });
     }
     root.addEventListener('change', e => {
