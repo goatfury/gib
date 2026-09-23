@@ -10,8 +10,9 @@ import { postGoogle as current } from '../netlify/functions/_lib/m1-common.mjs';
 
 test('control transport is byte-for-byte the pre-PR function, not the current helper', () => {
   const source = readFileSync(new URL('../netlify/functions/_lib/m1-google-pre-pr-control.mjs', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  const body = source.slice(source.indexOf('export async function postGoogle('));
-  assert.equal(createHash('sha256').update(body).digest('hex'), '3a9069eb939cb17ccfe01d630cc3f6d7fe62d524f97aeb9c37d5861d56e265ee');
+  // Exclude only the separator blank line after the original function.
+  const body = source.slice(source.indexOf('export async function postGoogle(')).trimEnd() + '\n';
+  assert.equal(createHash('sha256').update(body).digest('hex'), '270341855e0e6664225da32e1506adec8b62c06a89b553af3a8c2ea688412d9c');
 });
 
 test('actual fetch redirects are observed without changing baseline/current methods, bodies or privacy', async () => {

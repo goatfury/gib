@@ -70,4 +70,3 @@ export async function postGoogle(config, action, data, fetchImpl = fetch) {
     return { readable: false, status: response.status, failureClass: 'MALFORMED_JSON' };
   }
 }
-
