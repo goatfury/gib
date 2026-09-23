@@ -181,6 +181,24 @@ test('production origins and incomplete or stale backend reads never report caug
   }
 });
 
+test('explicit transport controls stay read-only, TEST-only and preserve the aggregate contract', async () => {
+  const ledger = receiver().call({ action: 'managerReviewRead' });
+  const bodies = [];
+  const deps = { ...dependencies, fetch: async (_url, init) => { bodies.push(JSON.parse(init.body)); return Response.json(ledger); } };
+  for (const control of ['pre-pr', 'current']) {
+    const headers = { 'X-GIB-M1-Transport-Control': control };
+    const response = await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { headers }), deps);
+    const result = await response.json();
+    assert.equal(response.status, 200);
+    assert.deepEqual(Object.keys(result).sort(), ['asOf', 'ok', 'pendingDays']);
+    assert.equal((await handleManagerReview(new Request('https://gib-live.netlify.app/api/m1-manager-review', { headers }), deps)).status, 403);
+    assert.equal((await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { method: 'POST', headers }), deps)).status, 400);
+  }
+  assert.deepEqual(bodies[0], bodies[1]);
+  assert.equal(bodies[0].action, 'managerReviewRead');
+  assert.equal((await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { headers: { 'X-GIB-M1-Transport-Control': 'write' } }), deps)).status, 400);
+});
+
 test('save returns only a confirmed receipt, with the updated view read separately', async () => {
   const r = receiver();
   const ledger = r.call({ action: 'managerReviewRead' });

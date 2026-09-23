@@ -8,6 +8,7 @@ import {
   deploymentInstallationProfile,
   remoteBackendEnabled
 } from './m1-installation.mjs';
+import { traceGoogle } from './m1-google-trace.mjs';
 
 export const ADMIN_NAMES = Object.freeze(['Andrew Smith', 'Stuart Turner']);
 export const ADMIN_COOKIE = 'gib_m1_admin_session';
@@ -456,7 +457,7 @@ export async function postGoogle(config, action, data, fetchImpl = fetch) {
   for (let attempt = 1; attempt <= (readRetry ? 2 : 1); attempt++) {
     const started = Date.now();
     let finalHost = 'unavailable', redirected = false;
-    result = await postGoogleRequest(config, action, data, async (...args) => {
+    result = await traceGoogle({ target: config.target, enabled: config.testTrace, action, gym: config.installationId, attempt }, () => postGoogleRequest(config, action, data, async (...args) => {
       const response = await fetchImpl(...args);
       try {
         const host = new URL(response.url).hostname;
@@ -464,7 +465,7 @@ export async function postGoogle(config, action, data, fetchImpl = fetch) {
       } catch { /* Test responses may not have a URL. */ }
       redirected = response.redirected === true;
       return response;
-    });
+    }));
     if (config.target === 'test' && ['dailyReview', 'managerReviewRead', 'managerReviewSave', 'managerReviewVoid'].includes(action)) {
       console.info('M1_TEST_GOOGLE', JSON.stringify({
         action, gym: config.installationId === 'richmond' ? 'richmond' : 'rev', attempt,

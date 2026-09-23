@@ -68,7 +68,7 @@ export async function handleAdminReview(request, dependencies = {}) {
   const allowInstructorSigninVoid = config.installationId === 'richmond'
     && config.environment === 'production';
   const google = await postGoogle(
-    { ...config, testReadRetry: MANAGER_REVIEW_ENABLED },
+    { ...config, testReadRetry: MANAGER_REVIEW_ENABLED, testTrace: MANAGER_REVIEW_ENABLED },
     'dailyReview',
     {
       date,
