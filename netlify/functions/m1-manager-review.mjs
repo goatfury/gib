@@ -8,6 +8,7 @@ import temporaryClasses from '../../m1/temporary-classes-core.js';
 import { postGoogle as prePrPostGoogle } from './_lib/m1-google-pre-pr-control.mjs';
 import { traceGoogle } from './_lib/m1-google-trace.mjs';
 import { nativeHttpsControl } from './_lib/m1-google-native-control.mjs';
+import { PROOF_ORIGIN, loadCallbackLedger } from './_lib/m1-test-read-callback.mjs';
 
 export const config = { path: '/api/m1-manager-review', rateLimit: { windowLimit: 40, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 export async function handleManagerReview(request, dependencies = {}) {
@@ -51,8 +52,9 @@ export async function handleManagerReview(request, dependencies = {}) {
     return google.value;
   };
   const load = async () => {
+    const callbackRead = url.origin === PROOF_ORIGIN && profile.installationId === 'rev' && !transportControl && ['read', 'badge'].includes(input.action);
     const [ledger, schedule, added] = await Promise.all([
-      call('managerReviewRead', { check: ['partial', 'complete'].includes(input.action) ? input : null, adminName }),
+      callbackRead ? loadCallbackLedger(request, runtime, adminName, dependencies) : call('managerReviewRead', { check: ['partial', 'complete'].includes(input.action) ? input : null, adminName }),
       dependencies.schedule ? Promise.resolve(dependencies.schedule) : handleM1Schedule(new Request(new URL('/api/m1-schedule', url)), dependencies).then(response => response.json()),
       (async () => {
         const store = dependencies.addedStore || await defaultAddedClassesStore('test');
@@ -95,7 +97,7 @@ export async function handleManagerReview(request, dependencies = {}) {
     if (request.method === 'GET') return jsonResponse(200, { ok: true, pendingDays: count, asOf: now.toISOString() });
     return jsonResponse(200, { ok: true, test: true, gym: profile.installationId, site: profile.siteCode, timezone: TIMEZONE, today, cleanupStart: REVIEW_START, period: periodFor(today), asOf: new Date().toISOString(), pendingDays: count, days: loaded.days, ...(receipt ? { receipt } : {}) });
   } catch (error) {
-    return jsonResponse(error.status || 503, { ok: false, message: error.message || 'Review unavailable. Nothing is being marked caught up.', ...(error.code ? { code: error.code } : {}) });
+    return jsonResponse(error.status || 503, { ok: false, message: ['read', 'badge'].includes(input.action) ? 'Review status unavailable. No fresh central read was confirmed.' : error.message || 'Review unavailable. Nothing is being marked caught up.', ...(error.code ? { code: error.code } : {}) });
   }
 }
 export default (request, context) => handleManagerReview(request, { context });

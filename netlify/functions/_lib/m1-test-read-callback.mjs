@@ -1,4 +1,4 @@
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { addedClassesScope } from '../m1-added-classes.mjs';
 import { constantTimeSecretEqual, runtimeConfig } from './m1-common.mjs';
 import { MANAGER_REVIEW_ENABLED as pilotEnabled } from './m1-manager-review.generated.mjs';
@@ -38,12 +38,12 @@ export async function readEntry(store, id, part) {
   if (entry && (!entry.etag || !entry.data)) fail(503, 'Temporary central storage is incomplete.');
   return entry?.data || null;
 }
-export function makeBinding(id, now) {
-  return { schema: PROOF_SCHEMA, requestId: id, target: 'test', gym: 'rev', action: 'managerReviewRead', from: REVIEW_START, to: localNow(new Date(now)).date, createdAt: now, expiresAt: now + PROOF_TTL_MS };
+export function makeBinding(id, now, action = 'managerReviewRead') {
+  return { schema: PROOF_SCHEMA, requestId: id, target: 'test', gym: 'rev', action, from: REVIEW_START, to: localNow(new Date(now)).date, createdAt: now, expiresAt: now + PROOF_TTL_MS };
 }
 export function validateBinding(binding, now) {
   if (!exactKeys(binding, ['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt'])
-    || !validId(binding.requestId) || binding.schema !== PROOF_SCHEMA || binding.target !== 'test' || binding.gym !== 'rev' || binding.action !== 'managerReviewRead'
+    || !validId(binding.requestId) || binding.schema !== PROOF_SCHEMA || binding.target !== 'test' || binding.gym !== 'rev' || !['managerReviewRead', 'managerReviewBadgeRead'].includes(binding.action)
     || binding.from !== REVIEW_START || !Number.isSafeInteger(binding.createdAt) || binding.createdAt > now
     || binding.expiresAt !== binding.createdAt + PROOF_TTL_MS || binding.to !== localNow(new Date(binding.createdAt)).date) fail(409, 'Read request does not match the proof.');
   if (now >= binding.expiresAt || localNow(new Date(now)).date !== binding.to) fail(410, 'Read proof expired. Run a fresh read.');
@@ -111,6 +111,55 @@ export async function dispatchProof(store, pending, runtime, dependencies = {}) 
   timing.elapsedMs = Math.max(0, clock() - started);
   // No credentials, redirect URL, response body, identity or raw error is logged.
   console.info('M1_TEST_CALLBACK_DISPATCH', JSON.stringify({ requestId: pending.binding.requestId, ...timing }));
-  try { await store.set(key(pending.binding.requestId, 'dispatch'), JSON.stringify(timing), { onlyIfNew: true }); }
+  try {
+    if (clock() < pending.binding.expiresAt && await readEntry(store, pending.binding.requestId, 'pending')) await store.set(key(pending.binding.requestId, 'dispatch'), JSON.stringify(timing), { onlyIfNew: true });
+  }
   catch { console.warn('M1_TEST_CALLBACK_DISPATCH_RECEIPT_UNAVAILABLE'); }
+}
+
+// Activity-driven collection is bounded by the number of temporary requests in
+// this TEST-only store. Nothing here can address attendance or audit storage.
+export async function cleanupExpiredReads(store, now) {
+  for await (const page of store.list({ prefix: 'test/rev/', paginate: true })) {
+    const ids = [...new Set(page.blobs.map(b => /^test\/rev\/([0-9a-f-]{36})\/(?:pending|result|dispatch)$/.exec(b.key)?.[1]).filter(validId))];
+    for (let offset = 0; offset < ids.length; offset += 10) await Promise.all(ids.slice(offset, offset + 10).map(async id => {
+      const pending = await readEntry(store, id, 'pending');
+      if (pending && (!Number.isSafeInteger(pending.binding?.expiresAt) || pending.binding.expiresAt > now)) return;
+      await Promise.all(['result', 'dispatch'].map(part => store.delete(key(id, part))));
+      await store.delete(key(id, 'pending'));
+    }));
+  }
+}
+
+// Only the normal Revolution TEST initial read and public aggregate call this.
+// Saves and same-request reconciliation continue through their original path.
+export async function loadCallbackLedger(request, runtime, reviewer, dependencies = {}) {
+  const path = new URL(request.url).pathname;
+  if (path !== '/api/m1-manager-review' || !proofRuntime(request, path, dependencies)) fail(403, 'Revolution TEST read required.');
+  if (typeof dependencies.context?.waitUntil !== 'function') fail(503, 'Review status unavailable.');
+  const clock = dependencies.clock || Date.now;
+  const sleep = dependencies.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const started = clock();
+  const store = dependencies.store || await proofStore();
+  await cleanupExpiredReads(store, started);
+  const id = randomUUID();
+  const pending = { binding: makeBinding(id, clock(), reviewer ? 'managerReviewRead' : 'managerReviewBadgeRead'), ...(reviewer ? { reviewer } : {}) };
+  const saved = await store.set(key(id, 'pending'), JSON.stringify(pending), { onlyIfNew: true });
+  const confirmed = await readEntry(store, id, 'pending');
+  if (saved?.modified !== true || JSON.stringify(confirmed) !== JSON.stringify(pending)) fail(503, 'Review status unavailable.');
+  dependencies.context.waitUntil(dispatchProof(store, confirmed, runtime, dependencies));
+  // Leave headroom under the platform's 60-second synchronous limit. Delivery
+  // has its original 25-second budget and is never retried by this waiter.
+  const deadline = Math.min(started + 50_000, pending.binding.expiresAt);
+  while (clock() < deadline) {
+    const result = await readProof(store, id, clock());
+    if (result.state === 'received') {
+      validateBinding(pending.binding, clock());
+      console.info('M1_TEST_MANAGER_CALLBACK_READ', JSON.stringify({ requestId: id, purpose: pending.binding.action, elapsedMs: clock() - started, callbackMs: result.latencyMs, state: 'received' }));
+      return result.result;
+    }
+    await sleep(Math.min(1000, deadline - clock()));
+  }
+  console.warn('M1_TEST_MANAGER_CALLBACK_READ', JSON.stringify({ requestId: id, purpose: pending.binding.action, elapsedMs: clock() - started, state: 'unavailable' }));
+  fail(503, 'Review status unavailable. No fresh central read was confirmed.');
 }

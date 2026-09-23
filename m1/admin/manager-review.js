@@ -9,9 +9,9 @@
     const root = document.createElement('section');
     root.id = 'managerDayReview';
     document.getElementById('sign-ins').prepend(root);
-    const readProof = globalThis.GIBM1ReadCallbackProof?.create({ request, onUnauthorized });
     document.body.classList.add('manager-pilot');
     let data, selected = '', active = false, busy = false, generation = 0, pending = null;
+    let inFlight = null, reading = false, unavailable = false;
     let dialog;
     const storageKey = 'm1-manager-pending-v1';
     const remember = value => { pending = value; try { value ? sessionStorage.setItem(storageKey, JSON.stringify(value)) : sessionStorage.removeItem(storageKey); } catch {} };
@@ -23,8 +23,9 @@
     };
     function render(note = '') {
       if (!active) return;
+      root.setAttribute('aria-busy', String(reading));
       if (!data) {
-        root.innerHTML = '<div class="manager-summary"><h2>Manager day review · TEST</h2><p>Review status is unavailable. Days are not being marked caught up.</p><button class="btn" data-action="refresh">Retry central read</button><p class="manager-status" role="status"></p></div>';
+        root.innerHTML = `<div class="manager-summary"><h2>Manager day review · TEST</h2><p>${reading ? 'Reading central records…' : 'Review status unavailable. Days are not being marked caught up.'}</p><button class="btn" data-action="refresh" ${reading ? 'disabled' : ''}>Retry central read</button><p class="manager-status" role="status"></p></div>`;
         message(note); return;
       }
       if (!current()) selected = (data.days.find(day => !day.complete) || data.days.at(-1)).date;
@@ -34,18 +35,33 @@
       tools.className = 'manager-controls';
       tools.innerHTML = '<button class="btn" data-action="export">Download this period’s records</button><button class="btn" data-action="legacy">Existing Daily Review tools</button>';
       root.querySelector('.manager-summary').append(tools);
+      if (reading || unavailable) root.querySelector('.manager-summary strong').textContent = reading ? 'Reading central records…' : 'Review status unavailable';
       if (note) message(note);
-      if (busy || pending) root.querySelectorAll('button:not([data-action="retry"]):not([data-action="refresh"]), select').forEach(node => { node.disabled = true; });
+      if (busy || pending || unavailable) root.querySelectorAll('button:not([data-action="retry"]):not([data-action="refresh"]), select').forEach(node => { node.disabled = true; });
+      if (reading) root.querySelectorAll('button, select').forEach(node => { node.disabled = true; });
     }
-    async function load() {
-      const own = ++generation;
-      data = null; render('Reading central records…');
-      try {
-        const result = await request(endpoint, { action: 'read' }, { timeoutMs: 60000, timeoutMessage: 'Central records could not be read in time. Retry the read; the day remains unconfirmed.' });
-        if (!active || own !== generation) return;
-        if (result?.ok !== true || result.test !== true || !Array.isArray(result.days) || !result.days.length || !Number.isInteger(result.pendingDays)) throw new Error('Incomplete central read.');
-        data = result; render();
-      } catch (error) { if (own === generation) { data = null; render(error.message); } if (error.status === 401) onUnauthorized(); }
+    function load(discardPrevious = false) {
+      if (inFlight) return inFlight;
+      if (dialog?.open) { message('Finish or cancel the open edit before refreshing.'); return Promise.resolve(); }
+      const own = generation;
+      if (discardPrevious) data = null;
+      reading = true; unavailable = false; render();
+      inFlight = (async () => {
+        let note = '';
+        try {
+          const result = await request(endpoint, { action: 'read' }, { timeoutMs: 60000, timeoutMessage: 'Review status unavailable. No fresh central read was confirmed.' });
+          if (!active || own !== generation || dialog?.open) return;
+          if (result?.ok !== true || result.test !== true || !Array.isArray(result.days) || !result.days.length || !Number.isInteger(result.pendingDays) || result.pendingDays < 0) throw new Error('Incomplete central read.');
+          data = result;
+        } catch (error) {
+          if (active && own === generation) { unavailable = true; note = 'Review status unavailable. No fresh central read was confirmed.'; if (error.status === 401) onUnauthorized(); }
+        } finally {
+          inFlight = null; reading = false;
+          if (active && own === generation && !dialog?.open) render(note);
+          else if (active && own !== generation) void load();
+        }
+      })();
+      return inFlight;
     }
     async function save(requestData, url = endpoint) {
       if (busy) return;
@@ -55,12 +71,12 @@
         if (result?.ok !== true || (url === endpoint && !result.receipt) || (url !== endpoint && !result.linkedRecordId)) throw new Error('Central saving was not confirmed.');
         remember(null); close();
         if (url === endpoint && Array.isArray(result.days)) data = result;
-        else await load();
+        else await load(true);
         busy = false; render(); message(data ? (current()?.complete ? 'This day is saved complete centrally.' : 'Saved centrally. Unresolved items keep this day pending.') : 'Save confirmed; the updated review still needs a fresh central read.', Boolean(data));
       } catch (error) {
         busy = false;
         console.warn('M1 TEST review save unconfirmed', error.status || 'network', error.data?.code || 'no receipt');
-        if (error.status === 409) { remember(null); await load(); }
+        if (error.status === 409) { remember(null); await load(true); }
         render(error.message);
         if (error.status === 401) onUnauthorized();
       }
@@ -85,18 +101,18 @@
     }
     root.addEventListener('change', e => {
       if (e.target.id === 'managerDate') { selected = e.target.value; render(); return; }
-      if (!e.target.hasAttribute('data-outcome') || !current() || busy || pending) return;
+      if (!e.target.hasAttribute('data-outcome') || !current() || busy || pending || reading || unavailable) return;
       const row = current().classes[Number(e.target.dataset.outcome)];
       const decisions = current().decisions.filter(item => item.label !== row.label);
       if (e.target.value) decisions.push({ label: row.label, outcome: e.target.value });
       void save(reviewRequest('partial', decisions));
     });
     root.addEventListener('click', e => {
-      const button = e.target.closest('[data-action]'); if (!button || busy) return;
+      const button = e.target.closest('[data-action]'); if (!button || busy || reading) return;
       const action = button.dataset.action;
       if (action === 'refresh') { void load(); return; }
       if (action === 'retry') { if (pending) void save(pending.body, pending.url); return; }
-      if (!current() || pending) return;
+      if (!current() || pending || unavailable) return;
       if (action === 'legacy') {
         document.body.classList.toggle('manager-legacy-open');
         if (document.body.classList.contains('manager-legacy-open')) void openLegacy(selected);
@@ -106,7 +122,7 @@
         const period = current().period;
         void (async () => {
           await load();
-          if (!data) return;
+          if (!data || unavailable) return;
           const days = data.days.filter(day => day.date >= period.start && day.date <= period.end);
           if (days.some(day => day.warnings.length)) { message('Export unavailable: resolve the unreadable attendance rows first.'); return; }
           const rows = [['RowID', 'Timestamp', 'Date', 'Class Label', 'Duration (hr)', 'Instructor', 'Site', 'Notes', 'Status']];
@@ -133,6 +149,6 @@
         d.querySelector('form').addEventListener('submit', e => { e.preventDefault(); const reason = new FormData(e.target).get('reason'); close(); void save({ action: 'void', date: selected, recordId: record.recordId, fingerprint: record.fingerprint, reason }); });
       }
     });
-    return { async open() { active = true; readProof?.open(); try { const stored = JSON.parse(sessionStorage.getItem(storageKey) || 'null'); if (stored?.url && stored?.body) { pending = stored; selected = stored.body.date || selected; } } catch {} await load(); }, clear() { active = false; generation++; data = null; close(); readProof?.clear(); root.replaceChildren(); }, refresh: load };
+    return { async open() { active = true; try { const stored = JSON.parse(sessionStorage.getItem(storageKey) || 'null'); if (stored?.url && stored?.body) { pending = stored; selected = stored.body.date || selected; } } catch {} await load(); }, clear() { active = false; generation++; data = null; close(); root.replaceChildren(); }, refresh: load };
   } });
 })();

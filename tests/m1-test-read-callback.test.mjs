@@ -5,9 +5,10 @@ import { readFileSync } from 'node:fs';
 import { createHash, createHmac } from 'node:crypto';
 import { handleReadProof } from '../netlify/functions/m1-test-read-proof.mjs';
 import { handleReadResult } from '../netlify/functions/m1-test-read-result.mjs';
+import { handleManagerReview } from '../netlify/functions/m1-manager-review.mjs';
 import { ADMIN_COOKIE, ADMIN_REQUEST_HEADER, createAdminSession, runtimeConfig } from '../netlify/functions/_lib/m1-common.mjs';
 import { datesThrough } from '../netlify/functions/_lib/m1-manager-review.mjs';
-import { CALLBACK_URL, PROOF_ORIGIN, PROOF_PATH, SIGNATURE_HEADER, key, makeBinding, signature } from '../netlify/functions/_lib/m1-test-read-callback.mjs';
+import { CALLBACK_URL, PROOF_ORIGIN, PROOF_PATH, SIGNATURE_HEADER, cleanupExpiredReads, key, makeBinding, signature } from '../netlify/functions/_lib/m1-test-read-callback.mjs';
 
 const now = Date.parse('2026-09-23T17:30:00Z');
 const id = '00000000-0000-4000-8000-000000000001';
@@ -20,6 +21,7 @@ const payload = () => ({ binding: makeBinding(id, now), readAt: now + 100, resul
 function memory() {
   const entries = new Map();
   return { entries, async getWithMetadata(k) { const data = entries.get(k); return data ? { data: structuredClone(data), etag: 'etag' } : null; },
+    async *list() { yield { blobs: [...entries.keys()].map(key => ({ key })) }; }, async delete(k) { entries.delete(k); },
     async set(k, value, options) { assert.equal(options.onlyIfNew, true); if (entries.has(k)) return { modified: false }; entries.set(k, JSON.parse(value)); return { modified: true }; } };
 }
 function harness() {
@@ -153,21 +155,42 @@ test('failed result saving and corrupted persisted result never return success',
 
 function googleHarness() {
   let locked = false;
+  let clock = now + 100;
   const sent = [];
-  const ctx = vm.createContext({ Date: class extends Date { static now() { return now + 100; } },
+  const properties = new Map();
+  const ctx = vm.createContext({ Date: class extends Date { static now() { return clock; } },
     console: { log() {}, warn() {} }, GIB_M1_ALLOWED_TARGET: 'test', GIB_M1_MANAGER_REVIEW_TEST_ENABLED: true, EXPECTED_SPREADSHEET_NAME: 'RBJJ M1 — TEST', GIB_M1_ADMIN_NAMES_: ['Andrew Smith', 'Stuart Turner'],
     configuredDeploymentTarget_: () => 'test', requestTarget_: body => body.target, adminActionAuthorized_: body => body.token === env.GIB_TEST_WEBHOOK_TOKEN && body.adminActionToken === env.GIB_TEST_ADMIN_ACTION_TOKEN,
     todayNewYork_: () => '2026-09-23', rejectedAuthResult_: () => ({ getContent: () => '{"ok":false}' }), jsonResult_: value => ({ getContent: () => JSON.stringify(value) }),
     LockService: { getScriptLock: () => ({ tryLock: () => { locked = true; return true; }, releaseLock: () => { locked = false; } }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => properties.get(k) || null, setProperty: (k, v) => properties.set(k, v), deleteProperty: k => properties.delete(k) }) },
     openExpectedSpreadsheet_: () => ({ getName: () => 'RBJJ M1 — TEST', getSheetByName: () => null }), signinsSheet_: () => ({}), readSignins_: () => ({ records: [] }),
-    Utilities: { Charset: { UTF_8: 'utf8' }, DigestAlgorithm: { SHA_256: 'sha256' }, newBlob: text => ({ getBytes: () => [...Buffer.from(text)] }), computeDigest: (algorithm, text) => [...createHash(algorithm).update(text).digest()], computeHmacSha256Signature: (text, secret) => [...createHmac('sha256', secret).update(text).digest()] },
+    Utilities: { sleep: ms => { assert.equal(locked, false); assert.ok(ms > 0 && ms <= 61000); clock += ms; }, Charset: { UTF_8: 'utf8' }, DigestAlgorithm: { SHA_256: 'sha256' }, newBlob: text => ({ getBytes: () => [...Buffer.from(text)] }), computeDigest: (algorithm, text) => [...createHash(algorithm).update(text).digest()], computeHmacSha256Signature: (text, secret) => [...createHmac('sha256', secret).update(text).digest()] },
     UrlFetchApp: { fetch: (url, options) => { assert.equal(locked, false, 'Google read lock must be released before callback'); sent.push({ url, options }); return { getResponseCode: () => 200 }; }, getRequest: () => ({}) }
   });
   vm.runInContext(read('integrations/google-apps-script/GibM1ManagerReview.gs'), ctx);
   vm.runInContext(read('integrations/google-apps-script/GibM1TestReadCallback.gs'), ctx);
   const body = { token: env.GIB_TEST_WEBHOOK_TOKEN, adminActionToken: env.GIB_TEST_ADMIN_ACTION_TOKEN, target: 'test', gym: 'rev', action: 'managerReviewReadCallbackProof', from: '2026-09-07', to: '2026-09-23', adminName: 'Andrew Smith', binding: makeBinding(id, now) };
-  return { ctx, sent, body };
+  return { ctx, sent, body, properties, clock: () => clock };
 }
+
+test('owner-only late badge fault is one-use, bounded, preserves the binding and releases locks', () => {
+  const g = googleHarness();
+  g.ctx.testRevolutionLateBadgeCallback();
+  g.body.binding.action = 'managerReviewBadgeRead'; delete g.body.adminName;
+  g.ctx.gibM1TestReadCallback_(g.body);
+  assert.equal(g.sent.length, 1); assert.equal(g.clock(), now + 61000);
+  assert.equal(g.properties.has('M1_TEST_LATE_BADGE'), false);
+  assert.deepEqual(JSON.parse(g.sent[0].options.payload).binding, g.body.binding);
+  assert.equal(JSON.parse(g.sent[0].options.payload).readAt, now + 100);
+  assert.equal(g.sent[0].options.timeoutSeconds, 10);
+  assert.equal(JSON.parse(g.properties.get('M1_TEST_CALLBACK_FAULT_RECEIPT')).expired, true);
+  const clean = googleHarness();
+  clean.properties.set('M1_TEST_LATE_BADGE', String(now));
+  clean.body.binding.action = 'managerReviewBadgeRead'; delete clean.body.adminName;
+  clean.ctx.gibM1TestReadCallback_(clean.body);
+  assert.equal(clean.clock(), now + 100); assert.equal(clean.sent.length, 1);
+});
 
 test('real Google read releases its lock, signs one fixed destination callback, and provides no ordinary read reply', () => {
   const g = googleHarness();
@@ -178,6 +201,110 @@ test('real Google read releases its lock, signs one fixed destination callback, 
   assert.equal(url, CALLBACK_URL); assert.equal(options.followRedirects, false); assert.equal(options.timeoutSeconds, 10); assert.equal(options.validateHttpsCertificates, true);
   assert.equal(options.headers[SIGNATURE_HEADER], signature(options.payload, env.GIB_TEST_ADMIN_ACTION_TOKEN));
   const p = JSON.parse(options.payload); assert.equal(p.result.days.length, 17); assert.equal(p.result.complete, true); assert.equal(p.result.gym, 'rev');
+});
+
+test('normal badge has no reviewer identity and the public response contains only an aggregate', async () => {
+  const h = normalHarness();
+  const response = await handleManagerReview(new Request(PROOF_ORIGIN + '/api/m1-manager-review'), h.deps);
+  assert.equal(response.status, 200, await response.clone().text());
+  const result = await response.json();
+  assert.deepEqual(Object.keys(result).sort(), ['asOf', 'ok', 'pendingDays']);
+  assert.equal(result.pendingDays, 17);
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].binding.action, 'managerReviewBadgeRead');
+  assert.equal(Object.hasOwn(h.calls[0], 'adminName'), false);
+  const pending = h.store.entries.get(key(h.calls[0].binding.requestId, 'pending'));
+  assert.equal(Object.hasOwn(pending, 'reviewer'), false);
+});
+
+function normalHarness(deliver = true) {
+  const h = harness();
+  Object.assign(h.deps, { now, schedule: { current: true, timezone: 'America/New_York', days: {} }, addedStore: { getWithMetadata: async () => null }, sleep: async ms => h.clock(h.deps.clock() + ms) });
+  h.deps.fetch = async (url, init) => {
+    const body = JSON.parse(init.body); h.calls.push(body);
+    assert.ok(h.deps.store.entries.has(key(body.binding.requestId, 'pending')));
+    if (deliver) {
+      const p = { binding: body.binding, readAt: h.deps.clock(), result: ledger() };
+      assert.equal((await handleReadResult(callback(p), { ...h.deps, context: { ...context } })).status, 200);
+    }
+    return new Response(null, { status: 302 });
+  };
+  return h;
+}
+function normalAdmin(input = { action: 'read' }) {
+  const auth = admin();
+  return new Request(PROOF_ORIGIN + '/api/m1-manager-review', { method: 'POST', headers: auth.headers, body: JSON.stringify(input) });
+}
+
+test('ordinary authenticated Admin read receives the callback; unauthenticated calls never dispatch', async () => {
+  const h = normalHarness();
+  assert.equal((await handleManagerReview(new Request(PROOF_ORIGIN + '/api/m1-manager-review', { method: 'POST', body: '{"action":"read"}' }), h.deps)).status, 401);
+  assert.equal(h.calls.length, 0);
+  const response = await handleManagerReview(normalAdmin(), h.deps);
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal((await response.json()).days.length, 17);
+  assert.equal(h.calls[0].adminName, 'Andrew Smith');
+  assert.equal(h.calls[0].binding.action, 'managerReviewRead');
+});
+
+test('missing normal callback makes one attempt and fails visibly; an expired response is rejected and a fresh read recovers', async () => {
+  const h = normalHarness(false);
+  const response = await handleManagerReview(new Request(PROOF_ORIGIN + '/api/m1-manager-review'), h.deps);
+  assert.equal(response.status, 503);
+  const result = await response.json();
+  assert.match(result.message, /Review status unavailable/);
+  assert.equal(result.pendingDays, undefined); assert.equal(h.calls.length, 1);
+  const binding = h.calls[0].binding;
+  h.clock(binding.expiresAt);
+  assert.equal((await handleReadResult(callback({ binding, readAt: binding.createdAt + 100, result: ledger() }), h.deps)).status, 410);
+  const recovered = normalHarness();
+  recovered.deps.store = h.store;
+  recovered.clock(binding.expiresAt + 1);
+  assert.equal((await handleManagerReview(normalAdmin(), recovered.deps)).status, 200);
+  assert.equal(h.store.entries.has(key(binding.requestId, 'pending')), false);
+});
+
+test('temporary collection removes expired and orphaned results while preserving live requests', async () => {
+  const store = memory();
+  store.entries.set(key(id, 'pending'), { binding: makeBinding(id, now - 60000) });
+  store.entries.set(key(id, 'result'), { old: true }); store.entries.set(key(id, 'dispatch'), { old: true });
+  const live = '00000000-0000-4000-8000-000000000002';
+  store.entries.set(key(live, 'pending'), { binding: makeBinding(live, now) });
+  store.entries.set(key(live, 'result'), { keep: true });
+  store.entries.set(key('00000000-0000-4000-8000-000000000003', 'result'), { orphan: true });
+  await cleanupExpiredReads(store, now);
+  assert.deepEqual([...store.entries.keys()], [key(live, 'pending'), key(live, 'result')]);
+});
+
+test('same-request save recovery and correction pre-validation stay on their original transport', async () => {
+  for (const action of ['partial', 'complete', 'void']) {
+    const h = normalHarness();
+    h.deps.store = { list() { throw new Error('A save must never dispatch a check:null callback'); } };
+    const input = { action, requestId: 'manager-1234567890123456', date: '2026-09-22', recordId: 'original', fingerprint: 'a'.repeat(64), reason: 'TEST reason' };
+    const calls = [];
+    h.deps.fetch = async (url, init) => {
+      const body = JSON.parse(init.body); calls.push(body);
+      if (body.action === 'managerReviewRead') return Response.json({ ...ledger(), ...(action !== 'void' ? { receipt: { saved: true, requestId: input.requestId, revision: 1 } } : {}) });
+      assert.equal(body.action, 'managerReviewVoid');
+      return Response.json({ ok: true, removed: true, recordId: input.recordId });
+    };
+    const response = await handleManagerReview(normalAdmin(input), h.deps);
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(calls[0].action, 'managerReviewRead');
+    assert.deepEqual(calls[0].check, action === 'void' ? null : input);
+    assert.equal(calls.length, action === 'void' ? 2 : 1);
+  }
+});
+
+test('Google badge callback rejects invented reviewer identities and uses the existing read with check:null', () => {
+  const g = googleHarness();
+  g.body.binding.action = 'managerReviewBadgeRead';
+  g.ctx.gibM1TestReadCallback_(g.body); assert.equal(g.sent.length, 0);
+  delete g.body.adminName;
+  const original = g.ctx.managerReviewAction_;
+  g.ctx.managerReviewAction_ = body => { assert.equal(body.adminName, undefined); assert.equal(body.check, null); return original(body); };
+  g.ctx.gibM1TestReadCallback_(g.body); assert.equal(g.sent.length, 1);
+  assert.equal(JSON.parse(g.sent[0].options.payload).binding.action, 'managerReviewBadgeRead');
 });
 
 test('Google proof refuses other actions, installations, expired bindings, bad auth, incomplete reads and never writes', () => {
