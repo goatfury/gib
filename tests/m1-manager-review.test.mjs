@@ -184,8 +184,9 @@ test('production origins and incomplete or stale backend reads never report caug
 test('explicit transport controls stay read-only, TEST-only and preserve the aggregate contract', async () => {
   const ledger = receiver().call({ action: 'managerReviewRead' });
   const bodies = [];
-  const deps = { ...dependencies, fetch: async (_url, init) => { bodies.push(JSON.parse(init.body)); return Response.json(ledger); } };
-  for (const control of ['pre-pr', 'current']) {
+  const fetch = async (_url, init) => { bodies.push(JSON.parse(init.body)); return Response.json(ledger); };
+  const deps = { ...dependencies, fetch, nativeHttps: fetch };
+  for (const control of ['pre-pr', 'current', 'native-https']) {
     const headers = { 'X-GIB-M1-Transport-Control': control };
     const response = await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { headers }), deps);
     const result = await response.json();
@@ -195,8 +196,18 @@ test('explicit transport controls stay read-only, TEST-only and preserve the agg
     assert.equal((await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { method: 'POST', headers }), deps)).status, 400);
   }
   assert.deepEqual(bodies[0], bodies[1]);
+  assert.deepEqual(bodies[0], bodies[2]);
   assert.equal(bodies[0].action, 'managerReviewRead');
   assert.equal((await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { headers: { 'X-GIB-M1-Transport-Control': 'write' } }), deps)).status, 400);
+});
+
+test('runtime verification reports the actual process without calling Google or exposing configuration', async () => {
+  const deps = { ...dependencies, context: { ...dependencies.context, deploy: { ...dependencies.context.deploy, id: 'test-deploy' } }, fetch: () => { throw new Error('Must not call Google'); } };
+  const headers = { 'X-GIB-M1-Transport-Control': 'runtime' };
+  const response = await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { headers }), deps);
+  assert.deepEqual(await response.json(), { ok: true, experiment: 'https-pairs-v1', gym: 'rev', target: 'test', node: process.versions.node, undici: process.versions.undici || 'unknown', deploy: 'test-deploy' });
+  assert.equal((await handleManagerReview(new Request('https://gib-live.netlify.app/api/m1-manager-review', { headers }), deps)).status, 403);
+  assert.equal((await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { method: 'POST', headers }), deps)).status, 400);
 });
 
 test('save returns only a confirmed receipt, with the updated view read separately', async () => {

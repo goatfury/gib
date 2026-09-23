@@ -7,6 +7,7 @@ import { REVIEW_START, TIMEZONE, localNow, periodFor, validateRead, dayPlan, pro
 import temporaryClasses from '../../m1/temporary-classes-core.js';
 import { postGoogle as prePrPostGoogle } from './_lib/m1-google-pre-pr-control.mjs';
 import { traceGoogle } from './_lib/m1-google-trace.mjs';
+import { nativeHttpsControl } from './_lib/m1-google-native-control.mjs';
 
 export const config = { path: '/api/m1-manager-review', rateLimit: { windowLimit: 40, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 export async function handleManagerReview(request, dependencies = {}) {
@@ -23,7 +24,9 @@ export async function handleManagerReview(request, dependencies = {}) {
   // Explicit diagnostic controls use the same public aggregate read, receiver,
   // payload and validation. They cannot select a write or return private data.
   const transportControl = request.headers.get('X-GIB-M1-Transport-Control');
-  if (transportControl && (request.method !== 'GET' || !['pre-pr', 'current'].includes(transportControl))) return jsonResponse(400, { ok: false, message: 'Read-only TEST control required.' });
+  if (transportControl && (request.method !== 'GET' || !['pre-pr', 'current', 'native-https', 'runtime'].includes(transportControl))) return jsonResponse(400, { ok: false, message: 'Read-only TEST control required.' });
+  if (['native-https', 'runtime'].includes(transportControl) && profile.installationId !== 'rev') return jsonResponse(403, { ok: false, message: 'Revolution TEST experiment only.' });
+  if (transportControl === 'runtime') return jsonResponse(200, { ok: true, experiment: 'https-pairs-v1', gym: 'rev', target: 'test', node: process.versions.node, undici: process.versions.undici || 'unknown', deploy: dependencies.context?.deploy?.id || process.env.DEPLOY_ID || null });
   let input = { action: 'badge' }, adminName;
   if (request.method === 'POST') {
     const auth = requireAdmin(request, runtime, +now);
@@ -36,8 +39,8 @@ export async function handleManagerReview(request, dependencies = {}) {
   }
   const call = async (action, data) => {
     const wireData = { ...envelope, ...data };
-    const google = transportControl === 'pre-pr'
-      ? await traceGoogle({ target: runtime.target, enabled: true, action, gym: profile.installationId, variant: 'pre-pr' }, () => prePrPostGoogle(runtime, action, wireData, dependencies.fetch || fetch))
+    const google = ['pre-pr', 'native-https'].includes(transportControl)
+      ? await traceGoogle({ target: runtime.target, enabled: true, action, gym: profile.installationId, variant: transportControl }, () => prePrPostGoogle(runtime, action, wireData, transportControl === 'native-https' ? dependencies.nativeHttps || nativeHttpsControl : dependencies.fetch || fetch))
       : await postGoogle({ ...runtime, testTrace: true, testReadRetry: !transportControl && ['badge', 'read'].includes(input.action) }, action, wireData, dependencies.fetch || fetch);
     if (!google.readable || google.value?.ok !== true) {
       const error = new Error(google.value?.conflict ? 'Attendance or another review changed. Refresh this day.' : 'Central saving or reading could not be confirmed. Retry safely; do not assume the day is complete.');

@@ -35,11 +35,28 @@ for (const [name, event] of [['headers', 'headers'], ['trailers', 'complete'], [
 }
 export async function traceGoogle(meta, run) {
   if (meta.target !== 'test' || meta.enabled !== true || !actions.has(meta.action)) return run();
-  const context = { id: randomBytes(8).toString('hex'), variant: meta.variant === 'pre-pr' ? 'pre-pr' : 'current', action: meta.action, gym: meta.gym === 'richmond' ? 'richmond' : 'rev', attempt: Number.isInteger(meta.attempt) ? meta.attempt : 1, hops: 0 };
+  const context = { id: randomBytes(8).toString('hex'), variant: ['pre-pr', 'native-https'].includes(meta.variant) ? meta.variant : 'current', action: meta.action, gym: meta.gym === 'richmond' ? 'richmond' : 'rev', attempt: Number.isInteger(meta.attempt) ? meta.attempt : 1, hops: 0 };
   return scope.run(context, async () => {
     const started = Date.now();
     emit(context, 'start', { node: process.versions.node, undici: process.versions.undici || 'unknown' });
     try { return await run(); }
     finally { emit(context, 'end', { hops: context.hops, elapsedMs: Date.now() - started }); }
   });
+}
+
+// Native HTTPS supplies the same minimal events; no URL, header or body is read.
+export function traceNativeHop(method, hostname) {
+  const context = scope.getStore();
+  if (!context || context.variant !== 'native-https') return () => {};
+  const hop = ++context.hops, started = Date.now();
+  const safe = { hop, method: ['POST', 'GET', 'HEAD'].includes(method) ? method : 'other', host: hosts.has(hostname) ? hostname : 'other' };
+  emit(context, 'request', { ...safe, elapsedMs: 0 });
+  let status = 0, ended = false;
+  return (event, value) => {
+    if (ended || !['headers', 'complete', 'error'].includes(event)) return;
+    if (event === 'headers' && Number.isInteger(value)) status = value;
+    const code = event === 'error' ? ['TimeoutError', 'AbortError'].includes(value?.name) ? value.name : errors.has(value?.code) ? value.code : 'OTHER' : '';
+    emit(context, event, { ...safe, status, elapsedMs: Date.now() - started, ...(code ? { code } : {}) });
+    if (event !== 'headers') ended = true;
+  };
 }
