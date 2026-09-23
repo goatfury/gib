@@ -447,7 +447,29 @@ export function validNonFutureDate(value, now = new Date()) {
     && text <= nyDate(now);
 }
 
+// TEST diagnostics deliberately exclude URLs, bodies, identities and error messages.
+// Both review paths use this boundary so their upstream timings can be compared.
 export async function postGoogle(config, action, data, fetchImpl = fetch) {
+  const started = Date.now();
+  const result = await postGoogleRequest(config, action, data, fetchImpl);
+  if (config.target === 'test' && ['dailyReview', 'managerReviewRead', 'managerReviewSave', 'managerReviewVoid'].includes(action)) {
+    console.info('M1_TEST_GOOGLE', JSON.stringify({
+      action, gym: config.installationId === 'richmond' ? 'richmond' : 'rev',
+      elapsedMs: Date.now() - started, status: result.status,
+      result: result.readable && result.value?.ok === true ? 'OK' : googleFailureClass(result),
+      ...(result.transportCode ? { transportCode: result.transportCode } : {})
+    }));
+  }
+  return result;
+}
+
+function safeTransportCode(error) {
+  const allowed = ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET'];
+  if (['TimeoutError', 'AbortError'].includes(error?.name)) return error.name;
+  return allowed.includes(error?.cause?.code) ? error.cause.code : 'OTHER';
+}
+
+async function postGoogleRequest(config, action, data, fetchImpl = fetch) {
   let response;
   try {
     const body = {
@@ -476,8 +498,8 @@ export async function postGoogle(config, action, data, fetchImpl = fetch) {
       redirect: 'follow',
       signal: AbortSignal.timeout(25_000)
     });
-  } catch {
-    return { readable: false, status: 0, failureClass: 'UNREACHABLE' };
+  } catch (error) {
+    return { readable: false, status: 0, failureClass: 'UNREACHABLE', transportCode: safeTransportCode(error) };
   }
 
   const declaredLength = response.headers.get('content-length');
