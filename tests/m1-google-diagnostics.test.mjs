@@ -52,3 +52,37 @@ test('bounded pilot retry is restricted to unreadable pure TEST reads', async ()
   assert.equal(failed.readable, false);
   assert.equal(failed.failureClass, 'HTML');
 });
+
+test('native repair is limited to opted-in Revolution TEST reads and never retries a failure', async () => {
+  const config = { target: 'test', installationId: 'rev', testNativeHttps: true, testReadRetry: true, webhookUrl: 'https://script.google.com/synthetic' };
+  for (const action of ['dailyReview', 'managerReviewRead']) {
+    let calls = 0;
+    const result = await postGoogle(config, action, {}, () => { throw new Error('fetch must not run'); }, async (_url, init) => {
+      calls++;
+      assert.equal(JSON.parse(init.body).action, action);
+      assert.equal(init.redirect, 'follow');
+      assert.ok(init.signal instanceof AbortSignal);
+      throw new Error('Synthetic failure');
+    });
+    assert.equal(calls, 1);
+    assert.equal(result.readable, false);
+    assert.equal(result.failureClass, 'UNREACHABLE');
+  }
+  for (const [overrides, action] of [
+    [{ target: 'production' }, 'dailyReview'], [{ installationId: 'richmond' }, 'managerReviewRead'],
+    [{ testNativeHttps: false }, 'dailyReview'], [{ installationId: undefined }, 'dailyReview'],
+    [{}, 'managerReviewSave'], [{}, 'managerReviewVoid'], [{}, 'adminAdd'], [{}, 'kioskSync']
+  ]) {
+    let fetchCalls = 0, nativeCalls = 0;
+    const result = await postGoogle({ ...config, ...overrides }, action, {}, async () => { fetchCalls++; return Response.json({ ok: true }); }, async () => { nativeCalls++; return Response.json({ ok: true }); });
+    assert.equal(result.value.ok, true);
+    assert.equal(fetchCalls, 1);
+    assert.equal(nativeCalls, 0);
+  }
+  for (const body of ['<html>Unavailable</html>', '[]', '{"ok":false}', '{']) {
+    let calls = 0;
+    const result = await postGoogle(config, 'dailyReview', {}, () => { throw new Error('fetch must not run'); }, async () => { calls++; return new Response(body); });
+    assert.equal(calls, 1);
+    assert.notEqual(result.value?.ok, true);
+  }
+});

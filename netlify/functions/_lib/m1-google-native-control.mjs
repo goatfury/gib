@@ -3,9 +3,9 @@ import { Readable } from 'node:stream';
 import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
 import { traceNativeHop } from './m1-google-trace.mjs';
 
-// Experimental fetch-compatible adapter. The unchanged pre-PR function creates
-// the exact credentials/body and a single 25-second signal for the whole chain.
-// No retries, URL reuse, credential storage, or change to normal application calls.
+// Fetch-compatible adapter, enabled only for opted-in Revolution TEST reads.
+// The caller retains its exact body and single 25-second signal for the chain.
+// No retries, URL reuse or credential storage.
 export function createNativeHttpsControl(requestImpl = httpsRequest) {
   return async (input, init) => {
     const initial = new URL(input);

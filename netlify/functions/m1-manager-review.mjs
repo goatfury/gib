@@ -41,7 +41,7 @@ export async function handleManagerReview(request, dependencies = {}) {
     const wireData = { ...envelope, ...data };
     const google = ['pre-pr', 'native-https'].includes(transportControl)
       ? await traceGoogle({ target: runtime.target, enabled: true, action, gym: profile.installationId, variant: transportControl }, () => prePrPostGoogle(runtime, action, wireData, transportControl === 'native-https' ? dependencies.nativeHttps || nativeHttpsControl : dependencies.fetch || fetch))
-      : await postGoogle({ ...runtime, testTrace: true, testReadRetry: !transportControl && ['badge', 'read'].includes(input.action) }, action, wireData, dependencies.fetch || fetch);
+      : await postGoogle({ ...runtime, installationId: profile.installationId, testTrace: true, testNativeHttps: !transportControl, testReadRetry: !transportControl && ['badge', 'read'].includes(input.action) }, action, wireData, dependencies.fetch || fetch, dependencies.nativeHttps || dependencies.fetch || nativeHttpsControl);
     if (!google.readable || google.value?.ok !== true) {
       const error = new Error(google.value?.conflict ? 'Attendance or another review changed. Refresh this day.' : 'Central saving or reading could not be confirmed. Retry safely; do not assume the day is complete.');
       if (google.value?.conflict) error.status = 409;

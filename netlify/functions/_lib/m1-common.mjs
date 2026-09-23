@@ -9,6 +9,7 @@ import {
   remoteBackendEnabled
 } from './m1-installation.mjs';
 import { traceGoogle } from './m1-google-trace.mjs';
+import { nativeHttpsControl } from './m1-google-native-control.mjs';
 
 export const ADMIN_NAMES = Object.freeze(['Andrew Smith', 'Stuart Turner']);
 export const ADMIN_COOKIE = 'gib_m1_admin_session';
@@ -450,15 +451,20 @@ export function validNonFutureDate(value, now = new Date()) {
 
 // TEST diagnostics deliberately exclude URLs, bodies, identities and error messages.
 // Both review paths use this boundary so their upstream timings can be compared.
-export async function postGoogle(config, action, data, fetchImpl = fetch) {
-  const readRetry = config.target === 'test' && config.testReadRetry === true
+export async function postGoogle(config, action, data, fetchImpl = fetch, nativeHttpsImpl = nativeHttpsControl) {
+  // The paired deployed experiment supports this exact TEST read boundary only.
+  // Keep writes, Richmond and production on their existing transport.
+  const nativeRead = config.target === 'test' && config.installationId === 'rev'
+    && config.testNativeHttps === true && ['dailyReview', 'managerReviewRead'].includes(action);
+  const transport = nativeRead ? nativeHttpsImpl : fetchImpl;
+  const readRetry = !nativeRead && config.target === 'test' && config.testReadRetry === true
     && ['dailyReview', 'managerReviewRead'].includes(action);
   let result;
   for (let attempt = 1; attempt <= (readRetry ? 2 : 1); attempt++) {
     const started = Date.now();
     let finalHost = 'unavailable', redirected = false;
-    result = await traceGoogle({ target: config.target, enabled: config.testTrace, action, gym: config.installationId, attempt }, () => postGoogleRequest(config, action, data, async (...args) => {
-      const response = await fetchImpl(...args);
+    result = await traceGoogle({ target: config.target, enabled: config.testTrace, action, gym: config.installationId, attempt, variant: nativeRead ? 'native-https' : 'current' }, () => postGoogleRequest(config, action, data, async (...args) => {
+      const response = await transport(...args);
       try {
         const host = new URL(response.url).hostname;
         finalHost = ['script.google.com', 'script.googleusercontent.com'].includes(host) ? host : 'other';

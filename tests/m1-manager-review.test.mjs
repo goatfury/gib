@@ -210,6 +210,21 @@ test('runtime verification reports the actual process without calling Google or 
   assert.equal((await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { method: 'POST', headers }), deps)).status, 400);
 });
 
+test('ordinary Revolution badge and authenticated review reads use native HTTPS; explicit current control retains fetch', async () => {
+  const ledger = receiver().call({ action: 'managerReviewRead' });
+  const counts = { fetch: 0, native: 0 };
+  const deps = { ...dependencies, fetch: async () => { counts.fetch++; return Response.json(ledger); }, nativeHttps: async () => { counts.native++; return Response.json(ledger); } };
+  assert.equal((await handleManagerReview(new Request(`${origin}/api/m1-manager-review`), deps)).status, 200);
+  const runtime = runtimeConfig(env, { admin: true, requestUrl: origin });
+  const token = 'x'.repeat(43);
+  const cookie = createAdminSession('Andrew Smith', runtime.sessionSecret, +now, token);
+  const headers = { 'Content-Type': 'application/json', Origin: origin, Cookie: `${ADMIN_COOKIE}=${encodeURIComponent(cookie)}`, [ADMIN_REQUEST_HEADER]: token };
+  assert.equal((await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { method: 'POST', headers, body: '{"action":"read"}' }), deps)).status, 200);
+  assert.deepEqual(counts, { fetch: 0, native: 2 });
+  assert.equal((await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { headers: { 'X-GIB-M1-Transport-Control': 'current' } }), deps)).status, 200);
+  assert.deepEqual(counts, { fetch: 1, native: 2 });
+});
+
 test('save returns only a confirmed receipt, with the updated view read separately', async () => {
   const r = receiver();
   const ledger = r.call({ action: 'managerReviewRead' });
