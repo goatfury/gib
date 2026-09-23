@@ -2,6 +2,7 @@ const DISPLAY_ID_PATTERN = /^sheet-row-[1-9][0-9]*$/u;
 const AUDIT_ID_PATTERN = /^audit-row-[1-9][0-9]*$/u;
 const SIGNIN_ROW_ID_PATTERN = /^gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const REMOVABLE_ROW_ID_PATTERN = /^(?:gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|gib-admin-m1-\d{4}-\d{2}-\d{2}-[0-9a-f]{24})$/u;
+const MANAGER_ADDED_ROW_ID_PATTERN = /^gib-admin-manager-add-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/u;
 const REVIEW_NOTES_MAX_LENGTH = 800;
@@ -203,6 +204,14 @@ export function sanitizeAuditRecord(input, expectedDate = '', options = {}) {
     result: text(input.result, 40),
     linkedRecordId: text(input.linkedRecordId, 240, true)
   };
+  // The TEST receiver verifies the retained VOID row and matching audit before
+  // returning it. Recognize this pilot contract only for its pinned gym and
+  // synthetic, permanent-ID records; production removal rules stay separate.
+  const managerTestVoid = ['Rev', 'Richmond'].includes(options.managerReviewTestSite)
+    && value.site === options.managerReviewTestSite
+    && /\b(test|fake|demo|qa)\b|do not pay/i.test(value.instructor || '')
+    && (MANAGER_ADDED_ROW_ID_PATTERN.test(value.linkedRecordId || '')
+      || REMOVABLE_ROW_ID_PATTERN.test(value.linkedRecordId || ''));
   if (
     !AUDIT_ID_PATTERN.test(value.auditId || '')
     || !Number.isSafeInteger(value.actionNumber)
@@ -222,6 +231,7 @@ export function sanitizeAuditRecord(input, expectedDate = '', options = {}) {
     )
     || (
       value.result === 'voided'
+      && !managerTestVoid
       && (
         options.allowRevolutionRemoval === true
           ? !REMOVABLE_ROW_ID_PATTERN.test(value.linkedRecordId || '') || value.site !== 'Rev'

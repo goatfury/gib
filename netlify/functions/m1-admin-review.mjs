@@ -81,10 +81,18 @@ export async function handleAdminReview(request, dependencies = {}) {
   );
   const review = google.readable && google.value && google.value.ok === true
     ? sanitizeDailyReviewPayload(google.value, date, {
-      allowInstructorSigninVoid, allowRevolutionRemoval: Boolean(removal)
+      allowInstructorSigninVoid, allowRevolutionRemoval: Boolean(removal),
+      managerReviewTestSite: MANAGER_REVIEW_ENABLED && config.target === 'test'
+        ? config.installationId === 'richmond' ? 'Richmond' : 'Rev'
+        : ''
     })
     : null;
-  if (!review) return reviewFailureResponse(google);
+  if (!review) {
+    if (config.target === 'test' && google.readable && google.value?.ok === true) {
+      console.info('M1_TEST_CONTRACT', JSON.stringify({ action: 'dailyReview', result: 'CONTRACT_MISMATCH' }));
+    }
+    return reviewFailureResponse(google);
+  }
 
   return jsonResponse(200, {
     ok: true,

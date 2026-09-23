@@ -1896,6 +1896,11 @@
       }
 
       function validAuditRecord(value, expectedDate) {
+        const managerTestVoid = typeof testMode !== 'undefined' && testMode
+          && globalThis.M1_MANAGER_REVIEW_CONFIG?.enabled === true
+          && value?.site === (typeof IS_RICHMOND !== 'undefined' && IS_RICHMOND ? 'Richmond' : 'Rev')
+          && /\b(test|fake|demo|qa)\b|do not pay/i.test(value?.instructor || '')
+          && /^(?:gib-admin-manager-add-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|gib-admin-m1-\d{4}-\d{2}-\d{2}-[0-9a-f]{24})$/.test(value?.linkedRecordId || '');
         return exactObjectKeys(value, [
           'auditId',
           'actionNumber',
@@ -1938,6 +1943,7 @@
           && ['added', 'already exists', 'voided'].includes(value.result)
           && (
             value.result !== 'voided'
+            || managerTestVoid
             || (typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED)
             || (
               typeof IS_RICHMOND_PRODUCTION !== 'undefined'
@@ -1949,7 +1955,7 @@
             value.result === 'added'
               ? value.linkedRecordId.startsWith('gib-admin-')
               : value.result === 'voided'
-                ? (typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED
+                ? managerTestVoid || (typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED
                   ? value.site === 'Rev' && REV_REMOVAL_ID.test(value.linkedRecordId)
                   : RICHMOND_PRODUCTION_ROW_ID_PATTERN.test(value.linkedRecordId))
                 : true
