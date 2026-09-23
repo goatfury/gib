@@ -17,5 +17,5 @@
 .manager-dialog input,.manager-dialog select { display: block; width: 100%; min-height: 44px; box-sizing: border-box; }
 #managerDayReview button,#managerDayReview select,.manager-dialog button { min-height: 44px; }
 .manager-dialog .manager-controls { margin-top: 18px; }
-body.manager-pilot:not(.manager-legacy-open) #sign-ins > :not(#managerDayReview) { display: none !important; }
+body.manager-pilot:not(.manager-legacy-open) #sign-ins > :not(#managerDayReview):not(#readCallbackProof) { display: none !important; }
 @media (max-width: 700px) { .manager-summary,.manager-day,.manager-class { padding: 14px; } .manager-controls > * { max-width: 100%; } .manager-class li { display: block; } .manager-class li button { margin-top: 7px; } }
