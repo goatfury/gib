@@ -9,6 +9,7 @@
     const root = document.createElement('section');
     root.id = 'managerDayReview';
     document.getElementById('sign-ins').prepend(root);
+    const readProof = globalThis.GIBM1ReadCallbackProof?.create({ request, onUnauthorized });
     document.body.classList.add('manager-pilot');
     let data, selected = '', active = false, busy = false, generation = 0, pending = null;
     let dialog;
@@ -132,6 +133,6 @@
         d.querySelector('form').addEventListener('submit', e => { e.preventDefault(); const reason = new FormData(e.target).get('reason'); close(); void save({ action: 'void', date: selected, recordId: record.recordId, fingerprint: record.fingerprint, reason }); });
       }
     });
-    return { async open() { active = true; try { const stored = JSON.parse(sessionStorage.getItem(storageKey) || 'null'); if (stored?.url && stored?.body) { pending = stored; selected = stored.body.date || selected; } } catch {} await load(); }, clear() { active = false; generation++; data = null; close(); root.replaceChildren(); }, refresh: load };
+    return { async open() { active = true; readProof?.open(); try { const stored = JSON.parse(sessionStorage.getItem(storageKey) || 'null'); if (stored?.url && stored?.body) { pending = stored; selected = stored.body.date || selected; } } catch {} await load(); }, clear() { active = false; generation++; data = null; close(); readProof?.clear(); root.replaceChildren(); }, refresh: load };
   } });
 })();

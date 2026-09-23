@@ -17,6 +17,7 @@ export const PUBLIC_FILES = Object.freeze([
   'm1/admin/added-classes.js',
   'm1/admin/removal-journal.js',
   'm1/admin/manager-review.js',
+  'm1/admin/read-callback-proof.js',
   'm1/admin/manager-review.css',
   'm1/manager-review-config.generated.js',
   'm1/manager-review-badge.js',

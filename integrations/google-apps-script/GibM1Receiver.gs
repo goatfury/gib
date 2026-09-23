@@ -157,6 +157,9 @@ function adReceiverV2_(e) {
     }
 
     var action = cleanText_(body.action);
+    if (action === 'managerReviewReadCallbackProof') {
+      return typeof gibM1TestReadCallback_ === 'function' ? gibM1TestReadCallback_(body) : rejectedAuthResult_();
+    }
     if (action === 'managerReviewRead' || action === 'managerReviewSave' || action === 'managerReviewVoid') {
       if (typeof managerReviewAction_ !== 'function') return rejectedAuthResult_();
       return managerReviewAction_(body);
