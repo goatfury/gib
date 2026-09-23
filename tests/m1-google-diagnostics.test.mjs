@@ -21,3 +21,34 @@ test('TEST transport diagnostics distinguish failures without exposing request o
     assert.doesNotMatch(JSON.stringify(result), /secret-/);
   } finally { console.info = original; }
 });
+
+test('bounded pilot retry is restricted to unreadable pure TEST reads', async () => {
+  const config = { target: 'test', testReadRetry: true, installationId: 'rev', webhookUrl: 'https://example.invalid' };
+  for (const action of ['dailyReview', 'managerReviewRead']) {
+    let calls = 0;
+    const result = await postGoogle(config, action, {}, async () => ++calls === 1
+      ? new Response('Unavailable', { status: 404 }) : Response.json({ ok: true }));
+    assert.equal(calls, 2);
+    assert.equal(result.value.ok, true);
+  }
+  for (const action of ['managerReviewSave', 'managerReviewVoid', 'adminAdd', 'kioskSync']) {
+    let calls = 0;
+    await postGoogle(config, action, {}, async () => { calls++; throw new Error('offline'); });
+    assert.equal(calls, 1, action);
+  }
+  for (const body of ['{"ok":false,"conflict":true}', '{"ok":false,"result":"rejected"}', '[]', '{']) {
+    let calls = 0;
+    await postGoogle(config, 'dailyReview', {}, async () => { calls++; return new Response(body); });
+    assert.equal(calls, 1, body);
+  }
+  for (const overrides of [{ target: 'production' }, { testReadRetry: false }]) {
+    let calls = 0;
+    await postGoogle({ ...config, ...overrides }, 'dailyReview', {}, async () => { calls++; throw new Error('offline'); });
+    assert.equal(calls, 1);
+  }
+  let attempts = 0;
+  const failed = await postGoogle(config, 'managerReviewRead', {}, async () => { attempts++; return new Response('<html>Unavailable</html>'); });
+  assert.equal(attempts, 2);
+  assert.equal(failed.readable, false);
+  assert.equal(failed.failureClass, 'HTML');
+});

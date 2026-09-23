@@ -450,15 +450,35 @@ export function validNonFutureDate(value, now = new Date()) {
 // TEST diagnostics deliberately exclude URLs, bodies, identities and error messages.
 // Both review paths use this boundary so their upstream timings can be compared.
 export async function postGoogle(config, action, data, fetchImpl = fetch) {
-  const started = Date.now();
-  const result = await postGoogleRequest(config, action, data, fetchImpl);
-  if (config.target === 'test' && ['dailyReview', 'managerReviewRead', 'managerReviewSave', 'managerReviewVoid'].includes(action)) {
-    console.info('M1_TEST_GOOGLE', JSON.stringify({
-      action, gym: config.installationId === 'richmond' ? 'richmond' : 'rev',
-      elapsedMs: Date.now() - started, status: result.status,
-      result: result.readable && result.value?.ok === true ? 'OK' : googleFailureClass(result),
-      ...(result.transportCode ? { transportCode: result.transportCode } : {})
-    }));
+  const readRetry = config.target === 'test' && config.testReadRetry === true
+    && ['dailyReview', 'managerReviewRead'].includes(action);
+  let result;
+  for (let attempt = 1; attempt <= (readRetry ? 2 : 1); attempt++) {
+    const started = Date.now();
+    let finalHost = 'unavailable', redirected = false;
+    result = await postGoogleRequest(config, action, data, async (...args) => {
+      const response = await fetchImpl(...args);
+      try {
+        const host = new URL(response.url).hostname;
+        finalHost = ['script.google.com', 'script.googleusercontent.com'].includes(host) ? host : 'other';
+      } catch { /* Test responses may not have a URL. */ }
+      redirected = response.redirected === true;
+      return response;
+    });
+    if (config.target === 'test' && ['dailyReview', 'managerReviewRead', 'managerReviewSave', 'managerReviewVoid'].includes(action)) {
+      console.info('M1_TEST_GOOGLE', JSON.stringify({
+        action, gym: config.installationId === 'richmond' ? 'richmond' : 'rev', attempt,
+        elapsedMs: Date.now() - started, status: result.status, finalHost, redirected,
+        result: result.readable && result.value?.ok === true ? 'OK' : googleFailureClass(result),
+        ...(result.transportCode ? { transportCode: result.transportCode } : {})
+      }));
+    }
+    // Repeat only pure TEST reads after an unreadable transport response. Never
+    // repeat a write, rejection, stale-view conflict, or valid-but-invalid contract.
+    // Each attempt retains the existing 25-second deadline and full validation.
+    const transient = ['UNREACHABLE', 'READ_FAILED', 'EMPTY', 'HTML'].includes(result.failureClass)
+      || (result.failureClass === 'HTTP_FAILURE' && [404, 408, 429, 500, 502, 503, 504].includes(result.status));
+    if (!transient) break;
   }
   return result;
 }

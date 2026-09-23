@@ -40,7 +40,7 @@
       const own = ++generation;
       data = null; render('Reading central records…');
       try {
-        const result = await request(endpoint, { action: 'read' }, { timeoutMs: 35000, timeoutMessage: 'Central records could not be read in time. Retry the read; the day remains unconfirmed.' });
+        const result = await request(endpoint, { action: 'read' }, { timeoutMs: 60000, timeoutMessage: 'Central records could not be read in time. Retry the read; the day remains unconfirmed.' });
         if (!active || own !== generation) return;
         if (result?.ok !== true || result.test !== true || !Array.isArray(result.days) || !result.days.length || !Number.isInteger(result.pendingDays)) throw new Error('Incomplete central read.');
         data = result; render();

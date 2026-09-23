@@ -29,7 +29,7 @@ export async function handleManagerReview(request, dependencies = {}) {
     if (!input || !['read', 'partial', 'complete', 'void'].includes(input.action)) return jsonResponse(400, { ok: false, message: 'Choose a review action.' });
   }
   const call = async (action, data) => {
-    const google = await postGoogle(runtime, action, { ...envelope, ...data }, dependencies.fetch || fetch);
+    const google = await postGoogle({ ...runtime, testReadRetry: ['badge', 'read'].includes(input.action) }, action, { ...envelope, ...data }, dependencies.fetch || fetch);
     if (!google.readable || google.value?.ok !== true) {
       const error = new Error(google.value?.conflict ? 'Attendance or another review changed. Refresh this day.' : 'Central saving or reading could not be confirmed. Retry safely; do not assume the day is complete.');
       if (google.value?.conflict) error.status = 409;

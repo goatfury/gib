@@ -5,7 +5,7 @@
     if (!link || document.hidden) return;
     link.textContent = 'Admin · Review status loading';
     try {
-      const response = await fetch('/api/m1-manager-review', { cache: 'no-store', signal: AbortSignal.timeout(30000) });
+      const response = await fetch('/api/m1-manager-review', { cache: 'no-store', signal: AbortSignal.timeout(60000) });
       const data = await response.json();
       if (!response.ok || data.ok !== true || !Number.isInteger(data.pendingDays) || data.pendingDays < 0) throw new Error('Unavailable');
       link.textContent = data.pendingDays ? `Admin · ${data.pendingDays} ${data.pendingDays === 1 ? 'day needs' : 'days need'} review` : 'Admin · All days reviewed';

@@ -14,6 +14,7 @@ import {
 } from './_lib/m1-admin-contracts.mjs';
 import { deploymentInstallationProfile } from './_lib/m1-installation.mjs';
 import { removalReadEnvelope } from './_lib/m1-revolution-removal.mjs';
+import { MANAGER_REVIEW_ENABLED } from './_lib/m1-manager-review.generated.mjs';
 
 function reviewFailureResponse(google) {
   const failureClass = googleFailureClass(google);
@@ -67,7 +68,7 @@ export async function handleAdminReview(request, dependencies = {}) {
   const allowInstructorSigninVoid = config.installationId === 'richmond'
     && config.environment === 'production';
   const google = await postGoogle(
-    config,
+    { ...config, testReadRetry: MANAGER_REVIEW_ENABLED },
     'dailyReview',
     {
       date,

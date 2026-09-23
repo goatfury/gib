@@ -103,5 +103,6 @@ jobs:
         with:
           name: richmond-test-${{ github.event.pull_request.head.sha }}
           path: .m1-richmond-test-package/
+          include-hidden-files: true
           retention-days: 14
           if-no-files-found: error
