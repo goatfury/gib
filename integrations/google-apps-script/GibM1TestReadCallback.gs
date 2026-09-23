@@ -29,17 +29,25 @@ function testRevolutionCallbackFaultReceipt() {
 }
 function gibM1ConsumeLateBadge_(binding) {
   if (binding.action !== 'managerReviewBadgeRead') return false;
-  var lock = LockService.getScriptLock();
-  if (!lock.tryLock(1000)) throw new Error('TEST read unavailable.');
+  var lock, acquired = false;
   try {
     var properties = PropertiesService.getScriptProperties();
     var expiry = Number(properties.getProperty('M1_TEST_LATE_BADGE'));
+    // Normal badges must not contend with the authoritative attendance lock.
+    if (!(expiry > Date.now() && expiry <= Date.now() + 120000)) return false;
+    lock = LockService.getScriptLock();
+    acquired = lock.tryLock(0);
+    if (!acquired) return false;
+    // Recheck under the lock so at most one overlapping badge consumes a fault.
+    expiry = Number(properties.getProperty('M1_TEST_LATE_BADGE'));
     properties.deleteProperty('M1_TEST_LATE_BADGE');
     return expiry > Date.now() && expiry <= Date.now() + 120000;
-  } finally { lock.releaseLock(); }
+  } catch (_) { return false; }
+  finally { if (acquired) { try { lock.releaseLock(); } catch (_) {} } }
 }
 
 function gibM1TestReadCallback_(body) {
+  var trace = function() {};
   try {
     if (!gibM1TestReadCallbackEnabled_() || body.action !== 'managerReviewReadCallbackProof'
       || requestTarget_(body) !== 'test' || !adminActionAuthorized_(body)
@@ -54,10 +62,18 @@ function gibM1TestReadCallback_(body) {
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(b.requestId)
       || !Number.isSafeInteger(b.createdAt) || b.createdAt > now || b.expiresAt !== b.createdAt + 60000
       || now >= b.expiresAt) return rejectedAuthResult_();
+    trace = function(stage, state, status) {
+      // Only fixed stages, request identity, duration and HTTP status. No data or secrets.
+      try { console.log('M1_TEST_READ_STAGE ' + JSON.stringify({ requestId: b.requestId,
+        stage: stage, state: state, elapsedMs: Math.max(0, Date.now() - now),
+        status: Number.isInteger(status) ? status : null })); } catch (_) {}
+    };
+    trace('google.request', 'accepted');
     var lateTest = gibM1ConsumeLateBadge_(b);
+    trace('google.fault', lateTest ? 'armed' : 'skipped');
     // This existing read owns and releases its lock in finally before returning.
     var read = managerReviewAction_({ action: 'managerReviewRead', target: 'test', token: body.token,
-      adminActionToken: body.adminActionToken, gym: 'rev', from: body.from, to: body.to, adminName: body.adminName, check: null });
+      adminActionToken: body.adminActionToken, gym: 'rev', from: body.from, to: body.to, adminName: body.adminName, check: null }, trace);
     var result = JSON.parse(read.getContent());
     var readAt = Date.now();
     if (result.ok !== true || result.complete !== true || result.schema !== 'm1-manager-review/v1'
@@ -70,17 +86,19 @@ function gibM1TestReadCallback_(body) {
     var sentAt = Date.now();
     var remaining = Math.floor((b.expiresAt - sentAt) / 1000);
     if (remaining < 1 && !lateTest) throw new Error('Read expired.');
+    trace('google.callback', 'start');
     var response = UrlFetchApp.fetch(GIB_M1_TEST_READ_CALLBACK_URL_, {
       method: 'post', contentType: 'application/json', payload: raw,
       headers: { 'X-GIB-M1-Read-Signature': signature },
       followRedirects: false, validateHttpsCertificates: true, muteHttpExceptions: true,
       timeoutSeconds: lateTest ? 10 : Math.min(10, remaining)
     });
+    trace('google.callback', 'response', response.getResponseCode());
     // Timing/status only. Never log the body, signature or other credentials.
     console.log('M1_TEST_CALLBACK_DELIVERY ' + JSON.stringify({ requestId: b.requestId,
       status: response.getResponseCode(), elapsedMs: Date.now() - sentAt }));
     if (lateTest) PropertiesService.getScriptProperties().setProperty('M1_TEST_CALLBACK_FAULT_RECEIPT', JSON.stringify({ requestId: b.requestId, expired: Date.now() >= b.expiresAt, status: response.getResponseCode(), elapsedMs: Date.now() - sentAt }));
-  } catch (_) { console.warn('M1_TEST_CALLBACK_UNAVAILABLE'); }
+  } catch (_) { trace('google.request', 'failed'); console.warn('M1_TEST_CALLBACK_UNAVAILABLE'); }
   // Deliberately unusable ContentService result for this proof action only.
   return jsonResult_({ ok: false, code: 'CALLBACK_PROOF_ORDINARY_REPLY_UNAVAILABLE' });
 }

@@ -58,13 +58,51 @@ test('refresh preserves an unfinished instructor form and Cancel leaves the reco
   h.nodes.get('[data-cancel]').events.click();
   assert.equal(form.open, false); assert.equal(h.calls.length, 1);
 });
-function badge() {
-  const link = { style: {} }, calls = [], events = {}, timers = [];
+function badge(traced = false) {
+  const link = { style: {} }, calls = [], events = {}, timers = [], logs = [];
   const document = { hidden: false, readyState: 'complete', getElementById: () => link, addEventListener: (k, fn) => { events[k] = fn; } };
-  const ctx = vm.createContext({ document, Date, AbortSignal, M1_MANAGER_REVIEW_CONFIG: { enabled: true }, clearTimeout() {}, setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, fetch: () => { const d = deferred(); calls.push(d); return d.promise; } });
+  const ctx = vm.createContext({ document, Date, AbortSignal,
+    location: { origin: traced ? 'https://deploy-preview-89--gib-live.netlify.app' : 'https://gib-richmond-test.netlify.app' },
+    crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' }, console: { info: (_, json) => logs.push(JSON.parse(json)) },
+    M1_MANAGER_REVIEW_CONFIG: { enabled: true }, clearTimeout() {}, setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, fetch: (...args) => { const d = deferred(); calls.push({ ...d, args }); return d.promise; } });
   vm.runInContext(source('m1/manager-review-badge.js'), ctx);
-  return { link, calls, events, timers, document };
+  return { link, calls, events, timers, document, logs };
 }
+
+test('badge delivery evidence correlates a real HTTP failure without logging response contents or changing Richmond', async () => {
+  for (const traced of [true, false]) {
+    const h = badge(traced);
+    assert.equal(Boolean(h.calls[0].args[1].headers?.['X-GIB-M1-Read-ID']), traced);
+    h.calls[0].resolve(Response.json({ ok: false, message: 'private response content' }, { status: 503, headers: { 'X-GIB-M1-Read-ID': '00000000-0000-4000-8000-000000000002' } }));
+    await flush();
+    assert.equal(h.link.textContent, 'Admin · Review status unavailable');
+    assert.equal(h.logs.length, traced ? 2 : 0);
+    if (traced) assert.deepEqual([h.logs[1].state, h.logs[1].status, h.logs[1].requestId], ['failed', 503, '00000000-0000-4000-8000-000000000002']);
+    assert.doesNotMatch(JSON.stringify(h.logs), /private response/);
+  }
+});
+
+test('Admin delivery tracing is confined to Revolution TEST display reads and excludes credentials, contents and saves', async () => {
+  const code = source('m1/admin/index.html').split('      async function requestJson(')[1].split('      function requestedManagerMode()')[0];
+  assert.ok(code);
+  const logs = [], calls = [];
+  const ctx = vm.createContext({ adminRequestToken: 'PRIVATE_SESSION_TOKEN', ADMIN_REQUEST_HEADER: 'X-Admin-Token', Date, AbortController,
+    clean: s => s, window: { setTimeout, clearTimeout }, location: { origin: 'https://deploy-preview-89--gib-live.netlify.app' },
+    crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' }, console: { info: (_, json) => logs.push(JSON.parse(json)) },
+    fetch: async (url, options) => { calls.push({ url, options }); return Response.json({ ok: true, private: 'PRIVATE_ATTENDANCE' }, { headers: { 'X-GIB-M1-Read-ID': '00000000-0000-4000-8000-000000000002' } }); }
+  });
+  vm.runInContext('async function requestJson(' + code, ctx);
+  await ctx.requestJson('/api/m1-manager-review', { action: 'read' });
+  assert.equal(logs.length, 2); assert.equal(logs[1].state, 'received'); assert.equal(logs[1].status, 200);
+  assert.ok(calls[0].options.headers['X-GIB-M1-Read-ID']);
+  await ctx.requestJson('/api/m1-manager-review', { action: 'partial', requestId: 'original-save-id' });
+  ctx.location.origin = 'https://gib-richmond-test.netlify.app';
+  await ctx.requestJson('/api/m1-manager-review', { action: 'read' });
+  assert.equal(logs.length, 2);
+  assert.ok(calls.slice(1).every(c => !c.options.headers['X-GIB-M1-Read-ID']));
+  assert.deepEqual(JSON.parse(calls[1].options.body), { action: 'partial', requestId: 'original-save-id' });
+  assert.doesNotMatch(JSON.stringify(logs), /PRIVATE_|original-save/);
+});
 test('tablet badge permits one read at a time and schedules the next only after settlement', async () => {
   const h = badge(); h.events.visibilitychange(); h.events.visibilitychange();
   assert.equal(h.calls.length, 1); assert.equal(h.timers.length, 0);

@@ -55,13 +55,20 @@ function managerDay_(date, state, events) {
   var reviews = events.filter(function(event) { return event.date === date; });
   return { date: date, records: records, warnings: warnings, attendanceHash: managerAttendanceHash_(all), review: reviews.length ? reviews[reviews.length - 1] : null };
 }
-function managerReviewAction_(body) {
+function managerReviewAction_(body, readTrace) {
   if (!managerReviewEnabled_() || requestTarget_(body) !== 'test' || !adminActionAuthorized_(body)) return rejectedAuthResult_();
   var gym = typeof GIB_M1_RICHMOND_INSTALLATION_ !== 'undefined' ? 'richmond' : 'rev';
   if (body.gym !== gym || body.from !== '2026-09-07' || body.to !== todayNewYork_()) return rejectedAuthResult_();
+  var trace = body.action === 'managerReviewRead' && typeof readTrace === 'function' ? readTrace : function() {};
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) return jsonResult_({ ok: false, message: 'Records are changing. Retry after refreshing.' });
+  trace('google.lock', 'waiting');
+  if (!lock.tryLock(10000)) {
+    trace('google.lock', 'unavailable');
+    return jsonResult_({ ok: false, message: 'Records are changing. Retry after refreshing.' });
+  }
+  trace('google.lock', 'acquired');
   try {
+    trace('google.read', 'start');
     var spreadsheet = openExpectedSpreadsheet_(body);
     if (spreadsheet.getName() !== (gym === 'rev' ? 'RBJJ M1 — TEST' : 'Richmond BJJ M1 — TEST')) return rejectedAuthResult_();
     var state = readSignins_(signinsSheet_(spreadsheet), { tolerantReview: true });
@@ -84,6 +91,7 @@ function managerReviewAction_(body) {
         if (checked.length) result.receipt = { saved: true, requestId: checked[0].requestId, revision: checked[0].revision };
       }
       if (JSON.stringify(result).length > 240000) throw new Error('Review response requires pagination.');
+      trace('google.read', 'validated');
       return jsonResult_(result);
     }
     if (GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) < 0 || !validCalendarDate_(body.date) || body.date < body.from || body.date > body.to) return rejectedAuthResult_();
@@ -110,7 +118,8 @@ function managerReviewAction_(body) {
     var confirmed = managerJournal_(spreadsheet, false).events.filter(function(e) { return e.requestId === input.requestId && e.requestHash === requestHash; });
     if (confirmed.length !== 1) throw new Error('Save was not confirmed.');
     return jsonResult_({ ok: true, saved: true, requestId: input.requestId, revision: revision });
-  } finally { lock.releaseLock(); }
+  } catch (error) { trace('google.read', 'failed'); throw error; }
+  finally { lock.releaseLock(); trace('google.lock', 'released'); }
 }
 
 // Same permanent VOID + append-only AdminAudit contract as existing corrections.

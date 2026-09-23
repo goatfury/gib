@@ -8,7 +8,8 @@ import temporaryClasses from '../../m1/temporary-classes-core.js';
 import { postGoogle as prePrPostGoogle } from './_lib/m1-google-pre-pr-control.mjs';
 import { traceGoogle } from './_lib/m1-google-trace.mjs';
 import { nativeHttpsControl } from './_lib/m1-google-native-control.mjs';
-import { PROOF_ORIGIN, loadCallbackLedger } from './_lib/m1-test-read-callback.mjs';
+import { randomUUID } from 'node:crypto';
+import { PROOF_ORIGIN, READ_ID_HEADER, createReadTrace, traceReadStage, loadCallbackLedger } from './_lib/m1-test-read-callback.mjs';
 
 export const config = { path: '/api/m1-manager-review', rateLimit: { windowLimit: 40, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 export async function handleManagerReview(request, dependencies = {}) {
@@ -38,6 +39,15 @@ export async function handleManagerReview(request, dependencies = {}) {
     adminName = auth.session.adminName;
     if (!input || !['read', 'partial', 'complete', 'void'].includes(input.action)) return jsonResponse(400, { ok: false, message: 'Choose a review action.' });
   }
+  const callbackRead = url.origin === PROOF_ORIGIN && profile.installationId === 'rev' && !transportControl && ['read', 'badge'].includes(input.action);
+  const trace = callbackRead ? createReadTrace(randomUUID(), dependencies, request.headers.get(READ_ID_HEADER)) : () => {};
+  const respond = (status, value) => {
+    const response = jsonResponse(status, value);
+    if (callbackRead) response.headers.set(READ_ID_HEADER, trace.requestId);
+    trace('response', 'ready', status); // Browser receipt is logged separately; this is not proof of delivery.
+    return response;
+  };
+  trace('request', 'accepted');
   const call = async (action, data) => {
     const wireData = { ...envelope, ...data };
     const google = ['pre-pr', 'native-https'].includes(transportControl)
@@ -52,19 +62,25 @@ export async function handleManagerReview(request, dependencies = {}) {
     return google.value;
   };
   const load = async () => {
-    const callbackRead = url.origin === PROOF_ORIGIN && profile.installationId === 'rev' && !transportControl && ['read', 'badge'].includes(input.action);
     const [ledger, schedule, added] = await Promise.all([
-      callbackRead ? loadCallbackLedger(request, runtime, adminName, dependencies) : call('managerReviewRead', { check: ['partial', 'complete'].includes(input.action) ? input : null, adminName }),
-      dependencies.schedule ? Promise.resolve(dependencies.schedule) : handleM1Schedule(new Request(new URL('/api/m1-schedule', url)), dependencies).then(response => response.json()),
-      (async () => {
+      callbackRead ? loadCallbackLedger(request, runtime, adminName, { ...dependencies, readTrace: trace }) : call('managerReviewRead', { check: ['partial', 'complete'].includes(input.action) ? input : null, adminName }),
+      traceReadStage(trace, 'schedule', async () => {
+        const value = dependencies.schedule || await handleM1Schedule(new Request(new URL('/api/m1-schedule', url)), dependencies).then(response => response.json());
+        if (callbackRead && (value?.current !== true || value.timezone !== TIMEZONE || !value.days)) throw new Error('Current schedule unavailable.');
+        return value;
+      }),
+      traceReadStage(trace, 'added-classes', async () => {
         const store = dependencies.addedStore || await defaultAddedClassesStore('test');
         const { value } = await readAddedClasses(store, profile.installationId, +now, 'test');
-        return publicAddedClasses(value, +now);
-      })()
+        const added = publicAddedClasses(value, +now);
+        if (callbackRead && (!temporaryClasses.validateDocument(added, profile.installationId, 'test') || !added.current)) throw new Error('Current added classes unavailable.');
+        return added;
+      })
     ]);
     validateRead(ledger, profile.installationId, today);
     if (schedule?.current !== true || schedule.timezone !== TIMEZONE || !schedule.days || !temporaryClasses.validateDocument(added, profile.installationId, 'test') || !added.current) throw new Error('The current schedule could not be confirmed. Review is unavailable until a fresh read succeeds.');
     const days = ledger.days.map(day => dayPlan(day, schedule, added, now));
+    trace('review.validation', 'ok');
     return { ledger, schedule, added, days };
   };
   try {
@@ -94,10 +110,11 @@ export async function handleManagerReview(request, dependencies = {}) {
     }
     const count = loaded.days.filter(day => !day.complete).length;
     // Public kiosk response is deliberately an aggregate. No dates, reviewer or attendance data.
-    if (request.method === 'GET') return jsonResponse(200, { ok: true, pendingDays: count, asOf: now.toISOString() });
-    return jsonResponse(200, { ok: true, test: true, gym: profile.installationId, site: profile.siteCode, timezone: TIMEZONE, today, cleanupStart: REVIEW_START, period: periodFor(today), asOf: new Date().toISOString(), pendingDays: count, days: loaded.days, ...(receipt ? { receipt } : {}) });
+    if (request.method === 'GET') return respond(200, { ok: true, pendingDays: count, asOf: now.toISOString() });
+    return respond(200, { ok: true, test: true, gym: profile.installationId, site: profile.siteCode, timezone: TIMEZONE, today, cleanupStart: REVIEW_START, period: periodFor(today), asOf: new Date().toISOString(), pendingDays: count, days: loaded.days, ...(receipt ? { receipt } : {}) });
   } catch (error) {
-    return jsonResponse(error.status || 503, { ok: false, message: ['read', 'badge'].includes(input.action) ? 'Review status unavailable. No fresh central read was confirmed.' : error.message || 'Review unavailable. Nothing is being marked caught up.', ...(error.code ? { code: error.code } : {}) });
+    trace('review', 'failed', error.status || 503);
+    return respond(error.status || 503, { ok: false, message: ['read', 'badge'].includes(input.action) ? 'Review status unavailable. No fresh central read was confirmed.' : error.message || 'Review unavailable. Nothing is being marked caught up.', ...(error.code ? { code: error.code } : {}) });
   }
 }
 export default (request, context) => handleManagerReview(request, { context });

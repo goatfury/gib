@@ -3685,6 +3685,17 @@
       async function requestJson(url, body, options = {}) {
         const headers = { 'Content-Type': 'application/json' };
         if (adminRequestToken) headers[ADMIN_REQUEST_HEADER] = adminRequestToken;
+        const traceId = globalThis.location?.origin === 'https://deploy-preview-89--gib-live.netlify.app'
+          && url === '/api/m1-manager-review' && body?.action === 'read' ? globalThis.crypto?.randomUUID?.() : null;
+        const traceStarted = Date.now();
+        if (traceId) headers['X-GIB-M1-Read-ID'] = traceId;
+        const traceRead = (state, status, requestId) => {
+          if (traceId) { try { console.info('M1_TEST_READ_CLIENT', JSON.stringify({ clientId: traceId,
+            requestId: /^[0-9a-f-]{36}$/.test(requestId || '') ? requestId : null,
+            stage: 'admin.delivery', state, status: Number.isInteger(status) ? status : null,
+            elapsedMs: Date.now() - traceStarted })); } catch {} }
+        };
+        traceRead('start');
         const timeoutMs = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0
           ? options.timeoutMs
           : 0;
@@ -3706,7 +3717,9 @@
             ...(controller ? { signal: controller.signal } : {})
           });
           try { data = await response.json(); } catch {}
+          if (traceId) traceRead(response.ok && data?.ok === true ? 'received' : 'failed', response.status, response.headers?.get('X-GIB-M1-Read-ID'));
         } catch (error) {
+          traceRead(controller?.signal.aborted ? 'timeout' : 'network');
           if (controller?.signal.aborted) {
             const timeoutError = new Error(clean(options.timeoutMessage)
               || 'The request took too long to complete.');

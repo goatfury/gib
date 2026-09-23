@@ -157,9 +157,10 @@ function googleHarness() {
   let locked = false;
   let clock = now + 100;
   const sent = [];
+  const logs = [];
   const properties = new Map();
   const ctx = vm.createContext({ Date: class extends Date { static now() { return clock; } },
-    console: { log() {}, warn() {} }, GIB_M1_ALLOWED_TARGET: 'test', GIB_M1_MANAGER_REVIEW_TEST_ENABLED: true, EXPECTED_SPREADSHEET_NAME: 'RBJJ M1 — TEST', GIB_M1_ADMIN_NAMES_: ['Andrew Smith', 'Stuart Turner'],
+    console: { log: value => logs.push(value), warn: value => logs.push(value) }, GIB_M1_ALLOWED_TARGET: 'test', GIB_M1_MANAGER_REVIEW_TEST_ENABLED: true, EXPECTED_SPREADSHEET_NAME: 'RBJJ M1 — TEST', GIB_M1_ADMIN_NAMES_: ['Andrew Smith', 'Stuart Turner'],
     configuredDeploymentTarget_: () => 'test', requestTarget_: body => body.target, adminActionAuthorized_: body => body.token === env.GIB_TEST_WEBHOOK_TOKEN && body.adminActionToken === env.GIB_TEST_ADMIN_ACTION_TOKEN,
     todayNewYork_: () => '2026-09-23', rejectedAuthResult_: () => ({ getContent: () => '{"ok":false}' }), jsonResult_: value => ({ getContent: () => JSON.stringify(value) }),
     LockService: { getScriptLock: () => ({ tryLock: () => { locked = true; return true; }, releaseLock: () => { locked = false; } }) },
@@ -171,8 +172,53 @@ function googleHarness() {
   vm.runInContext(read('integrations/google-apps-script/GibM1ManagerReview.gs'), ctx);
   vm.runInContext(read('integrations/google-apps-script/GibM1TestReadCallback.gs'), ctx);
   const body = { token: env.GIB_TEST_WEBHOOK_TOKEN, adminActionToken: env.GIB_TEST_ADMIN_ACTION_TOKEN, target: 'test', gym: 'rev', action: 'managerReviewReadCallbackProof', from: '2026-09-07', to: '2026-09-23', adminName: 'Andrew Smith', binding: makeBinding(id, now) };
-  return { ctx, sent, body, properties, clock: () => clock };
+  return { ctx, sent, body, properties, logs, clock: () => clock };
 }
+
+test('unarmed or expired badge faults never acquire a lock; authoritative read still owns its 10s lock', () => {
+  for (const armedUntil of [undefined, now]) {
+    const g = googleHarness(), attempts = [];
+    if (armedUntil) g.properties.set('M1_TEST_LATE_BADGE', String(armedUntil));
+    g.body.binding.action = 'managerReviewBadgeRead'; delete g.body.adminName;
+    g.ctx.LockService.getScriptLock = () => ({ tryLock: ms => { attempts.push(ms); return ms === 10000; }, releaseLock() {} });
+    g.ctx.gibM1TestReadCallback_(g.body);
+    assert.deepEqual(attempts, [10000]);
+    assert.equal(g.sent.length, 1, 'a busy instrumentation lock must not prevent the authoritative read');
+  }
+});
+
+test('armed fault contention and unavailable instrumentation cannot abort normal badge reads', () => {
+  for (const mode of ['busy', 'lock-error', 'properties-error']) {
+    const g = googleHarness(), attempts = [];
+    g.properties.set('M1_TEST_LATE_BADGE', String(now + 100000));
+    g.body.binding.action = 'managerReviewBadgeRead'; delete g.body.adminName;
+    g.ctx.LockService.getScriptLock = () => ({ tryLock: ms => {
+      attempts.push(ms);
+      if (ms === 0 && mode === 'lock-error') throw new Error('private instrumentation failure');
+      return ms === 10000;
+    }, releaseLock() {} });
+    if (mode === 'properties-error') g.ctx.PropertiesService.getScriptProperties = () => { throw new Error('private property failure'); };
+    g.ctx.gibM1TestReadCallback_(g.body);
+    assert.equal(g.sent.length, 1, mode);
+    assert.equal(g.clock(), now + 100);
+    assert.deepEqual(attempts, mode === 'properties-error' ? [10000] : [0, 10000]);
+    assert.ok(g.properties.has('M1_TEST_LATE_BADGE'), 'failed fault consumption cannot consume a fault');
+  }
+});
+
+test('Google correlation distinguishes authoritative lock failure and read failure without logging private content', () => {
+  for (const mode of ['lock', 'read']) {
+    const g = googleHarness();
+    if (mode === 'lock') g.ctx.LockService.getScriptLock = () => ({ tryLock: () => false });
+    else g.ctx.readSignins_ = () => { throw new Error('private attendance contents'); };
+    g.ctx.gibM1TestReadCallback_(g.body);
+    assert.equal(g.sent.length, 0);
+    const stages = g.logs.filter(s => s.startsWith('M1_TEST_READ_STAGE ')).map(s => JSON.parse(s.slice(19)));
+    assert.ok(stages.every(s => s.requestId === id));
+    assert.ok(stages.some(s => s.stage === 'google.' + mode && s.state === (mode === 'lock' ? 'unavailable' : 'failed')));
+    assert.doesNotMatch(g.logs.join('\n'), /private attendance|synthetic-test-admin|synthetic-test-transport|Andrew|script\.google/);
+  }
+});
 
 test('owner-only late badge fault is one-use, bounded, preserves the binding and releases locks', () => {
   const g = googleHarness();
@@ -261,7 +307,84 @@ test('missing normal callback makes one attempt and fails visibly; an expired re
   recovered.deps.store = h.store;
   recovered.clock(binding.expiresAt + 1);
   assert.equal((await handleManagerReview(normalAdmin(), recovered.deps)).status, 200);
+  await Promise.all(recovered.tasks);
   assert.equal(h.store.entries.has(key(binding.requestId, 'pending')), false);
+});
+
+test('slow or failing cleanup cannot delay dispatch, block a successful response or escape waitUntil ownership', { timeout: 2000 }, async () => {
+  for (const mode of ['slow', 'failed']) {
+    const h = normalHarness(), stages = [];
+    h.deps.traceLog = (_, json) => stages.push(JSON.parse(json));
+    let release;
+    const blocked = new Promise(resolve => { release = resolve; });
+    h.store.list = async function* () {
+      assert.equal(h.calls.length, 1, 'dispatch must precede cleanup');
+      if (mode === 'slow') await blocked;
+      throw new Error('private cleanup failure');
+    };
+    const response = await handleManagerReview(normalAdmin(), h.deps);
+    assert.equal(response.status, 200, mode);
+    assert.equal(h.tasks.length, 2, 'supported lifecycle owns dispatch and cleanup');
+    assert.ok(stages.some(s => s.stage === 'response' && s.status === 200));
+    release(); await Promise.all(h.tasks);
+    assert.ok(stages.some(s => s.stage === 'cleanup' && s.state === 'unavailable'));
+    assert.doesNotMatch(JSON.stringify(stages), /private cleanup|Andrew|synthetic-test/);
+  }
+});
+
+test('cleanup has a work cap and a deadline, and cannot remove overlapping unexpired requests', async () => {
+  const store = memory(), live = '00000000-0000-4000-8000-000000000099';
+  store.entries.set(key(live, 'pending'), { binding: makeBinding(live, now) });
+  store.entries.set(key(live, 'result'), { keep: true });
+  for (let i = 1; i <= 40; i++) {
+    const old = '00000000-0000-4000-8000-' + String(i).padStart(12, '0');
+    store.entries.set(key(old, 'pending'), { binding: makeBinding(old, now - 60000) });
+  }
+  const before = store.entries.size;
+  await cleanupExpiredReads(store, now);
+  assert.equal(before - store.entries.size, 29); // One of the 30 inspected requests is live.
+  assert.ok(store.entries.has(key(live, 'pending'))); assert.ok(store.entries.has(key(live, 'result')));
+  const bounded = store.entries.size;
+  await cleanupExpiredReads(store, now, { clock: () => now, deadline: now });
+  assert.equal(store.entries.size, bounded);
+});
+
+test('overlapping badge and Admin reads preserve separate bindings, public privacy and request-stage correlation', async () => {
+  const h = normalHarness(), stages = [];
+  h.deps.traceLog = (_, json) => stages.push(JSON.parse(json));
+  const badge = new Request(PROOF_ORIGIN + '/api/m1-manager-review', { headers: { 'X-GIB-M1-Read-ID': id } });
+  const responses = await Promise.all([handleManagerReview(badge, h.deps), handleManagerReview(normalAdmin(), h.deps)]);
+  assert.deepEqual(responses.map(r => r.status), [200, 200]);
+  assert.deepEqual(Object.keys(await responses[0].json()).sort(), ['asOf', 'ok', 'pendingDays']);
+  const ids = responses.map(r => r.headers.get('X-GIB-M1-Read-ID'));
+  assert.equal(new Set(ids).size, 2); assert.ok(ids.every(Boolean));
+  for (const requestId of ids) {
+    const own = stages.filter(s => s.requestId === requestId);
+    for (const stage of ['pending.write', 'pending.readback', 'dispatch', 'callback.acceptance', 'schedule', 'added-classes', 'response']) assert.ok(own.some(s => s.stage === stage), stage);
+  }
+  assert.ok(stages.some(s => s.clientId === id));
+  assert.doesNotMatch(JSON.stringify(stages), /synthetic-test-admin|synthetic-test-transport|Andrew|attendanceHash|https:/);
+  await Promise.all(h.tasks);
+});
+
+test('dependency and storage failures identify their failing stage without returning an all-clear', async () => {
+  for (const failure of ['pending.write', 'schedule', 'added-classes', 'callback.result.write']) {
+    const h = normalHarness(), stages = [];
+    h.deps.traceLog = (_, json) => stages.push(JSON.parse(json));
+    if (failure === 'pending.write') h.store.set = async () => { throw new Error('private store failure'); };
+    if (failure === 'schedule') h.deps.schedule.current = false;
+    if (failure === 'added-classes') h.deps.addedStore.getWithMetadata = async () => { throw new Error('private added-class failure'); };
+    if (failure === 'callback.result.write') {
+      const set = h.store.set;
+      h.store.set = (...args) => args[0].endsWith('/result') ? Promise.reject(new Error('private result failure')) : set(...args);
+    }
+    const response = await handleManagerReview(normalAdmin(), h.deps);
+    assert.equal(response.status, 503, failure);
+    assert.equal((await response.json()).pendingDays, undefined);
+    await Promise.all(h.tasks);
+    assert.ok(stages.some(s => s.stage === failure && s.state === 'failed'), failure);
+    assert.doesNotMatch(JSON.stringify(stages), /private .* failure/);
+  }
 });
 
 test('temporary collection removes expired and orphaned results while preserving live requests', async () => {
