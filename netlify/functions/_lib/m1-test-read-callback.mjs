@@ -119,6 +119,9 @@ export async function dispatchProof(store, pending, runtime, dependencies = {}) 
   const started = clock();
   const trace = dependencies.readTrace || createReadTrace(pending.binding.requestId, dependencies);
   const timing = { method: 'POST', host: 'script.google.com', status: null, elapsedMs: 0, outcome: 'unavailable', ordinaryReplyUsed: false };
+  const confirmed = dependencies.confirmedCallbackSignal;
+  const budget = AbortSignal.timeout(25_000);
+  const signal = confirmed ? AbortSignal.any([budget, confirmed]) : budget;
   try {
     validateBinding(pending.binding, started);
     trace('dispatch', 'start');
@@ -126,12 +129,17 @@ export async function dispatchProof(store, pending, runtime, dependencies = {}) 
       method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       body: JSON.stringify({ token: runtime.webhookToken, adminActionToken: runtime.adminActionToken, target: 'test', action: 'managerReviewReadCallbackProof', gym: 'rev', from: pending.binding.from, to: pending.binding.to, adminName: pending.reviewer, binding: pending.binding }),
       // Fault injection: never follow or consume ContentService, even if it works.
-      redirect: 'manual', signal: AbortSignal.timeout(25_000)
+      redirect: 'manual', signal
     });
     timing.status = response.status;
     timing.outcome = 'ordinary-reply-discarded';
     await response.body?.cancel();
-  } catch (error) { timing.outcome = ['TimeoutError', 'AbortError'].includes(error?.name) ? 'timeout' : 'unavailable'; }
+  } catch (error) {
+    // The winning abort reason is immutable: a later valid callback must not
+    // relabel an ordinary request whose original timeout already fired.
+    timing.outcome = confirmed?.aborted && signal.reason === confirmed.reason
+      ? 'callback-confirmed' : ['TimeoutError', 'AbortError'].includes(error?.name) ? 'timeout' : 'unavailable';
+  }
   timing.elapsedMs = Math.max(0, clock() - started);
   trace('dispatch', timing.outcome, timing.status);
   // No credentials, redirect URL, response body, identity or raw error is logged.
@@ -202,7 +210,8 @@ export async function loadCallbackLedger(request, runtime, reviewer, dependencie
   const saved = await traceReadStage(trace, 'pending.write', () => store.set(key(id, 'pending'), JSON.stringify(pending), { onlyIfNew: true }));
   const confirmed = await traceReadStage(trace, 'pending.readback', () => readEntry(store, id, 'pending'));
   if (saved?.modified !== true || JSON.stringify(confirmed) !== JSON.stringify(pending)) fail(503, 'Review status unavailable.');
-  dependencies.context.waitUntil(dispatchProof(store, confirmed, runtime, { ...dependencies, readTrace: trace }));
+  const callbackConfirmed = new AbortController();
+  dependencies.context.waitUntil(dispatchProof(store, confirmed, runtime, { ...dependencies, readTrace: trace, confirmedCallbackSignal: callbackConfirmed.signal }));
   // Leave headroom under the platform's 60-second synchronous limit. Delivery
   // has its original 25-second budget and is never retried by this waiter.
   const deadline = Math.min(started + 50_000, pending.binding.expiresAt);
@@ -214,6 +223,9 @@ export async function loadCallbackLedger(request, runtime, reviewer, dependencie
     catch (error) { trace('result.storage.read', 'failed', error?.status); throw error; }
     if (result.state === 'received') {
       validateBinding(pending.binding, clock());
+      // readProof has validated the persisted authoritative result, digest,
+      // binding and snapshot time. Its unused ordinary reply can now stop.
+      callbackConfirmed.abort(new DOMException('Authoritative callback confirmed', 'AbortError'));
       trace('callback.wait', 'received');
       console.info('M1_TEST_MANAGER_CALLBACK_READ', JSON.stringify({ requestId: id, purpose: pending.binding.action, elapsedMs: clock() - started, callbackMs: result.latencyMs, state: 'received' }));
       return result.result;

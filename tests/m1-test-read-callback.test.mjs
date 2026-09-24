@@ -8,7 +8,7 @@ import { handleReadResult } from '../netlify/functions/m1-test-read-result.mjs';
 import { handleManagerReview } from '../netlify/functions/m1-manager-review.mjs';
 import { ADMIN_COOKIE, ADMIN_REQUEST_HEADER, createAdminSession, runtimeConfig } from '../netlify/functions/_lib/m1-common.mjs';
 import { datesThrough } from '../netlify/functions/_lib/m1-manager-review.mjs';
-import { CALLBACK_URL, PROOF_ORIGIN, PROOF_PATH, SIGNATURE_HEADER, cleanupExpiredReads, key, makeBinding, signature } from '../netlify/functions/_lib/m1-test-read-callback.mjs';
+import { CALLBACK_URL, PROOF_ORIGIN, PROOF_PATH, SIGNATURE_HEADER, cleanupExpiredReads, dispatchProof, key, makeBinding, signature } from '../netlify/functions/_lib/m1-test-read-callback.mjs';
 
 const now = Date.parse('2026-09-23T17:30:00Z');
 const id = '00000000-0000-4000-8000-000000000001';
@@ -428,6 +428,111 @@ function normalAdmin(input = { action: 'read' }) {
   const auth = admin();
   return new Request(PROOF_ORIGIN + '/api/m1-manager-review', { method: 'POST', headers: auth.headers, body: JSON.stringify(input) });
 }
+
+test('validated callback cancels a blocked ordinary reply while lifecycle ownership and receipt saving finish', { timeout: 2000 }, async () => {
+  const h = normalHarness(), stages = [];
+  let signal;
+  h.deps.traceLog = (_, json) => stages.push(JSON.parse(json));
+  h.deps.fetch = async (url, init) => {
+    const body = JSON.parse(init.body); h.calls.push(body); signal = init.signal;
+    const ordinary = new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    assert.equal(signal.aborted, false);
+    const p = { binding: body.binding, readAt: h.deps.clock(), result: ledger() };
+    assert.equal((await handleReadResult(callback(p), { ...h.deps, context: { ...context } })).status, 200);
+    return ordinary;
+  };
+  const response = await handleManagerReview(normalAdmin(), h.deps);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).days.length, 17);
+  await Promise.all(h.tasks); // Model a delivery layer that drains waitUntil.
+  assert.equal(h.tasks.length, 2); assert.equal(h.calls.length, 1);
+  assert.equal(signal.aborted, true);
+  const requestId = h.calls[0].binding.requestId;
+  assert.equal(h.store.entries.get(key(requestId, 'dispatch')).outcome, 'callback-confirmed');
+  const received = stages.findIndex(s => s.stage === 'result.storage.read' && s.state === 'ok');
+  const cancelled = stages.findIndex(s => s.stage === 'dispatch' && s.state === 'callback-confirmed');
+  assert.ok(received >= 0 && cancelled > received, 'only the validated persisted result may cancel dispatch');
+});
+
+test('missing, failed, corrupt, mismatched and expired callbacks never confirm cancellation', { timeout: 2000 }, async () => {
+  for (const mode of ['missing', 'write-failed', 'digest', 'binding', 'readAt', 'expired']) {
+    const h = normalHarness(false);
+    let signal, release;
+    const ordinary = new Promise(resolve => { release = resolve; });
+    h.deps.fetch = async (url, init) => {
+      const body = JSON.parse(init.body); h.calls.push(body); signal = init.signal;
+      if (mode !== 'missing') {
+        const p = { binding: body.binding, readAt: h.deps.clock(), result: ledger() };
+        if (mode === 'write-failed') {
+          const set = h.store.set;
+          h.store.set = (...args) => args[0].endsWith('/result') ? Promise.reject(new Error('unavailable')) : set(...args);
+        }
+        if (mode === 'digest') {
+          const set = h.store.set;
+          h.store.set = (k, value, options) => set(k, k.endsWith('/result') ? JSON.stringify({ ...JSON.parse(value), digest: 'corrupt' }) : value, options);
+        }
+        if (mode === 'binding') p.binding = { ...p.binding, gym: 'richmond' };
+        if (mode === 'readAt') p.readAt = body.binding.expiresAt;
+        if (mode === 'expired') h.clock(body.binding.expiresAt);
+        await handleReadResult(callback(p), { ...h.deps, context: { ...context } });
+      }
+      return ordinary;
+    };
+    const response = await handleManagerReview(normalAdmin(), h.deps);
+    assert.notEqual(response.status, 200, mode);
+    assert.equal((await response.json()).pendingDays, undefined, mode);
+    assert.equal(signal.aborted, false, mode);
+    assert.equal(h.calls.length, 1, mode);
+    release(new Response(null, { status: 302 })); await Promise.all(h.tasks);
+  }
+});
+
+test('the original 25-second budget wins its race with later confirmation and proof dispatch keeps that budget', async t => {
+  const budget = new AbortController(), confirmation = new AbortController(), durations = [];
+  t.mock.method(AbortSignal, 'timeout', ms => { durations.push(ms); return budget.signal; });
+  const h = harness(), pending = { binding: makeBinding(id, now), reviewer: 'Andrew Smith' };
+  h.store.entries.set(key(id, 'pending'), pending);
+  h.deps.fetch = async (url, init) => {
+    budget.abort(new DOMException('budget elapsed', 'TimeoutError'));
+    confirmation.abort(new DOMException('confirmed later', 'AbortError'));
+    throw init.signal.reason;
+  };
+  await dispatchProof(h.store, pending, runtime, { ...h.deps, confirmedCallbackSignal: confirmation.signal });
+  assert.deepEqual(durations, [25000]);
+  assert.equal(h.store.entries.get(key(id, 'dispatch')).outcome, 'timeout');
+  const proof = harness();
+  proof.store.entries.set(key(id, 'pending'), pending);
+  await dispatchProof(proof.store, pending, runtime, proof.deps);
+  assert.deepEqual(durations, [25000, 25000]);
+});
+
+test('confirming one overlapping read cannot cancel the other; settled ordinary receipts stay unchanged', { timeout: 2000 }, async () => {
+  const h = normalHarness(), dispatched = [], waiters = [];
+  h.deps.sleep = () => new Promise(resolve => waiters.push(resolve));
+  h.deps.fetch = async (url, init) => {
+    const body = JSON.parse(init.body); h.calls.push(body);
+    const ordinary = new Promise((resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+      dispatched.push({ body, signal: init.signal, resolve });
+    });
+    return ordinary;
+  };
+  const adminRead = handleManagerReview(normalAdmin(), h.deps);
+  const badgeRead = handleManagerReview(new Request(PROOF_ORIGIN + '/api/m1-manager-review'), h.deps);
+  while (dispatched.length < 2 || waiters.length < 2) await new Promise(resolve => setImmediate(resolve));
+  const adminDispatch = dispatched.find(d => d.body.binding.action === 'managerReviewRead');
+  const badgeDispatch = dispatched.find(d => d.body.binding.action === 'managerReviewBadgeRead');
+  await handleReadResult(callback({ binding: adminDispatch.body.binding, readAt: now, result: ledger() }), h.deps);
+  waiters.splice(0).forEach(resolve => resolve());
+  assert.equal((await adminRead).status, 200);
+  assert.equal(adminDispatch.signal.aborted, true); assert.equal(badgeDispatch.signal.aborted, false);
+  badgeDispatch.resolve(new Response(null, { status: 302 }));
+  while (!h.store.entries.has(key(badgeDispatch.body.binding.requestId, 'dispatch'))) await new Promise(resolve => setImmediate(resolve));
+  await handleReadResult(callback({ binding: badgeDispatch.body.binding, readAt: now, result: ledger() }), h.deps);
+  waiters.splice(0).forEach(resolve => resolve());
+  assert.equal((await badgeRead).status, 200); await Promise.all(h.tasks);
+  assert.equal(h.store.entries.get(key(badgeDispatch.body.binding.requestId, 'dispatch')).outcome, 'ordinary-reply-discarded');
+});
 
 test('ordinary authenticated Admin read receives the callback; unauthenticated calls never dispatch', async () => {
   const h = normalHarness();
