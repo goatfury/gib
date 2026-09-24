@@ -156,6 +156,7 @@ test('failed result saving and corrupted persisted result never return success',
 function googleHarness() {
   let locked = false;
   let clock = now + 100;
+  let nonce = 0;
   const sent = [];
   const logs = [];
   const properties = new Map();
@@ -164,16 +165,144 @@ function googleHarness() {
     configuredDeploymentTarget_: () => 'test', requestTarget_: body => body.target, adminActionAuthorized_: body => body.token === env.GIB_TEST_WEBHOOK_TOKEN && body.adminActionToken === env.GIB_TEST_ADMIN_ACTION_TOKEN,
     todayNewYork_: () => '2026-09-23', rejectedAuthResult_: () => ({ getContent: () => '{"ok":false}' }), jsonResult_: value => ({ getContent: () => JSON.stringify(value) }),
     LockService: { getScriptLock: () => ({ tryLock: () => { locked = true; return true; }, releaseLock: () => { locked = false; } }) },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: k => properties.get(k) || null, setProperty: (k, v) => properties.set(k, v), deleteProperty: k => properties.delete(k) }) },
+    PropertiesService: { getScriptProperties: () => ({ getKeys: () => [...properties.keys()], getProperty: k => properties.get(k) || null, setProperty: (k, v) => { if (k.startsWith('M1_TEST_READ_TRACE_V1_')) assert.equal(locked, false); properties.set(k, v); }, deleteProperty: k => properties.delete(k) }) },
     openExpectedSpreadsheet_: () => ({ getName: () => 'RBJJ M1 — TEST', getSheetByName: () => null }), signinsSheet_: () => ({}), readSignins_: () => ({ records: [] }),
-    Utilities: { sleep: ms => { assert.equal(locked, false); assert.ok(ms > 0 && ms <= 61000); clock += ms; }, Charset: { UTF_8: 'utf8' }, DigestAlgorithm: { SHA_256: 'sha256' }, newBlob: text => ({ getBytes: () => [...Buffer.from(text)] }), computeDigest: (algorithm, text) => [...createHash(algorithm).update(text).digest()], computeHmacSha256Signature: (text, secret) => [...createHmac('sha256', secret).update(text).digest()] },
-    UrlFetchApp: { fetch: (url, options) => { assert.equal(locked, false, 'Google read lock must be released before callback'); sent.push({ url, options }); return { getResponseCode: () => 200 }; }, getRequest: () => ({}) }
+    Utilities: { getUuid: () => `10000000-0000-4000-8000-${String(++nonce).padStart(12, '0')}`, sleep: ms => { assert.equal(locked, false); assert.ok(ms > 0 && ms <= 61000); clock += ms; }, Charset: { UTF_8: 'utf8' }, DigestAlgorithm: { SHA_256: 'sha256' }, newBlob: text => ({ getBytes: () => [...Buffer.from(text)] }), computeDigest: (algorithm, text) => [...createHash(algorithm).update(text).digest()], computeHmacSha256Signature: (text, secret) => [...createHmac('sha256', secret).update(text).digest()] },
+    UrlFetchApp: { fetch: (url, options) => { assert.equal(locked, false, 'Google read lock must be released before callback'); sent.push({ url, options }); return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ ok: true, accepted: true, requestId: JSON.parse(options.payload).binding.requestId }) }; }, getRequest: () => ({}) }
   });
   vm.runInContext(read('integrations/google-apps-script/GibM1ManagerReview.gs'), ctx);
   vm.runInContext(read('integrations/google-apps-script/GibM1TestReadCallback.gs'), ctx);
   const body = { token: env.GIB_TEST_WEBHOOK_TOKEN, adminActionToken: env.GIB_TEST_ADMIN_ACTION_TOKEN, target: 'test', gym: 'rev', action: 'managerReviewReadCallbackProof', from: '2026-09-07', to: '2026-09-23', adminName: 'Andrew Smith', binding: makeBinding(id, now) };
-  return { ctx, sent, body, properties, logs, clock: () => clock };
+  return { ctx, sent, body, properties, logs, clock: () => clock, setClock: value => { clock = value; } };
 }
+
+const googleReceipts = g => [...g.properties].filter(([key]) => key.startsWith('M1_TEST_READ_TRACE_V1_')).map(([, value]) => JSON.parse(value));
+test('editor-armed receipts cover authenticated validation rejection and a request-specific acknowledgment; unauthenticated input cannot create a receipt', () => {
+  const g = googleHarness();
+  g.ctx.testRevolutionStartReadTrace();
+  g.ctx.gibM1TestReadCallback_(g.body);
+  const success = googleReceipts(g)[0];
+  assert.equal(success.requestId, id); assert.equal(success.acknowledged, true); assert.equal(success.error, 'none'); assert.equal(success.status, 200);
+  assert.ok(success.events.some(e => e.stage === 'google.lock' && e.state === 'released'));
+  for (const change of [body => { body.gym = 'richmond'; }, body => { body.binding.expiresAt++; }, body => { body.binding.requestId = 'private-untrusted-value'; }]) {
+    const body = structuredClone(g.body); change(body);
+    g.ctx.gibM1TestReadCallback_(body);
+    assert.equal(googleReceipts(g).at(-1).error, 'validation_rejected');
+  }
+  assert.equal(googleReceipts(g).at(-1).requestId, null);
+  const before = structuredClone([...g.properties]);
+  g.ctx.gibM1TestReadCallback_({ ...g.body, adminActionToken: 'bad' });
+  assert.deepEqual([...g.properties], before);
+  assert.doesNotMatch(JSON.stringify([...g.properties]) + g.logs.join('\n'), /private-untrusted|synthetic-test|Andrew|script\.google/);
+  assert.equal(g.sent.length, 1);
+});
+
+test('Google failure receipts distinguish thrown read/parse/transport exceptions, rejection, non-success HTTP and wrong acknowledgments', () => {
+  const cases = [
+    ['lock', 'google.result', 'read_rejected', null, null],
+    ['read', 'google.read', 'thrown_exception', null, null],
+    ['decode', 'google.decode', 'thrown_exception', null, null],
+    ['incomplete', 'google.result', 'read_rejected', null, null],
+    ['oversize', 'google.payload', 'payload_limit', null, null],
+    ['transport', 'google.callback', 'thrown_exception', null, null],
+    ['http', 'google.callback', 'callback_http', 503, false],
+    ['json', 'google.ack', 'ack_invalid_json', 200, false],
+    ['mismatch', 'google.ack', 'ack_mismatch', 200, false],
+    ['null', 'google.ack', 'ack_mismatch', 200, false],
+    ['ack-read', 'google.ack', 'ack_read_exception', 200, false]
+  ];
+  for (const [mode, stage, error, status, acknowledged] of cases) {
+    const g = googleHarness(); g.ctx.testRevolutionStartReadTrace();
+    if (mode === 'lock') g.ctx.LockService.getScriptLock = () => ({ tryLock: () => false });
+    if (mode === 'read') g.ctx.readSignins_ = () => { throw new Error('private attendance error'); };
+    if (mode === 'decode') g.ctx.managerReviewAction_ = () => ({ getContent: () => 'private response' });
+    if (mode === 'incomplete') g.ctx.managerReviewAction_ = () => ({ getContent: () => JSON.stringify({ ...ledger(), complete: false }) });
+    if (mode === 'oversize') g.ctx.Utilities.newBlob = () => ({ getBytes: () => ({ length: 256001 }) });
+    let calls = 0;
+    if (['transport', 'http', 'json', 'mismatch', 'null', 'ack-read'].includes(mode)) g.ctx.UrlFetchApp.fetch = () => {
+      calls++;
+      if (mode === 'transport') throw new Error('private signed URL');
+      return { getResponseCode: () => mode === 'http' ? 503 : 200, getContentText: () => {
+        if (mode === 'ack-read') throw new Error('private response');
+        if (mode === 'json') return '<private response>';
+        if (mode === 'null') return 'null';
+        return JSON.stringify({ ok: true, accepted: true, requestId: 'different-private-id' });
+      } };
+    };
+    const result = g.ctx.gibM1TestReadCallback_(g.body);
+    assert.equal(JSON.parse(result.getContent()).code, 'CALLBACK_PROOF_ORDINARY_REPLY_UNAVAILABLE');
+    const receipts = googleReceipts(g); assert.equal(receipts.length, 1, mode);
+    assert.deepEqual([receipts[0].stage, receipts[0].error, receipts[0].status, receipts[0].acknowledged], [stage, error, status, acknowledged], mode);
+    assert.ok(calls <= 1, 'diagnostic must not retry delivery');
+    assert.doesNotMatch(JSON.stringify(receipts) + g.logs.join('\n'), /private|Andrew|synthetic-test/);
+  }
+});
+
+test('separate immutable diagnostic receipts preserve failure evidence even when a later success reuses the same request ID and millisecond', () => {
+  const g = googleHarness(); g.ctx.testRevolutionStartReadTrace();
+  const fetch = g.ctx.UrlFetchApp.fetch;
+  g.ctx.UrlFetchApp.fetch = () => ({ getResponseCode: () => 503 });
+  g.ctx.gibM1TestReadCallback_(g.body);
+  const [failureKey, failureValue] = [...g.properties].find(([key]) => key.startsWith('M1_TEST_READ_TRACE_V1_'));
+  g.ctx.UrlFetchApp.fetch = fetch;
+  g.ctx.gibM1TestReadCallback_(g.body);
+  const receipts = googleReceipts(g);
+  assert.equal(receipts.length, 2);
+  assert.equal(g.properties.get(failureKey), failureValue);
+  assert.deepEqual(receipts.map(r => [r.requestId, r.error]), [[id, 'callback_http'], [id, 'none']]);
+});
+
+test('trace expiry and admission bounds preserve unexpired receipts and unrelated properties; the editor reader only outputs sanitized values', () => {
+  const g = googleHarness(); g.ctx.testRevolutionStartReadTrace();
+  const key = (expiry, index) => `M1_TEST_READ_TRACE_V1_${expiry}_20000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+  const raw = JSON.stringify({ requestId: id, stage: 'private-stage', error: 'private-error', events: [], extra: 'private-payload' });
+  g.properties.set('UNRELATED', 'private-secret');
+  for (let i = 0; i < 96; i++) g.properties.set(key(now + 3600000, i), raw);
+  for (let i = 0; i < 40; i++) g.properties.set(key(now, i), raw);
+  const keys = g.ctx.gibM1ReadTraceKeys_(g.ctx.PropertiesService.getScriptProperties(), g.clock());
+  assert.equal(keys.length, 104, 'at most 32 expired keys are cleaned per call');
+  g.ctx.gibM1TestReadCallback_(g.body);
+  assert.equal(googleReceipts(g).length, 96); assert.equal(g.sent.length, 1);
+  assert.ok(g.logs.includes('M1_TEST_READ_TRACE_UNAVAILABLE'));
+  assert.equal(g.properties.get('UNRELATED'), 'private-secret');
+  g.ctx.testRevolutionReadTraceReceipts();
+  assert.doesNotMatch(g.logs.join('\n'), /private-/);
+  assert.ok(g.logs.some(s => s.includes('"stage":"google.request"')));
+  g.setClock(now + 3600001);
+  g.logs.length = 0; g.ctx.testRevolutionReadTraceReceipts();
+  assert.equal(g.logs.some(s => s.startsWith('M1_TEST_READ_RECEIPT ')), false, 'expired receipts are never exposed even when cleanup is partial');
+  g.setClock(now + 21 * 60000); g.ctx.gibM1TestReadCallback_(g.body);
+  assert.equal(g.logs.some(s => s.startsWith('M1_TEST_READ_RECEIPT ')), false);
+});
+
+test('every diagnostic service failure is best effort and adds no lock or callback dependency', () => {
+  for (const mode of ['window', 'keys', 'write', 'uuid', 'console']) {
+    const g = googleHarness(); g.ctx.testRevolutionStartReadTrace();
+    const properties = g.ctx.PropertiesService.getScriptProperties();
+    if (mode === 'window') properties.getProperty = () => { throw new Error('private diagnostic error'); };
+    if (mode === 'keys') properties.getKeys = () => { throw new Error('private diagnostic error'); };
+    if (mode === 'write') properties.setProperty = () => { throw new Error('private diagnostic error'); };
+    if (mode === 'uuid') g.ctx.Utilities.getUuid = () => { throw new Error('private diagnostic error'); };
+    if (mode === 'console') g.ctx.console.log = () => { throw new Error('private diagnostic error'); };
+    g.ctx.PropertiesService.getScriptProperties = () => properties;
+    const locks = [];
+    g.ctx.LockService.getScriptLock = () => ({ tryLock: ms => { locks.push(ms); return true; }, releaseLock() {} });
+    g.body.binding.action = 'managerReviewBadgeRead'; delete g.body.adminName;
+    g.ctx.gibM1TestReadCallback_(g.body);
+    assert.equal(g.sent.length, 1, mode); assert.deepEqual(locks, [10000], mode);
+  }
+});
+
+test('trace helpers are confined to the separate TEST editor and stop preserves existing receipts', () => {
+  const g = googleHarness(); g.ctx.testRevolutionStartReadTrace(); g.ctx.gibM1TestReadCallback_(g.body);
+  const existing = googleReceipts(g); g.ctx.testRevolutionStopReadTrace();
+  g.ctx.gibM1TestReadCallback_(g.body);
+  assert.deepEqual(googleReceipts(g), existing);
+  g.ctx.GIB_M1_RICHMOND_INSTALLATION_ = true;
+  for (const name of ['testRevolutionStartReadTrace', 'testRevolutionStopReadTrace', 'testRevolutionReadTraceReceipts']) assert.throws(() => g.ctx[name](), /Revolution TEST/);
+  const receiver = read('integrations/google-apps-script/GibM1Receiver.gs');
+  assert.doesNotMatch(receiver, /testRevolution(?:StartReadTrace|StopReadTrace|ReadTraceReceipts)/);
+});
 
 test('unarmed or expired badge faults never acquire a lock; authoritative read still owns its 10s lock', () => {
   for (const armedUntil of [undefined, now]) {
