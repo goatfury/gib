@@ -284,3 +284,109 @@ test('save returns only a confirmed receipt, with the updated view read separate
   const view = await handleManagerReview(new Request(`${origin}/api/m1-manager-review`, { method: 'POST', headers, body: '{"action":"read"}' }), deps);
   assert.equal((await view.json()).days.find(day => day.date === d.date).complete, true);
 });
+
+function reviewSaveRequest(input) {
+  const runtime = runtimeConfig(env, { admin: true, requestUrl: origin }), token = 'x'.repeat(43);
+  const cookie = createAdminSession('Andrew Smith', runtime.sessionSecret, +now, token);
+  return new Request(`${origin}/api/m1-manager-review`, { method: 'POST', headers: {
+    'Content-Type': 'application/json', Origin: origin, Cookie: `${ADMIN_COOKIE}=${encodeURIComponent(cookie)}`, [ADMIN_REQUEST_HEADER]: token
+  }, body: JSON.stringify(input) });
+}
+
+test('both review receipt paths require the exact original next revision and a complete success shape', async () => {
+  const mutations = [
+    ['missing revision', value => { delete value.revision; }], ['missing saved', value => { delete value.saved; }],
+    ['wrong ID', value => { value.requestId = 'manager-other1234567890123'; }], ['unsaved', value => { value.saved = false; }],
+    ...[0, -1, 2, 0.5, '1', Number.MAX_SAFE_INTEGER + 1].map(revision => [`wrong revision ${revision}`, value => { value.revision = revision; }]),
+    ['unexpected field', value => { value.date = '2026-09-21'; }], ['invalid retry', value => { value.retry = false; }],
+    ['array receipt', () => []]
+  ];
+  for (const action of ['partial', 'complete']) for (const path of ['checked', 'new']) for (const [name, change] of mutations) {
+    const ledger = receiver().call({ action: 'managerReviewRead' });
+    const input = { ...request(ledger.days.find(day => day.date === '2026-09-21')), action };
+    const value = { ...(path === 'new' ? { ok: true } : {}), saved: true, requestId: input.requestId, revision: 1 };
+    const malformed = change(value) || value;
+    if (path === 'checked') ledger.receipt = malformed;
+    const actions = [];
+    const response = await handleManagerReview(reviewSaveRequest(input), { ...dependencies, fetch: async (_url, init) => {
+      const body = JSON.parse(init.body); actions.push(body.action);
+      if (body.action === 'managerReviewRead') { assert.deepEqual(body.check, input); return Response.json(ledger); }
+      assert.equal(body.review.requestId, input.requestId);
+      return Response.json(malformed);
+    } });
+    assert.equal(response.status, 503, `${action}/${path}/${name}`);
+    const result = await response.json(); assert.equal(result.ok, false); assert.equal(result.receipt, undefined);
+    assert.equal(result.stage, path === 'checked' ? 'review.checked-receipt' : name === 'array receipt' ? 'review.save-dispatch' : 'review.save-receipt');
+    assert.deepEqual(actions, path === 'checked' ? ['managerReviewRead'] : ['managerReviewRead', 'managerReviewSave'], `${action}/${path}/${name}`);
+  }
+});
+
+test('a present null or invalid checked receipt never falls through to saving again', async () => {
+  for (const receipt of [null, false, 0, '', {}, { saved: true, requestId: 'manager-1234567890123456', revision: 1, retry: true },
+    { saved: true, requestId: 'manager-1234567890123456', revision: 1, ok: false }]) {
+    const ledger = receiver().call({ action: 'managerReviewRead' });
+    const input = request(ledger.days.find(day => day.date === '2026-09-21')); ledger.receipt = receipt;
+    const actions = [];
+    const response = await handleManagerReview(reviewSaveRequest(input), { ...dependencies, fetch: async (_url, init) => {
+      actions.push(JSON.parse(init.body).action); return Response.json(ledger);
+    } });
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).code, 'MANAGER_REVIEW_SAVE_UNCONFIRMED');
+    assert.deepEqual(actions, ['managerReviewRead']);
+  }
+});
+
+test('known Google receipt shapes remain accepted without rewriting the original request', async () => {
+  for (const path of ['checked', 'new']) for (const flags of path === 'checked' ? [{}, { ok: true }, { ok: true, retry: true }] : [{ ok: true }, { ok: true, retry: true }]) {
+    const ledger = receiver().call({ action: 'managerReviewRead' });
+    const input = request(ledger.days.find(day => day.date === '2026-09-21'));
+    const receipt = { ...flags, saved: true, requestId: input.requestId, revision: input.revision + 1 };
+    if (path === 'checked') ledger.receipt = receipt;
+    const actions = [];
+    const response = await handleManagerReview(reviewSaveRequest(input), { ...dependencies, fetch: async (_url, init) => {
+      const body = JSON.parse(init.body); actions.push(body.action);
+      if (body.action === 'managerReviewRead') { assert.deepEqual(body.check, input); return Response.json(ledger); }
+      assert.equal(body.review.requestId, input.requestId); assert.equal(body.review.revision, input.revision);
+      return Response.json(receipt);
+    } });
+    assert.equal(response.status, 200, `${path}/${JSON.stringify(flags)}`);
+    assert.deepEqual((await response.json()).receipt, receipt);
+    assert.deepEqual(actions, path === 'checked' ? ['managerReviewRead'] : ['managerReviewRead', 'managerReviewSave']);
+  }
+});
+
+test('a receipt cannot legitimize an invalid original revision', async () => {
+  for (const revision of [-1, 0.5, '0', Number.MAX_SAFE_INTEGER]) {
+    const ledger = receiver().call({ action: 'managerReviewRead' });
+    const input = { ...request(ledger.days.find(day => day.date === '2026-09-21')), revision };
+    ledger.receipt = { saved: true, requestId: input.requestId, revision: Number(revision) + 1 };
+    const actions = [];
+    const response = await handleManagerReview(reviewSaveRequest(input), { ...dependencies, fetch: async (_url, init) => {
+      actions.push(JSON.parse(init.body).action); return Response.json(ledger);
+    } });
+    assert.equal(response.status, 503, String(revision));
+    assert.deepEqual(actions, ['managerReviewRead']);
+  }
+});
+
+test('upstream save failures identify pre-read versus dispatch without logging credentials, records or raw errors', async () => {
+  for (const failedAction of ['managerReviewRead', 'managerReviewSave']) {
+    const ledger = receiver().call({ action: 'managerReviewRead' }), logged = [], actions = [];
+    const input = request(ledger.days.find(day => day.date === '2026-09-21'));
+    const response = await handleManagerReview(reviewSaveRequest(input), { ...dependencies, traceLog: (prefix, value) => logged.push([prefix, JSON.parse(value)]), fetch: async (_url, init) => {
+      const body = JSON.parse(init.body); actions.push(body.action);
+      if (body.action === failedAction) throw new Error('PRIVATE synthetic upstream error contents');
+      return Response.json(ledger);
+    } });
+    assert.equal(response.status, 503);
+    const result = await response.json();
+    const stage = failedAction === 'managerReviewRead' ? 'review.pre-save-read' : 'review.save-dispatch';
+    assert.equal(result.stage, stage); assert.equal(result.code, 'UNREACHABLE');
+    assert.deepEqual(actions, failedAction === 'managerReviewRead' ? ['managerReviewRead'] : ['managerReviewRead', 'managerReviewSave']);
+    assert.equal(logged.length, 1); assert.equal(logged[0][0], 'M1_MANAGER_REVIEW_SAVE_STAGE');
+    const evidence = logged[0][1];
+    assert.deepEqual(Object.keys(evidence).sort(), ['code', 'elapsedMs', 'requestId', 'stage', 'status']);
+    assert.equal(evidence.requestId, input.requestId); assert.equal(evidence.stage, stage); assert.equal(evidence.code, 'UNREACHABLE');
+    assert.doesNotMatch(JSON.stringify(logged), /PRIVATE|upstream error|synthetic-test|Andrew Smith|decisions/);
+  }
+});

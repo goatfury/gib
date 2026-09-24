@@ -7,7 +7,8 @@ import { handleReadProof } from '../netlify/functions/m1-test-read-proof.mjs';
 import { handleReadResult } from '../netlify/functions/m1-test-read-result.mjs';
 import { handleManagerReview } from '../netlify/functions/m1-manager-review.mjs';
 import { ADMIN_COOKIE, ADMIN_REQUEST_HEADER, createAdminSession, runtimeConfig } from '../netlify/functions/_lib/m1-common.mjs';
-import { datesThrough } from '../netlify/functions/_lib/m1-manager-review.mjs';
+import { datesThrough, dayPlan } from '../netlify/functions/_lib/m1-manager-review.mjs';
+import { emptyAddedClasses, publicAddedClasses } from '../netlify/functions/_lib/m1-added-classes.mjs';
 import { CALLBACK_URL, PROOF_ORIGIN, PROOF_PATH, SIGNATURE_HEADER, cleanupExpiredReads, dispatchProof, key, makeBinding, signature } from '../netlify/functions/_lib/m1-test-read-callback.mjs';
 
 const now = Date.parse('2026-09-23T17:30:00Z');
@@ -655,7 +656,11 @@ test('same-request save recovery and correction pre-validation stay on their ori
   for (const action of ['partial', 'complete', 'void']) {
     const h = normalHarness();
     h.deps.store = { list() { throw new Error('A save must never dispatch a check:null callback'); } };
-    const input = { action, requestId: 'manager-1234567890123456', date: '2026-09-22', recordId: 'original', fingerprint: 'a'.repeat(64), reason: 'TEST reason' };
+    const day = ledger().days.find(day => day.date === '2026-09-22');
+    const plan = dayPlan(day, h.deps.schedule, publicAddedClasses(emptyAddedClasses('rev'), now), new Date(now));
+    const input = { action, requestId: 'manager-1234567890123456', date: day.date, ...(action === 'void'
+      ? { recordId: 'original', fingerprint: 'a'.repeat(64), reason: 'TEST reason' }
+      : { revision: plan.revision, attendanceHash: day.attendanceHash, scheduleHash: plan.scheduleHash, decisions: [] }) };
     const calls = [];
     h.deps.fetch = async (url, init) => {
       const body = JSON.parse(init.body); calls.push(body);

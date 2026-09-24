@@ -75,6 +75,20 @@
       })();
       return inFlight;
     }
+    function confirmedReviewSave(result, original) {
+      const receipt = result?.receipt;
+      if (result?.ok !== true || result.target !== target || result.test !== test
+        || !['partial', 'complete'].includes(original.action)
+        || typeof original.requestId !== 'string' || !/^manager-[a-zA-Z0-9-]{16,100}$/.test(original.requestId)
+        || !Number.isSafeInteger(original.revision) || original.revision < 0
+        || !receipt || typeof receipt !== 'object' || Array.isArray(receipt)
+        || receipt.saved !== true || receipt.requestId !== original.requestId
+        || !Number.isSafeInteger(receipt.revision) || receipt.revision !== original.revision + 1) return false;
+      const keys = Object.keys(receipt);
+      return keys.every(key => ['saved', 'requestId', 'revision', 'ok', 'retry'].includes(key))
+        && (!keys.includes('ok') || receipt.ok === true)
+        && (!keys.includes('retry') || (receipt.retry === true && receipt.ok === true));
+    }
     async function save(requestData, url = endpoint) {
       if (busy || legacyWritePending()) return;
       try { remember({ url, body: requestData }); }
@@ -84,7 +98,9 @@
       try {
         const result = await request(url, requestData, { timeoutMs: 65000, timeoutMessage: 'Central saving could not be confirmed in time. Retry / check the same save safely.' });
         if (!active || own !== generation) return;
-        if (result?.ok !== true || (url === endpoint && !result.receipt) || (url !== endpoint && !validateAdditionResult(result, requestData))) throw new Error('Central saving was not confirmed.');
+        const reviewSave = url === endpoint && ['partial', 'complete'].includes(requestData.action);
+        if (result?.ok !== true || (reviewSave ? !confirmedReviewSave(result, requestData) : url === endpoint && !result.receipt)
+          || (url !== endpoint && !validateAdditionResult(result, requestData))) throw new Error('Central saving was not confirmed.');
         remember(null); close();
         if (url === endpoint && Array.isArray(result.days)) data = result;
         else await load(true);
@@ -92,7 +108,9 @@
       } catch (error) {
         if (!active || own !== generation) return;
         busy = false;
-        console.warn('M1 review save unconfirmed', error.status || 'network', error.data?.code || 'no receipt');
+        const stage = ['review.pre-save-read', 'review.pre-save-validation', 'review.save-dispatch', 'review.checked-receipt', 'review.save-receipt'].includes(error.data?.stage)
+          ? error.data.stage : 'unknown-stage';
+        console.warn('M1 review save unconfirmed', error.status || 'network', error.data?.code || 'no receipt', stage);
         if (error.status === 409 && url === endpoint) { remember(null); await load(true); }
         render(error.message);
         if (error.status === 401) onUnauthorized();

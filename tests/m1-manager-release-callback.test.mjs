@@ -8,7 +8,8 @@ import { handleReadProof } from '../netlify/functions/m1-test-read-proof.mjs';
 import { handleReadResult } from '../netlify/functions/m1-test-read-result.mjs';
 import { managerReviewScope } from '../netlify/functions/_lib/m1-manager-scope.mjs';
 import { ADMIN_COOKIE, ADMIN_REQUEST_HEADER, createAdminSession, runtimeConfig } from '../netlify/functions/_lib/m1-common.mjs';
-import { datesThrough } from '../netlify/functions/_lib/m1-manager-review.mjs';
+import { datesThrough, dayPlan } from '../netlify/functions/_lib/m1-manager-review.mjs';
+import { emptyAddedClasses, publicAddedClasses } from '../netlify/functions/_lib/m1-added-classes.mjs';
 import { CALLBACK_URL, LIVE_ORIGIN, PROOF_ORIGIN, SIGNATURE_HEADER, callbackURL, callbackRuntime, cleanupExpiredReads, key, makeBinding, signature } from '../netlify/functions/_lib/m1-test-read-callback.mjs';
 
 const now = Date.parse('2026-09-23T17:30:00Z');
@@ -162,7 +163,10 @@ test('live read needs supported lifecycle and missing callback is unavailable, n
 
 test('live save recovery preserves the original request check and never uses callback check:null', async () => {
   const h = harness();
-  const input = { action: 'partial', requestId: 'manager-synthetic-original-request', date: '2026-09-22' };
+  const day = ledger().days.find(day => day.date === '2026-09-22');
+  const plan = dayPlan(day, h.deps.schedule, publicAddedClasses(emptyAddedClasses('rev', 'production'), now), new Date(now));
+  const input = { action: 'partial', requestId: 'manager-synthetic-original-request', date: day.date,
+    revision: plan.revision, attendanceHash: day.attendanceHash, scheduleHash: plan.scheduleHash, decisions: [] };
   const receipt = { saved: true, requestId: input.requestId, revision: 1 };
   h.deps.fetch = async (url, options) => {
     const body = JSON.parse(options.body); h.calls.push(body);

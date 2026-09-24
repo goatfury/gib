@@ -33,7 +33,7 @@ function manager(target = 'test', options = {}) {
     focus() { this.focused = true; }
     scrollIntoView() { this.scrolled = true; }
   }
-  const bodyClasses = new Set(), legacyCalls = [], events = {};
+  const bodyClasses = new Set(), legacyCalls = [], events = {}, warnings = [];
   const legacySection = new Element('section');
   const document = { addEventListener: (name, fn) => { events[name] = fn; }, createElement: tag => { const n = new Element(tag); made.push(n); return n; }, getElementById: id => id === 'reviewSection' ? legacySection : new Element('parent'), body: { classList: { add: name => bodyClasses.add(name), remove: name => bodyClasses.delete(name) } } };
   let unauthorized = 0;
@@ -47,12 +47,132 @@ function manager(target = 'test', options = {}) {
     createTicket: () => ({ requestId: `00000000-0000-4000-8000-${String(++ticketSequence).padStart(12, '0')}`, startedAt: clockNow(), deadlineAt: clockNow() + 50000, expiresAt: clockNow() + 60000, dispatched: false }),
     run: ({ ticket, send, retain = () => {} }) => { retain({ ...ticket, dispatched: true }); return send({ operation: ticket.dispatched ? 'status' : 'start', requestId: ticket.requestId }, { timeoutMs: 25000 }); }
   };
-  const ctx = vm.createContext({ document, Date, console, GIBM1ReadClient: readClient, addEventListener: (name, fn) => { events[name] = fn; }, crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' }, FormData: class { constructor(form) { return Object.entries(form.fields); } }, sessionStorage: { getItem: key => remembered.get(key) || null, setItem: (key, value) => remembered.set(key, value), removeItem: key => remembered.delete(key) }, M1_MANAGER_REVIEW_CONFIG: { enabled: options.enabled ?? true, target } });
+  const ctx = vm.createContext({ document, Date, console: { ...console, warn: (...args) => warnings.push(args) }, GIBM1ReadClient: readClient, addEventListener: (name, fn) => { events[name] = fn; }, crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' }, FormData: class { constructor(form) { return Object.entries(form.fields); } }, sessionStorage: { getItem: key => remembered.get(key) || null, setItem: (key, value) => remembered.set(key, value), removeItem: key => remembered.delete(key) }, M1_MANAGER_REVIEW_CONFIG: { enabled: options.enabled ?? true, target } });
   vm.runInContext(source('m1/admin/manager-review.js'), ctx);
   const ui = ctx.GIBM1ManagerReview.create({ request: (...args) => { const d = deferred(); calls.push({ ...d, args }); return d.promise; }, site: 'Rev', onUnauthorized: () => unauthorized++, openLegacy: date => { legacyCalls.push(date); return options.legacyResult ?? true; }, additionRequestId: date => { additionDates.push(date); return `m1-${date}-${'a'.repeat(24)}`; }, ...options });
   const root = made[0];
-  return { ui, calls, made, nodes, root, bodyClasses, legacyCalls, legacySection, remembered, additionDates, events, document, unauthorized: () => unauthorized, click: (action, detail = {}) => root.events.click({ target: { closest: () => ({ dataset: { action, ...detail } }) } }) };
+  return { ui, calls, made, nodes, root, bodyClasses, legacyCalls, legacySection, remembered, additionDates, events, document, warnings, unauthorized: () => unauthorized, click: (action, detail = {}) => root.events.click({ target: { closest: () => ({ dataset: { action, ...detail } }) } }) };
 }
+
+const reviewView = (target = 'test') => {
+  const value = result(2, target);
+  Object.assign(value.days[0], { revision: 2, attendanceHash: 'a'.repeat(64), scheduleHash: 'b'.repeat(64), decisions: [],
+    canComplete: true, historyKnown: true, warnings: [], changed: false,
+    classes: [{ label: '9:00 AM BJJ', scheduled: true, outcome: '', records: [] }] });
+  return value;
+};
+const reviewReceipt = (original, target = 'test') => ({ ok: true, target, test: target === 'test',
+  receipt: { saved: true, requestId: original.requestId, revision: original.revision + 1 } });
+
+test('unconfirmed review-save logging accepts only fixed diagnostic stages and excludes private payloads', async () => {
+  for (const stage of ['review.pre-save-read', 'review.pre-save-validation', 'review.save-dispatch', 'review.checked-receipt', 'review.save-receipt', 'private credential or attendance']) {
+    const h = manager(), opened = h.ui.open(); h.calls[0].resolve(reviewView()); await opened;
+    h.click('partial');
+    h.calls[1].reject(Object.assign(new Error('Private response message'), { status: 503, data: { code: 'FAILED', stage, request: { credential: 'SECRET' } } }));
+    await flush();
+    assert.deepEqual(h.warnings, [['M1 review save unconfirmed', 503, 'FAILED', stage.startsWith('review.') ? stage : 'unknown-stage']]);
+    assert.doesNotMatch(JSON.stringify(h.warnings), /private|Private|SECRET|credential/);
+  }
+});
+
+test('class decisions and day completion retain their exact request until a matching central receipt', async () => {
+  for (const target of ['test', 'production']) for (const action of ['partial', 'complete']) {
+    const h = manager(target), opened = h.ui.open();
+    h.calls[0].resolve(reviewView(target)); await opened;
+    if (action === 'partial') h.root.events.change({ target: { hasAttribute: key => key === 'data-outcome', dataset: { outcome: '0' }, value: 'unknown' } });
+    else { h.click('complete'); h.nodes.get('[data-confirm]').events.click(); }
+    const original = JSON.parse(JSON.stringify(h.calls[1].args[1]));
+    assert.equal(original.action, action); assert.equal(original.revision, 2);
+    assert.deepEqual(original.decisions, action === 'partial' ? [{ label: '9:00 AM BJJ', outcome: 'unknown' }] : []);
+    assert.deepEqual(JSON.parse(h.remembered.get('m1-manager-pending-v1')).body, original);
+    h.click('partial'); h.click('complete'); assert.equal(h.calls.length, 2);
+    const confirmation = reviewReceipt(original, target); confirmation.receipt.ok = true;
+    h.calls[1].resolve(confirmation); await flush();
+    assert.equal(h.remembered.has('m1-manager-pending-v1'), false);
+    assert.equal(h.calls[2].args[1].action, 'read');
+    const fresh = reviewView(target); fresh.days[0].revision = 3; fresh.days[0].complete = action === 'complete';
+    h.calls[2].resolve(fresh); await flush();
+    assert.equal(h.ui.hasPendingSave(), false);
+    assert.match(h.nodes.get('.manager-status').textContent, action === 'complete' ? /saved complete centrally/ : /Unresolved items keep this day pending/);
+  }
+});
+
+test('partial and complete saves reject incomplete, conflicting or foreign-environment receipts without clearing the journal', async () => {
+  const changes = [
+    value => { value.receipt = {}; },
+    value => { value.receipt = true; },
+    value => { value.receipt = []; },
+    value => { value.receipt.saved = false; },
+    value => { delete value.receipt.saved; },
+    value => { value.receipt.requestId = 'manager-other-original-1234567890'; },
+    value => { value.receipt.revision = 2; },
+    value => { value.receipt.revision = 4; },
+    value => { value.receipt.revision = 3.5; },
+    value => { value.receipt.revision = '3'; },
+    value => { value.receipt.ok = false; },
+    value => { value.receipt.retry = true; },
+    value => { value.receipt.ok = true; value.receipt.retry = false; },
+    value => { value.receipt.extra = true; },
+    value => { value.target = 'production'; value.test = false; },
+    value => { delete value.target; },
+    value => { value.test = false; }
+  ];
+  for (const action of ['partial', 'complete']) for (const change of changes) {
+    const h = manager(), opened = h.ui.open(); h.calls[0].resolve(reviewView()); await opened;
+    if (action === 'partial') h.click('partial');
+    else { h.click('complete'); h.nodes.get('[data-confirm]').events.click(); }
+    const original = JSON.parse(JSON.stringify(h.calls[1].args[1])), response = reviewReceipt(original);
+    change(response); h.calls[1].resolve(response); await flush();
+    assert.equal(h.ui.hasPendingSave(), true);
+    assert.deepEqual(JSON.parse(h.remembered.get('m1-manager-pending-v1')).body, original);
+    assert.equal(h.calls.length, 2, 'unconfirmed receipt cannot trigger a success read');
+    assert.match(h.nodes.get('.manager-status').textContent, /not confirmed/);
+    h.click('legacy'); assert.equal(h.legacyCalls.length, 0);
+  }
+});
+
+test('a lost review-save response survives reload and retries only the same original revision and identity', async () => {
+  for (const action of ['partial', 'complete']) for (const retryReceipt of [false, true]) {
+    const storage = new Map(), first = manager('test', { storage }), opened = first.ui.open();
+    first.calls[0].resolve(reviewView()); await opened;
+    if (action === 'partial') first.click('partial');
+    else { first.click('complete'); first.nodes.get('[data-confirm]').events.click(); }
+    const original = JSON.parse(JSON.stringify(first.calls[1].args[1]));
+    first.calls[1].reject(new Error('Original reply lost')); await flush(); first.ui.clear();
+    const h = manager('test', { storage }), reopened = h.ui.open();
+    assert.equal(h.calls[0].args[1].action, 'read', 'reopening does not resend a review write');
+    const latest = reviewView(); latest.days[0].revision = 7;
+    h.calls[0].resolve(latest); await reopened;
+    assert.equal(h.ui.hasPendingSave(), true, 'ordinary read is not original-save evidence');
+    h.click('retry'); h.click('retry');
+    assert.equal(h.calls.length, 2);
+    assert.deepEqual(JSON.parse(JSON.stringify(h.calls[1].args[1])), original);
+    const response = { ...latest, ...reviewReceipt(original) };
+    if (retryReceipt) Object.assign(response.receipt, { ok: true, retry: true });
+    h.calls[1].resolve(response); await flush();
+    assert.equal(h.ui.hasPendingSave(), false);
+    assert.equal(storage.has('m1-manager-pending-v1'), false);
+    assert.equal(h.calls.length, 2, 'valid recovery view needs no extra read or write');
+  }
+});
+
+test('malformed original revision and late review-save replies cannot release a newer pending request', async () => {
+  for (const revision of [-1, 1.5, Number.MAX_SAFE_INTEGER, '2']) {
+    const original = { action: 'partial', requestId: 'manager-original-1234567890123456', date: '2026-09-21', revision };
+    const storage = new Map([['m1-manager-pending-v1', JSON.stringify({ url: '/api/m1-manager-review', body: original })]]);
+    const h = manager('test', { storage }), opened = h.ui.open(); h.calls[0].resolve(reviewView()); await opened;
+    h.click('retry'); h.calls[1].resolve(reviewReceipt(original)); await flush();
+    assert.equal(h.ui.hasPendingSave(), true); assert.equal(storage.has('m1-manager-pending-v1'), true);
+  }
+  const h = manager(), opened = h.ui.open(); h.calls[0].resolve(reviewView()); await opened;
+  h.click('partial'); const original = JSON.parse(JSON.stringify(h.calls[1].args[1]));
+  h.ui.clear(); const reopened = h.ui.open(); h.calls[2].resolve(reviewView()); await reopened;
+  h.click('retry');
+  h.calls[1].resolve(reviewReceipt(original)); await flush();
+  assert.equal(h.ui.hasPendingSave(), true, 'old session receipt cannot clear the reopened request');
+  h.calls[3].resolve({ ...reviewView(), ...reviewReceipt(original) }); await flush();
+  assert.equal(h.ui.hasPendingSave(), false); assert.equal(h.calls.length, 4);
+});
 
 test('both release targets keep independent Daily Review reachable after first-load and refresh failures', async () => {
   for (const target of ['test', 'production']) for (const initial of [true, false]) {

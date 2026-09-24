@@ -51,6 +51,21 @@ export async function assembleManagerRead(ledger, request, scope, dependencies =
   return managerResponse(plannedManagerRead(ledger, calendar, scope, now, dependencies.readTrace), scope, now);
 }
 
+function confirmedReviewReceipt(receipt, original) {
+  const required = ['saved', 'requestId', 'revision'], allowed = [...required, 'ok', 'retry'];
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)
+    || required.some(key => !Object.hasOwn(receipt, key)) || Object.keys(receipt).some(key => !allowed.includes(key))
+    || !Number.isSafeInteger(original.revision) || original.revision < 0
+    || typeof original.requestId !== 'string' || !/^manager-[a-zA-Z0-9-]{16,100}$/.test(original.requestId)
+    || receipt.saved !== true || receipt.requestId !== original.requestId
+    || !Number.isSafeInteger(receipt.revision) || receipt.revision !== original.revision + 1
+    || (Object.hasOwn(receipt, 'ok') && receipt.ok !== true)
+    || (Object.hasOwn(receipt, 'retry') && (receipt.retry !== true || receipt.ok !== true))) {
+    throw Object.assign(new Error('The original review save was not confirmed. Keep its request and check it again.'), { status: 503, code: 'MANAGER_REVIEW_SAVE_UNCONFIRMED' });
+  }
+  return receipt;
+}
+
 export async function handleManagerReview(request, dependencies = {}) {
   const url = new URL(request.url);
   if (!(dependencies.enabled ?? MANAGER_REVIEW_ENABLED) || url.pathname !== config.path || url.search || url.hash || !['GET', 'POST'].includes(request.method)) return jsonResponse(404, { ok: false, message: 'Manager pilot unavailable.' });
@@ -117,6 +132,8 @@ export async function handleManagerReview(request, dependencies = {}) {
     ]);
     return plannedManagerRead(ledger, calendar, scope, now, trace);
   };
+  const reviewSave = ['partial', 'complete'].includes(input.action), saveStarted = (dependencies.clock || Date.now)();
+  let saveStage = reviewSave ? 'review.pre-save-read' : null;
   try {
     if (ticket) {
       const read = await readCallbackTicket(request, runtime, adminName, ticket, { ...dependencies, readTrace: trace });
@@ -140,15 +157,22 @@ export async function handleManagerReview(request, dependencies = {}) {
       return jsonResponse(200, { ok: true, test: true, receipt });
     } else if (['partial', 'complete'].includes(input.action)) {
       // A lost response can be checked using the original request, even after later changes.
-      if (loaded.ledger.receipt?.requestId === input.requestId && loaded.ledger.receipt.saved === true) receipt = loaded.ledger.receipt;
+      // A present but invalid receipt is ambiguous, never permission to save again.
+      if (Object.hasOwn(loaded.ledger, 'receipt')) {
+        saveStage = 'review.checked-receipt';
+        receipt = confirmedReviewReceipt(loaded.ledger.receipt, input);
+      }
       else {
+        saveStage = 'review.pre-save-validation';
         const day = loaded.ledger.days.find(day => day.date === input.date);
         if (!day) throw new Error('Choose a date in the cleanup period.');
         let review;
         try { review = proposedReview(input, day, loaded.schedule, loaded.added, now); }
         catch (error) { error.status = 409; throw error; }
+        saveStage = 'review.save-dispatch';
         receipt = await call('managerReviewSave', { date: input.date, adminName, review });
-        if (receipt.saved !== true || receipt.requestId !== input.requestId || !Number.isInteger(receipt.revision)) throw new Error('The review save was not confirmed.');
+        saveStage = 'review.save-receipt';
+        receipt = confirmedReviewReceipt(receipt, input);
         return jsonResponse(200, { ok: true, target, test: target === 'test', receipt });
       }
     }
@@ -158,7 +182,14 @@ export async function handleManagerReview(request, dependencies = {}) {
     return respond(200, { ok: true, target, test: target === 'test', gym: profile.installationId, site: profile.siteCode, timezone: TIMEZONE, today, cleanupStart: REVIEW_START, period: periodFor(today), asOf: new Date().toISOString(), pendingDays: count, days: loaded.days, ...(receipt ? { receipt } : {}) });
   } catch (error) {
     trace('review', 'failed', error.status || 503);
-    return respond(error.status || 503, { ok: false, message: ['read', 'badge'].includes(input.action) ? 'Review status unavailable. No fresh central read was confirmed.' : error.message || 'Review unavailable. Nothing is being marked caught up.', ...(error.code ? { code: error.code } : {}) });
+    if (reviewSave) {
+      try { (dependencies.traceLog || console.warn)('M1_MANAGER_REVIEW_SAVE_STAGE', JSON.stringify({
+        requestId: /^manager-[a-zA-Z0-9-]{16,100}$/.test(input.requestId || '') ? input.requestId : null,
+        stage: saveStage, status: error.status || 503, code: /^[A-Z_]{1,64}$/.test(error.code || '') ? error.code : 'UNCONFIRMED',
+        elapsedMs: Math.max(0, (dependencies.clock || Date.now)() - saveStarted)
+      })); } catch {} // Diagnostics cannot change save confirmation or recovery.
+    }
+    return respond(error.status || 503, { ok: false, message: ['read', 'badge'].includes(input.action) ? 'Review status unavailable. No fresh central read was confirmed.' : error.message || 'Review unavailable. Nothing is being marked caught up.', ...(error.code ? { code: error.code } : {}), ...(reviewSave ? { stage: saveStage } : {}) });
   }
 }
 export default (request, context) => handleManagerReview(request, { context });
