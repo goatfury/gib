@@ -156,6 +156,23 @@ test('a lost review-save response survives reload and retries only the same orig
   }
 });
 
+test('reloaded review-save retry is visibly disabled during the initial read and reenabled after either outcome', async () => {
+  for (const failedRead of [false, true]) {
+    const original = { action: 'partial', requestId: 'manager-original-1234567890123456', date: '2026-09-21', revision: 2 };
+    const storage = new Map([['m1-manager-pending-v1', JSON.stringify({ url: '/api/m1-manager-review', body: original })]]);
+    const h = manager('test', { storage }), opened = h.ui.open();
+    assert.match(h.root.innerHTML, /A previous save needs confirmation/);
+    assert.match(h.root.innerHTML, /data-action="retry" disabled>Retry \/ check the same save/);
+    h.click('retry'); assert.equal(h.calls.length, 1);
+    if (failedRead) h.calls[0].reject(new Error('Central read unavailable'));
+    else h.calls[0].resolve(reviewView());
+    await opened;
+    assert.match(h.root.innerHTML, /data-action="retry">Retry \/ check the same save/);
+    h.click('retry'); assert.equal(h.calls.length, 2);
+    assert.deepEqual(JSON.parse(JSON.stringify(h.calls[1].args[1])), original);
+  }
+});
+
 test('malformed original revision and late review-save replies cannot release a newer pending request', async () => {
   for (const revision of [-1, 1.5, Number.MAX_SAFE_INTEGER, '2']) {
     const original = { action: 'partial', requestId: 'manager-original-1234567890123456', date: '2026-09-21', revision };

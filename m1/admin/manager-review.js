@@ -29,8 +29,8 @@
       if (busy || pending) document.body.classList.remove('manager-legacy-open');
       root.setAttribute('aria-busy', String(reading));
       const retryLabel = isRevolutionAddition(pending) ? 'Check original save' : 'Retry / check the same save';
-      const originalRetry = pending && !busy && isRevolutionAddition(pending) ? '<button class="btn" data-action="retry-original">Retry original save</button>' : '';
-      const recovery = pending && !busy ? '<p class="manager-warning">A previous save needs confirmation before another edit.</p><button class="btn warn" data-action="retry">' + retryLabel + '</button>' + originalRetry : '';
+      const originalRetry = pending && !busy && isRevolutionAddition(pending) ? '<button class="btn" data-action="retry-original"' + (reading ? ' disabled' : '') + '>Retry original save</button>' : '';
+      const recovery = pending && !busy ? '<p class="manager-warning">A previous save needs confirmation before another edit.</p><button class="btn warn" data-action="retry"' + (reading ? ' disabled' : '') + '>' + retryLabel + '</button>' + originalRetry : '';
       const legacy = `<button class="btn" data-action="legacy" ${busy || pending ? 'disabled' : ''}>Existing Daily Review tools</button>`;
       if (!data) {
         root.innerHTML = `<div class="manager-summary"><h2>${title}</h2><p>${reading ? 'Reading central records…' : 'Review status unavailable. Unfinished days still need review.'}</p><div class="manager-controls"><button class="btn" data-action="refresh" ${reading || busy ? 'disabled' : ''}>Retry central read</button>${legacy}</div>${recovery}<p class="manager-status" role="status"></p></div>`;

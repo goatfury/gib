@@ -87,7 +87,12 @@ export function proposedReview(input, day, schedule, added, now) {
   for (const item of input.decisions) {
     if (!item || typeof item.label !== 'string' || !['unknown', 'not-held'].includes(item.outcome) || seen.has(key(item.label))) throw new Error('Invalid class decision.');
     const row = current.classes.find(row => row.id === key(item.label));
-    if (!row || row.upcoming || (item.outcome === 'not-held' && row.records.length)) throw new Error('Recorded teaching cannot be marked as not held, and upcoming classes cannot be resolved early.');
+    // A late sign-in can conflict with an already saved cancellation. Keep that
+    // unresolved decision while saving other partial work; never introduce a new
+    // cancellation over recorded teaching or use the exception to complete a day.
+    const retainedCancellation = input.action === 'partial' && item.outcome === 'not-held'
+      && day.review?.decisions.some(saved => saved.outcome === 'not-held' && key(saved.label) === key(item.label));
+    if (!row || row.upcoming || (item.outcome === 'not-held' && row.records.length && !retainedCancellation)) throw new Error('Recorded teaching cannot be marked as not held, and upcoming classes cannot be resolved early.');
     seen.add(key(item.label));
   }
   const candidate = dayPlan({ ...day, review: { ...day.review, decisions: input.decisions, snapshot: { base: current.base } } }, schedule, added, now);

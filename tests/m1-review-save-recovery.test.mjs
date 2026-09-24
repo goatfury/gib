@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { handleManagerReview, assembleManagerRead } from '../netlify/functions/m1-manager-review.mjs';
 import { managerReviewScope } from '../netlify/functions/_lib/m1-manager-scope.mjs';
-import { localNow } from '../netlify/functions/_lib/m1-manager-review.mjs';
+import { localNow, dayPlan, proposedReview } from '../netlify/functions/_lib/m1-manager-review.mjs';
+import { emptyAddedClasses, publicAddedClasses } from '../netlify/functions/_lib/m1-added-classes.mjs';
 import { ADMIN_COOKIE, ADMIN_REQUEST_HEADER, createAdminSession, runtimeConfig } from '../netlify/functions/_lib/m1-common.mjs';
 
 const morning = Date.parse('2026-09-22T15:00:00Z');
@@ -89,8 +90,8 @@ function fixture(target = 'test', liveEnabled = true) {
     const response = await handleManagerReview(request(body, name), { ...deps(), ...overrides });
     return { status: response.status, body: await response.json() };
   };
-  const add = (date, suffix, instructor = `TEST instructor ${suffix}`) => {
-    const body = { ...envelope(), action: 'addMissedInstructor', requestId: `m1-${date}-${suffix.repeat(24)}`, date, classLabel: taught, duration: 1, instructor, site: 'Rev', notes: 'DO NOT PAY', reason: 'TEST isolated fixture' };
+  const add = (date, suffix, instructor = `TEST instructor ${suffix}`, classLabel = taught) => {
+    const body = { ...envelope(), action: 'addMissedInstructor', requestId: `m1-${date}-${suffix.repeat(24)}`, date, classLabel, duration: 1, instructor, site: 'Rev', notes: 'DO NOT PAY', reason: 'TEST isolated fixture' };
     const receipt = post(body); assert.equal(receipt.ok, true, JSON.stringify(receipt)); return { body, receipt };
   };
   return { context, target, sheets, calls, post, envelope, ledger, view, input, save, add, request, deps,
@@ -211,3 +212,74 @@ test('production save remains blocked by either live switch and never uses the T
   assert.equal(f.calls.length, 1); assert.equal(f.calls[0].target, 'production');
   assert.equal(f.post({ ...f.envelope(), target: 'test', action: 'managerReviewRead' }).ok, false);
 });
+
+test('partial proposal may retain only a current inherited cancellation conflict; it remains unresolved and cannot bypass freshness or upcoming guards', () => {
+  const stamp = new Date(morning), schedule = { current: true, timezone: 'America/New_York', days: { Tuesday: [taught, canceled, evening] } };
+  const added = publicAddedClasses(emptyAddedClasses('rev'), +stamp);
+  const decision = { label: canceled, outcome: 'not-held' };
+  const record = { recordId: 'original-late-id', date: '2026-09-22', classLabel: canceled, instructor: 'TEST late instructor', duration: 1, reviewRequired: false };
+  const day = { date: record.date, attendanceHash: 'b'.repeat(64), records: [record], warnings: [],
+    review: { revision: 3, action: 'complete', attendanceHash: 'a'.repeat(64), scheduleHash: 'c'.repeat(64), decisions: [decision], snapshot: { base: schedule.days.Tuesday } } };
+  const input = { action: 'partial', requestId: 'manager-partial-conflict-0000000000000001', date: day.date, revision: 3, attendanceHash: day.attendanceHash,
+    scheduleHash: dayPlan(day, schedule, added, stamp).scheduleHash, decisions: [decision, { label: taught, outcome: 'unknown' }] };
+  const before = JSON.stringify(day), saved = proposedReview(input, day, schedule, added, stamp);
+  assert.deepEqual(saved.decisions, input.decisions);
+  assert.deepEqual(saved.snapshot.classes.find(row => row.label === canceled).records, [record]);
+  const plan = dayPlan({ ...day, review: saved }, schedule, added, stamp);
+  assert.equal(plan.classes.find(row => row.label === canceled).conflict, true);
+  assert.equal(plan.classes.find(row => row.label === canceled).unresolved, true);
+  assert.equal(plan.complete, false); assert.equal(plan.canComplete, false); assert.equal(JSON.stringify(day), before);
+  for (const change of [{ action: 'complete' }, { revision: 2 }, { attendanceHash: 'a'.repeat(64) }, { scheduleHash: 'a'.repeat(64) }]) {
+    assert.throws(() => proposedReview({ ...input, ...change }, day, schedule, added, stamp));
+  }
+  // Neither historical permission nor an unknown in the current revision counts.
+  for (const decisions of [[], [{ label: canceled, outcome: 'unknown' }]]) {
+    assert.throws(() => proposedReview(input, { ...day, review: { ...day.review, decisions } }, schedule, added, stamp), /Recorded teaching/);
+  }
+  const futureDay = { ...day, records: [{ ...record, classLabel: evening }], review: { ...day.review, decisions: [{ label: evening, outcome: 'not-held' }] } };
+  assert.throws(() => proposedReview({ ...input, decisions: [{ label: evening, outcome: 'not-held' }] }, futureDay, schedule, added, stamp), /upcoming/);
+});
+
+for (const target of ['test', 'production']) {
+  test(`${target}: late teaching conflict permits unrelated partial progress without changing records, old history or same-request recovery`, async () => {
+    const f = fixture(target); f.add('2026-09-22', '1');
+    const cancellation = { label: canceled, outcome: 'not-held' };
+    const original = await f.input('partial', '2026-09-22', [cancellation]);
+    f.loseNextSaveReply(); assert.equal((await f.save(original)).status, 503);
+    const oldHistory = f.journal(); assert.equal(oldHistory.length, 2);
+    const stale = await f.input('partial', original.date, [cancellation, { label: taught, outcome: 'unknown' }]);
+    const late = f.add(original.date, '2', 'TEST actual late instructor', canceled);
+    const records = f.attendanceAndAudit();
+    assert.equal((await f.save(stale)).status, 409, 'unsaved old attendance hash cannot use the inherited-decision exception');
+    const recoveredOriginal = await f.save(original);
+    assert.equal(recoveredOriginal.status, 200); assert.equal(recoveredOriginal.body.receipt.revision, 1);
+    assert.equal(recoveredOriginal.body.days.find(day => day.date === original.date).classes.find(row => row.label === canceled).conflict, true);
+    assert.deepEqual(f.journal(), oldHistory);
+    const progress = await f.input('partial', original.date, [cancellation, { label: taught, outcome: 'unknown' }]);
+    const partial = await f.save(progress);
+    assert.equal(partial.status, 200, JSON.stringify(partial.body)); assert.equal(partial.body.receipt.revision, 2);
+    const day = (await f.view()).days.find(day => day.date === original.date), conflicting = day.classes.find(row => row.label === canceled);
+    assert.equal(day.complete, false); assert.equal(day.canComplete, false); assert.equal(conflicting.conflict, true); assert.equal(conflicting.unresolved, true);
+    assert.equal(conflicting.records[0].recordId, late.receipt.linkedRecordId);
+    assert.equal(day.classes.find(row => row.label === taught).outcome, 'unknown');
+    assert.deepEqual(f.journal().slice(0, oldHistory.length), oldHistory); assert.equal(f.attendanceAndAudit(), records);
+    const progressHistory = f.journal();
+    assert.equal((await f.save(progress)).body.receipt.revision, 2); assert.deepEqual(f.journal(), progressHistory);
+    assert.equal((await f.save({ ...stale, attendanceHash: progress.attendanceHash })).status, 409, 'current hash cannot excuse an old unsaved review revision');
+    // Even after all class times pass, inherited conflict cannot complete the day.
+    f.setTime('2026-09-23T00:00:00Z');
+    const complete = await f.input('complete', original.date, [cancellation, { label: evening, outcome: 'not-held' }]);
+    assert.equal((await f.save(complete)).status, 409); assert.deepEqual(f.journal(), progressHistory);
+    // Once resolved in a new partial revision, an old not-held may not be reintroduced.
+    const resolved = await f.input('partial', original.date, [{ label: taught, outcome: 'unknown' }]);
+    assert.equal((await f.save(resolved)).status, 200);
+    const resolvedHistory = f.journal(); assert.equal(resolvedHistory.length, 4);
+    assert.equal((await f.save(await f.input('partial', original.date, [cancellation]))).status, 409);
+    const originalAfterResolution = await f.save(original);
+    assert.equal(originalAfterResolution.status, 200); assert.equal(originalAfterResolution.body.receipt.revision, 1);
+    const current = originalAfterResolution.body.days.find(day => day.date === original.date);
+    assert.equal(current.revision, 3); assert.equal(current.complete, false); assert.equal(current.classes.find(row => row.label === canceled).outcome, '');
+    assert.deepEqual(f.journal(), resolvedHistory); assert.equal(f.attendanceAndAudit(), records);
+    assert.equal(f.calls.filter(body => body.action === 'managerReviewSave').length, 3);
+  });
+}
