@@ -22,10 +22,17 @@ const functions = await zipFunctions('netlify/functions', resolve(root, 'functio
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const archiveHashes = {};
 for (const fn of functions) archiveHashes[fn.name] = sha256(await readFile(fn.path));
+// Keep the artifact portable. The upload preflight alone creates the short-lived,
+// absolute-path cache that the installed CLI actually consumes.
+const manifest = JSON.parse(await readFile(resolve(root, 'manifest.json'), 'utf8'));
+for (const fn of manifest.functions) fn.path = `functions/${fn.name}.zip`;
+const manifestBytes = JSON.stringify(manifest);
+await writeFile(resolve(root, 'manifest.json'), manifestBytes);
 await writeFile(resolve(root, 'build.json'), JSON.stringify({
   source: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   tree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim(),
-  installation: 'richmond', environment: 'test', packager: '14.5.4', archiveHashes
+  installation: 'richmond', environment: 'test', packager: '14.5.4',
+  manifestSha256: sha256(manifestBytes), archiveHashes
 }, null, 2));
 await writeFile(resolve(root, 'netlify.toml'), '[build]\npublish = "public"\nfunctions = "functions"\n');
 console.log(`Packaged ${functions.length} Richmond TEST functions; nothing deployed.`);
