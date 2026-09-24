@@ -1,6 +1,18 @@
-/* Revolution TEST only. No callback support for writes or other installations. */
+/* Revolution reads only. Fixed, separate TEST and production destinations. */
 var GIB_M1_TEST_READ_CALLBACK_URL_ = 'https://deploy-preview-89--gib-live.netlify.app/api/m1-test-read-result';
 var GIB_M1_TEST_READ_CALLBACK_SCHEMA_ = 'm1-test-read-callback/v1';
+var GIB_M1_LIVE_READ_CALLBACK_URL_ = 'https://gib-live.netlify.app/api/m1-manager-read-result';
+var GIB_M1_LIVE_READ_CALLBACK_SCHEMA_ = 'm1-manager-read-callback/v1';
+
+function gibM1ReadCallbackTarget_() {
+  if (!managerReviewEnabled_() || typeof GIB_M1_RICHMOND_INSTALLATION_ !== 'undefined'
+    || typeof GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ !== 'undefined') return '';
+  var target = configuredDeploymentTarget_();
+  if (typeof GIB_M1_ALLOWED_TARGET === 'undefined' || GIB_M1_ALLOWED_TARGET !== target) return '';
+  if (target === 'test' && EXPECTED_SPREADSHEET_NAME === 'RBJJ M1 — TEST') return target;
+  if (target === 'production' && EXPECTED_SPREADSHEET_NAME === 'RBJJ M1 — PRODUCTION') return target;
+  return '';
+}
 
 // Editor-armed diagnostic only; no HTTP action exposes these receipts.
 var GIB_M1_READ_TRACE_WINDOW_ = 'M1_TEST_READ_TRACE_UNTIL';
@@ -57,7 +69,7 @@ function gibM1ReadTraceReceipt_(requestId, started) {
   var events = [], active = false;
   try {
     var until = Number(PropertiesService.getScriptProperties().getProperty(GIB_M1_READ_TRACE_WINDOW_));
-    active = until > started && until <= started + 20 * 60000;
+    active = gibM1TestReadCallbackEnabled_() && until > started && until <= started + 20 * 60000;
   } catch (_) {} // Diagnostics never gate the authoritative read or callback.
   return {
     event: function(stage, state, status, elapsedMs) {
@@ -84,9 +96,7 @@ function gibM1ReadTraceReceipt_(requestId, started) {
 }
 
 function gibM1TestReadCallbackEnabled_() {
-  return typeof GIB_M1_ALLOWED_TARGET !== 'undefined' && GIB_M1_ALLOWED_TARGET === 'test'
-    && typeof GIB_M1_RICHMOND_INSTALLATION_ === 'undefined'
-    && EXPECTED_SPREADSHEET_NAME === 'RBJJ M1 — TEST' && managerReviewEnabled_();
+  return gibM1ReadCallbackTarget_() === 'test';
 }
 
 // Run this only from the separate TEST project's editor for the owner's consent.
@@ -95,6 +105,14 @@ function authorizeRevolutionTestReadCallback() {
   if (!gibM1TestReadCallbackEnabled_()) throw new Error('Revolution TEST project required.');
   UrlFetchApp.getRequest(GIB_M1_TEST_READ_CALLBACK_URL_, { method: 'post' });
   console.log('Revolution TEST callback permission is available. No request sent.');
+}
+
+// Only a separately approved production release may run this consent handoff.
+// No request is sent and no Sheet is modified.
+function authorizeRevolutionManagerReadCallback() {
+  if (gibM1ReadCallbackTarget_() !== 'production') throw new Error('Enabled Revolution production project required.');
+  UrlFetchApp.getRequest(GIB_M1_LIVE_READ_CALLBACK_URL_, { method: 'post' });
+  console.log('Revolution read callback permission is available. No request sent.');
 }
 
 // Editor-only, one-shot fault for hosted TEST QA. No HTTP action can arm it.
@@ -109,7 +127,7 @@ function testRevolutionCallbackFaultReceipt() {
   console.log(PropertiesService.getScriptProperties().getProperty('M1_TEST_CALLBACK_FAULT_RECEIPT') || 'No fault receipt.');
 }
 function gibM1ConsumeLateBadge_(binding) {
-  if (binding.action !== 'managerReviewBadgeRead') return false;
+  if (!gibM1TestReadCallbackEnabled_() || binding.action !== 'managerReviewBadgeRead') return false;
   var lock, acquired = false;
   try {
     var properties = PropertiesService.getScriptProperties();
@@ -133,9 +151,12 @@ function gibM1TestReadCallback_(body) {
   var stage = 'google.request', error = 'thrown_exception', status = null, acknowledged = null;
   var now = Date.now();
   try {
-    if (!gibM1TestReadCallbackEnabled_() || !adminActionAuthorized_(body)) return rejectedAuthResult_();
+    var target = gibM1ReadCallbackTarget_();
+    if (!target || !adminActionAuthorized_(body)) return rejectedAuthResult_();
+    var schema = target === 'test' ? GIB_M1_TEST_READ_CALLBACK_SCHEMA_ : GIB_M1_LIVE_READ_CALLBACK_SCHEMA_;
+    var callbackUrl = target === 'test' ? GIB_M1_TEST_READ_CALLBACK_URL_ : GIB_M1_LIVE_READ_CALLBACK_URL_;
     var b = body.binding;
-    receipt = gibM1ReadTraceReceipt_(b && b.requestId, now);
+    if (target === 'test') receipt = gibM1ReadTraceReceipt_(b && b.requestId, now);
     trace = function(stage, state, status, elapsedMs) {
       // Allow-listed diagnostic data only; never raw errors, response bodies or secrets.
       try {
@@ -147,7 +168,7 @@ function gibM1TestReadCallback_(body) {
     };
     trace('google.request', 'accepted');
     stage = 'google.envelope';
-    if (body.action !== 'managerReviewReadCallbackProof' || requestTarget_(body) !== 'test'
+    if (body.action !== (target === 'test' ? 'managerReviewReadCallbackProof' : 'managerReviewReadCallback') || requestTarget_(body) !== target
       || body.gym !== 'rev' || body.from !== '2026-09-07' || body.to !== todayNewYork_()) {
       error = 'validation_rejected'; trace(stage, 'rejected'); return rejectedAuthResult_();
     }
@@ -156,7 +177,7 @@ function gibM1TestReadCallback_(body) {
     var fields = ['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt'];
     var rejection = null;
     if (!b || JSON.stringify(Object.keys(b).sort()) !== JSON.stringify(fields.sort())) rejection = 'binding_shape';
-    else if (b.schema !== GIB_M1_TEST_READ_CALLBACK_SCHEMA_ || b.target !== 'test' || b.gym !== 'rev'
+    else if (b.schema !== schema || b.target !== target || b.gym !== 'rev'
       || ['managerReviewRead', 'managerReviewBadgeRead'].indexOf(b.action) < 0 || b.from !== body.from || b.to !== body.to
     ) rejection = 'binding_scope';
     else if (b.action === 'managerReviewRead' ? GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) < 0 : body.adminName !== undefined) rejection = 'binding_reviewer';
@@ -169,25 +190,25 @@ function gibM1TestReadCallback_(body) {
     }
     if (rejection) { error = rejection; trace(stage, 'rejected'); return rejectedAuthResult_(); }
     trace(stage, 'validated');
-    var lateTest = gibM1ConsumeLateBadge_(b);
+    var lateTest = target === 'test' && gibM1ConsumeLateBadge_(b);
     trace('google.fault', lateTest ? 'armed' : 'skipped');
     // This existing read owns and releases its lock in finally before returning.
     stage = 'google.read';
-    var read = managerReviewAction_({ action: 'managerReviewRead', target: 'test', token: body.token,
+    var read = managerReviewAction_({ action: 'managerReviewRead', target: target, token: body.token,
       adminActionToken: body.adminActionToken, gym: 'rev', from: body.from, to: body.to, adminName: body.adminName, check: null }, trace);
     stage = 'google.decode';
     var result = JSON.parse(read.getContent());
     var readAt = Date.now();
     stage = 'google.result';
     if (result.ok !== true || result.complete !== true || result.schema !== 'm1-manager-review/v1'
-      || result.gym !== 'rev' || result.from !== b.from || result.to !== b.to || readAt >= b.expiresAt) {
+      || result.gym !== 'rev' || result.target !== target || result.from !== b.from || result.to !== b.to || readAt >= b.expiresAt) {
       error = 'read_rejected'; throw new Error('Read unavailable.');
     }
     stage = 'google.payload';
     var raw = JSON.stringify({ binding: b, readAt: readAt, result: result });
     if (Utilities.newBlob(raw).getBytes().length > 256000) { error = 'payload_limit'; throw new Error('Callback too large.'); }
     stage = 'google.signature';
-    var signature = Utilities.computeHmacSha256Signature(GIB_M1_TEST_READ_CALLBACK_SCHEMA_ + '\n' + raw, body.adminActionToken, Utilities.Charset.UTF_8)
+    var signature = Utilities.computeHmacSha256Signature(schema + '\n' + raw, body.adminActionToken, Utilities.Charset.UTF_8)
       .map(function(byte) { return ('0' + ((byte + 256) % 256).toString(16)).slice(-2); }).join('');
     if (lateTest) Utilities.sleep(Math.max(0, b.expiresAt + 1000 - Date.now()));
     stage = 'google.expiry';
@@ -196,7 +217,7 @@ function gibM1TestReadCallback_(body) {
     if (remaining < 1 && !lateTest) { error = 'expired'; throw new Error('Read expired.'); }
     stage = 'google.callback';
     trace('google.callback', 'start');
-    var response = UrlFetchApp.fetch(GIB_M1_TEST_READ_CALLBACK_URL_, {
+    var response = UrlFetchApp.fetch(callbackUrl, {
       method: 'post', contentType: 'application/json', payload: raw,
       headers: { 'X-GIB-M1-Read-Signature': signature },
       followRedirects: false, validateHttpsCertificates: true, muteHttpExceptions: true,
@@ -228,6 +249,6 @@ function gibM1TestReadCallback_(body) {
     } catch (_) {}
   } catch (_) { trace(stage, 'failed'); trace('google.request', 'failed'); try { console.warn('M1_TEST_CALLBACK_UNAVAILABLE'); } catch (_) {} }
   finally { try { receipt.finish(stage, error, status, acknowledged); } catch (_) {} }
-  // Deliberately unusable ContentService result for this proof action only.
-  return jsonResult_({ ok: false, code: 'CALLBACK_PROOF_ORDINARY_REPLY_UNAVAILABLE' });
+  // No authoritative data travels in the discarded ordinary response.
+  return jsonResult_({ ok: false, code: target === 'production' ? 'CALLBACK_ORDINARY_REPLY_UNAVAILABLE' : 'CALLBACK_PROOF_ORDINARY_REPLY_UNAVAILABLE' });
 }

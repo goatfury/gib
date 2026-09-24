@@ -157,7 +157,7 @@ function adReceiverV2_(e) {
     }
 
     var action = cleanText_(body.action);
-    if (action === 'managerReviewReadCallbackProof') {
+    if (action === 'managerReviewReadCallbackProof' || action === 'managerReviewReadCallback') {
       return typeof gibM1TestReadCallback_ === 'function' ? gibM1TestReadCallback_(body) : rejectedAuthResult_();
     }
     if (action === 'managerReviewRead' || action === 'managerReviewSave' || action === 'managerReviewVoid') {
@@ -1921,11 +1921,11 @@ function readAdminAuditHistory_(spreadsheet, date, options) {
         || (
           result !== 'added'
           && result !== 'already exists'
-          && !(result === 'voided' && (richmondInstructorVoidAuditContractEnabled_() || revolutionRemovalEnabled_() || (typeof managerReviewEnabled_ === 'function' && managerReviewEnabled_())))
+          && !(result === 'voided' && (richmondInstructorVoidAuditContractEnabled_() || revolutionRemovalEnabled_() || (typeof managerReviewTestEnabled_ === 'function' && managerReviewTestEnabled_())))
         )
         || exactText_(row[10]).length > GIB_M1_RECORD_ID_MAX_
         || (result === 'added' && exactText_(row[10]).indexOf('gib-admin-') !== 0)
-        || (result === 'voided' && !((typeof managerReviewEnabled_ === 'function' && managerReviewEnabled_())
+        || (result === 'voided' && !((typeof managerReviewTestEnabled_ === 'function' && managerReviewTestEnabled_())
           ? managerReviewHistoryComplete_(spreadsheet, row)
           : revolutionRemovalEnabled_()
             ? revolutionRemovalId_(exactText_(row[10])) && revolutionRemovalHistoryComplete_(spreadsheet, row)

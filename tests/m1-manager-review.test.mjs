@@ -76,14 +76,14 @@ function sheet(initial = []) {
   const rows = structuredClone(initial);
   return { rows, getDataRange: () => ({ getValues: () => structuredClone(rows) }), getLastRow: () => rows.length, appendRow: r => rows.push([...r]), getRange: (r, c) => ({ setNumberFormat() { return this; }, setValues(values) { values.forEach((row, i) => { rows[r - 1 + i] = [...row]; }); }, setValue(value) { rows[r - 1][c - 1] = value; } }) };
 }
-function receiver() {
+function receiver({ target = 'test', liveEnabled = false, name = target === 'production' ? 'RBJJ M1 — PRODUCTION' : 'RBJJ M1 — TEST' } = {}) {
   const sheets = new Map();
   const records = [];
   let failWrite = false;
-  const spreadsheet = { getName: () => 'RBJJ M1 — TEST', getSheetByName: name => sheets.get(name), insertSheet: name => { if (failWrite) throw new Error('TEST failed save'); const value = sheet(); sheets.set(name, value); return value; } };
-  const context = vm.createContext({ Date, JSON, GIB_M1_MANAGER_REVIEW_TEST_ENABLED: true, GIB_M1_ADMIN_NAMES_: ['Andrew Smith', 'Stuart Turner'], configuredDeploymentTarget_: () => 'test', requestTarget_: b => b.target, adminActionAuthorized_: b => b.token === 'synthetic', rejectedAuthResult_: () => ({ ok: false }), jsonResult_: value => JSON.parse(JSON.stringify(value)), todayNewYork_: () => '2026-09-22', validCalendarDate_: s => /^\d{4}-\d{2}-\d{2}$/.test(s), displayDate_: s => String(s), openExpectedSpreadsheet_: () => spreadsheet, signinsSheet_: () => ({}), readSignins_: () => ({ records }), activeRecord_: r => r.status !== 'VOID', reviewRecordIssue_: () => false, publicRecord_: r => ({ ...record(r.instructor, r.classLabel), date: r.date, recordId: r.rowId }), obviousTestValue_: s => /TEST/.test(s), LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) }, SpreadsheetApp: { flush() {} }, Utilities: { DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' }, computeDigest: (_, text) => [...createHash('sha256').update(text).digest()] } });
+  const spreadsheet = { getName: () => name, getSheetByName: name => sheets.get(name), insertSheet: name => { if (failWrite) throw new Error('TEST failed save'); const value = sheet(); sheets.set(name, value); return value; } };
+  const context = vm.createContext({ Date, JSON, GIB_M1_MANAGER_REVIEW_TEST_ENABLED: true, GIB_M1_MANAGER_REVIEW_LIVE_ENABLED: liveEnabled, GIB_M1_ADMIN_NAMES_: ['Andrew Smith', 'Stuart Turner'], configuredDeploymentTarget_: () => target, requestTarget_: b => b.target, adminActionAuthorized_: b => b.token === 'synthetic', rejectedAuthResult_: () => ({ ok: false }), jsonResult_: value => JSON.parse(JSON.stringify(value)), todayNewYork_: () => '2026-09-22', validCalendarDate_: s => /^\d{4}-\d{2}-\d{2}$/.test(s), displayDate_: s => String(s), openExpectedSpreadsheet_: () => spreadsheet, signinsSheet_: () => ({}), readSignins_: () => ({ records }), activeRecord_: r => r.status !== 'VOID', reviewRecordIssue_: () => false, publicRecord_: r => ({ ...record(r.instructor, r.classLabel), date: r.date, recordId: r.rowId }), obviousTestValue_: s => /TEST/.test(s), LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) }, SpreadsheetApp: { flush() {} }, Utilities: { DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' }, computeDigest: (_, text) => [...createHash('sha256').update(text).digest()] } });
   vm.runInContext(readFileSync(new URL('../integrations/google-apps-script/GibM1ManagerReview.gs', import.meta.url), 'utf8'), context);
-  const call = body => context.managerReviewAction_({ token: 'synthetic', target: 'test', gym: 'rev', from: '2026-09-07', to: '2026-09-22', adminName: 'Andrew Smith', ...body });
+  const call = body => context.managerReviewAction_({ token: 'synthetic', target, gym: 'rev', from: '2026-09-07', to: '2026-09-22', adminName: 'Andrew Smith', ...body });
   return { call, records, sheets, context, fail: () => { failWrite = true; } };
 }
 test('central journal survives sessions, is append-only and rejects simultaneous stale completion', () => {
@@ -118,6 +118,41 @@ test('wrong gym, production target and unauthenticated receiver actions are deni
   for (const override of [{ gym: 'richmond' }, { target: 'production' }, { token: 'wrong' }]) assert.equal(r.call({ action: 'managerReviewRead', ...override }).ok, false);
   r.context.GIB_M1_MANAGER_REVIEW_TEST_ENABLED = false;
   assert.equal(r.call({ action: 'managerReviewRead' }).ok, false);
+});
+
+test('production manager review requires its separate live gate and exact Revolution target and Sheet', () => {
+  assert.equal(receiver({ target: 'production' }).call({ action: 'managerReviewRead' }).ok, false);
+  assert.equal(receiver({ target: 'production', liveEnabled: true, name: 'RBJJ M1 — TEST' }).call({ action: 'managerReviewRead' }).ok, false);
+  const r = receiver({ target: 'production', liveEnabled: true });
+  for (const override of [{ gym: 'richmond' }, { target: 'test' }, { token: 'wrong' }]) {
+    assert.equal(r.call({ action: 'managerReviewRead', ...override }).ok, false);
+  }
+  r.records.push({ rowId: 'original-live-id', date: '2026-09-21', instructor: 'Existing Instructor', classLabel: '9:00 AM BJJ', duration: 1, status: 'OK' });
+  const read = r.call({ action: 'managerReviewRead' });
+  assert.equal(read.target, 'production');
+  const d = read.days.find(day => day.date === '2026-09-21');
+  assert.equal(d.records[0].correctable, true);
+  const input = proposedReview(request(d), d, schedule, added, now);
+  assert.equal(r.call({ action: 'managerReviewSave', date: d.date, review: input }).saved, true);
+  assert.equal(r.call({ action: 'managerReviewRead', check: input }).receipt.saved, true);
+  assert.equal(r.call({ action: 'managerReviewSave', date: d.date, review: input }).retry, true);
+  assert.equal(r.sheets.get('Manager Reviews').rows.length, 2);
+  r.context.GIB_M1_RICHMOND_INSTALLATION_ = true;
+  assert.equal(r.call({ action: 'managerReviewRead' }).ok, false);
+  delete r.context.GIB_M1_RICHMOND_INSTALLATION_;
+  r.context.GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ = true;
+  assert.equal(r.call({ action: 'managerReviewRead' }).ok, false);
+});
+
+test('live manager review cannot dispatch TEST removal or use TEST history compatibility', () => {
+  const r = receiver({ target: 'production', liveEnabled: true });
+  const original = { rowId: 'test-id-not-a-live-protocol', date: '2026-09-21', instructor: 'QA TEST Old fixture', status: 'OK' };
+  r.records.push(original);
+  assert.equal(r.call({ action: 'managerReviewVoid', date: original.date, recordId: original.rowId }).ok, false);
+  assert.equal(r.context.managerReviewVoid_({ target: 'production' }, null, null).ok, false);
+  assert.equal(r.context.managerReviewHistoryComplete_(null, null), false);
+  assert.equal(original.status, 'OK');
+  assert.equal(r.sheets.size, 0);
 });
 
 test('ambiguous permanent IDs keep an otherwise complete day pending', () => {

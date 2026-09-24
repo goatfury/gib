@@ -1,7 +1,16 @@
-/* Internal TEST-only day review journal. Attendance remains in Signins and AdminAudit. */
-function managerReviewEnabled_() {
+/* Explicitly gated day review journal. Attendance remains in Signins and AdminAudit. */
+function managerReviewTestEnabled_() {
   return typeof GIB_M1_MANAGER_REVIEW_TEST_ENABLED !== 'undefined'
     && GIB_M1_MANAGER_REVIEW_TEST_ENABLED === true && configuredDeploymentTarget_() === 'test';
+}
+function managerReviewEnabled_() {
+  return managerReviewTestEnabled_() || (
+    typeof GIB_M1_MANAGER_REVIEW_LIVE_ENABLED !== 'undefined'
+    && GIB_M1_MANAGER_REVIEW_LIVE_ENABLED === true
+    && configuredDeploymentTarget_() === 'production'
+    && typeof GIB_M1_RICHMOND_INSTALLATION_ === 'undefined'
+    && typeof GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ === 'undefined'
+  );
 }
 function managerHash_(value) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify(value), Utilities.Charset.UTF_8)
@@ -48,7 +57,8 @@ function managerDay_(date, state, events) {
     }
     var value = publicRecord_(r);
     value.fingerprint = managerAttendanceHash_([r]);
-    value.correctable = Boolean(r.rowId) && obviousTestValue_(r.instructor)
+    // Production opens the existing Daily Review, which independently checks eligibility.
+    value.correctable = Boolean(r.rowId) && (configuredDeploymentTarget_() === 'production' || obviousTestValue_(r.instructor))
       && state.records.filter(function(other) { return other.rowId === r.rowId; }).length === 1;
     records.push(value);
   });
@@ -56,7 +66,9 @@ function managerDay_(date, state, events) {
   return { date: date, records: records, warnings: warnings, attendanceHash: managerAttendanceHash_(all), review: reviews.length ? reviews[reviews.length - 1] : null };
 }
 function managerReviewAction_(body, readTrace) {
-  if (!managerReviewEnabled_() || requestTarget_(body) !== 'test' || !adminActionAuthorized_(body)) return rejectedAuthResult_();
+  var target = configuredDeploymentTarget_();
+  if (!managerReviewEnabled_() || requestTarget_(body) !== target || !adminActionAuthorized_(body)) return rejectedAuthResult_();
+  if (['managerReviewRead', 'managerReviewSave'].indexOf(body.action) < 0 && !(body.action === 'managerReviewVoid' && managerReviewTestEnabled_())) return rejectedAuthResult_();
   var gym = typeof GIB_M1_RICHMOND_INSTALLATION_ !== 'undefined' ? 'richmond' : 'rev';
   if (body.gym !== gym || body.from !== '2026-09-07' || body.to !== todayNewYork_()) return rejectedAuthResult_();
   var trace = body.action === 'managerReviewRead' && typeof readTrace === 'function' ? readTrace : function() {};
@@ -70,7 +82,8 @@ function managerReviewAction_(body, readTrace) {
   try {
     trace('google.read', 'start');
     var spreadsheet = openExpectedSpreadsheet_(body);
-    if (spreadsheet.getName() !== (gym === 'rev' ? 'RBJJ M1 — TEST' : 'Richmond BJJ M1 — TEST')) return rejectedAuthResult_();
+    var expectedName = target === 'production' ? 'RBJJ M1 — PRODUCTION' : (gym === 'rev' ? 'RBJJ M1 — TEST' : 'Richmond BJJ M1 — TEST');
+    if (spreadsheet.getName() !== expectedName) return rejectedAuthResult_();
     var state = readSignins_(signinsSheet_(spreadsheet), { tolerantReview: true });
     if (state.records.length > 20000) throw new Error('Attendance range too large.');
     var journal = managerJournal_(spreadsheet, false);
@@ -84,7 +97,7 @@ function managerReviewAction_(body, readTrace) {
         days.push(managerDay_(date, state, journal.events));
       }
       if (!days.length || days[days.length - 1].date !== body.to) throw new Error('Review date range incomplete.');
-      var result = { ok: true, schema: 'm1-manager-review/v1', complete: true, gym: gym, from: body.from, to: body.to, days: days };
+      var result = { ok: true, schema: 'm1-manager-review/v1', complete: true, target: target, gym: gym, from: body.from, to: body.to, days: days };
       if (body.check && GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) >= 0) {
         var checked = journal.events.filter(function(e) { return e.requestId === body.check.requestId; });
         if (checked.length && checked[0].requestHash !== managerRequestHash_(body.adminName, body.check)) return jsonResult_({ ok: false, message: 'Review request identity conflict.' });
@@ -125,6 +138,7 @@ function managerReviewAction_(body, readTrace) {
 // Same permanent VOID + append-only AdminAudit contract as existing corrections.
 // The pilot can exercise it only on fake records in a permanently TEST-locked receiver.
 function managerReviewVoid_(body, spreadsheet, state) {
+  if (!managerReviewTestEnabled_() || requestTarget_(body) !== 'test') return rejectedAuthResult_();
   var matches = state.records.filter(function(r) { return r.rowId && r.rowId === body.recordId; });
   var reason = safeText_(body.reason, 240, false);
   if (matches.length !== 1 || !reason || reason.length < 3 || !obviousTestValue_(matches[0].instructor)) return rejectedAuthResult_();
@@ -146,7 +160,7 @@ function managerReviewVoid_(body, spreadsheet, state) {
 }
 
 function managerReviewHistoryComplete_(spreadsheet, row) {
-  if (!managerReviewEnabled_()) return false;
+  if (!managerReviewTestEnabled_()) return false;
   var records = readSignins_(signinsSheet_(spreadsheet)).records.filter(function(record) { return record.rowId === exactText_(row[10]); });
   if (records.length !== 1 || records[0].status !== 'VOID' || !obviousTestValue_(records[0].instructor)) return false;
   var r = records[0];

@@ -16,7 +16,7 @@ const env = { GIB_TEST_WEBHOOK_URL: 'https://script.google.com/macros/s/SYNTHETI
 const runtime = runtimeConfig(env, { admin: true, requestUrl: PROOF_ORIGIN });
 const context = { site: { id: 'f748e737-11e3-4fab-8e8c-bf185eab29ff', name: 'gib-live' }, deploy: { id: 'synthetic-deploy', context: 'deploy-preview', published: false } };
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
-const ledger = () => ({ ok: true, schema: 'm1-manager-review/v1', complete: true, gym: 'rev', from: '2026-09-07', to: '2026-09-23', days: datesThrough('2026-09-23').map(date => ({ date, attendanceHash: 'a'.repeat(64), records: [], warnings: [], review: null })) });
+const ledger = () => ({ ok: true, target: 'test', schema: 'm1-manager-review/v1', complete: true, gym: 'rev', from: '2026-09-07', to: '2026-09-23', days: datesThrough('2026-09-23').map(date => ({ date, attendanceHash: 'a'.repeat(64), records: [], warnings: [], review: null })) });
 const payload = () => ({ binding: makeBinding(id, now), readAt: now + 100, result: ledger() });
 function memory() {
   const entries = new Map();
@@ -694,11 +694,12 @@ test('Google proof refuses other actions, installations, expired bindings, bad a
   assert.doesNotMatch(read('integrations/google-apps-script/GibM1TestReadCallback.gs'), /appendRow|setValues|setValue\(|deleteRow|managerReviewSave|managerReviewVoid/);
 });
 
-test('new scope and proof file are confined to the separate Revolution TEST source package', () => {
+test('callback scope is declared only for Revolution packages; production remains an approval-only prepared manifest', () => {
   const scope = 'https://www.googleapis.com/auth/script.external_request';
   assert.ok(JSON.parse(read('integrations/google-apps-script/appsscript.json')).oauthScopes.includes(scope));
-  for (const project of ['production', 'richmond-test', 'richmond-production']) assert.ok(!JSON.parse(read(`integrations/google-apps-script/${project}/appsscript.json`)).oauthScopes.includes(scope));
+  assert.ok(JSON.parse(read('integrations/google-apps-script/production/appsscript.json')).oauthScopes.includes(scope));
+  for (const project of ['richmond-test', 'richmond-production']) assert.ok(!JSON.parse(read(`integrations/google-apps-script/${project}/appsscript.json`)).oauthScopes.includes(scope));
   assert.match(read('integrations/google-apps-script/.claspignore'), /!GibM1TestReadCallback\.gs/);
-  assert.doesNotMatch(read('integrations/google-apps-script/production/.claspignore'), /!GibM1TestReadCallback/);
+  assert.match(read('integrations/google-apps-script/production/.claspignore'), /!GibM1TestReadCallback/);
   const g = googleHarness(); g.ctx.authorizeRevolutionTestReadCallback(); assert.equal(g.sent.length, 0);
 });

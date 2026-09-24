@@ -253,6 +253,8 @@ function createHarness({
   vm.runInContext(wrapperSource, context, { filename: 'RevolutionTestCode.gs' });
   vm.runInContext(receiverSource, context, { filename: 'GibM1Receiver.gs' });
   return {
+    context,
+    spreadsheet,
     signins,
     audit,
     timeline,
@@ -330,6 +332,25 @@ test('Revolution removes only the selected kiosk record and retains every origin
   assert.equal(h.post({ ...request, adminName: 'Stuart Turner', reason: 'Different competing reason' }).state, 'removed');
   assert.equal(h.audit.values.length, 2);
   assert.equal(h.audit.values[1][1], 'Andrew Smith');
+});
+
+test('enabling live manager review retains the existing production VOID history contract', () => {
+  const row = signin({ instructor: 'Existing Instructor', status: 'VOID' });
+  const h = createHarness({ rows: [row], auditRows: [auditSheetRow(row)] });
+  vm.runInContext(readFileSync(new URL('integrations/google-apps-script/GibM1ManagerReview.gs', ROOT), 'utf8'), h.context);
+  h.context.GIB_M1_ALLOWED_TARGET = 'production';
+  h.context.EXPECTED_SPREADSHEET_NAME = 'RBJJ M1 — PRODUCTION';
+  h.context.GIB_M1_MANAGER_REVIEW_LIVE_ENABLED = true;
+  assert.equal(h.context.managerReviewEnabled_(), true);
+  assert.equal(h.context.managerReviewTestEnabled_(), false);
+  const before = structuredClone([h.signins.values, h.audit.values]);
+  const result = h.context.readAdminAuditHistory_(h.spreadsheet, row.date, { revolutionRemoval: true });
+  assert.equal(result.history.length, 1);
+  assert.equal(result.history[0].linkedRecordId, row.rowId);
+  assert.equal(result.warnings.length, 0);
+  assert.deepEqual([h.signins.values, h.audit.values], before);
+  h.audit.values[1][8] = '';
+  assert.equal(h.context.readAdminAuditHistory_(h.spreadsheet, row.date, { revolutionRemoval: true }).history.length, 0);
 });
 
 test('Admin-added entry created on a later date is removable only with its one matching addition audit', () => {

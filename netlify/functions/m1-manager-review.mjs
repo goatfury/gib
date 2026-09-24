@@ -1,4 +1,4 @@
-import { addedClassesScope } from './m1-added-classes.mjs';
+import { managerReviewScope } from './_lib/m1-manager-scope.mjs';
 import { handleM1Schedule } from './m1-schedule.mjs';
 import { defaultAddedClassesStore, publicAddedClasses, readAddedClasses } from './_lib/m1-added-classes.mjs';
 import { jsonResponse, readJson, requireAdmin, runtimeConfig, postGoogle, googleFailureClass } from './_lib/m1-common.mjs';
@@ -9,23 +9,25 @@ import { postGoogle as prePrPostGoogle } from './_lib/m1-google-pre-pr-control.m
 import { traceGoogle } from './_lib/m1-google-trace.mjs';
 import { nativeHttpsControl } from './_lib/m1-google-native-control.mjs';
 import { randomUUID } from 'node:crypto';
-import { PROOF_ORIGIN, READ_ID_HEADER, createReadTrace, traceReadStage, loadCallbackLedger } from './_lib/m1-test-read-callback.mjs';
+import { callbackRuntime, READ_ID_HEADER, createReadTrace, traceReadStage, loadCallbackLedger } from './_lib/m1-test-read-callback.mjs';
 
 export const config = { path: '/api/m1-manager-review', rateLimit: { windowLimit: 40, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 export async function handleManagerReview(request, dependencies = {}) {
   const url = new URL(request.url);
-  if (!(dependencies.enabled ?? MANAGER_REVIEW_ENABLED) || url.pathname !== config.path || url.search || url.hash || !['GET', 'POST'].includes(request.method)) return jsonResponse(404, { ok: false, message: 'TEST pilot unavailable.' });
-  const scope = addedClassesScope(new Request(new URL('/api/m1-added-classes', url), { headers: request.headers }), dependencies);
-  if (!scope || scope.target !== 'test') return jsonResponse(403, { ok: false, message: 'This pilot is available only in TEST.' });
+  if (!(dependencies.enabled ?? MANAGER_REVIEW_ENABLED) || url.pathname !== config.path || url.search || url.hash || !['GET', 'POST'].includes(request.method)) return jsonResponse(404, { ok: false, message: 'Manager pilot unavailable.' });
+  const scope = managerReviewScope(request, dependencies);
+  if (!scope) return jsonResponse(403, { ok: false, message: 'This pilot is unavailable on this deployment.' });
+  const target = scope.target;
   const profile = scope.profile;
   const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: profile.installationId, environment: profile.environment, activation: profile.activation });
-  if (!runtime || runtime.target !== 'test') return jsonResponse(503, { ok: false, message: 'TEST receiver unavailable.' });
+  if (!runtime || runtime.target !== target) return jsonResponse(503, { ok: false, message: 'Scoped receiver unavailable.' });
   const now = new Date(dependencies.now ?? Date.now());
   const today = localNow(now).date;
   const envelope = { gym: profile.installationId, from: REVIEW_START, to: today };
   // Explicit diagnostic controls use the same public aggregate read, receiver,
   // payload and validation. They cannot select a write or return private data.
   const transportControl = request.headers.get('X-GIB-M1-Transport-Control');
+  if (transportControl && target !== 'test') return jsonResponse(403, { ok: false, message: 'Diagnostics are TEST-only.' });
   if (transportControl && (request.method !== 'GET' || !['pre-pr', 'current', 'native-https', 'runtime'].includes(transportControl))) return jsonResponse(400, { ok: false, message: 'Read-only TEST control required.' });
   if (['native-https', 'runtime'].includes(transportControl) && profile.installationId !== 'rev') return jsonResponse(403, { ok: false, message: 'Revolution TEST experiment only.' });
   if (transportControl === 'runtime') return jsonResponse(200, { ok: true, experiment: 'https-pairs-v1', gym: 'rev', target: 'test', node: process.versions.node, undici: process.versions.undici || 'unknown', deploy: dependencies.context?.deploy?.id || process.env.DEPLOY_ID || null });
@@ -38,8 +40,9 @@ export async function handleManagerReview(request, dependencies = {}) {
     input = parsed.value;
     adminName = auth.session.adminName;
     if (!input || !['read', 'partial', 'complete', 'void'].includes(input.action)) return jsonResponse(400, { ok: false, message: 'Choose a review action.' });
+    if (input.action === 'void' && target !== 'test') return jsonResponse(403, { ok: false, message: 'Use the existing Daily Review correction controls.' });
   }
-  const callbackRead = url.origin === PROOF_ORIGIN && profile.installationId === 'rev' && !transportControl && ['read', 'badge'].includes(input.action);
+  const callbackRead = Boolean(callbackRuntime(request, config.path, dependencies)) && !transportControl && ['read', 'badge'].includes(input.action);
   const trace = callbackRead ? createReadTrace(randomUUID(), dependencies, request.headers.get(READ_ID_HEADER)) : () => {};
   const respond = (status, value) => {
     const response = jsonResponse(status, value);
@@ -52,7 +55,7 @@ export async function handleManagerReview(request, dependencies = {}) {
     const wireData = { ...envelope, ...data };
     const google = ['pre-pr', 'native-https'].includes(transportControl)
       ? await traceGoogle({ target: runtime.target, enabled: true, action, gym: profile.installationId, variant: transportControl }, () => prePrPostGoogle(runtime, action, wireData, transportControl === 'native-https' ? dependencies.nativeHttps || nativeHttpsControl : dependencies.fetch || fetch))
-      : await postGoogle({ ...runtime, installationId: profile.installationId, testTrace: true, testNativeHttps: !transportControl, testReadRetry: !transportControl && ['badge', 'read'].includes(input.action) }, action, wireData, dependencies.fetch || fetch, dependencies.nativeHttps || dependencies.fetch || nativeHttpsControl);
+      : await postGoogle({ ...runtime, installationId: profile.installationId, testTrace: target === 'test', testNativeHttps: target === 'test' && !transportControl, testReadRetry: target === 'test' && !transportControl && ['badge', 'read'].includes(input.action) }, action, wireData, dependencies.fetch || fetch, dependencies.nativeHttps || dependencies.fetch || nativeHttpsControl);
     if (!google.readable || google.value?.ok !== true) {
       const error = new Error(google.value?.conflict ? 'Attendance or another review changed. Refresh this day.' : 'Central saving or reading could not be confirmed. Retry safely; do not assume the day is complete.');
       if (google.value?.conflict) error.status = 409;
@@ -70,15 +73,15 @@ export async function handleManagerReview(request, dependencies = {}) {
         return value;
       }),
       traceReadStage(trace, 'added-classes', async () => {
-        const store = dependencies.addedStore || await defaultAddedClassesStore('test');
-        const { value } = await readAddedClasses(store, profile.installationId, +now, 'test');
+        const store = dependencies.addedStore || await defaultAddedClassesStore(target);
+        const { value } = await readAddedClasses(store, profile.installationId, +now, target);
         const added = publicAddedClasses(value, +now);
-        if (callbackRead && (!temporaryClasses.validateDocument(added, profile.installationId, 'test') || !added.current)) throw new Error('Current added classes unavailable.');
+        if (callbackRead && (!temporaryClasses.validateDocument(added, profile.installationId, target) || !added.current)) throw new Error('Current added classes unavailable.');
         return added;
       })
     ]);
-    validateRead(ledger, profile.installationId, today);
-    if (schedule?.current !== true || schedule.timezone !== TIMEZONE || !schedule.days || !temporaryClasses.validateDocument(added, profile.installationId, 'test') || !added.current) throw new Error('The current schedule could not be confirmed. Review is unavailable until a fresh read succeeds.');
+    validateRead(ledger, profile.installationId, today, target);
+    if (schedule?.current !== true || schedule.timezone !== TIMEZONE || !schedule.days || !temporaryClasses.validateDocument(added, profile.installationId, target) || !added.current) throw new Error('The current schedule could not be confirmed. Review is unavailable until a fresh read succeeds.');
     const days = ledger.days.map(day => dayPlan(day, schedule, added, now));
     trace('review.validation', 'ok');
     return { ledger, schedule, added, days };
@@ -105,13 +108,13 @@ export async function handleManagerReview(request, dependencies = {}) {
         catch (error) { error.status = 409; throw error; }
         receipt = await call('managerReviewSave', { date: input.date, adminName, review });
         if (receipt.saved !== true || receipt.requestId !== input.requestId || !Number.isInteger(receipt.revision)) throw new Error('The review save was not confirmed.');
-        return jsonResponse(200, { ok: true, test: true, receipt });
+        return jsonResponse(200, { ok: true, target, test: target === 'test', receipt });
       }
     }
     const count = loaded.days.filter(day => !day.complete).length;
     // Public kiosk response is deliberately an aggregate. No dates, reviewer or attendance data.
     if (request.method === 'GET') return respond(200, { ok: true, pendingDays: count, asOf: now.toISOString() });
-    return respond(200, { ok: true, test: true, gym: profile.installationId, site: profile.siteCode, timezone: TIMEZONE, today, cleanupStart: REVIEW_START, period: periodFor(today), asOf: new Date().toISOString(), pendingDays: count, days: loaded.days, ...(receipt ? { receipt } : {}) });
+    return respond(200, { ok: true, target, test: target === 'test', gym: profile.installationId, site: profile.siteCode, timezone: TIMEZONE, today, cleanupStart: REVIEW_START, period: periodFor(today), asOf: new Date().toISOString(), pendingDays: count, days: loaded.days, ...(receipt ? { receipt } : {}) });
   } catch (error) {
     trace('review', 'failed', error.status || 503);
     return respond(error.status || 503, { ok: false, message: ['read', 'badge'].includes(input.action) ? 'Review status unavailable. No fresh central read was confirmed.' : error.message || 'Review unavailable. Nothing is being marked caught up.', ...(error.code ? { code: error.code } : {}) });

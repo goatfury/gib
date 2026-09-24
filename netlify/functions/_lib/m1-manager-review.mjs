@@ -65,9 +65,10 @@ export function dayPlan(day, schedule, added, now = new Date()) {
   return { date: day.date, period: periodFor(day.date), classes, historyKnown, base: base || null, scheduleHash, attendanceHash: day.attendanceHash, revision: saved?.revision || 0, decisions: saved?.decisions || [], warnings: day.warnings, blockers, complete, changed, reviewer: saved?.reviewer || '', reviewedAt: saved?.time || '', canComplete: !blockers.length && day.date <= clock.date };
 }
 
-export function validateRead(value, gym, today) {
+export function validateRead(value, gym, today, target) {
   const dates = datesThrough(today);
   if (!value || value.ok !== true || value.schema !== 'm1-manager-review/v1' || value.gym !== gym || value.from !== REVIEW_START || value.to !== today || value.complete !== true || !Array.isArray(value.days) || value.days.length !== dates.length) throw new Error('The complete central review could not be read.');
+  if (target && value.target !== target) throw new Error('The central review belongs to a different environment.');
   for (let i = 0; i < dates.length; i++) {
     const day = value.days[i];
     if (day?.date !== dates[i] || !/^[a-f0-9]{64}$/.test(day.attendanceHash) || !Array.isArray(day.records) || !Array.isArray(day.warnings)) throw new Error('Incomplete central day.');

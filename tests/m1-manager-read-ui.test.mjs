@@ -5,8 +5,8 @@ import { readFileSync } from 'node:fs';
 const source = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
-const result = count => ({ ok: true, test: true, pendingDays: count, period: { start: '2026-09-21', end: '2026-10-04' }, cleanupStart: '2026-09-07', days: [{ date: '2026-09-21', period: { start: '2026-09-21', end: '2026-10-04' }, complete: false, classes: [], blockers: [] }] });
-function manager() {
+const result = (count, target = 'test') => ({ ok: true, test: target === 'test', target, pendingDays: count, period: { start: '2026-09-21', end: '2026-10-04' }, cleanupStart: '2026-09-07', days: [{ date: '2026-09-21', period: { start: '2026-09-21', end: '2026-10-04' }, complete: false, classes: [], blockers: [] }] });
+function manager(target = 'test') {
   const made = [], calls = [], nodes = new Map();
   class Element {
     constructor(tag) { this.tag = tag; this.events = {}; this.children = []; this.open = false; this.attributes = {}; this.html = ''; }
@@ -22,15 +22,75 @@ function manager() {
     showModal() { this.open = true; }
     close() { this.open = false; }
     remove() { this.removed = true; }
+    focus() { this.focused = true; }
+    scrollIntoView() { this.scrolled = true; }
   }
-  const document = { createElement: tag => { const n = new Element(tag); made.push(n); return n; }, getElementById: () => new Element('parent'), body: { classList: { add() {} } } };
+  const bodyClasses = new Set(), legacyCalls = [];
+  const legacySection = new Element('section');
+  const document = { createElement: tag => { const n = new Element(tag); made.push(n); return n; }, getElementById: id => id === 'reviewSection' ? legacySection : new Element('parent'), body: { classList: { add: name => bodyClasses.add(name) } } };
   let unauthorized = 0;
-  const ctx = vm.createContext({ document, Date, console, sessionStorage: { getItem: () => null }, M1_MANAGER_REVIEW_CONFIG: { enabled: true } });
+  const remembered = new Map(), additionDates = [];
+  const ctx = vm.createContext({ document, Date, console, crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' }, FormData: class { constructor(form) { return Object.entries(form.fields); } }, sessionStorage: { getItem: key => remembered.get(key) || null, setItem: (key, value) => remembered.set(key, value), removeItem: key => remembered.delete(key) }, M1_MANAGER_REVIEW_CONFIG: { enabled: true, target } });
   vm.runInContext(source('m1/admin/manager-review.js'), ctx);
-  const ui = ctx.GIBM1ManagerReview.create({ request: (...args) => { const d = deferred(); calls.push({ ...d, args }); return d.promise; }, site: 'Rev', onUnauthorized: () => unauthorized++, openLegacy() {} });
+  const ui = ctx.GIBM1ManagerReview.create({ request: (...args) => { const d = deferred(); calls.push({ ...d, args }); return d.promise; }, site: 'Rev', onUnauthorized: () => unauthorized++, openLegacy: date => legacyCalls.push(date), additionRequestId: date => { additionDates.push(date); return `m1-${date}-${'a'.repeat(24)}`; } });
   const root = made[0];
-  return { ui, calls, made, nodes, root, unauthorized: () => unauthorized, click: action => root.events.click({ target: { closest: () => ({ dataset: { action } }) } }) };
+  return { ui, calls, made, nodes, root, bodyClasses, legacyCalls, legacySection, remembered, additionDates, unauthorized: () => unauthorized, click: (action, detail = {}) => root.events.click({ target: { closest: () => ({ dataset: { action, ...detail } }) } }) };
 }
+test('manager view fails closed on a response from the other environment or missing target', async () => {
+  for (const target of ['test', 'production']) for (const mismatch of [undefined, target === 'test' ? 'production' : 'test']) {
+    const h = manager(target), open = h.ui.open();
+    h.calls[0].resolve({ ...result(0, target), target: mismatch }); await open;
+    assert.match(h.root.innerHTML, /Review status unavailable/);
+    assert.doesNotMatch(h.root.innerHTML, /0 days need/);
+  }
+  assert.equal(manager('disabled').ui, null);
+});
+test('production correction opens existing Daily Review for the exact day without a removal request', async () => {
+  const h = manager('production'), open = h.ui.open();
+  const view = result(1, 'production');
+  view.days[0].classes = [{ label: '9:00 AM BJJ', records: [{ recordId: 'original-id', instructor: 'Existing Instructor', duration: 1, correctable: true }] }];
+  h.calls[0].resolve(view); await open;
+  assert.match(h.root.innerHTML, /Open correction tools/);
+  assert.doesNotMatch(h.root.innerHTML, /· TEST/);
+  h.click('correct', { class: '0', record: '0' });
+  await flush();
+  assert.deepEqual(h.legacyCalls, ['2026-09-21']);
+  assert.equal(h.bodyClasses.has('manager-legacy-open'), true);
+  assert.equal(h.legacySection.focused, true);
+  assert.equal(h.legacySection.scrolled, true);
+  assert.equal(h.legacySection.attributes.tabindex, '-1');
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.made.some(node => node.tag === 'dialog'), false);
+  h.click('unlisted');
+  assert.match(h.made.find(node => node.tag === 'dialog').innerHTML, /Instructor name/);
+  assert.doesNotMatch(h.made.find(node => node.tag === 'dialog').innerHTML, /TEST|fake/);
+});
+test('a closed manager session cannot move focus when correction tools finish loading', async () => {
+  const h = manager('production'), open = h.ui.open();
+  h.calls[0].resolve(result(1, 'production')); await open;
+  h.click('correct'); h.ui.clear(); await flush();
+  assert.equal(h.legacySection.focused, undefined);
+  assert.equal(h.legacySection.scrolled, undefined);
+});
+test('production additions reuse existing correction-compatible IDs and retry the same original ID', async () => {
+  for (const target of ['production', 'test']) {
+    const h = manager(target), open = h.ui.open();
+    h.calls[0].resolve(result(1, target)); await open;
+    h.click('unlisted');
+    h.nodes.get('form').events.submit({ preventDefault() {}, target: { fields: { instructor: target === 'test' ? 'QA TEST Instructor' : 'Existing Instructor', classLabel: '9:00 AM BJJ', duration: '1', reason: 'Forgotten instructor' } } });
+    assert.equal(h.calls[1].args[0], '/.netlify/functions/m1-admin-add');
+    const id = h.calls[1].args[1].requestId;
+    assert.equal(id, target === 'test' ? 'manager-add-00000000-0000-4000-8000-000000000001' : `m1-2026-09-21-${'a'.repeat(24)}`);
+    assert.deepEqual(h.additionDates, target === 'test' ? [] : ['2026-09-21']);
+    h.calls[1].reject(new Error('Response unavailable')); await flush();
+    assert.equal(JSON.parse(h.remembered.get('m1-manager-pending-v1')).body.requestId, id);
+    h.click('retry');
+    assert.equal(h.calls[2].args[1].requestId, id);
+    assert.deepEqual(h.calls[2].args[1], h.calls[1].args[1]);
+  }
+  const html = source('m1/admin/index.html');
+  assert.match(html, /additionRequestId: uniqueRequestId/);
+});
 test('manager coalesces reads, ignores an old session response, and loads the reopened session once', async () => {
   const h = manager();
   const open = h.ui.open(); void h.ui.refresh(); void h.ui.refresh();

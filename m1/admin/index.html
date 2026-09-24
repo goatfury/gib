@@ -7129,7 +7129,7 @@
           await loadReview(date);
         }
       });
-      managerDayReview = globalThis.GIBM1ManagerReview?.create({ request: requestJson, site: SITE, openLegacy: date => loadReview(date), onUnauthorized: () => setLoggedOut('Admin login required.') });
+      managerDayReview = globalThis.GIBM1ManagerReview?.create({ request: requestJson, site: SITE, openLegacy: date => loadReview(date), additionRequestId: uniqueRequestId, onUnauthorized: () => setLoggedOut('Admin login required.') });
       initialize();
     })();
   </script>
