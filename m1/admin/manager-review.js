@@ -7,7 +7,7 @@
   const test = target === 'test';
   const title = `Manager day review${test ? ' · TEST' : ''}`;
   const enabled = () => globalThis.M1_MANAGER_REVIEW_CONFIG?.enabled === true && ['test', 'production'].includes(target);
-  globalThis.GIBM1ManagerReview = Object.freeze({ create({ request, site, onUnauthorized, openLegacy, additionRequestId }) {
+  globalThis.GIBM1ManagerReview = Object.freeze({ create({ request, site, onUnauthorized, openLegacy, additionRequestId, legacyWritePending = () => false, validateAdditionResult = result => Boolean(result?.linkedRecordId) }) {
     if (!enabled() || (!test && typeof additionRequestId !== 'function')) return null;
     const root = document.createElement('section');
     root.id = 'managerDayReview';
@@ -17,7 +17,7 @@
     let inFlight = null, reading = false, unavailable = false;
     let dialog;
     const storageKey = 'm1-manager-pending-v1';
-    const remember = value => { pending = value; try { value ? sessionStorage.setItem(storageKey, JSON.stringify(value)) : sessionStorage.removeItem(storageKey); } catch {} };
+    const remember = value => { value ? sessionStorage.setItem(storageKey, JSON.stringify(value)) : sessionStorage.removeItem(storageKey); pending = value; };
     const current = () => data?.days.find(day => day.date === selected);
     const close = () => { if (dialog) { dialog.close(); dialog.remove(); dialog = null; } };
     const message = (text, success = false) => {
@@ -26,9 +26,12 @@
     };
     function render(note = '') {
       if (!active) return;
+      if (busy || pending) document.body.classList.remove('manager-legacy-open');
       root.setAttribute('aria-busy', String(reading));
+      const recovery = pending && !busy ? '<p class="manager-warning">A previous save needs confirmation before another edit.</p><button class="btn warn" data-action="retry">Retry / check the same save</button>' : '';
+      const legacy = `<button class="btn" data-action="legacy" ${busy || pending ? 'disabled' : ''}>Existing Daily Review tools</button>`;
       if (!data) {
-        root.innerHTML = `<div class="manager-summary"><h2>${title}</h2><p>${reading ? 'Reading central records…' : 'Review status unavailable. Days are not being marked caught up.'}</p><button class="btn" data-action="refresh" ${reading ? 'disabled' : ''}>Retry central read</button><p class="manager-status" role="status"></p></div>`;
+        root.innerHTML = `<div class="manager-summary"><h2>${title}</h2><p>${reading ? 'Reading central records…' : 'Review status unavailable. Unfinished days still need review.'}</p><div class="manager-controls"><button class="btn" data-action="refresh" ${reading || busy ? 'disabled' : ''}>Retry central read</button>${legacy}</div>${recovery}<p class="manager-status" role="status"></p></div>`;
         message(note); return;
       }
       if (!current()) selected = (data.days.find(day => !day.complete) || data.days.at(-1)).date;
@@ -36,12 +39,12 @@
       root.innerHTML = `<div class="manager-summary"><h2>${title}</h2><p><strong>${data.pendingDays} ${data.pendingDays === 1 ? 'day needs' : 'days need'} review</strong></p><p class="manager-note">Current payroll period: ${pretty(data.period.start)} – ${pretty(data.period.end)}, ${data.period.end.slice(0,4)}. Cleanup begins ${pretty(data.cleanupStart)}. Earlier unfinished days stay here. All dates use Eastern time.</p><div class="manager-controls"><label for="managerDate">Review day</label><select id="managerDate">${data.days.map(d => `<option value="${d.date}" ${d.date === selected ? 'selected' : ''}>${pretty(d.date)} · ${d.complete ? 'Complete' : d.changed ? 'Changed — review again' : 'Pending'}</option>`).join('')}</select><button class="btn" data-action="refresh">Refresh</button></div></div><div class="manager-day"><h2>${pretty(day.date)}</h2><p class="manager-note">Pay period ${pretty(day.period.start)} – ${pretty(day.period.end)}. Review every instructor below, including any second instructor. A recorded name does not mean the class is complete.</p>${!day.historyKnown ? '<p class="manager-warning">No saved timetable is available for this past date. These are recorded and date-specific classes only. Add any other classes that happened before confirming the day.</p>' : ''}${day.changed ? '<p class="manager-warning">Attendance or the schedule changed after the saved review. Check this day again.</p>' : ''}${day.complete ? `<p class="manager-success">Complete · ${escape(day.reviewer)} · ${escape(new Date(day.reviewedAt).toLocaleString('en-US', { timeZone: 'America/New_York' }))} ET</p>` : ''}<p class="manager-status" role="status" aria-live="polite"></p>${pending && !busy ? '<p class="manager-warning">A previous save needs confirmation.</p><button class="btn warn" data-action="retry">Retry / check the same save</button>' : ''}<div>${day.classes.map((row, index) => `<article class="manager-class"><h3>${escape(row.label)} ${row.scheduled ? '' : '<small>· Unlisted</small>'}</h3>${row.upcoming ? '<p class="manager-note">Upcoming — not missing</p>' : ''}${row.records.length ? `<ul>${row.records.map((r, ri) => `<li><span><strong>${escape(r.instructor)}</strong> · ${escape(r.duration)} hr${r.reviewRequired ? `<br><span class="manager-warning">${escape(r.reviewMessage)}</span>` : ''}</span>${r.correctable ? `<button class="btn small" data-action="correct" data-class="${index}" data-record="${ri}">${test ? 'Correct record' : 'Open correction tools'}</button>` : ''}</li>`).join('')}</ul>` : `<p class="blank">${row.outcome === 'not-held' ? 'Didn’t happen' : row.upcoming ? 'No instructors recorded yet' : 'No instructor recorded'}</p>`}${row.conflict ? '<p class="manager-warning">Recorded teaching conflicts with “Didn’t happen.” Resolve the records explicitly.</p>' : ''}<div class="manager-controls"><button class="btn" data-action="add" data-class="${index}" ${row.upcoming ? 'disabled' : ''}>${row.records.length ? 'Add another instructor' : 'Add instructor'}</button><label>Class status <select aria-label="Class status for ${escape(row.label)}" data-outcome="${index}" ${row.upcoming ? 'disabled' : ''}><option value="" ${!row.outcome ? 'selected' : ''}>${row.records.length ? 'Recorded — review all names' : 'Needs instructor'}</option><option value="unknown" ${row.outcome === 'unknown' ? 'selected' : ''}>Don’t know</option><option value="not-held" ${row.outcome === 'not-held' ? 'selected' : ''} ${row.records.length ? 'disabled' : ''}>Didn’t happen</option></select></label></div></article>`).join('') || '<p>No classes are recorded for this date. Add any classes that happened.</p>'}</div><div class="manager-controls"><button class="btn" data-action="unlisted">Record an unlisted class</button><button class="btn" data-action="partial">Save partial progress</button><button class="btn primary" data-action="complete" ${!day.canComplete || day.complete ? 'disabled' : ''}>This day is complete</button></div>${day.blockers.map(b => `<p class="manager-note">${escape(b)}</p>`).join('')}<p class="manager-note">Class status changes save centrally. Completing the day confirms every class and every instructor, including additional instructors. Future days are not counted.</p></div>`;
       const tools = document.createElement('div');
       tools.className = 'manager-controls';
-      tools.innerHTML = '<button class="btn" data-action="export">Download this period’s records</button><button class="btn" data-action="legacy">Existing Daily Review tools</button>';
+      tools.innerHTML = '<button class="btn" data-action="export">Download this period’s records</button>' + legacy;
       root.querySelector('.manager-summary').append(tools);
       if (reading || unavailable) root.querySelector('.manager-summary strong').textContent = reading ? 'Reading central records…' : 'Review status unavailable';
       if (note) message(note);
-      if (busy || pending || unavailable) root.querySelectorAll('button:not([data-action="retry"]):not([data-action="refresh"]), select').forEach(node => { node.disabled = true; });
-      if (reading) root.querySelectorAll('button, select').forEach(node => { node.disabled = true; });
+      if (busy || pending || unavailable) root.querySelectorAll('button:not([data-action="retry"]):not([data-action="refresh"]):not([data-action="legacy"]), select').forEach(node => { node.disabled = true; });
+      if (reading) root.querySelectorAll('button:not([data-action="legacy"]), select').forEach(node => { node.disabled = true; });
     }
     function load(discardPrevious = false) {
       if (inFlight) return inFlight;
@@ -67,11 +70,13 @@
       return inFlight;
     }
     async function save(requestData, url = endpoint) {
-      if (busy) return;
-      busy = true; remember({ url, body: requestData }); render('Saving centrally…');
+      if (busy || legacyWritePending()) return;
+      try { remember({ url, body: requestData }); }
+      catch { message('The original save could not be retained safely. Nothing was sent.'); return; }
+      busy = true; render('Saving centrally…');
       try {
         const result = await request(url, requestData, { timeoutMs: 65000, timeoutMessage: 'Central saving could not be confirmed in time. Retry / check the same save safely.' });
-        if (result?.ok !== true || (url === endpoint && !result.receipt) || (url !== endpoint && !result.linkedRecordId)) throw new Error('Central saving was not confirmed.');
+        if (result?.ok !== true || (url === endpoint && !result.receipt) || (url !== endpoint && !validateAdditionResult(result, requestData))) throw new Error('Central saving was not confirmed.');
         remember(null); close();
         if (url === endpoint && Array.isArray(result.days)) data = result;
         else await load(true);
@@ -104,23 +109,39 @@
     }
     root.addEventListener('change', e => {
       if (e.target.id === 'managerDate') { selected = e.target.value; render(); return; }
-      if (!e.target.hasAttribute('data-outcome') || !current() || busy || pending || reading || unavailable) return;
+      if (!e.target.hasAttribute('data-outcome') || !current() || busy || pending || reading || unavailable || legacyWritePending()) return;
       const row = current().classes[Number(e.target.dataset.outcome)];
       const decisions = current().decisions.filter(item => item.label !== row.label);
       if (e.target.value) decisions.push({ label: row.label, outcome: e.target.value });
       void save(reviewRequest('partial', decisions));
     });
     root.addEventListener('click', e => {
-      const button = e.target.closest('[data-action]'); if (!button || busy || reading) return;
+      const button = e.target.closest('[data-action]'); if (!button || busy) return;
       const action = button.dataset.action;
+      if (action === 'legacy') {
+        if (pending) { message('Check the original save before opening another edit.'); return; }
+        document.body.classList.add('manager-legacy-open');
+        const own = generation;
+        void (async () => {
+          try {
+            const loaded = await openLegacy(selected);
+            if (!active || own !== generation) return;
+            const section = document.getElementById('reviewSection');
+            section?.setAttribute('tabindex', '-1');
+            section?.focus({ preventScroll: true });
+            section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            if (loaded === false && unavailable) message('Neither review could load fresh records. No changes are available. Unfinished days still need review. Retry Daily Review when the connection returns.');
+          } catch {
+            if (active && own === generation) message('Daily Review could not load fresh records. Unfinished days still need review. Use its retry below.');
+          }
+        })();
+        return;
+      }
+      if (reading) return;
       if (action === 'refresh') { void load(); return; }
       if (action === 'retry') { if (pending) void save(pending.body, pending.url); return; }
       if (!current() || pending || unavailable) return;
-      if (action === 'legacy') {
-        document.body.classList.toggle('manager-legacy-open');
-        if (document.body.classList.contains('manager-legacy-open')) void openLegacy(selected);
-        return;
-      }
+      if (legacyWritePending()) { message('Check the saved Daily Review request before another edit.'); return; }
       if (action === 'export') {
         const period = current().period;
         void (async () => {
@@ -170,6 +191,24 @@
         d.querySelector('form').addEventListener('submit', e => { e.preventDefault(); const reason = new FormData(e.target).get('reason'); close(); void save({ action: 'void', date: selected, recordId: record.recordId, fingerprint: record.fingerprint, reason }); });
       }
     });
-    return { async open() { active = true; try { const stored = JSON.parse(sessionStorage.getItem(storageKey) || 'null'); if (stored?.url && stored?.body) { pending = stored; selected = stored.body.date || selected; } } catch {} await load(); }, clear() { active = false; generation++; data = null; close(); root.replaceChildren(); }, refresh: load };
+    return {
+      async open() { active = true; try { const stored = JSON.parse(sessionStorage.getItem(storageKey) || 'null'); if (stored?.url && stored?.body) { pending = stored; selected = stored.body.date || selected; } } catch {} await load(); },
+      clear() { active = false; generation++; data = null; close(); root.replaceChildren(); },
+      refresh: load,
+      hasPendingSave: () => Boolean(busy || pending),
+      beginExternalSave(url, body) {
+        if (busy || pending) return false;
+        try { remember({ url, body }); }
+        catch { message('The original save could not be retained safely. Nothing was sent.'); return false; }
+        busy = true; render('Saving centrally…'); return true;
+      },
+      finishExternalSave(body, confirmed) {
+        if (!pending || JSON.stringify(pending.body) !== JSON.stringify(body)) return;
+        if (confirmed) { try { remember(null); } catch { confirmed = false; } }
+        if (confirmed) { generation++; data = null; unavailable = true; }
+        busy = false;
+        render(confirmed ? 'Save confirmed centrally. Refresh records before another edit.' : 'Save result unknown. Retry / check the same save before another edit.');
+      }
+    };
   } });
 })();

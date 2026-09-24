@@ -4967,6 +4967,12 @@
       }
 
       function openRemoval(record) {
+        if (typeof managerDayReview !== 'undefined' && managerDayReview?.hasPendingSave()) {
+          toast('Check the original save in Manager day review before another edit.'); return;
+        }
+        if (typeof managerDayReview !== 'undefined' && managerDayReview && !reviewLoaded && !savedRemoval) {
+          toast('Load fresh Daily Review records before removing a sign-in.'); return;
+        }
         if (!REV_REMOVAL_ENABLED || removalWorking) return;
         if (savedRemoval?.unreadable) { toast('The saved removal needs a record review.'); return; }
         if (!savedRemoval && record.removal?.pending && validReviewRecord(record, '', { allowRevolutionRemoval: true })) {
@@ -5020,6 +5026,12 @@
       }
 
       async function runRemoval(operation) {
+        if (typeof managerDayReview !== 'undefined' && managerDayReview?.hasPendingSave()) {
+          showMessage($('#removalStatus'), 'Check the original save in Manager day review before another edit.'); return;
+        }
+        if (typeof managerDayReview !== 'undefined' && managerDayReview && !reviewLoaded && !savedRemoval) {
+          showMessage($('#removalStatus'), 'Load fresh Daily Review records before removing a sign-in.'); return;
+        }
         if (removalWorking || !REV_REMOVAL_ENABLED || !removalSelection) return;
         if (operation === 'remove' && savedRemoval && !removalResubmitAllowed) return;
         if (!savedRemoval) {
@@ -5488,6 +5500,10 @@
       }
 
       async function loadReview(dateString, options = {}) {
+        if (typeof managerDayReview !== 'undefined' && managerDayReview?.hasPendingSave()) {
+          showMessage($('#reviewMessage'), 'A save is still unconfirmed. Check the original save in Manager day review before reloading or editing.');
+          return false;
+        }
         if (!schedule) return false;
         const preserveOnFailure = options.preserveOnFailure === true;
         const expectedAdditionInteraction = options.additionInteractionGeneration;
@@ -5521,6 +5537,11 @@
           const data = await requestJson(API.review, { date: dateString,
             ...(typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED ? { removalVersion: REV_REMOVAL_VERSION } : {}) });
           if (generation !== reviewLoadGeneration) return false;
+          if (typeof managerDayReview !== 'undefined' && managerDayReview?.hasPendingSave()) {
+            reviewLoaded = false;
+            showMessage($('#reviewMessage'), 'A save is still unconfirmed. Check the original save before loading fresh Daily Review records.');
+            return false;
+          }
           if (
             Number.isInteger(expectedAdditionInteraction)
             && expectedAdditionInteraction !== additionInteractionGeneration
@@ -6631,6 +6652,11 @@
       }
 
       async function addInstructor(form) {
+        const manager = typeof managerDayReview === 'undefined' ? null : managerDayReview;
+        if (manager && (!reviewLoaded || manager.hasPendingSave() || legacyWritePending())) {
+          showMessage(form.querySelector('.add-status'), 'Load fresh Daily Review records and confirm any original save before another edit.');
+          return;
+        }
         if (
           typeof ADMIN_MUTATIONS_ENABLED !== 'undefined'
           && !ADMIN_MUTATIONS_ENABLED
@@ -6646,7 +6672,6 @@
         const { date, classLabel, site, duration, instructor, reason } = addition;
         const key = `${date}|${normalize(classLabel)}|${normalize(site)}|${normalize(instructor)}`;
         if (inFlightAdditions.has(key)) return;
-        inFlightAdditions.add(key);
         clearClassOutcome();
         setAdditionWorking(form, true, `Adding ${instructor}…`);
         const interactionGeneration = additionInteractionGeneration;
@@ -6656,11 +6681,18 @@
           }
         }, 3_000);
         let completed = false;
+        let request = null;
+        let managerSaveStarted = false;
         try {
-          const request = Object.freeze({
+          request = Object.freeze({
             requestId: requestIdForAddition(form, addition),
             ...addition
           });
+          if (manager) {
+            managerSaveStarted = manager.beginExternalSave(API.add, request);
+            if (!managerSaveStarted) return;
+          }
+          inFlightAdditions.add(key);
           const { data } = await requestAdditionWithReconciliation(request, () => {});
           if (!validAdminAdditionResponse(data, {
             requestId: request.requestId,
@@ -6675,8 +6707,10 @@
           })) {
             throw new Error('The correction could not be confirmed.');
           }
-          clearAdditionRequestId(form);
           completed = true;
+          inFlightAdditions.delete(key);
+          if (managerSaveStarted) manager.finishExternalSave(request, true);
+          clearAdditionRequestId(form);
           if (
             interactionGeneration !== additionInteractionGeneration
             || currentDate !== date
@@ -6698,12 +6732,15 @@
           } else {
             showMessage(
               form.querySelector('.add-status'),
-              'Could not confirm the sign-in. Nothing else should be submitted yet. Try again later or use the Sheet.'
+              managerSaveStarted
+                ? 'Could not confirm the sign-in. Use Retry / check the same save in Manager day review before another edit.'
+                : 'Could not confirm the sign-in. Nothing else should be submitted yet. Try again later or use the Sheet.'
             );
           }
         } finally {
           window.clearTimeout(slowTimer);
           inFlightAdditions.delete(key);
+          if (managerSaveStarted && !completed) manager.finishExternalSave(request, false);
           setAdditionWorking(form, false);
           if (completed) {
             form.reset();
@@ -7129,7 +7166,28 @@
           await loadReview(date);
         }
       });
-      managerDayReview = globalThis.GIBM1ManagerReview?.create({ request: requestJson, site: SITE, openLegacy: date => loadReview(date), additionRequestId: uniqueRequestId, onUnauthorized: () => setLoggedOut('Admin login required.') });
+      function legacyWritePending() {
+        return Boolean(removalWorking || savedRemoval || inFlightAdditions.size);
+      }
+
+      async function openLegacyReview(date) {
+        if (managerDayReview?.hasPendingSave()) return false;
+        return loadReview(date || currentDate || defaultYesterday());
+      }
+
+      managerDayReview = globalThis.GIBM1ManagerReview?.create({
+        request: requestJson,
+        site: SITE,
+        openLegacy: openLegacyReview,
+        legacyWritePending,
+        validateAdditionResult: (result, body) => validAdminAdditionResponse(result, {
+          requestId: body.requestId, adminName: currentAdminName, date: body.date,
+          classLabel: body.classLabel, duration: body.duration, instructor: body.instructor,
+          site: body.site, reason: body.reason, notes: body.notes
+        }),
+        additionRequestId: uniqueRequestId,
+        onUnauthorized: () => setLoggedOut('Admin login required.')
+      });
       initialize();
     })();
   </script>
