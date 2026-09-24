@@ -39,7 +39,7 @@ function exactKeys(value, expected) {
     && actual.every((key, index) => key === wanted[index]);
 }
 
-function validateAddition(input, config, now) {
+export function validateAddition(input, config, now) {
   if (
     !exactKeys(input, [
       'requestId', 'date', 'classLabel', 'duration', 'instructor', 'site', 'notes', 'reason'

@@ -6,6 +6,14 @@ const source = path => readFileSync(new URL('../' + path, import.meta.url), 'utf
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
 const result = (count, target = 'test') => ({ ok: true, test: target === 'test', target, pendingDays: count, period: { start: '2026-09-21', end: '2026-10-04' }, cleanupStart: '2026-09-07', days: [{ date: '2026-09-21', period: { start: '2026-09-21', end: '2026-10-04' }, complete: false, classes: [], blockers: [] }] });
+const additionReview = (original, receipt) => {
+  const view = { ...result(2), gym: 'rev', site: 'Rev' };
+  Object.assign(view.days[0], { date: original.date, warnings: [], revision: 1, changed: true,
+    classes: [{ label: original.classLabel, records: [{ ...original, recordId: receipt.linkedRecordId,
+      displayId: receipt.linkedDisplayId, source: 'Admin-added', reviewRequired: false,
+      notes: `Admin-added | Admin: ${receipt.confirmation?.adminName} | Reason: ${original.reason}${original.notes ? ` | Notes: ${original.notes}` : ''}` }] }] });
+  return view;
+};
 function manager(target = 'test', options = {}) {
   const made = [], calls = [], nodes = new Map();
   class Element {
@@ -68,19 +76,110 @@ test('an unresolved Daily Review addition survives failed manager reads and retr
   assert.equal(h.ui.hasPendingSave(), true);
   h.ui.finishExternalSave(original, false);
   h.ui.clear(); const reopened = h.ui.open(); h.calls[1].reject(new Error('offline')); await reopened;
-  assert.match(h.root.innerHTML, /Retry \/ check the same save/);
+  assert.match(h.root.innerHTML, /Check original save/);
   h.click('legacy'); assert.equal(h.legacyCalls.length, 1);
   h.click('retry'); assert.deepEqual(JSON.parse(JSON.stringify(h.calls[2].args[1])), original);
+  assert.equal(h.calls[2].args[0], '/api/m1-admin-add-check');
   h.calls[2].resolve({ ok: true, linkedRecordId: 'incomplete-receipt' }); await flush();
   assert.equal(h.ui.hasPendingSave(), true);
   const read = h.ui.refresh(); h.calls[3].resolve(result(2)); await read;
   assert.equal(h.ui.hasPendingSave(), true, 'check:null read cannot reconcile the save');
   h.click('retry'); assert.deepEqual(JSON.parse(JSON.stringify(h.calls[4].args[1])), original);
-  h.calls[4].resolve({ ok: true, linkedRecordId: 'authoritative-original-id', confirmedOriginal: true }); await flush();
-  h.calls[5].resolve(result(2)); await flush();
+  const receipt = { ok: true, test: true, linkedRecordId: 'authoritative-original-id', linkedDisplayId: 'sheet-row-79', confirmedOriginal: true, confirmation: { adminName: 'Stuart Turner' } };
+  h.calls[4].resolve(receipt); await flush();
+  assert.equal(h.ui.hasPendingSave(), true, 'receipt alone must not unlock editing');
+  h.calls[5].resolve(additionReview(original, receipt)); await flush();
   assert.equal(h.ui.hasPendingSave(), false);
   assert.equal(h.remembered.has('m1-manager-pending-v1'), false);
   h.click('legacy'); await flush(); assert.equal(h.legacyCalls.length, 2);
+});
+
+test('read-only original-save checks keep failures and changed review evidence pending across reopening', async () => {
+  const original = { requestId: 'm1-2026-09-21-' + 'a'.repeat(24), date: '2026-09-21', instructor: 'QA TEST Original', classLabel: '9:00 AM BJJ', duration: 1, site: 'Rev', reason: 'Forgotten sign-in' };
+  const receipt = { ok: true, test: true, linkedRecordId: 'gib-admin-' + original.requestId, linkedDisplayId: 'sheet-row-79', confirmedOriginal: true, confirmation: { adminName: 'Stuart Turner' } };
+  for (const failure of ['missing', 'conflict', 'incomplete', 'manager-read', 'warning', 'duplicate', 'mismatch', 'notes', 'false-complete', 'other-gym']) {
+    const h = manager('test', { validateAdditionResult: r => r.confirmedOriginal === true });
+    const opened = h.ui.open(); h.calls[0].resolve(result(2)); await opened;
+    h.ui.beginExternalSave('/.netlify/functions/m1-admin-add', original); h.ui.finishExternalSave(original, false);
+    h.ui.clear(); const reopened = h.ui.open(); h.calls[1].resolve(result(2)); await reopened;
+    h.click('retry');
+    assert.equal(h.calls[2].args[0], '/api/m1-admin-add-check');
+    assert.deepEqual(JSON.parse(JSON.stringify(h.calls[2].args[1])), original);
+    if (failure === 'missing' || failure === 'conflict') h.calls[2].reject(Object.assign(new Error('Original save not confirmed'), { status: failure === 'conflict' ? 409 : 503 }));
+    else if (failure === 'incomplete') h.calls[2].resolve({ ok: true, test: true, linkedRecordId: receipt.linkedRecordId });
+    else {
+      h.calls[2].resolve(receipt); await flush();
+      assert.equal(h.ui.hasPendingSave(), true);
+      h.click('legacy'); assert.equal(h.legacyCalls.length, 0);
+      if (failure === 'manager-read') h.calls[3].reject(new Error('No fresh central read'));
+      else {
+        const view = additionReview(original, receipt), day = view.days[0];
+        if (failure === 'warning') day.warnings.push({ code: 'RECORD_ID_CONFLICT' });
+        if (failure === 'duplicate') day.classes[0].records.push({ ...day.classes[0].records[0] });
+        if (failure === 'mismatch') day.classes[0].records[0].duration = 2;
+        if (failure === 'notes') day.classes[0].records[0].notes += ' changed after receipt read';
+        if (failure === 'false-complete') day.complete = true;
+        if (failure === 'other-gym') view.gym = 'richmond';
+        h.calls[3].resolve(view);
+      }
+    }
+    await flush();
+    assert.equal(h.ui.hasPendingSave(), true, failure);
+    assert.deepEqual(JSON.parse(h.remembered.get('m1-manager-pending-v1')).body, original);
+    assert.equal(h.calls.some(call => /m1-admin-add$/.test(call.args[0])), false, 'recovery never resends a write');
+    h.click('legacy'); assert.equal(h.legacyCalls.length, 0);
+    h.ui.clear(); const again = h.ui.open(); h.calls.at(-1).resolve(result(2)); await again;
+    assert.equal(h.ui.hasPendingSave(), true, 'ordinary reload/read never clears the original');
+  }
+});
+
+test('logout and reopening at either recovery await preserve the original and release the old busy guard', async () => {
+  for (const boundary of ['receipt', 'review']) {
+    const original = { requestId: 'original', date: '2026-09-21', reason: 'Missed sign-in' };
+    const receipt = { ok: true, test: true, confirmedOriginal: true, confirmation: { adminName: 'Stuart Turner' } };
+    const h = manager('test', { validateAdditionResult: r => r.confirmedOriginal === true });
+    const open = h.ui.open(); h.calls[0].resolve(result(2)); await open;
+    h.ui.beginExternalSave('/.netlify/functions/m1-admin-add', original); h.ui.finishExternalSave(original, false);
+    h.click('retry');
+    if (boundary === 'review') { h.calls[1].resolve(receipt); await flush(); }
+    const old = h.calls.at(-1);
+    h.ui.clear(); const reopened = h.ui.open(); h.calls.at(-1).resolve(result(2)); await reopened;
+    old.resolve(boundary === 'receipt' ? receipt : additionReview(original, receipt)); await flush();
+    assert.equal(h.ui.hasPendingSave(), true);
+    assert.match(h.root.innerHTML, /Check original save/);
+    const count = h.calls.length;
+    h.click('retry'); assert.equal(h.calls.length, count + 1, 'old in-flight request cannot strand a reopened session');
+    assert.equal(h.calls.at(-1).args[0], '/api/m1-admin-add-check');
+    assert.equal(h.calls.filter(c => c.args[0] === '/api/m1-manager-review').length, boundary === 'receipt' ? 2 : 3, 'old receipt cannot dispatch an extra read into a new session');
+  }
+});
+
+test('Richmond TEST and production keep their existing original-save path', async () => {
+  for (const [target, site] of [['test', 'Richmond'], ['production', 'Rev']]) {
+    const h = manager(target, { site });
+    const opened = h.ui.open(); h.calls[0].resolve(result(2, target)); await opened;
+    const original = { requestId: 'original', date: '2026-09-21' };
+    h.ui.beginExternalSave('/.netlify/functions/m1-admin-add', original); h.ui.finishExternalSave(original, false);
+    h.click('retry'); assert.equal(h.calls[1].args[0], '/.netlify/functions/m1-admin-add');
+    h.calls[1].reject(Object.assign(new Error('Unknown addition'), { status: 409 })); await flush();
+    assert.equal(h.ui.hasPendingSave(), true, 'addition conflicts cannot clear the save journal');
+  }
+});
+
+test('only an explicit original retry resends a retained addition, once, with unchanged identity', async () => {
+  const h = manager('test', { validateAdditionResult: r => r.confirmedOriginal === true });
+  const opened = h.ui.open(); h.calls[0].resolve(result(2)); await opened;
+  const original = { requestId: 'original-unchanged', date: '2026-09-21', instructor: 'QA TEST Offline' };
+  h.ui.beginExternalSave('/.netlify/functions/m1-admin-add', original); h.ui.finishExternalSave(original, false);
+  h.click('retry'); h.calls[1].reject(Object.assign(new Error('No complete original evidence'), { status: 409 })); await flush();
+  assert.equal(h.calls.some(c => /m1-admin-add$/.test(c.args[0])), false);
+  h.click('retry-original'); h.click('retry-original'); h.click('retry');
+  assert.equal(h.calls.length, 3);
+  assert.equal(h.calls[2].args[0], '/.netlify/functions/m1-admin-add');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[2].args[1])), original);
+  h.calls[2].resolve({ ok: true, linkedRecordId: 'insufficient' }); await flush();
+  assert.equal(h.ui.hasPendingSave(), true);
+  assert.deepEqual(JSON.parse(h.remembered.get('m1-manager-pending-v1')).body, original);
 });
 
 test('existing legacy removal or in-flight save blocks new manager writes but not read recovery', async () => {
