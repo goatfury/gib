@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { prepareRichmondUpload, validateClientFunctions, validateRichmondArtifact } from '../tools/prepare-m1-richmond-test-upload.mjs';
 
 const source = 'a'.repeat(40);
@@ -82,14 +85,23 @@ test('client-produced metadata cannot silently lose routes, runtime, streaming o
   ]) { const changed = structuredClone(result); mutate(changed); assert.throws(() => validateClientFunctions(changed, f.manifest, f.receipt)); }
 });
 
-test('actual installed upload client consumes the fresh staged manifest and produces exact metadata', { skip: !process.env.M1_TEST_UPLOAD_CLIENT_ROOT }, async t => {
+test('upload preparation rejects a different process directory before changing the artifact', async t => {
+  const f = await fixture(t);
+  await assert.rejects(prepareRichmondUpload({ directory: f.root, cliRoot: 'unused', expectedSource: source }), /artifact directory/);
+  await assert.rejects(readFile(join(f.root, 'netlify.toml')), { code: 'ENOENT' });
+});
+
+test('actual installed upload client consumes the fresh staged manifest from the artifact CWD', { skip: !process.env.M1_TEST_UPLOAD_CLIENT_ROOT }, async t => {
   const f = await fixture(t);
   const original = await readFile(join(f.root, 'manifest.json'), 'utf8');
-  const report = await prepareRichmondUpload({ directory: f.root, cliRoot: process.env.M1_TEST_UPLOAD_CLIENT_ROOT, expectedSource: source });
+  const tool = fileURLToPath(new URL('../tools/prepare-m1-richmond-test-upload.mjs', import.meta.url));
+  await promisify(execFile)(process.execPath, [tool, '.', resolve(process.env.M1_TEST_UPLOAD_CLIENT_ROOT), source], { cwd: f.root });
+  const report = JSON.parse(await readFile(join(f.root, 'upload-preflight.json'), 'utf8'));
   assert.equal(report.functions.length, 1);
   assert.equal(report.root, f.root);
   assert.equal(report.manifestPath, join(f.root, '.netlify/functions/manifest.json'));
   assert.deepEqual(report.archiveHashes, f.receipt.archiveHashes);
+  assert.equal(await readFile(join(f.root, 'netlify.toml'), 'utf8'), '[build]\npublish = "public"\nfunctions = "functions"\n');
   assert.equal(await readFile(join(f.root, 'manifest.json'), 'utf8'), original, 'Relocation never mutates the canonical manifest.');
   const staged = JSON.parse(await readFile(report.manifestPath, 'utf8'));
   assert.ok(Date.now() - staged.timestamp < 120_000);

@@ -64,6 +64,7 @@ export function validateClientFunctions(result, manifest, receipt) {
 }
 
 export async function prepareRichmondUpload({ directory, cliRoot, expectedSource }) {
+  assert.equal(resolve(process.cwd()), resolve(directory), 'Run upload preparation from the artifact directory.');
   const { root, receipt, manifest } = await validateRichmondArtifact(directory, expectedSource);
   const clientRoot = resolve(cliRoot);
   const client = JSON.parse(await readFile(resolve(clientRoot, 'package.json'), 'utf8'));
@@ -74,10 +75,10 @@ export async function prepareRichmondUpload({ directory, cliRoot, expectedSource
   const { getFunctionsManifestPath } = await import(pathToFileURL(resolve(clientRoot, 'dist/utils/functions/functions.js')).href);
   const { default: hashFns } = await import(pathToFileURL(resolve(clientRoot, 'dist/utils/deploy/hash-fns.js')).href);
 
-  // An artifact may be extracted below another Git checkout. An explicit absolute
-  // base prevents CLI ancestor discovery from selecting that checkout's cache.
+  // The CLI finds this nearest config from the actual artifact CWD. Do not put
+  // an absolute base in TOML: Netlify treats leading POSIX slashes as relative.
   const configPath = resolve(root, 'netlify.toml');
-  await writeFile(configPath, `[build]\nbase = ${JSON.stringify(root.replaceAll('\\', '/'))}\npublish = "public"\nfunctions = "functions"\n`);
+  await writeFile(configPath, '[build]\npublish = "public"\nfunctions = "functions"\n');
   const resolved = await resolveConfig({ config: configPath, cwd: root, offline: true, mode: 'cli', buffer: true });
   assert.equal(resolve(resolved.buildDir), root, 'Upload client selected an unexpected project root.');
   assert.equal(resolve(resolved.config.functionsDirectory), resolve(root, 'functions'));
@@ -113,7 +114,9 @@ export async function prepareRichmondUpload({ directory, cliRoot, expectedSource
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const [directory, cliRoot, expectedSource] = process.argv.slice(2);
   assert.ok(directory && cliRoot && expectedSource, 'Usage: node tools/prepare-m1-richmond-test-upload.mjs <artifact> <netlify-cli-package> <reviewed-40-character-SHA>');
-  const report = await prepareRichmondUpload({ directory, cliRoot, expectedSource });
+  const artifactRoot = resolve(directory), clientRoot = resolve(cliRoot);
+  process.chdir(artifactRoot);
+  const report = await prepareRichmondUpload({ directory: artifactRoot, cliRoot: clientRoot, expectedSource });
   console.log(JSON.stringify({ source: report.source, uploadClient: report.uploadClient, functionCount: report.functions.length,
     root: report.root, manifestPath: report.manifestPath, expiresAt: report.expiresAt, validated: true }));
 }
