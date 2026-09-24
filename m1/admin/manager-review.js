@@ -28,9 +28,9 @@
       if (!active) return;
       if (busy || pending) document.body.classList.remove('manager-legacy-open');
       root.setAttribute('aria-busy', String(reading));
-      const retryLabel = isTestAddition(pending) ? 'Check original save' : 'Retry / check the same save';
-      const originalRetry = pending && !busy && isTestAddition(pending) ? '<button class="btn" data-action="retry-original">Retry original save</button>' : '';
-      const recovery = pending && !busy ? '<p class="manager-warning">A previous save needs confirmation before another edit.</p><button class="btn warn" data-action="retry">' + (isTestAddition(pending) ? 'Check original save' : 'Retry / check the same save') + '</button>' + originalRetry : '';
+      const retryLabel = isRevolutionAddition(pending) ? 'Check original save' : 'Retry / check the same save';
+      const originalRetry = pending && !busy && isRevolutionAddition(pending) ? '<button class="btn" data-action="retry-original">Retry original save</button>' : '';
+      const recovery = pending && !busy ? '<p class="manager-warning">A previous save needs confirmation before another edit.</p><button class="btn warn" data-action="retry">' + retryLabel + '</button>' + originalRetry : '';
       const legacy = `<button class="btn" data-action="legacy" ${busy || pending ? 'disabled' : ''}>Existing Daily Review tools</button>`;
       if (!data) {
         root.innerHTML = `<div class="manager-summary"><h2>${title}</h2><p>${reading ? 'Reading central records…' : 'Review status unavailable. Unfinished days still need review.'}</p><div class="manager-controls"><button class="btn" data-action="refresh" ${reading || busy ? 'disabled' : ''}>Retry central read</button>${legacy}</div>${recovery}<p class="manager-status" role="status"></p></div>`;
@@ -91,10 +91,10 @@
         if (error.status === 401) onUnauthorized();
       }
     }
-    const isTestAddition = value => test && site === 'Rev'
+    const isRevolutionAddition = value => site === 'Rev'
       && ['/.netlify/functions/m1-admin-add', '/api/m1-admin-add'].includes(value?.url);
     function confirmedAdditionReview(result, original, receipt) {
-      if (result?.ok !== true || result.target !== 'test' || result.test !== true
+      if (result?.ok !== true || result.target !== target || result.test !== test
         || result.gym !== 'rev' || result.site !== 'Rev' || !Array.isArray(result.days)
         || !result.days.length || !Number.isInteger(result.pendingDays) || result.pendingDays < 0) return false;
       const days = result.days.filter(day => day.date === original.date);
@@ -117,14 +117,14 @@
         && record.displayId === receipt.linkedDisplayId && record.notes === notes;
     }
     async function reconcileAddition() {
-      if (busy || legacyWritePending() || !isTestAddition(pending)) return;
+      if (busy || legacyWritePending() || !isRevolutionAddition(pending)) return;
       const original = pending, own = ++generation;
       busy = true; data = null; unavailable = true;
       render('Checking the original save and its audit without sending another save…');
       try {
         const receipt = await request('/api/m1-admin-add-check', original.body);
         if (!active || own !== generation || pending !== original) return;
-        if (receipt?.ok !== true || receipt.test !== true || !validateAdditionResult(receipt, original.body)) throw new Error('The complete original save and audit could not be confirmed.');
+        if (receipt?.ok !== true || receipt.test !== test || !validateAdditionResult(receipt, original.body)) throw new Error('The complete original save and audit could not be confirmed.');
         // This ordinary callback is NOT save evidence. It is a separate, fresh
         // check for global ID warnings and the derived day-review state, after
         // the exact record + audit have already been independently confirmed.
@@ -189,8 +189,8 @@
       }
       if (reading) return;
       if (action === 'refresh') { void load(); return; }
-      if (action === 'retry') { if (pending) void (isTestAddition(pending) ? reconcileAddition() : save(pending.body, pending.url)); return; }
-      if (action === 'retry-original') { if (isTestAddition(pending)) void save(pending.body, pending.url); return; }
+      if (action === 'retry') { if (pending) void (isRevolutionAddition(pending) ? reconcileAddition() : save(pending.body, pending.url)); return; }
+      if (action === 'retry-original') { if (isRevolutionAddition(pending)) void save(pending.body, pending.url); return; }
       if (!current() || pending || unavailable) return;
       if (legacyWritePending()) { message('Check the saved Daily Review request before another edit.'); return; }
       if (action === 'export') {

@@ -6,8 +6,8 @@ const source = path => readFileSync(new URL('../' + path, import.meta.url), 'utf
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
 const result = (count, target = 'test') => ({ ok: true, test: target === 'test', target, pendingDays: count, period: { start: '2026-09-21', end: '2026-10-04' }, cleanupStart: '2026-09-07', days: [{ date: '2026-09-21', period: { start: '2026-09-21', end: '2026-10-04' }, complete: false, classes: [], blockers: [] }] });
-const additionReview = (original, receipt) => {
-  const view = { ...result(2), gym: 'rev', site: 'Rev' };
+const additionReview = (original, receipt, target = 'test') => {
+  const view = { ...result(2, target), gym: 'rev', site: 'Rev' };
   Object.assign(view.days[0], { date: original.date, warnings: [], revision: 1, changed: true,
     classes: [{ label: original.classLabel, records: [{ ...original, recordId: receipt.linkedRecordId,
       displayId: receipt.linkedDisplayId, source: 'Admin-added', reviewRequired: false,
@@ -37,19 +37,19 @@ function manager(target = 'test', options = {}) {
   const legacySection = new Element('section');
   const document = { createElement: tag => { const n = new Element(tag); made.push(n); return n; }, getElementById: id => id === 'reviewSection' ? legacySection : new Element('parent'), body: { classList: { add: name => bodyClasses.add(name), remove: name => bodyClasses.delete(name) } } };
   let unauthorized = 0;
-  const remembered = new Map(), additionDates = [];
-  const ctx = vm.createContext({ document, Date, console, crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' }, FormData: class { constructor(form) { return Object.entries(form.fields); } }, sessionStorage: { getItem: key => remembered.get(key) || null, setItem: (key, value) => remembered.set(key, value), removeItem: key => remembered.delete(key) }, M1_MANAGER_REVIEW_CONFIG: { enabled: true, target } });
+  const remembered = options.storage || new Map(), additionDates = [];
+  const ctx = vm.createContext({ document, Date, console, crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' }, FormData: class { constructor(form) { return Object.entries(form.fields); } }, sessionStorage: { getItem: key => remembered.get(key) || null, setItem: (key, value) => remembered.set(key, value), removeItem: key => remembered.delete(key) }, M1_MANAGER_REVIEW_CONFIG: { enabled: options.enabled ?? true, target } });
   vm.runInContext(source('m1/admin/manager-review.js'), ctx);
   const ui = ctx.GIBM1ManagerReview.create({ request: (...args) => { const d = deferred(); calls.push({ ...d, args }); return d.promise; }, site: 'Rev', onUnauthorized: () => unauthorized++, openLegacy: date => { legacyCalls.push(date); return options.legacyResult ?? true; }, additionRequestId: date => { additionDates.push(date); return `m1-${date}-${'a'.repeat(24)}`; }, ...options });
   const root = made[0];
   return { ui, calls, made, nodes, root, bodyClasses, legacyCalls, legacySection, remembered, additionDates, unauthorized: () => unauthorized, click: (action, detail = {}) => root.events.click({ target: { closest: () => ({ dataset: { action, ...detail } }) } }) };
 }
 
-test('first-load and refresh failures leave independent Daily Review reachable without claiming completion', async () => {
-  for (const initial of [true, false]) {
-    const h = manager('test', { legacyResult: false }), open = h.ui.open();
+test('both release targets keep independent Daily Review reachable after first-load and refresh failures', async () => {
+  for (const target of ['test', 'production']) for (const initial of [true, false]) {
+    const h = manager(target, { legacyResult: false }), open = h.ui.open();
     if (initial) { h.calls[0].reject(new Error('offline')); await open; }
-    else { h.calls[0].resolve(result(2)); await open; const read = h.ui.refresh(); h.calls[1].reject(new Error('offline')); await read; }
+    else { h.calls[0].resolve(result(2, target)); await open; const read = h.ui.refresh(); h.calls[1].reject(new Error('offline')); await read; }
     assert.match(initial ? h.root.innerHTML : h.nodes.get('.manager-summary strong').textContent, /Review status unavailable/);
     const controls = initial ? h.root.innerHTML : h.nodes.get('.manager-summary').children[0].innerHTML;
     assert.match(controls, /data-action="legacy"\s*>Existing Daily Review tools/);
@@ -58,7 +58,7 @@ test('first-load and refresh failures leave independent Daily Review reachable w
     assert.equal(h.bodyClasses.has('manager-legacy-open'), true);
     assert.match(h.nodes.get('.manager-status').textContent, /Neither review could load fresh records.*Unfinished days still need review/);
     assert.equal(h.legacySection.focused, true);
-    const read = h.ui.refresh(); h.calls.at(-1).resolve(result(2)); await read;
+    const read = h.ui.refresh(); h.calls.at(-1).resolve(result(2, target)); await read;
     assert.match(h.root.innerHTML, /2 days need/);
   }
 });
@@ -96,30 +96,32 @@ test('an unresolved Daily Review addition survives failed manager reads and retr
 
 test('read-only original-save checks keep failures and changed review evidence pending across reopening', async () => {
   const original = { requestId: 'm1-2026-09-21-' + 'a'.repeat(24), date: '2026-09-21', instructor: 'QA TEST Original', classLabel: '9:00 AM BJJ', duration: 1, site: 'Rev', reason: 'Forgotten sign-in' };
-  const receipt = { ok: true, test: true, linkedRecordId: 'gib-admin-' + original.requestId, linkedDisplayId: 'sheet-row-79', confirmedOriginal: true, confirmation: { adminName: 'Stuart Turner' } };
-  for (const failure of ['missing', 'conflict', 'incomplete', 'manager-read', 'warning', 'duplicate', 'mismatch', 'notes', 'false-complete', 'other-gym']) {
-    const h = manager('test', { validateAdditionResult: r => r.confirmedOriginal === true });
-    const opened = h.ui.open(); h.calls[0].resolve(result(2)); await opened;
+  for (const target of ['test', 'production']) for (const failure of ['missing', 'conflict', 'incomplete', 'receipt-target', 'manager-read', 'warning', 'duplicate', 'mismatch', 'notes', 'false-complete', 'other-gym', 'review-target']) {
+    const receipt = { ok: true, test: target === 'test', linkedRecordId: 'gib-admin-' + original.requestId, linkedDisplayId: 'sheet-row-79', confirmedOriginal: true, confirmation: { adminName: 'Stuart Turner' } };
+    const h = manager(target, { validateAdditionResult: r => r.confirmedOriginal === true });
+    const opened = h.ui.open(); h.calls[0].resolve(result(2, target)); await opened;
     h.ui.beginExternalSave('/.netlify/functions/m1-admin-add', original); h.ui.finishExternalSave(original, false);
-    h.ui.clear(); const reopened = h.ui.open(); h.calls[1].resolve(result(2)); await reopened;
+    h.ui.clear(); const reopened = h.ui.open(); h.calls[1].resolve(result(2, target)); await reopened;
     h.click('retry');
     assert.equal(h.calls[2].args[0], '/api/m1-admin-add-check');
     assert.deepEqual(JSON.parse(JSON.stringify(h.calls[2].args[1])), original);
     if (failure === 'missing' || failure === 'conflict') h.calls[2].reject(Object.assign(new Error('Original save not confirmed'), { status: failure === 'conflict' ? 409 : 503 }));
-    else if (failure === 'incomplete') h.calls[2].resolve({ ok: true, test: true, linkedRecordId: receipt.linkedRecordId });
+    else if (failure === 'incomplete') h.calls[2].resolve({ ok: true, test: target === 'test', linkedRecordId: receipt.linkedRecordId });
+    else if (failure === 'receipt-target') h.calls[2].resolve({ ...receipt, test: target !== 'test' });
     else {
       h.calls[2].resolve(receipt); await flush();
       assert.equal(h.ui.hasPendingSave(), true);
       h.click('legacy'); assert.equal(h.legacyCalls.length, 0);
       if (failure === 'manager-read') h.calls[3].reject(new Error('No fresh central read'));
       else {
-        const view = additionReview(original, receipt), day = view.days[0];
+        const view = additionReview(original, receipt, target), day = view.days[0];
         if (failure === 'warning') day.warnings.push({ code: 'RECORD_ID_CONFLICT' });
         if (failure === 'duplicate') day.classes[0].records.push({ ...day.classes[0].records[0] });
         if (failure === 'mismatch') day.classes[0].records[0].duration = 2;
         if (failure === 'notes') day.classes[0].records[0].notes += ' changed after receipt read';
         if (failure === 'false-complete') day.complete = true;
         if (failure === 'other-gym') view.gym = 'richmond';
+        if (failure === 'review-target') { view.target = target === 'test' ? 'production' : 'test'; view.test = target !== 'test'; }
         h.calls[3].resolve(view);
       }
     }
@@ -128,9 +130,40 @@ test('read-only original-save checks keep failures and changed review evidence p
     assert.deepEqual(JSON.parse(h.remembered.get('m1-manager-pending-v1')).body, original);
     assert.equal(h.calls.some(call => /m1-admin-add$/.test(call.args[0])), false, 'recovery never resends a write');
     h.click('legacy'); assert.equal(h.legacyCalls.length, 0);
-    h.ui.clear(); const again = h.ui.open(); h.calls.at(-1).resolve(result(2)); await again;
+    h.ui.clear(); const again = h.ui.open(); h.calls.at(-1).resolve(result(2, target)); await again;
     assert.equal(h.ui.hasPendingSave(), true, 'ordinary reload/read never clears the original');
   }
+});
+
+test('production lost-confirmation recovery survives a fresh page context and requires both proofs before unlocking', async () => {
+  const storage = new Map();
+  const options = { storage, validateAdditionResult: r => r.confirmedOriginal === true };
+  const first = manager('production', options), opened = first.ui.open();
+  first.calls[0].resolve(result(2, 'production')); await opened;
+  first.click('unlisted');
+  first.nodes.get('form').events.submit({ preventDefault() {}, target: { fields: { instructor: 'Isolated Fake Instructor', classLabel: '9:00 AM BJJ', duration: '1', reason: 'Isolated recovery test' } } });
+  const original = JSON.parse(JSON.stringify(first.calls[1].args[1]));
+  assert.equal(original.requestId, `m1-2026-09-21-${'a'.repeat(24)}`);
+  first.calls[1].reject(new Error('Lost confirmation')); await flush();
+  const h = manager('production', options), reopened = h.ui.open();
+  h.calls[0].resolve(result(2, 'production')); await reopened;
+  assert.equal(h.ui.hasPendingSave(), true);
+  h.click('legacy'); h.click('unlisted'); assert.equal(h.legacyCalls.length, 0);
+  h.click('retry');
+  assert.equal(h.calls[1].args[0], '/api/m1-admin-add-check');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[1].args[1])), original);
+  const receipt = { ok: true, test: false, confirmedOriginal: true, linkedRecordId: 'gib-admin-' + original.requestId, linkedDisplayId: 'sheet-row-2', confirmation: { adminName: 'Stuart Turner' } };
+  h.calls[1].resolve(receipt); await flush();
+  assert.equal(h.ui.hasPendingSave(), true, 'a matching record and audit alone cannot bypass current review status');
+  h.calls[2].resolve(additionReview(original, receipt, 'production')); await flush();
+  assert.equal(h.ui.hasPendingSave(), false);
+  assert.equal(storage.has('m1-manager-pending-v1'), false);
+  assert.equal(h.calls.some(c => /m1-admin-add$/.test(c.args[0])), false, 'recovery sends no writes');
+  h.click('legacy'); await flush(); assert.deepEqual(h.legacyCalls, ['2026-09-21']);
+  const again = manager('production', options), lastOpen = again.ui.open();
+  again.calls[0].resolve(result(2, 'production')); await lastOpen;
+  assert.equal(again.ui.hasPendingSave(), false, 'confirmed state survives another reload');
+  assert.equal(manager('production', { enabled: false }).ui, null, 'live switch remains off by default');
 });
 
 test('logout and reopening at either recovery await preserve the original and release the old busy guard', async () => {
@@ -154,8 +187,8 @@ test('logout and reopening at either recovery await preserve the original and re
   }
 });
 
-test('Richmond TEST and production keep their existing original-save path', async () => {
-  for (const [target, site] of [['test', 'Richmond'], ['production', 'Rev']]) {
+test('Richmond TEST keeps its existing original-save path', async () => {
+  for (const [target, site] of [['test', 'Richmond']]) {
     const h = manager(target, { site });
     const opened = h.ui.open(); h.calls[0].resolve(result(2, target)); await opened;
     const original = { requestId: 'original', date: '2026-09-21' };

@@ -3,12 +3,12 @@ import { sanitizeAdminAdditionPayload, sanitizeDailyReviewPayload } from './m1-a
 // This proof is deliberately narrower than the write receipt: only the exact
 // retained Admin-created row and its one matching audit can confirm a save.
 // Absence, an existing-event result, or ambiguous history never permits resend.
-export function additionReceiptFromDailyReview(input, original, adminName) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)
+export function additionReceiptFromDailyReview(input, original, adminName, target) {
+  if (!['test', 'production'].includes(target) || !input || typeof input !== 'object' || Array.isArray(input)
     || Object.keys(input).sort().join('|') !== ['ok', 'test', 'adminName', 'date', 'records', 'warnings', 'auditHistory'].sort().join('|')
-    || input.ok !== true || input.test !== true || input.adminName !== adminName) return null;
+    || input.ok !== true || input.test !== (target === 'test') || input.adminName !== adminName) return null;
   const daily = sanitizeDailyReviewPayload({ ok: input.ok, date: input.date, records: input.records,
-    warnings: input.warnings, auditHistory: input.auditHistory }, original.date, { managerReviewTestSite: 'Rev' });
+    warnings: input.warnings, auditHistory: input.auditHistory }, original.date, target === 'test' ? { managerReviewTestSite: 'Rev' } : { allowRevolutionRemoval: true });
   if (!daily || daily.warnings.length) return null;
   const linkedRecordId = `gib-admin-${original.requestId}`;
   const rows = daily.records.filter(row => row.recordId === linkedRecordId);
@@ -17,6 +17,7 @@ export function additionReceiptFromDailyReview(input, original, adminName) {
   const row = rows[0], audit = audits[0];
   const attributedNotes = `Admin-added | Admin: ${adminName} | Reason: ${original.reason}${original.notes ? ` | Notes: ${original.notes}` : ''}`;
   if (row.source !== 'Admin-added' || row.reviewRequired || !row.timestamp
+    || (target === 'production' && (!row.removal.eligible || row.removal.pending !== null))
     || row.notes !== attributedNotes || row.site !== 'Rev'
     || ['date', 'classLabel', 'duration', 'instructor', 'site'].some(key => row[key] !== original[key])
     || audit.result !== 'added' || audit.adminName !== adminName || audit.classDate !== original.date
