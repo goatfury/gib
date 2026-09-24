@@ -33,16 +33,25 @@ function manager(target = 'test', options = {}) {
     focus() { this.focused = true; }
     scrollIntoView() { this.scrolled = true; }
   }
-  const bodyClasses = new Set(), legacyCalls = [];
+  const bodyClasses = new Set(), legacyCalls = [], events = {};
   const legacySection = new Element('section');
-  const document = { createElement: tag => { const n = new Element(tag); made.push(n); return n; }, getElementById: id => id === 'reviewSection' ? legacySection : new Element('parent'), body: { classList: { add: name => bodyClasses.add(name), remove: name => bodyClasses.delete(name) } } };
+  const document = { addEventListener: (name, fn) => { events[name] = fn; }, createElement: tag => { const n = new Element(tag); made.push(n); return n; }, getElementById: id => id === 'reviewSection' ? legacySection : new Element('parent'), body: { classList: { add: name => bodyClasses.add(name), remove: name => bodyClasses.delete(name) } } };
   let unauthorized = 0;
   const remembered = options.storage || new Map(), additionDates = [];
-  const ctx = vm.createContext({ document, Date, console, crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' }, FormData: class { constructor(form) { return Object.entries(form.fields); } }, sessionStorage: { getItem: key => remembered.get(key) || null, setItem: (key, value) => remembered.set(key, value), removeItem: key => remembered.delete(key) }, M1_MANAGER_REVIEW_CONFIG: { enabled: options.enabled ?? true, target } });
+  let ticketSequence = 0;
+  const clockNow = () => options.clock?.now ?? Date.now();
+  // Component tests control each completed read. The real short-poll lifecycle
+  // is separately exercised with a deterministic clock in the client suite.
+  const readClient = {
+    reusable: ticket => Boolean(ticket && ticket.deadlineAt > clockNow()),
+    createTicket: () => ({ requestId: `00000000-0000-4000-8000-${String(++ticketSequence).padStart(12, '0')}`, startedAt: clockNow(), deadlineAt: clockNow() + 50000, expiresAt: clockNow() + 60000, dispatched: false }),
+    run: ({ ticket, send, retain = () => {} }) => { retain({ ...ticket, dispatched: true }); return send({ operation: ticket.dispatched ? 'status' : 'start', requestId: ticket.requestId }, { timeoutMs: 25000 }); }
+  };
+  const ctx = vm.createContext({ document, Date, console, GIBM1ReadClient: readClient, addEventListener: (name, fn) => { events[name] = fn; }, crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' }, FormData: class { constructor(form) { return Object.entries(form.fields); } }, sessionStorage: { getItem: key => remembered.get(key) || null, setItem: (key, value) => remembered.set(key, value), removeItem: key => remembered.delete(key) }, M1_MANAGER_REVIEW_CONFIG: { enabled: options.enabled ?? true, target } });
   vm.runInContext(source('m1/admin/manager-review.js'), ctx);
   const ui = ctx.GIBM1ManagerReview.create({ request: (...args) => { const d = deferred(); calls.push({ ...d, args }); return d.promise; }, site: 'Rev', onUnauthorized: () => unauthorized++, openLegacy: date => { legacyCalls.push(date); return options.legacyResult ?? true; }, additionRequestId: date => { additionDates.push(date); return `m1-${date}-${'a'.repeat(24)}`; }, ...options });
   const root = made[0];
-  return { ui, calls, made, nodes, root, bodyClasses, legacyCalls, legacySection, remembered, additionDates, unauthorized: () => unauthorized, click: (action, detail = {}) => root.events.click({ target: { closest: () => ({ dataset: { action, ...detail } }) } }) };
+  return { ui, calls, made, nodes, root, bodyClasses, legacyCalls, legacySection, remembered, additionDates, events, document, unauthorized: () => unauthorized, click: (action, detail = {}) => root.events.click({ target: { closest: () => ({ dataset: { action, ...detail } }) } }) };
 }
 
 test('both release targets keep independent Daily Review reachable after first-load and refresh failures', async () => {
@@ -63,128 +72,154 @@ test('both release targets keep independent Daily Review reachable after first-l
   }
 });
 
-test('an unresolved Daily Review addition survives failed manager reads and retries only its original request', async () => {
-  const original = { requestId: 'original-daily-save', date: '2026-09-21', instructor: 'QA TEST Original', classLabel: '9:00 AM BJJ', duration: 1, reason: 'Forgotten sign-in' };
-  const h = manager('test', { validateAdditionResult: r => r.confirmedOriginal === true });
-  const open = h.ui.open(); h.calls[0].reject(new Error('offline')); await open;
-  h.click('legacy'); await flush();
-  assert.equal(h.ui.beginExternalSave('/.netlify/functions/m1-admin-add', original), true);
-  assert.equal(h.ui.hasPendingSave(), true);
-  assert.equal(h.bodyClasses.has('manager-legacy-open'), false);
-  h.click('legacy'); h.click('retry'); assert.equal(h.calls.length, 1);
-  h.ui.finishExternalSave({ ...original, requestId: 'wrong' }, true);
-  assert.equal(h.ui.hasPendingSave(), true);
-  h.ui.finishExternalSave(original, false);
-  h.ui.clear(); const reopened = h.ui.open(); h.calls[1].reject(new Error('offline')); await reopened;
-  assert.match(h.root.innerHTML, /Check original save/);
-  h.click('legacy'); assert.equal(h.legacyCalls.length, 1);
-  h.click('retry'); assert.deepEqual(JSON.parse(JSON.stringify(h.calls[2].args[1])), original);
-  assert.equal(h.calls[2].args[0], '/api/m1-admin-add-check');
-  h.calls[2].resolve({ ok: true, linkedRecordId: 'incomplete-receipt' }); await flush();
-  assert.equal(h.ui.hasPendingSave(), true);
-  const read = h.ui.refresh(); h.calls[3].resolve(result(2)); await read;
-  assert.equal(h.ui.hasPendingSave(), true, 'check:null read cannot reconcile the save');
-  h.click('retry'); assert.deepEqual(JSON.parse(JSON.stringify(h.calls[4].args[1])), original);
-  const receipt = { ok: true, test: true, linkedRecordId: 'authoritative-original-id', linkedDisplayId: 'sheet-row-79', confirmedOriginal: true, confirmation: { adminName: 'Stuart Turner' } };
-  h.calls[4].resolve(receipt); await flush();
-  assert.equal(h.ui.hasPendingSave(), true, 'receipt alone must not unlock editing');
-  h.calls[5].resolve(additionReview(original, receipt)); await flush();
+const originalAddition = { requestId: 'm1-2026-09-21-' + 'a'.repeat(24), date: '2026-09-21', instructor: 'QA TEST Original', classLabel: '9:00 AM BJJ', duration: 1, site: 'Rev', notes: '', reason: 'Forgotten sign-in' };
+const originalReceipt = (original = originalAddition, target = 'test') => ({ ok: true, test: target === 'test', requestId: original.requestId, linkedRecordId: 'gib-admin-' + original.requestId, linkedDisplayId: 'sheet-row-79', confirmedOriginal: true, confirmation: { adminName: 'Stuart Turner' } });
+const proof = (original = originalAddition, target = 'test') => { const receipt = originalReceipt(original, target); return { ...receipt, review: additionReview(original, receipt, target) }; };
+const validateOriginal = receipt => receipt.confirmedOriginal === true && !('review' in receipt);
+
+test('uncertain external addition automatically checks one persisted ticket and coalesces every trigger', async () => {
+  const h = manager('test', { validateAdditionResult: validateOriginal });
+  const opened = h.ui.open(); h.calls[0].resolve(result(2)); await opened;
+  assert.equal(h.ui.beginExternalSave('/.netlify/functions/m1-admin-add', originalAddition), true);
+  h.ui.finishExternalSave(originalAddition, false);
+  assert.equal(h.calls[1].args[0], '/api/m1-admin-add-check');
+  const stored = JSON.parse(h.remembered.get('m1-manager-pending-v1'));
+  assert.deepEqual(stored.body, originalAddition);
+  assert.equal(stored.readTicket.dispatched, true);
+  assert.equal(stored.readTicket.requestId, h.calls[1].args[1].readRequest.requestId);
+  assert.equal(h.calls[1].args[1].readRequest.operation, 'start');
+  h.click('retry'); h.events.online(); h.events.visibilitychange(); void h.ui.refresh(); h.click('legacy');
+  assert.equal(h.calls.length, 2); assert.equal(h.legacyCalls.length, 0);
+  h.calls[1].resolve(proof()); await flush();
   assert.equal(h.ui.hasPendingSave(), false);
   assert.equal(h.remembered.has('m1-manager-pending-v1'), false);
-  h.click('legacy'); await flush(); assert.equal(h.legacyCalls.length, 2);
+  assert.equal(h.calls.length, 2, 'same full proof includes current review; no second Google read');
+  h.click('legacy'); await flush(); assert.deepEqual(h.legacyCalls, ['2026-09-21']);
 });
 
-test('read-only original-save checks keep failures and changed review evidence pending across reopening', async () => {
-  const original = { requestId: 'm1-2026-09-21-' + 'a'.repeat(24), date: '2026-09-21', instructor: 'QA TEST Original', classLabel: '9:00 AM BJJ', duration: 1, site: 'Rev', reason: 'Forgotten sign-in' };
-  for (const target of ['test', 'production']) for (const failure of ['missing', 'conflict', 'incomplete', 'receipt-target', 'manager-read', 'warning', 'duplicate', 'mismatch', 'notes', 'false-complete', 'other-gym', 'review-target']) {
-    const receipt = { ok: true, test: target === 'test', linkedRecordId: 'gib-admin-' + original.requestId, linkedDisplayId: 'sheet-row-79', confirmedOriginal: true, confirmation: { adminName: 'Stuart Turner' } };
-    const h = manager(target, { validateAdditionResult: r => r.confirmedOriginal === true });
+test('incomplete full proof or mismatched review never clears the original save', async () => {
+  for (const target of ['test', 'production']) for (const failure of ['receipt', 'no-review', 'receipt-target', 'warning', 'duplicate', 'mismatch', 'notes', 'false-complete', 'other-gym', 'review-target']) {
+    const h = manager(target, { validateAdditionResult: validateOriginal });
     const opened = h.ui.open(); h.calls[0].resolve(result(2, target)); await opened;
-    h.ui.beginExternalSave('/.netlify/functions/m1-admin-add', original); h.ui.finishExternalSave(original, false);
-    h.ui.clear(); const reopened = h.ui.open(); h.calls[1].resolve(result(2, target)); await reopened;
-    h.click('retry');
-    assert.equal(h.calls[2].args[0], '/api/m1-admin-add-check');
-    assert.deepEqual(JSON.parse(JSON.stringify(h.calls[2].args[1])), original);
-    if (failure === 'missing' || failure === 'conflict') h.calls[2].reject(Object.assign(new Error('Original save not confirmed'), { status: failure === 'conflict' ? 409 : 503 }));
-    else if (failure === 'incomplete') h.calls[2].resolve({ ok: true, test: target === 'test', linkedRecordId: receipt.linkedRecordId });
-    else if (failure === 'receipt-target') h.calls[2].resolve({ ...receipt, test: target !== 'test' });
-    else {
-      h.calls[2].resolve(receipt); await flush();
-      assert.equal(h.ui.hasPendingSave(), true);
-      h.click('legacy'); assert.equal(h.legacyCalls.length, 0);
-      if (failure === 'manager-read') h.calls[3].reject(new Error('No fresh central read'));
-      else {
-        const view = additionReview(original, receipt, target), day = view.days[0];
-        if (failure === 'warning') day.warnings.push({ code: 'RECORD_ID_CONFLICT' });
-        if (failure === 'duplicate') day.classes[0].records.push({ ...day.classes[0].records[0] });
-        if (failure === 'mismatch') day.classes[0].records[0].duration = 2;
-        if (failure === 'notes') day.classes[0].records[0].notes += ' changed after receipt read';
-        if (failure === 'false-complete') day.complete = true;
-        if (failure === 'other-gym') view.gym = 'richmond';
-        if (failure === 'review-target') { view.target = target === 'test' ? 'production' : 'test'; view.test = target !== 'test'; }
-        h.calls[3].resolve(view);
-      }
-    }
-    await flush();
+    h.ui.beginExternalSave('/.netlify/functions/m1-admin-add', originalAddition); h.ui.finishExternalSave(originalAddition, false);
+    const response = proof(originalAddition, target), day = response.review.days[0];
+    if (failure === 'receipt') delete response.confirmedOriginal;
+    if (failure === 'no-review') delete response.review;
+    if (failure === 'receipt-target') response.test = target !== 'test';
+    if (failure === 'warning') day.warnings.push({ code: 'RECORD_ID_CONFLICT' });
+    if (failure === 'duplicate') day.classes[0].records.push({ ...day.classes[0].records[0] });
+    if (failure === 'mismatch') day.classes[0].records[0].duration = 2;
+    if (failure === 'notes') day.classes[0].records[0].notes += ' changed';
+    if (failure === 'false-complete') day.complete = true;
+    if (failure === 'other-gym') response.review.gym = 'richmond';
+    if (failure === 'review-target') { response.review.target = target === 'test' ? 'production' : 'test'; response.review.test = target !== 'test'; }
+    h.calls[1].resolve(response); await flush();
     assert.equal(h.ui.hasPendingSave(), true, failure);
-    assert.deepEqual(JSON.parse(h.remembered.get('m1-manager-pending-v1')).body, original);
-    assert.equal(h.calls.some(call => /m1-admin-add$/.test(call.args[0])), false, 'recovery never resends a write');
+    assert.deepEqual(JSON.parse(h.remembered.get('m1-manager-pending-v1')).body, originalAddition);
     h.click('legacy'); assert.equal(h.legacyCalls.length, 0);
-    h.ui.clear(); const again = h.ui.open(); h.calls.at(-1).resolve(result(2, target)); await again;
-    assert.equal(h.ui.hasPendingSave(), true, 'ordinary reload/read never clears the original');
+    assert.equal(h.calls.some(call => /m1-admin-add$/.test(call.args[0])), false);
   }
 });
 
-test('production lost-confirmation recovery survives a fresh page context and requires both proofs before unlocking', async () => {
-  const storage = new Map();
-  const options = { storage, validateAdditionResult: r => r.confirmedOriginal === true };
+test('reload resumes the retained ticket automatically without an initial ordinary read or another write', async () => {
+  const storage = new Map(), options = { storage, validateAdditionResult: validateOriginal };
   const first = manager('production', options), opened = first.ui.open();
   first.calls[0].resolve(result(2, 'production')); await opened;
   first.click('unlisted');
   first.nodes.get('form').events.submit({ preventDefault() {}, target: { fields: { instructor: 'Isolated Fake Instructor', classLabel: '9:00 AM BJJ', duration: '1', reason: 'Isolated recovery test' } } });
   const original = JSON.parse(JSON.stringify(first.calls[1].args[1]));
-  assert.equal(original.requestId, `m1-2026-09-21-${'a'.repeat(24)}`);
   first.calls[1].reject(new Error('Lost confirmation')); await flush();
+  assert.equal(first.calls[2].args[0], '/api/m1-admin-add-check');
+  const ticket = first.calls[2].args[1].readRequest.requestId;
+  first.ui.clear();
   const h = manager('production', options), reopened = h.ui.open();
-  h.calls[0].resolve(result(2, 'production')); await reopened;
-  assert.equal(h.ui.hasPendingSave(), true);
-  h.click('legacy'); h.click('unlisted'); assert.equal(h.legacyCalls.length, 0);
-  h.click('retry');
-  assert.equal(h.calls[1].args[0], '/api/m1-admin-add-check');
-  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[1].args[1])), original);
-  const receipt = { ok: true, test: false, confirmedOriginal: true, linkedRecordId: 'gib-admin-' + original.requestId, linkedDisplayId: 'sheet-row-2', confirmation: { adminName: 'Stuart Turner' } };
-  h.calls[1].resolve(receipt); await flush();
-  assert.equal(h.ui.hasPendingSave(), true, 'a matching record and audit alone cannot bypass current review status');
-  h.calls[2].resolve(additionReview(original, receipt, 'production')); await flush();
+  assert.equal(h.calls[0].args[0], '/api/m1-admin-add-check');
+  assert.equal(h.calls[0].args[1].readRequest.requestId, ticket);
+  assert.equal(h.calls[0].args[1].readRequest.operation, 'status');
+  h.calls[0].resolve(proof(original, 'production')); await reopened;
   assert.equal(h.ui.hasPendingSave(), false);
   assert.equal(storage.has('m1-manager-pending-v1'), false);
-  assert.equal(h.calls.some(c => /m1-admin-add$/.test(c.args[0])), false, 'recovery sends no writes');
-  h.click('legacy'); await flush(); assert.deepEqual(h.legacyCalls, ['2026-09-21']);
-  const again = manager('production', options), lastOpen = again.ui.open();
-  again.calls[0].resolve(result(2, 'production')); await lastOpen;
-  assert.equal(again.ui.hasPendingSave(), false, 'confirmed state survives another reload');
-  assert.equal(manager('production', { enabled: false }).ui, null, 'live switch remains off by default');
+  first.calls[2].resolve(proof(original, 'production')); await flush();
+  assert.equal(storage.has('m1-manager-pending-v1'), false, 'old session cannot reinsert pending state');
+  assert.equal(h.calls.some(c => /m1-admin-add$/.test(c.args[0])), false);
 });
 
-test('logout and reopening at either recovery await preserve the original and release the old busy guard', async () => {
-  for (const boundary of ['receipt', 'review']) {
-    const original = { requestId: 'original', date: '2026-09-21', reason: 'Missed sign-in' };
-    const receipt = { ok: true, test: true, confirmedOriginal: true, confirmation: { adminName: 'Stuart Turner' } };
-    const h = manager('test', { validateAdditionResult: r => r.confirmedOriginal === true });
-    const open = h.ui.open(); h.calls[0].resolve(result(2)); await open;
-    h.ui.beginExternalSave('/.netlify/functions/m1-admin-add', original); h.ui.finishExternalSave(original, false);
-    h.click('retry');
-    if (boundary === 'review') { h.calls[1].resolve(receipt); await flush(); }
-    const old = h.calls.at(-1);
-    h.ui.clear(); const reopened = h.ui.open(); h.calls.at(-1).resolve(result(2)); await reopened;
-    old.resolve(boundary === 'receipt' ? receipt : additionReview(original, receipt)); await flush();
-    assert.equal(h.ui.hasPendingSave(), true);
-    assert.match(h.root.innerHTML, /Check original save/);
-    const count = h.calls.length;
-    h.click('retry'); assert.equal(h.calls.length, count + 1, 'old in-flight request cannot strand a reopened session');
-    assert.equal(h.calls.at(-1).args[0], '/api/m1-admin-add-check');
-    assert.equal(h.calls.filter(c => c.args[0] === '/api/m1-manager-review').length, boundary === 'receipt' ? 2 : 3, 'old receipt cannot dispatch an extra read into a new session');
-  }
+test('logout during recovery ignores old proof and keeps reopened recovery usable', async () => {
+  const h = manager('test', { validateAdditionResult: validateOriginal });
+  const open = h.ui.open(); h.calls[0].resolve(result(2)); await open;
+  h.ui.beginExternalSave('/.netlify/functions/m1-admin-add', originalAddition); h.ui.finishExternalSave(originalAddition, false);
+  const old = h.calls[1]; h.ui.clear(); const reopened = h.ui.open();
+  assert.equal(h.calls[2].args[1].readRequest.operation, 'status');
+  old.resolve(proof()); await flush(); assert.equal(h.ui.hasPendingSave(), true);
+  h.calls[2].resolve(proof()); await reopened;
+  assert.equal(h.ui.hasPendingSave(), false); assert.equal(h.calls.length, 3);
+});
+
+test('late write acknowledgment from a closed session cannot erase the resumed check', async () => {
+  const h = manager('production', { validateAdditionResult: validateOriginal }), opened = h.ui.open();
+  h.calls[0].resolve(result(2, 'production')); await opened;
+  h.click('unlisted');
+  h.nodes.get('form').events.submit({ preventDefault() {}, target: { fields: { instructor: 'Isolated Fake Instructor', classLabel: '9:00 AM BJJ', duration: '1', reason: 'Isolated recovery test' } } });
+  const original = JSON.parse(JSON.stringify(h.calls[1].args[1]));
+  h.ui.clear(); const reopened = h.ui.open();
+  assert.equal(h.calls[2].args[0], '/api/m1-admin-add-check');
+  h.calls[1].resolve(originalReceipt(original, 'production')); await flush();
+  assert.equal(h.ui.hasPendingSave(), true);
+  assert.deepEqual(JSON.parse(h.remembered.get('m1-manager-pending-v1')).body, original);
+  h.calls[2].resolve(proof(original, 'production')); await reopened;
+  assert.equal(h.ui.hasPendingSave(), false);
+  assert.equal(h.calls.length, 3);
+});
+
+test('expired recovery is retained; only reopening or explicit retry can start one fresh ticket', async () => {
+  const storage = new Map(), oldTicket = { requestId: '00000000-0000-4000-8000-000000000099', startedAt: Date.now()-61000, deadlineAt: Date.now()-11000, expiresAt: Date.now()-1000, dispatched: true };
+  storage.set('m1-manager-pending-v1', JSON.stringify({ url: '/api/m1-admin-add', body: originalAddition, readTicket: oldTicket }));
+  const h = manager('test', { storage, validateAdditionResult: validateOriginal }), open = h.ui.open();
+  const fresh = h.calls[0].args[1].readRequest;
+  assert.equal(fresh.operation, 'start'); assert.notEqual(fresh.requestId, oldTicket.requestId);
+  h.events.online(); h.events.visibilitychange(); h.click('retry'); assert.equal(h.calls.length, 1);
+  h.calls[0].reject(Object.assign(new Error('Expired read'), { status: 410 })); await open;
+  const stored = JSON.parse(storage.get('m1-manager-pending-v1')); stored.readTicket.deadlineAt = Date.now()-1; storage.set('m1-manager-pending-v1', JSON.stringify(stored));
+  h.ui.clear(); const reopened = h.ui.open(); assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[1].args[1].readRequest.operation, 'start');
+  h.calls[1].resolve(proof()); await reopened; assert.equal(h.ui.hasPendingSave(), false);
+});
+
+test('one real offline-to-online transition after the deadline automatically recovers the unchanged save', async () => {
+  const clock = { now: Date.now() }, h = manager('test', { clock, validateAdditionResult: validateOriginal });
+  const opened = h.ui.open(); h.calls[0].resolve(result(2)); await opened;
+  h.ui.beginExternalSave('/api/m1-admin-add', originalAddition); h.ui.finishExternalSave(originalAddition, false);
+  const firstTicket = h.calls[1].args[1].readRequest.requestId;
+  h.events.offline(); clock.now += 51000;
+  h.calls[1].reject(Object.assign(new Error('Expired read'), { status: 410 })); await flush();
+  h.events.visibilitychange(); assert.equal(h.calls.length, 2, 'visibility alone cannot renew an expired ticket');
+  h.events.online(); h.events.online(); h.events.visibilitychange(); h.click('retry');
+  assert.equal(h.calls.length, 3);
+  assert.equal(h.calls[2].args[0], '/api/m1-admin-add-check');
+  assert.equal(h.calls[2].args[1].readRequest.operation, 'start');
+  assert.notEqual(h.calls[2].args[1].readRequest.requestId, firstTicket);
+  const { readRequest, ...original } = h.calls[2].args[1];
+  assert.deepEqual(original, originalAddition);
+  h.calls[2].resolve(proof()); await flush();
+  assert.equal(h.ui.hasPendingSave(), false);
+  assert.equal(h.calls.some(call => /m1-admin-add$/.test(call.args[0])), false);
+});
+
+test('connection recovery while hidden is retained until the original review becomes visible', async () => {
+  const clock = { now: Date.now() }, h = manager('test', { clock, validateAdditionResult: validateOriginal });
+  const opened = h.ui.open(); h.calls[0].resolve(result(2)); await opened;
+  h.ui.beginExternalSave('/api/m1-admin-add', originalAddition); h.ui.finishExternalSave(originalAddition, false);
+  const expiredId = h.calls[1].args[1].readRequest.requestId;
+  h.events.offline(); clock.now += 51000;
+  h.calls[1].reject(Object.assign(new Error('Expired read'), { status: 410 })); await flush();
+  h.document.hidden = true; h.events.online(); h.events.online(); h.events.visibilitychange();
+  assert.equal(h.calls.length, 2);
+  h.document.hidden = false; h.events.visibilitychange(); h.events.visibilitychange(); h.events.online();
+  assert.equal(h.calls.length, 3);
+  assert.equal(h.calls[2].args[1].readRequest.operation, 'start');
+  assert.notEqual(h.calls[2].args[1].readRequest.requestId, expiredId);
+  h.calls[2].resolve(proof()); await flush();
+  assert.equal(h.ui.hasPendingSave(), false);
 });
 
 test('Richmond TEST keeps its existing original-save path', async () => {
@@ -273,7 +308,10 @@ test('production additions reuse existing correction-compatible IDs and retry th
     assert.equal(JSON.parse(h.remembered.get('m1-manager-pending-v1')).body.requestId, id);
     h.click('retry');
     assert.equal(h.calls[2].args[1].requestId, id);
-    assert.deepEqual(h.calls[2].args[1], h.calls[1].args[1]);
+    assert.equal(h.calls[2].args[0], '/api/m1-admin-add-check');
+    const { readRequest, ...retainedOriginal } = h.calls[2].args[1];
+    assert.equal(readRequest.operation, 'start');
+    assert.deepEqual(retainedOriginal, JSON.parse(JSON.stringify(h.calls[1].args[1])));
   }
   const html = source('m1/admin/index.html');
   assert.match(html, /additionRequestId: uniqueRequestId/);
@@ -305,13 +343,15 @@ test('refresh preserves an unfinished instructor form and Cancel leaves the reco
   h.nodes.get('[data-cancel]').events.click();
   assert.equal(form.open, false); assert.equal(h.calls.length, 1);
 });
-function badge(traced = false) {
+function badge(traced = false, realClient = false) {
   const link = { style: {} }, calls = [], events = {}, timers = [], logs = [];
   const document = { hidden: false, readyState: 'complete', getElementById: () => link, addEventListener: (k, fn) => { events[k] = fn; } };
-  const ctx = vm.createContext({ document, Date, AbortSignal,
+  const ctx = vm.createContext({ document, Date, AbortSignal, M1_INSTALLATION_PROFILE: { installationId: traced ? 'rev' : 'richmond' },
     location: { origin: traced ? 'https://deploy-preview-89--gib-live.netlify.app' : 'https://gib-richmond-test.netlify.app' },
     crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' }, console: { info: (_, json) => logs.push(JSON.parse(json)) },
     M1_MANAGER_REVIEW_CONFIG: { enabled: true }, clearTimeout() {}, setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, fetch: (...args) => { const d = deferred(); calls.push({ ...d, args }); return d.promise; } });
+  if (realClient) vm.runInContext(source('m1/manager-read-client.js'), ctx);
+  else ctx.GIBM1ReadClient = { createTicket: () => ({ requestId: '00000000-0000-4000-8000-000000000001' }), run: ({ ticket, send }) => send({ operation: 'start', requestId: ticket.requestId }, { timeoutMs: 25000 }) };
   vm.runInContext(source('m1/manager-review-badge.js'), ctx);
   return { link, calls, events, timers, document, logs };
 }
@@ -342,12 +382,16 @@ test('Admin delivery tracing is confined to Revolution TEST display reads and ex
   await ctx.requestJson('/api/m1-manager-review', { action: 'read' });
   assert.equal(logs.length, 2); assert.equal(logs[1].state, 'received'); assert.equal(logs[1].status, 200);
   assert.ok(calls[0].options.headers['X-GIB-M1-Read-ID']);
+  const ticketId = '00000000-0000-4000-8000-000000000003';
+  await ctx.requestJson('/api/m1-manager-review', { action: 'read', readRequest: { operation: 'status', requestId: ticketId } });
+  assert.equal(calls[1].options.headers['X-GIB-M1-Read-ID'], ticketId);
+  assert.equal(logs[2].clientId, ticketId);
   await ctx.requestJson('/api/m1-manager-review', { action: 'partial', requestId: 'original-save-id' });
   ctx.location.origin = 'https://gib-richmond-test.netlify.app';
   await ctx.requestJson('/api/m1-manager-review', { action: 'read' });
-  assert.equal(logs.length, 2);
-  assert.ok(calls.slice(1).every(c => !c.options.headers['X-GIB-M1-Read-ID']));
-  assert.deepEqual(JSON.parse(calls[1].options.body), { action: 'partial', requestId: 'original-save-id' });
+  assert.equal(logs.length, 4);
+  assert.ok(calls.slice(2).every(c => !c.options.headers['X-GIB-M1-Read-ID']));
+  assert.deepEqual(JSON.parse(calls[2].options.body), { action: 'partial', requestId: 'original-save-id' });
   assert.doesNotMatch(JSON.stringify(logs), /PRIVATE_|original-save/);
 });
 test('tablet badge permits one read at a time and schedules the next only after settlement', async () => {
@@ -355,6 +399,27 @@ test('tablet badge permits one read at a time and schedules the next only after 
   assert.equal(h.calls.length, 1); assert.equal(h.timers.length, 0);
   h.calls[0].resolve(Response.json({ ok: true, pendingDays: 2, asOf: new Date().toISOString() })); await flush();
   assert.equal(h.link.textContent, 'Admin · 2 days need review'); assert.equal(h.timers.length, 1); assert.equal(h.timers[0].ms, 120000);
+});
+test('Revolution badge keeps one ticket across pending delivery and overlapping visibility events', async () => {
+  const h = badge(true, true), requestId = h.calls[0].args[1].headers['X-GIB-M1-Read-ID'];
+  assert.equal(h.calls[0].args[1].headers['X-GIB-M1-Read-Operation'], 'start');
+  h.calls[0].resolve(Response.json({ ok: true, state: 'pending', requestId, deadlineAt: Date.now() + 50000, expiresAt: Date.now() + 60000 }, { status: 202 })); await flush();
+  h.events.visibilitychange(); h.events.visibilitychange();
+  assert.equal(h.calls.length, 1); assert.equal(h.link.textContent, 'Admin · Review status loading');
+  assert.equal(h.timers[0].ms, 2000); h.timers[0].fn(); await flush();
+  assert.equal(h.calls[1].args[1].headers['X-GIB-M1-Read-ID'], requestId);
+  assert.equal(h.calls[1].args[1].headers['X-GIB-M1-Read-Operation'], 'status');
+  h.calls[1].resolve(Response.json({ ok: true, pendingDays: 2, asOf: new Date().toISOString() })); await flush();
+  assert.equal(h.link.textContent, 'Admin · 2 days need review');
+  assert.equal(h.timers.at(-1).ms, 120000);
+});
+
+test('read client is packaged before both manager consumers without initializing the kiosk', () => {
+  const kiosk = source('m1/index.html'), admin = source('m1/admin/index.html'), build = source('tools/build-public.mjs');
+  assert.ok(kiosk.indexOf('src="./manager-read-client.js') < kiosk.indexOf('src="./manager-review-badge.js'));
+  assert.ok(admin.indexOf('src="../manager-read-client.js') < admin.indexOf('src="./manager-review.js'));
+  assert.match(build, /'m1\/manager-read-client.js'/);
+  assert.doesNotMatch(source('m1/manager-read-client.js'), /localStorage|sessionStorage|document\.|fetch\(|addEventListener/);
 });
 test('tablet badge treats a missing, failed or stale zero-count read as unavailable and recovers', async () => {
   const h = badge();

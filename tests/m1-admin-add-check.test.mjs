@@ -8,6 +8,9 @@ import { additionReceiptFromDailyReview } from '../netlify/functions/_lib/m1-adm
 import { sanitizeAdminAdditionPayload } from '../netlify/functions/_lib/m1-admin-contracts.mjs';
 import { ADMIN_COOKIE, ADMIN_REQUEST_HEADER, createAdminSession, runtimeConfig } from '../netlify/functions/_lib/m1-common.mjs';
 import { REMOVAL_VERSION } from '../netlify/functions/_lib/m1-revolution-removal.mjs';
+import { additionCheckHash } from '../netlify/functions/_lib/m1-admin-add-check-proof.mjs';
+import { acceptResult, signature } from '../netlify/functions/_lib/m1-test-read-callback.mjs';
+import { datesThrough } from '../netlify/functions/_lib/m1-manager-review.mjs';
 
 const origin = 'https://deploy-preview-89--gib-live.netlify.app';
 const productionOrigin = 'https://gib-live.netlify.app';
@@ -22,6 +25,7 @@ const productionEnv = { GIB_M1_PRODUCTION_WEBHOOK_URL: 'https://script.google.co
 const productionDependencies = { ...dependencies, target: 'production', env: productionEnv,
   context: { ...dependencies.context, deploy: { context: 'production', published: true } } };
 const adminName = 'Stuart Turner';
+const ticketId = '11111111-2222-4333-8444-555555555555';
 const original = { requestId: 'm1-2026-09-23-111111112222222233333333', date: '2026-09-23',
   classLabel: '6:00 PM TEST class', duration: 1, instructor: 'TEST retained instructor', site: 'Rev',
   notes: 'DO NOT PAY', reason: 'TEST preserved addition' };
@@ -44,15 +48,54 @@ function request(body = original, options = {}) {
   return new Request(options.url || selectedOrigin + config.path, { method: options.method || 'POST',
     headers: { 'Content-Type': 'application/json', Origin: selectedOrigin, Cookie: `${ADMIN_COOKIE}=${encodeURIComponent(cookie)}`,
       [ADMIN_REQUEST_HEADER]: requestToken, ...options.headers },
-    ...((options.method || 'POST') === 'GET' ? {} : { body: JSON.stringify(body) }) });
+    ...((options.method || 'POST') === 'GET' ? {} : { body: JSON.stringify({ ...body, readRequest: options.readRequest || { operation: 'start', requestId: ticketId } }) }) });
 }
 async function run(body = original, review = googleReview(body), overrides = {}, options = {}) {
-  const calls = [];
-  const response = await handleAdminAddCheck(request(body, options), { ...(options.production ? productionDependencies : dependencies), fetch: async (_url, init) => {
-    calls.push(JSON.parse(init.body));
-    return new Response(JSON.stringify(review), { status: 200 });
-  }, ...overrides });
-  return { response, value: await response.json(), calls };
+  const calls = [], dispatches = [], tasks = [], entries = new Map();
+  let stamp = now;
+  const store = { async getWithMetadata(key) { return entries.has(key) ? { etag: 'fixed', data: structuredClone(entries.get(key)) } : null; },
+    async set(key, value) { if (entries.has(key)) return { modified: false }; entries.set(key, JSON.parse(value)); return { modified: true }; },
+    async *list() { yield { blobs: [...entries.keys()].map(key => ({ key })) }; }, async delete(key) { entries.delete(key); } };
+  const { fetch: readBackend, ...otherOverrides } = overrides;
+  const base = { ...(options.production ? productionDependencies : dependencies), ...otherOverrides };
+  const target = options.production ? 'production' : 'test';
+  const deps = { ...base, store, clock: () => stamp, traceLog: base.traceLog || (() => {}),
+    context: { ...base.context, waitUntil: task => tasks.push(task) },
+    schedule: base.schedule || { current: true, timezone: 'America/New_York', days: {} }, addedStore: base.addedStore || { getWithMetadata: async () => null },
+    fetch: async (_url, init) => {
+      const dispatched = JSON.parse(init.body); dispatches.push(dispatched);
+      assert.equal(dispatched.binding.action, 'adminAdditionCheckRead');
+      assert.deepEqual(dispatched.original, body);
+      const logicalRead = { action: 'dailyReview', target, token: dispatched.token, adminActionToken: dispatched.adminActionToken,
+        date: dispatched.original.date, ...(target === 'production' ? { removalVersion: REMOVAL_VERSION, installation: 'rev', environment: target } : {}) };
+      calls.push(logicalRead);
+      // Fake the Google callback's authoritative read, not its ordinary reply.
+      // Separate actual Apps Script tests exercise this same locked proof path.
+      try {
+        const upstream = readBackend ? await readBackend(_url, { ...init, body: JSON.stringify(logicalRead) }) : new Response(JSON.stringify(review));
+        if (!upstream.ok) throw new Error('Read unavailable');
+        const daily = await upstream.json();
+        const rows = Array.isArray(daily.records) ? daily.records.map(row => { const { removal, ...record } = row; return { ...record, fingerprint: 'a'.repeat(64), correctable: true }; }) : [];
+        const ledger = { ok: true, schema: 'm1-manager-review/v1', complete: true, target, gym: 'rev', from: '2026-09-07', to: '2026-09-24',
+          days: datesThrough('2026-09-24').map(date => ({ date, attendanceHash: 'a'.repeat(64), records: date === daily.date ? rows : [], warnings: [], review: null })) };
+        const result = { ok: true, schema: 'm1-admin-addition-check/v1', target, gym: 'rev', date: dispatched.original.date,
+          originalHash: additionCheckHash(dispatched.original, dispatched.adminName, target), reviewer: dispatched.adminName,
+          dailyRead: { ...daily, test: target === 'test', adminName: dispatched.adminName }, ledger };
+        const raw = JSON.stringify({ binding: dispatched.binding, readAt: stamp, result });
+        const runtime = runtimeConfig(base.env, { admin: true, requestUrl: options.production ? productionOrigin : origin });
+        await acceptResult(store, raw, signature(raw, runtime.adminActionToken, target), runtime, stamp);
+      } catch { /* Rejected/unavailable proof leaves the original pending. */ }
+      return new Response(null, { status: 302 });
+    }
+  };
+  let response = await handleAdminAddCheck(request(body, options), deps);
+  if (response.status === 202) {
+    await Promise.all(tasks);
+    const statusOptions = { ...options, readRequest: { operation: 'status', requestId: ticketId } };
+    response = await handleAdminAddCheck(request(body, statusOptions), deps);
+    if (response.status === 202) { stamp += 50001; response = await handleAdminAddCheck(request(body, statusOptions), deps); }
+  }
+  return { response, value: await response.json(), calls, dispatches };
 }
 
 test('fresh exact original row and audit produce a full ordinary addition receipt through reads only', async () => {
@@ -61,8 +104,9 @@ test('fresh exact original row and audit produce a full ordinary addition receip
     assert.equal(response.status, 200, JSON.stringify(value));
     assert.equal(response.headers.get('Cache-Control'), 'no-store, max-age=0');
     assert.equal(value.test, true);
-    const { test: _test, message: _message, ...receipt } = value;
+    const { test: _test, message: _message, review: managerRead, ...receipt } = value;
     assert.ok(sanitizeAdminAdditionPayload(receipt, { ...body, adminName }));
+    assert.equal(managerRead.ok, true); assert.equal(managerRead.target, 'test');
     assert.equal(value.requestId, body.requestId);
     assert.equal(value.linkedRecordId, `gib-admin-${body.requestId}`);
     assert.equal(calls.length, 1);
@@ -81,7 +125,8 @@ test('read-only receipt passes the unchanged real browser addition validator, in
   const context = vm.createContext({ testMode: true });
   vm.runInContext(`${helpers}\n${validator}`, context);
   for (const body of [original, { ...original, requestId: 'manager-add-11111111-2222-4333-8444-555555555555', notes: '' }]) {
-    const { response, value } = await run(body);
+    const { response, value: full } = await run(body);
+    const { review, ...value } = full;
     assert.equal(response.status, 200);
     const expected = { ...body, adminName };
     assert.equal(context.validAdminAdditionResponse(value, expected), true);
@@ -174,7 +219,7 @@ test('the actual receiver addition and Daily Review contract confirm read-only w
     return new Response(JSON.stringify(post(body)));
   } });
   assert.equal(response.status, 200, JSON.stringify(value));
-  const { test: _test, message: _message, ...receipt } = value;
+  const { test: _test, message: _message, review: _review, ...receipt } = value;
   assert.deepEqual(receipt, actualSaved);
   assert.deepEqual(actions, ['dailyReview']);
   assert.equal(JSON.stringify([...sheets].map(([name, item]) => [name, item.rows])), before);
@@ -217,7 +262,7 @@ for (const [name, mutate] of mutations) {
   test(`${name} remains unconfirmed and cannot dispatch a write`, async () => {
     const review = googleReview(); mutate(review);
     const { response, value, calls } = await run(original, review);
-    assert.ok([409, 503].includes(response.status), JSON.stringify(value));
+    assert.ok([409, 410, 503].includes(response.status), JSON.stringify(value));
     assert.equal(value.ok, false); assert.equal(value.result, 'unconfirmed');
     assert.equal(value.code, 'ADMIN_ADD_CHECK_UNCONFIRMED');
     assert.match(value.message, /do not submit another addition/);
@@ -228,7 +273,7 @@ for (const [name, mutate] of mutations) {
 test('transport failures and unreadable responses stay unconfirmed', async () => {
   for (const fetch of [async () => { throw new Error('No connection'); }, async () => new Response('unavailable', { status: 503 }), async () => new Response('{partial')]) {
     const { response, value } = await run(original, null, { fetch });
-    assert.equal(response.status, 503); assert.equal(value.result, 'unconfirmed');
+    assert.ok([410, 503].includes(response.status)); assert.equal(value.result, 'unconfirmed');
   }
 });
 
@@ -278,7 +323,8 @@ test('complete Daily Review envelope validation is required and the new endpoint
   }
   const source = readFileSync(new URL('../netlify/functions/m1-admin-add-check.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /addMissedInstructor|handleAdminAdd\(|postGoogle\(|managerReviewSave|managerReviewVoid|loadCallbackLedger/);
-  assert.match(source, /handleAdminReview\(dailyRequest/);
+  assert.match(source, /readCallbackTicket\(request/);
+  assert.doesNotMatch(source, /handleAdminReview\(/);
   assert.equal(config.path, '/api/m1-admin-add-check');
 });
 
@@ -297,8 +343,9 @@ test('enabled published Revolution production uses existing full history read an
   const context = vm.createContext({ testMode: false });
   vm.runInContext(html.slice(html.indexOf('function exactObjectKeys('), html.indexOf('function validReviewDate('))
     + html.slice(html.indexOf('function validAdminAdditionResponse('), html.indexOf('function signinVoidRequestId(')), context);
-  assert.equal(context.validAdminAdditionResponse(value, { ...original, adminName }), true);
-  assert.equal(context.validAdminAdditionResponse({ ...value, test: true }, { ...original, adminName }), false);
+  const { review, ...receipt } = value;
+  assert.equal(context.validAdminAdditionResponse(receipt, { ...original, adminName }), true);
+  assert.equal(context.validAdminAdditionResponse({ ...receipt, test: true }, { ...original, adminName }), false);
 });
 
 test('production remains unavailable without its existing live switch, canonical published site and matching authentication scope', async () => {
@@ -356,7 +403,7 @@ test('production rejects the same incomplete/conflicting evidence and incomplete
   for (const [name, mutate] of changes) {
     const review = googleReview(original, 'production'); mutate(review);
     const { response, value, calls } = await run(original, review, {}, { production: true });
-    assert.ok([409, 503].includes(response.status), name + JSON.stringify(value));
+    assert.ok([409, 410, 503].includes(response.status), name + JSON.stringify(value));
     assert.equal(value.result, 'unconfirmed', name);
     assert.ok(calls.length && calls.every(call => call.action === 'dailyReview' && call.removalVersion === REMOVAL_VERSION));
   }
@@ -380,7 +427,7 @@ test('actual production receiver lost-receipt replay preserves one permanent row
   } }, { production: true });
   assert.equal(response.status, 200, JSON.stringify(value));
   assert.equal(value.test, false);
-  const { test: _test, message: _message, ...receipt } = value;
+  const { test: _test, message: _message, review: _review, ...receipt } = value;
   assert.deepEqual(receipt, first);
   assert.deepEqual(actions, ['dailyReview']);
   assert.equal(JSON.stringify([...sheets].map(([name, item]) => [name, item.rows])), before);
@@ -409,8 +456,46 @@ test('actual production receiver exposes hidden linked VOID conflicts, off-date 
       const body = JSON.parse(init.body); assert.equal(body.action, 'dailyReview');
       return new Response(JSON.stringify(post(body)));
     } }, { production: true });
-    assert.ok([409, 503].includes(response.status), type + JSON.stringify(value));
+    assert.ok([409, 410, 503].includes(response.status), type + JSON.stringify(value));
     assert.equal(value.result, 'unconfirmed', type);
     assert.equal(JSON.stringify([...sheets].map(([name, item]) => [name, item.rows, [...item.notes]])), before, type);
   }
+});
+
+test('only confirmed missing ticket gets the recovery code; storage failure stays unavailable and never dispatches', async () => {
+  for (const unavailable of [false, true]) {
+    let dispatches = 0;
+    const response = await handleAdminAddCheck(request(original, { readRequest: { operation: 'status', requestId: ticketId } }), {
+      ...dependencies, clock: () => now, traceLog() {}, store: { getWithMetadata: async () => { if (unavailable) throw new Error('storage failed'); return null; } },
+      fetch: async () => { dispatches++; throw new Error('Status must not dispatch'); }
+    });
+    assert.equal(response.status, unavailable ? 503 : 404);
+    const value = await response.json();
+    assert.equal(value.code, unavailable ? 'ADMIN_ADD_CHECK_UNCONFIRMED' : 'READ_TICKET_MISSING');
+    assert.equal(value.result, 'unconfirmed'); assert.equal(dispatches, 0);
+  }
+});
+
+test('a confirmed callback cannot clear the original save without current schedule and shared classes', async () => {
+  for (const overrides of [{ schedule: { current: false, timezone: 'America/New_York', days: {} } },
+    { addedStore: { getWithMetadata: async () => { throw new Error('shared classes unavailable'); } } }]) {
+    const { response, value, dispatches } = await run(original, googleReview(), overrides);
+    assert.equal(response.status, 503); assert.equal(value.result, 'unconfirmed');
+    assert.equal(dispatches.length, 1);
+    assert.equal(dispatches[0].binding.action, 'adminAdditionCheckRead');
+  }
+});
+
+test('schedule failure and final unconfirmed status share the sanitized original ticket trace', async () => {
+  const events = [];
+  const { response, value } = await run(original, googleReview(), {
+    schedule: { current: false, timezone: 'America/New_York', days: {} },
+    traceLog: (prefix, raw) => { assert.equal(prefix, 'M1_TEST_READ_STAGE'); events.push(JSON.parse(raw)); }
+  });
+  assert.equal(response.status, 503); assert.equal(value.code, 'ADMIN_ADD_CHECK_UNCONFIRMED');
+  assert.ok(events.some(event => event.stage === 'pending.write' && event.state === 'ok'));
+  assert.ok(events.some(event => event.stage === 'schedule' && event.state === 'failed'));
+  assert.ok(events.some(event => event.stage === 'addition.response' && event.state === 'unconfirmed' && event.status === 503));
+  assert.ok(events.every(event => event.requestId === ticketId));
+  assert.doesNotMatch(JSON.stringify(events), /retained instructor|preserved addition|DO NOT PAY|synthetic-test-admin|https:/);
 });

@@ -126,6 +126,33 @@ function testRevolutionCallbackFaultReceipt() {
   if (!gibM1TestReadCallbackEnabled_()) throw new Error('Revolution TEST project required.');
   console.log(PropertiesService.getScriptProperties().getProperty('M1_TEST_CALLBACK_FAULT_RECEIPT') || 'No fault receipt.');
 }
+// Editor-only proof that a normal read can survive the old browser cutoff.
+// The fixed delay is applied after the attendance lock has been released.
+function testRevolutionSlowManagerCallback() {
+  if (!gibM1TestReadCallbackEnabled_()) throw new Error('Revolution TEST project required.');
+  PropertiesService.getScriptProperties().setProperty('M1_TEST_SLOW_MANAGER', String(Date.now() + 120000));
+  console.log('One 35-second TEST manager callback delay armed for two minutes.');
+}
+function testRevolutionSlowManagerCallbackReceipt() {
+  if (!gibM1TestReadCallbackEnabled_()) throw new Error('Revolution TEST project required.');
+  console.log(PropertiesService.getScriptProperties().getProperty('M1_TEST_SLOW_MANAGER_RECEIPT') || 'No slow callback receipt.');
+}
+function gibM1ConsumeSlowManager_(binding) {
+  if (!gibM1TestReadCallbackEnabled_() || binding.action !== 'managerReviewRead') return false;
+  var lock, acquired = false;
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    var expiry = Number(properties.getProperty('M1_TEST_SLOW_MANAGER'));
+    if (!(expiry > Date.now() && expiry <= Date.now() + 120000)) return false;
+    lock = LockService.getScriptLock();
+    acquired = lock.tryLock(0);
+    if (!acquired) return false;
+    expiry = Number(properties.getProperty('M1_TEST_SLOW_MANAGER'));
+    properties.deleteProperty('M1_TEST_SLOW_MANAGER');
+    return expiry > Date.now() && expiry <= Date.now() + 120000;
+  } catch (_) { return false; }
+  finally { if (acquired) { try { lock.releaseLock(); } catch (_) {} } }
+}
 function gibM1ConsumeLateBadge_(binding) {
   if (!gibM1TestReadCallbackEnabled_() || binding.action !== 'managerReviewBadgeRead') return false;
   var lock, acquired = false;
@@ -175,12 +202,16 @@ function gibM1TestReadCallback_(body) {
     trace(stage, 'validated');
     stage = 'google.binding';
     var fields = ['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt'];
+    var additionCheck = b && b.action === 'adminAdditionCheckRead';
+    if (additionCheck) fields = fields.concat(['originalHash', 'date']);
     var rejection = null;
     if (!b || JSON.stringify(Object.keys(b).sort()) !== JSON.stringify(fields.sort())) rejection = 'binding_shape';
     else if (b.schema !== schema || b.target !== target || b.gym !== 'rev'
-      || ['managerReviewRead', 'managerReviewBadgeRead'].indexOf(b.action) < 0 || b.from !== body.from || b.to !== body.to
+      || ['managerReviewRead', 'managerReviewBadgeRead', 'adminAdditionCheckRead'].indexOf(b.action) < 0 || b.from !== body.from || b.to !== body.to
     ) rejection = 'binding_scope';
-    else if (b.action === 'managerReviewRead' ? GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) < 0 : body.adminName !== undefined) rejection = 'binding_reviewer';
+    else if (b.action !== 'managerReviewBadgeRead' ? GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) < 0 : body.adminName !== undefined) rejection = 'binding_reviewer';
+    else if (additionCheck ? (b.originalHash !== managerAdditionCheckHash_(body.original, body.adminName, target)
+      || b.date !== body.original.date || b.date < b.from || b.date > b.to) : body.original !== undefined) rejection = 'binding_scope';
     else if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(b.requestId)) rejection = 'binding_id';
     else if (!Number.isSafeInteger(b.createdAt) || b.expiresAt !== b.createdAt + 60000) rejection = 'binding_time';
     else {
@@ -191,17 +222,26 @@ function gibM1TestReadCallback_(body) {
     if (rejection) { error = rejection; trace(stage, 'rejected'); return rejectedAuthResult_(); }
     trace(stage, 'validated');
     var lateTest = target === 'test' && gibM1ConsumeLateBadge_(b);
-    trace('google.fault', lateTest ? 'armed' : 'skipped');
+    var slowTest = target === 'test' && gibM1ConsumeSlowManager_(b);
+    trace('google.fault', lateTest || slowTest ? 'armed' : 'skipped');
     // This existing read owns and releases its lock in finally before returning.
     stage = 'google.read';
-    var read = managerReviewAction_({ action: 'managerReviewRead', target: target, token: body.token,
-      adminActionToken: body.adminActionToken, gym: 'rev', from: body.from, to: body.to, adminName: body.adminName, check: null }, trace);
+    var readBody = { action: additionCheck ? 'adminAdditionCheckRead' : 'managerReviewRead', target: target, token: body.token,
+      adminActionToken: body.adminActionToken, gym: 'rev', from: body.from, to: body.to, adminName: body.adminName };
+    if (additionCheck) { readBody.original = body.original; readBody.originalHash = b.originalHash; readBody.date = b.date; }
+    else readBody.check = null;
+    var read = managerReviewAction_(readBody, trace);
     stage = 'google.decode';
     var result = JSON.parse(read.getContent());
     var readAt = Date.now();
     stage = 'google.result';
-    if (result.ok !== true || result.complete !== true || result.schema !== 'm1-manager-review/v1'
-      || result.gym !== 'rev' || result.target !== target || result.from !== b.from || result.to !== b.to || readAt >= b.expiresAt) {
+    var ledger = additionCheck ? result.ledger : result;
+    if (additionCheck && (result.ok !== true || result.schema !== 'm1-admin-addition-check/v1' || result.target !== target
+      || result.gym !== 'rev' || result.originalHash !== b.originalHash || result.date !== b.date || result.reviewer !== body.adminName)) {
+      error = 'read_rejected'; throw new Error('Addition proof unavailable.');
+    }
+    if (!ledger || ledger.ok !== true || ledger.complete !== true || ledger.schema !== 'm1-manager-review/v1'
+      || ledger.gym !== 'rev' || ledger.target !== target || ledger.from !== b.from || ledger.to !== b.to || readAt >= b.expiresAt) {
       error = 'read_rejected'; throw new Error('Read unavailable.');
     }
     stage = 'google.payload';
@@ -211,6 +251,7 @@ function gibM1TestReadCallback_(body) {
     var signature = Utilities.computeHmacSha256Signature(schema + '\n' + raw, body.adminActionToken, Utilities.Charset.UTF_8)
       .map(function(byte) { return ('0' + ((byte + 256) % 256).toString(16)).slice(-2); }).join('');
     if (lateTest) Utilities.sleep(Math.max(0, b.expiresAt + 1000 - Date.now()));
+    if (slowTest) Utilities.sleep(35000);
     stage = 'google.expiry';
     var sentAt = Date.now();
     var remaining = Math.floor((b.expiresAt - sentAt) / 1000);
@@ -246,6 +287,7 @@ function gibM1TestReadCallback_(body) {
     try {
       console.log('M1_TEST_CALLBACK_DELIVERY ' + JSON.stringify({ requestId: b.requestId, status: status, elapsedMs: Date.now() - sentAt }));
       if (lateTest) PropertiesService.getScriptProperties().setProperty('M1_TEST_CALLBACK_FAULT_RECEIPT', JSON.stringify({ requestId: b.requestId, expired: Date.now() >= b.expiresAt, status: status, elapsedMs: Date.now() - sentAt }));
+      if (slowTest) PropertiesService.getScriptProperties().setProperty('M1_TEST_SLOW_MANAGER_RECEIPT', JSON.stringify({ requestId: b.requestId, fault: 'slow-manager-read', delayMs: 35000, status: status, acknowledged: acknowledged }));
     } catch (_) {}
   } catch (_) { trace(stage, 'failed'); trace('google.request', 'failed'); try { console.warn('M1_TEST_CALLBACK_UNAVAILABLE'); } catch (_) {} }
   finally { try { receipt.finish(stage, error, status, acknowledged); } catch (_) {} }

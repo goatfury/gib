@@ -14,7 +14,7 @@
     document.getElementById('sign-ins').prepend(root);
     document.body.classList.add('manager-pilot');
     let data, selected = '', active = false, busy = false, generation = 0, pending = null;
-    let inFlight = null, reading = false, unavailable = false;
+    let inFlight = null, recoveryFlight = null, reading = false, unavailable = false;
     let dialog;
     const storageKey = 'm1-manager-pending-v1';
     const remember = value => { value ? sessionStorage.setItem(storageKey, JSON.stringify(value)) : sessionStorage.removeItem(storageKey); pending = value; };
@@ -49,6 +49,7 @@
       if (reading) root.querySelectorAll('button:not([data-action="legacy"]), select').forEach(node => { node.disabled = true; });
     }
     function load(discardPrevious = false) {
+      if (isRevolutionAddition(pending)) return reconcileAddition({ renew: true });
       if (inFlight) return inFlight;
       if (dialog?.open) { message('Finish or cancel the open edit before refreshing.'); return Promise.resolve(); }
       const own = generation;
@@ -57,7 +58,10 @@
       inFlight = (async () => {
         let note = '';
         try {
-          const result = await request(endpoint, { action: 'read' }, { timeoutMs: 60000, timeoutMessage: 'Review status unavailable. No fresh central read was confirmed.' });
+          const result = site === 'Rev'
+            ? await globalThis.GIBM1ReadClient.run({ ticket: globalThis.GIBM1ReadClient.createTicket(), current: () => active && own === generation,
+              send: (readRequest, options) => request(endpoint, { action: 'read', readRequest }, options) })
+            : await request(endpoint, { action: 'read' }, { timeoutMs: 60000, timeoutMessage: 'Review status unavailable. No fresh central read was confirmed.' });
           if (!active || own !== generation || dialog?.open) return;
           if (result?.ok !== true || result.target !== target || result.test !== test || !Array.isArray(result.days) || !result.days.length || !Number.isInteger(result.pendingDays) || result.pendingDays < 0) throw new Error('Incomplete central read.');
           data = result;
@@ -75,20 +79,24 @@
       if (busy || legacyWritePending()) return;
       try { remember({ url, body: requestData }); }
       catch { message('The original save could not be retained safely. Nothing was sent.'); return; }
+      const own = ++generation;
       busy = true; render('Saving centrally…');
       try {
         const result = await request(url, requestData, { timeoutMs: 65000, timeoutMessage: 'Central saving could not be confirmed in time. Retry / check the same save safely.' });
+        if (!active || own !== generation) return;
         if (result?.ok !== true || (url === endpoint && !result.receipt) || (url !== endpoint && !validateAdditionResult(result, requestData))) throw new Error('Central saving was not confirmed.');
         remember(null); close();
         if (url === endpoint && Array.isArray(result.days)) data = result;
         else await load(true);
         busy = false; render(); message(data ? (current()?.complete ? 'This day is saved complete centrally.' : 'Saved centrally. Unresolved items keep this day pending.') : 'Save confirmed; the updated review still needs a fresh central read.', Boolean(data));
       } catch (error) {
+        if (!active || own !== generation) return;
         busy = false;
         console.warn('M1 review save unconfirmed', error.status || 'network', error.data?.code || 'no receipt');
         if (error.status === 409 && url === endpoint) { remember(null); await load(true); }
         render(error.message);
         if (error.status === 401) onUnauthorized();
+        else if (error.status !== 403 && isRevolutionAddition(pending)) await reconcileAddition({ renew: true });
       }
     }
     const isRevolutionAddition = value => site === 'Rev'
@@ -116,28 +124,46 @@
         && record.source === 'Admin-added' && record.reviewRequired === false
         && record.displayId === receipt.linkedDisplayId && record.notes === notes;
     }
-    async function reconcileAddition() {
-      if (busy || legacyWritePending() || !isRevolutionAddition(pending)) return;
-      const original = pending, own = ++generation;
+    function reconcileAddition({ renew = false } = {}) {
+      if (recoveryFlight) return recoveryFlight;
+      if (busy || !active || legacyWritePending() || !isRevolutionAddition(pending)) return Promise.resolve();
+      const original = pending.body, own = ++generation;
+      const currentRequest = () => active && own === generation && pending?.body?.requestId === original.requestId;
+      const client = globalThis.GIBM1ReadClient;
+      let ticket = pending.readTicket;
+      try {
+        if (!client.reusable(ticket)) {
+          if (!renew) return Promise.resolve();
+          ticket = client.createTicket();
+        }
+        remember({ ...pending, readTicket: ticket });
+      } catch {
+        render('The original save check could not be retained safely. Nothing was sent.');
+        return Promise.resolve();
+      }
+      if (renew) onlineRenewalNeeded = false;
       busy = true; data = null; unavailable = true;
       render('Checking the original save and its audit without sending another save…');
-      try {
-        const receipt = await request('/api/m1-admin-add-check', original.body);
-        if (!active || own !== generation || pending !== original) return;
-        if (receipt?.ok !== true || receipt.test !== test || !validateAdditionResult(receipt, original.body)) throw new Error('The complete original save and audit could not be confirmed.');
-        // This ordinary callback is NOT save evidence. It is a separate, fresh
-        // check for global ID warnings and the derived day-review state, after
-        // the exact record + audit have already been independently confirmed.
-        const review = await request(endpoint, { action: 'read' }, { timeoutMs: 60000, timeoutMessage: 'The save evidence was read, but fresh review status is unavailable. The original request is retained.' });
-        if (!active || own !== generation || pending !== original) return;
-        if (!confirmedAdditionReview(review, original.body, receipt)) throw new Error('The original save evidence or updated review is incomplete or changed. Editing stays locked.');
-        remember(null); data = review; selected = original.body.date; unavailable = false;
-        busy = false; render('Original save and audit confirmed. The updated day is ready to review.');
-      } catch (error) {
-        if (!active || own !== generation) return;
-        busy = false; render(error.message || 'The original save could not be confirmed. Editing stays locked.');
-        if (error.status === 401) onUnauthorized();
-      }
+      recoveryFlight = (async () => {
+        try {
+          const result = await client.run({ ticket, current: currentRequest,
+            retain: readTicket => { if (!currentRequest()) throw new Error('Review session changed.'); remember({ ...pending, readTicket }); },
+            send: (readRequest, options) => request('/api/m1-admin-add-check', { ...original, readRequest }, options) });
+          if (!currentRequest()) return;
+          const { review, ...receipt } = result || {};
+          if (receipt.ok !== true || receipt.test !== test || !validateAdditionResult(receipt, original)
+            || !confirmedAdditionReview(review, original, receipt)) throw new Error('The original save evidence or updated review is incomplete or changed. Editing stays locked.');
+          remember(null); data = review; selected = original.date; unavailable = false;
+          busy = false; render('Original save and audit confirmed. The updated day is ready to review.');
+        } catch (error) {
+          if (!currentRequest()) return;
+          busy = false; render(error.message || 'The original save could not be confirmed. Editing stays locked.');
+          if (error.status === 401) onUnauthorized();
+        } finally {
+          if (own === generation) recoveryFlight = null;
+        }
+      })();
+      return recoveryFlight;
     }
     function reviewRequest(action, decisions = current().decisions) {
       const day = current();
@@ -189,7 +215,7 @@
       }
       if (reading) return;
       if (action === 'refresh') { void load(); return; }
-      if (action === 'retry') { if (pending) void (isRevolutionAddition(pending) ? reconcileAddition() : save(pending.body, pending.url)); return; }
+      if (action === 'retry') { if (pending) void (isRevolutionAddition(pending) ? reconcileAddition({ renew: true }) : save(pending.body, pending.url)); return; }
       if (action === 'retry-original') { if (isRevolutionAddition(pending)) void save(pending.body, pending.url); return; }
       if (!current() || pending || unavailable) return;
       if (legacyWritePending()) { message('Check the saved Daily Review request before another edit.'); return; }
@@ -242,15 +268,38 @@
         d.querySelector('form').addEventListener('submit', e => { e.preventDefault(); const reason = new FormData(e.target).get('reason'); close(); void save({ action: 'void', date: selected, recordId: record.recordId, fingerprint: record.fingerprint, reason }); });
       }
     });
+    let wasOffline = globalThis.navigator?.onLine === false, onlineRenewalNeeded = false, resumeWaiting = false;
+    const resume = () => {
+      if (!active || document.hidden || dialog?.open || !isRevolutionAddition(pending)) return;
+      if (onlineRenewalNeeded && recoveryFlight) {
+        if (resumeWaiting) return;
+        resumeWaiting = true;
+        const originalId = pending.body.requestId;
+        void recoveryFlight.finally(() => { resumeWaiting = false; if (pending?.body?.requestId === originalId) resume(); });
+        return;
+      }
+      if (busy || legacyWritePending()) return;
+      void reconcileAddition({ renew: onlineRenewalNeeded });
+    };
+    globalThis.addEventListener?.('offline', () => { wasOffline = true; });
+    globalThis.addEventListener?.('online', () => {
+      if (wasOffline && isRevolutionAddition(pending)) onlineRenewalNeeded = true;
+      wasOffline = false;
+      // One actual connection recovery may replace an expired READ ticket.
+      // It never resubmits the original attendance addition or loops on a timer.
+      resume();
+    });
+    document.addEventListener?.('visibilitychange', () => resume());
     return {
       async open() { active = true; try { const stored = JSON.parse(sessionStorage.getItem(storageKey) || 'null'); if (stored?.url && stored?.body) { pending = stored; selected = stored.body.date || selected; } } catch {} await load(); },
-      clear() { active = false; generation++; busy = false; data = null; close(); root.replaceChildren(); },
+      clear() { active = false; generation++; busy = false; recoveryFlight = null; data = null; close(); root.replaceChildren(); },
       refresh: load,
       hasPendingSave: () => Boolean(busy || pending),
       beginExternalSave(url, body) {
         if (busy || pending) return false;
         try { remember({ url, body }); }
         catch { message('The original save could not be retained safely. Nothing was sent.'); return false; }
+        generation++;
         busy = true; render('Saving centrally…'); return true;
       },
       finishExternalSave(body, confirmed) {
@@ -259,6 +308,7 @@
         if (confirmed) { generation++; data = null; unavailable = true; }
         busy = false;
         render(confirmed ? 'Save confirmed centrally. Refresh records before another edit.' : 'Save result unknown. Retry / check the same save before another edit.');
+        if (!confirmed && isRevolutionAddition(pending)) void reconcileAddition({ renew: true });
       }
     };
   } });

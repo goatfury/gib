@@ -16,8 +16,19 @@
     };
     trace('start');
     try {
-      response = await fetch('/api/m1-manager-review', { cache: 'no-store', signal: AbortSignal.timeout(60000), ...(traceId ? { headers: { 'X-GIB-M1-Read-ID': traceId } } : {}) });
-      const data = await response.json();
+      const revolution = globalThis.M1_INSTALLATION_PROFILE?.installationId === 'rev';
+      const data = revolution ? await globalThis.GIBM1ReadClient.run({ ticket: globalThis.GIBM1ReadClient.createTicket(),
+        send: async (readRequest, options) => {
+          response = await fetch('/api/m1-manager-review', { cache: 'no-store', signal: AbortSignal.timeout(options.timeoutMs), headers: {
+            'X-GIB-M1-Read-Operation': readRequest.operation, 'X-GIB-M1-Read-ID': readRequest.requestId
+          } });
+          const value = await response.json();
+          if (!response.ok) throw Object.assign(new Error('Unavailable'), { status: response.status, data: value });
+          return value;
+        } }) : await (async () => {
+          response = await fetch('/api/m1-manager-review', { cache: 'no-store', signal: AbortSignal.timeout(60000), ...(traceId ? { headers: { 'X-GIB-M1-Read-ID': traceId } } : {}) });
+          return response.json();
+        })();
       const age = Date.now() - Date.parse(data.asOf);
       if (!response.ok || data.ok !== true || !Number.isInteger(data.pendingDays) || data.pendingDays < 0 || !Number.isFinite(age) || age < -5000 || age >= 60000) throw new Error('Unavailable');
       link.textContent = data.pendingDays ? `Admin · ${data.pendingDays} ${data.pendingDays === 1 ? 'day needs' : 'days need'} review` : 'Admin · All days reviewed';
@@ -28,4 +39,5 @@
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', refresh); else void refresh();
   document.addEventListener('visibilitychange', refresh);
+  globalThis.addEventListener?.('online', refresh);
 })();

@@ -9,9 +9,48 @@ import { postGoogle as prePrPostGoogle } from './_lib/m1-google-pre-pr-control.m
 import { traceGoogle } from './_lib/m1-google-trace.mjs';
 import { nativeHttpsControl } from './_lib/m1-google-native-control.mjs';
 import { randomUUID } from 'node:crypto';
-import { callbackRuntime, READ_ID_HEADER, createReadTrace, traceReadStage, loadCallbackLedger } from './_lib/m1-test-read-callback.mjs';
+import { callbackRuntime, READ_ID_HEADER, READ_OPERATION_HEADER, validId, createReadTrace, traceReadStage, loadCallbackLedger, readCallbackTicket } from './_lib/m1-test-read-callback.mjs';
 
 export const config = { path: '/api/m1-manager-review', rateLimit: { windowLimit: 40, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
+
+async function managerCalendar(request, scope, dependencies, now) {
+  const trace = dependencies.readTrace || (() => {}), url = new URL(request.url);
+  const [schedule, added] = await Promise.all([
+    traceReadStage(trace, 'schedule', async () => {
+      const value = dependencies.schedule || await handleM1Schedule(new Request(new URL('/api/m1-schedule', url)), dependencies).then(response => response.json());
+      if (value?.current !== true || value.timezone !== TIMEZONE || !value.days) throw new Error('Current schedule unavailable.');
+      return value;
+    }),
+    traceReadStage(trace, 'added-classes', async () => {
+      const store = dependencies.addedStore || await defaultAddedClassesStore(scope.target);
+      const { value } = await readAddedClasses(store, scope.profile.installationId, +now, scope.target);
+      const added = publicAddedClasses(value, +now);
+      if (!temporaryClasses.validateDocument(added, scope.profile.installationId, scope.target) || !added.current) throw new Error('Current added classes unavailable.');
+      return added;
+    })
+  ]);
+  return { schedule, added };
+}
+function plannedManagerRead(ledger, calendar, scope, now, trace = () => {}) {
+  validateRead(ledger, scope.profile.installationId, localNow(now).date, scope.target);
+  const days = ledger.days.map(day => dayPlan(day, calendar.schedule, calendar.added, now));
+  trace('review.validation', 'ok');
+  return { ledger, ...calendar, days };
+}
+function managerResponse(loaded, scope, now) {
+  const today = localNow(now).date;
+  return { ok: true, target: scope.target, test: scope.target === 'test', gym: scope.profile.installationId, site: scope.profile.siteCode,
+    timezone: TIMEZONE, today, cleanupStart: REVIEW_START, period: periodFor(today), asOf: now.toISOString(),
+    pendingDays: loaded.days.filter(day => !day.complete).length, days: loaded.days };
+}
+// Addition reconciliation and normal manager display use the same complete,
+// target-bound ledger/calendar validation. This never writes or confirms a save.
+export async function assembleManagerRead(ledger, request, scope, dependencies = {}) {
+  const now = new Date(dependencies.now ?? Date.now());
+  const calendar = await managerCalendar(request, scope, dependencies, now);
+  return managerResponse(plannedManagerRead(ledger, calendar, scope, now, dependencies.readTrace), scope, now);
+}
+
 export async function handleManagerReview(request, dependencies = {}) {
   const url = new URL(request.url);
   if (!(dependencies.enabled ?? MANAGER_REVIEW_ENABLED) || url.pathname !== config.path || url.search || url.hash || !['GET', 'POST'].includes(request.method)) return jsonResponse(404, { ok: false, message: 'Manager pilot unavailable.' });
@@ -43,7 +82,14 @@ export async function handleManagerReview(request, dependencies = {}) {
     if (input.action === 'void' && target !== 'test') return jsonResponse(403, { ok: false, message: 'Use the existing Daily Review correction controls.' });
   }
   const callbackRead = Boolean(callbackRuntime(request, config.path, dependencies)) && !transportControl && ['read', 'badge'].includes(input.action);
-  const trace = callbackRead ? createReadTrace(randomUUID(), dependencies, request.headers.get(READ_ID_HEADER)) : () => {};
+  const ticketRequested = request.method === 'GET' ? request.headers.has(READ_OPERATION_HEADER) : input.action === 'read' && Object.hasOwn(input, 'readRequest');
+  const ticket = ticketRequested ? request.method === 'GET'
+    ? { operation: request.headers.get(READ_OPERATION_HEADER), requestId: request.headers.get(READ_ID_HEADER) } : input.readRequest : null;
+  if (ticketRequested && (!callbackRead || !ticket || typeof ticket !== 'object' || Array.isArray(ticket)
+    || Object.keys(ticket).sort().join('|') !== 'operation|requestId' || !['start', 'status'].includes(ticket.operation) || !validId(ticket.requestId))) {
+    return jsonResponse(400, { ok: false, message: 'An identified Revolution read ticket is required.' });
+  }
+  const trace = callbackRead ? createReadTrace(ticket?.requestId || randomUUID(), dependencies, request.headers.get(READ_ID_HEADER)) : () => {};
   const respond = (status, value) => {
     const response = jsonResponse(status, value);
     if (callbackRead) response.headers.set(READ_ID_HEADER, trace.requestId);
@@ -65,28 +111,23 @@ export async function handleManagerReview(request, dependencies = {}) {
     return google.value;
   };
   const load = async () => {
-    const [ledger, schedule, added] = await Promise.all([
+    const [ledger, calendar] = await Promise.all([
       callbackRead ? loadCallbackLedger(request, runtime, adminName, { ...dependencies, readTrace: trace }) : call('managerReviewRead', { check: ['partial', 'complete'].includes(input.action) ? input : null, adminName }),
-      traceReadStage(trace, 'schedule', async () => {
-        const value = dependencies.schedule || await handleM1Schedule(new Request(new URL('/api/m1-schedule', url)), dependencies).then(response => response.json());
-        if (callbackRead && (value?.current !== true || value.timezone !== TIMEZONE || !value.days)) throw new Error('Current schedule unavailable.');
-        return value;
-      }),
-      traceReadStage(trace, 'added-classes', async () => {
-        const store = dependencies.addedStore || await defaultAddedClassesStore(target);
-        const { value } = await readAddedClasses(store, profile.installationId, +now, target);
-        const added = publicAddedClasses(value, +now);
-        if (callbackRead && (!temporaryClasses.validateDocument(added, profile.installationId, target) || !added.current)) throw new Error('Current added classes unavailable.');
-        return added;
-      })
+      managerCalendar(request, scope, { ...dependencies, readTrace: trace }, now)
     ]);
-    validateRead(ledger, profile.installationId, today, target);
-    if (schedule?.current !== true || schedule.timezone !== TIMEZONE || !schedule.days || !temporaryClasses.validateDocument(added, profile.installationId, target) || !added.current) throw new Error('The current schedule could not be confirmed. Review is unavailable until a fresh read succeeds.');
-    const days = ledger.days.map(day => dayPlan(day, schedule, added, now));
-    trace('review.validation', 'ok');
-    return { ledger, schedule, added, days };
+    return plannedManagerRead(ledger, calendar, scope, now, trace);
   };
   try {
+    if (ticket) {
+      const read = await readCallbackTicket(request, runtime, adminName, ticket, { ...dependencies, readTrace: trace });
+      if (read.state === 'pending') return respond(202, { ok: true, ...read });
+      const value = await assembleManagerRead(read.result, request, scope, { ...dependencies, readTrace: trace });
+      const deliveredAt = (dependencies.clock || Date.now)();
+      if (deliveredAt >= read.deadlineAt || deliveredAt >= read.expiresAt || localNow(new Date(deliveredAt)).date !== value.today) {
+        throw Object.assign(new Error('Read observation ended before delivery.'), { status: 410 });
+      }
+      return respond(200, request.method === 'GET' ? { ok: true, pendingDays: value.pendingDays, asOf: value.asOf } : value);
+    }
     let loaded = await load();
     let receipt;
     if (input.action === 'void') {

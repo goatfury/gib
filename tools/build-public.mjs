@@ -21,6 +21,7 @@ export const PUBLIC_FILES = Object.freeze([
   'm1/admin/manager-review.css',
   'm1/manager-review-config.generated.js',
   'm1/manager-review-badge.js',
+  'm1/manager-read-client.js',
   'm1/admin/index.html',
   'm1/assets/logo-sources.json',
   'm1/assets/revolution-bjj-logo.webp',

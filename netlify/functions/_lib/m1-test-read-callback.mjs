@@ -2,6 +2,7 @@ import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { constantTimeSecretEqual, runtimeConfig } from './m1-common.mjs';
 import { managerReviewScope } from './m1-manager-scope.mjs';
 import { REVIEW_START, localNow, validateRead } from './m1-manager-review.mjs';
+import { additionCheckHash, validateAdditionCheckCallback } from './m1-admin-add-check-proof.mjs';
 
 // Fixed destinations are selected by trusted deployment scope, never request data.
 export const PROOF_ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
@@ -16,6 +17,8 @@ export const callbackURL = target => target === 'production' ? LIVE_ORIGIN + LIV
 export const PROOF_TTL_MS = 60_000;
 export const SIGNATURE_HEADER = 'X-GIB-M1-Read-Signature';
 export const READ_ID_HEADER = 'X-GIB-M1-Read-ID';
+export const READ_OPERATION_HEADER = 'X-GIB-M1-Read-Operation';
+export const READ_OBSERVATION_MS = 50_000;
 export const validId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 export const hash = text => createHash('sha256').update(text, 'utf8').digest('hex');
 export const signature = (text, secret, target = 'test') => createHmac('sha256', secret).update(`${callbackSchema(target)}\n${text}`, 'utf8').digest('hex');
@@ -35,7 +38,7 @@ export function callbackRuntime(request, path, dependencies) {
   const scope = managerReviewScope(request, dependencies);
   if (!scope || scope.profile.installationId !== 'rev') return null;
   const origin = scope.target === 'production' ? LIVE_ORIGIN : PROOF_ORIGIN;
-  const paths = scope.target === 'production' ? ['/api/m1-manager-review', LIVE_CALLBACK_PATH] : ['/api/m1-manager-review', CALLBACK_PATH, PROOF_PATH];
+  const paths = scope.target === 'production' ? ['/api/m1-manager-review', '/api/m1-admin-add-check', LIVE_CALLBACK_PATH] : ['/api/m1-manager-review', '/api/m1-admin-add-check', CALLBACK_PATH, PROOF_PATH];
   if (url.origin !== origin || !paths.includes(path)) return null;
   const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: scope.profile.installationId, environment: scope.profile.environment });
   return runtime?.target === scope.target ? runtime : null;
@@ -70,22 +73,31 @@ export function makeBinding(id, now, action = 'managerReviewRead', target = 'tes
   return { schema: callbackSchema(target), requestId: id, target, gym: 'rev', action, from: REVIEW_START, to: localNow(new Date(now)).date, createdAt: now, expiresAt: now + PROOF_TTL_MS };
 }
 export function validateBinding(binding, now, target = 'test') {
-  if (!exactKeys(binding, ['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt'])
-    || !['test', 'production'].includes(target) || !validId(binding.requestId) || binding.schema !== callbackSchema(target) || binding.target !== target || binding.gym !== 'rev' || !['managerReviewRead', 'managerReviewBadgeRead'].includes(binding.action)
+  const addition = binding?.action === 'adminAdditionCheckRead';
+  if (!exactKeys(binding, ['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt', ...(addition ? ['originalHash', 'date'] : [])])
+    || !['test', 'production'].includes(target) || !validId(binding.requestId) || binding.schema !== callbackSchema(target) || binding.target !== target || binding.gym !== 'rev' || !['managerReviewRead', 'managerReviewBadgeRead', 'adminAdditionCheckRead'].includes(binding.action)
     || binding.from !== REVIEW_START || !Number.isSafeInteger(binding.createdAt) || binding.createdAt > now
-    || binding.expiresAt !== binding.createdAt + PROOF_TTL_MS || binding.to !== localNow(new Date(binding.createdAt)).date) fail(409, 'Read request does not match the proof.');
+    || binding.expiresAt !== binding.createdAt + PROOF_TTL_MS || binding.to !== localNow(new Date(binding.createdAt)).date
+    || (addition && (!/^[0-9a-f]{64}$/.test(binding.originalHash) || !/^\d{4}-\d{2}-\d{2}$/.test(binding.date) || binding.date > binding.to))) fail(409, 'Read request does not match the proof.');
   if (now >= binding.expiresAt || localNow(new Date(now)).date !== binding.to) fail(410, 'Read proof expired. Run a fresh read.');
   return binding;
 }
 export function bindingText(binding) {
-  return JSON.stringify(['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt'].map(field => binding[field]));
+  return JSON.stringify(['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt', ...(binding.action === 'adminAdditionCheckRead' ? ['originalHash', 'date'] : [])].map(field => binding[field]));
 }
-export function validateResult(payload, binding, now, target = 'test') {
+export function validateResult(payload, binding, now, target = 'test', pending) {
   if (!exactKeys(payload, ['binding', 'readAt', 'result'])) fail(422, 'Incomplete callback.');
   validateBinding(payload.binding, now, target);
   if (bindingText(payload.binding) !== bindingText(binding)) fail(409, 'Callback belongs to a different read request.');
   if (!Number.isSafeInteger(payload.readAt) || payload.readAt < binding.createdAt || payload.readAt >= binding.expiresAt || payload.readAt > now) fail(422, 'Callback snapshot time is invalid.');
-  try { validateRead(payload.result, binding.gym, binding.to, target); }
+  try {
+    if (binding.action === 'adminAdditionCheckRead') {
+      if (!pending?.original || pending.binding.originalHash !== additionCheckHash(pending.original, pending.reviewer, target)
+        || pending.binding.date !== pending.original.date) throw new Error('Original read binding unavailable.');
+      validateAdditionCheckCallback(payload.result, pending.original, pending.reviewer, target);
+      if (payload.result.ledger.from !== binding.from || payload.result.ledger.to !== binding.to) throw new Error('Callback read range did not match.');
+    } else validateRead(payload.result, binding.gym, binding.to, target);
+  }
   catch { fail(422, 'The complete authoritative read was not received.'); }
   return payload;
 }
@@ -101,7 +113,7 @@ export async function acceptResult(store, raw, suppliedSignature, runtime, now, 
   if (!pending) fail(404, 'No pending read request.');
   trace('callback.validation', 'start');
   validateBinding(pending.binding, now, target);
-  validateResult(payload, pending.binding, now, target);
+  validateResult(payload, pending.binding, now, target, pending);
   trace('callback.validation', 'ok');
   const digest = hash(raw);
   const receipt = { digest, receivedAt: now, payload };
@@ -122,7 +134,7 @@ export async function readProof(store, id, now, target = 'test') {
   const common = { requestId: id, expiresAt: pending.binding.expiresAt, dispatch, ordinaryReplyUsed: false };
   if (!saved) return { ok: true, state: 'pending', ...common };
   if (hash(JSON.stringify(saved.payload)) !== saved.digest || !Number.isSafeInteger(saved.receivedAt) || saved.receivedAt < pending.binding.createdAt || saved.receivedAt >= pending.binding.expiresAt) fail(503, 'Stored callback is incomplete.');
-  validateResult(saved.payload, pending.binding, now, target);
+  validateResult(saved.payload, pending.binding, now, target, pending);
   return { ok: true, state: 'received', ...common, readAt: saved.payload.readAt, receivedAt: saved.receivedAt, latencyMs: saved.receivedAt - pending.binding.createdAt, digest: saved.digest, result: saved.payload.result };
 }
 export async function dispatchProof(store, pending, runtime, dependencies = {}) {
@@ -139,7 +151,8 @@ export async function dispatchProof(store, pending, runtime, dependencies = {}) 
     trace('dispatch', 'start');
     const response = await (dependencies.fetch || fetch)(runtime.webhookUrl, {
       method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      body: JSON.stringify({ token: runtime.webhookToken, adminActionToken: runtime.adminActionToken, target, action: target === 'test' ? 'managerReviewReadCallbackProof' : 'managerReviewReadCallback', gym: 'rev', from: pending.binding.from, to: pending.binding.to, adminName: pending.reviewer, binding: pending.binding }),
+      body: JSON.stringify({ token: runtime.webhookToken, adminActionToken: runtime.adminActionToken, target, action: target === 'test' ? 'managerReviewReadCallbackProof' : 'managerReviewReadCallback', gym: 'rev', from: pending.binding.from, to: pending.binding.to, adminName: pending.reviewer, binding: pending.binding,
+        ...(pending.binding.action === 'adminAdditionCheckRead' ? { original: pending.original } : {}) }),
       // This read uses only its authenticated persisted callback, not ContentService.
       redirect: 'manual', signal
     });
@@ -206,6 +219,115 @@ export function scheduleReadCleanup(dependencies, trace, target = 'test') {
       } catch { trace('cleanup', 'unavailable'); }
     })());
   } catch { trace('cleanup', 'not-scheduled'); }
+}
+
+// A watcher belongs to the same supported invocation as its one dispatch. It
+// only cancels the unused ordinary reply after validating a persisted callback;
+// it never extends the dispatch budget or keeps polling after dispatch settles.
+function untilStopped(work, signal) {
+  if (signal.aborted) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const stopped = () => resolve(null);
+    signal.addEventListener('abort', stopped, { once: true });
+    Promise.resolve().then(work).then(resolve, reject).finally(() => signal.removeEventListener('abort', stopped));
+  });
+}
+export async function dispatchReadTicket(store, pending, runtime, dependencies = {}) {
+  const clock = dependencies.clock || Date.now;
+  const trace = dependencies.readTrace || createReadTrace(pending.binding.requestId, dependencies);
+  const confirmed = new AbortController(), settled = new AbortController();
+  const stop = AbortSignal.any([settled.signal, AbortSignal.timeout(25_000)]);
+  const dispatch = dispatchProof(store, pending, runtime, { ...dependencies, readTrace: trace, confirmedCallbackSignal: confirmed.signal })
+    .finally(() => settled.abort());
+  const watcher = (async () => {
+    try {
+      const watchStore = dependencies.watchStore || dependencies.store || await untilStopped(() => proofStore({
+        fetch: (url, options = {}) => fetch(url, { ...options, signal: options.signal ? AbortSignal.any([stop, options.signal]) : stop })
+      }, runtime.target), stop);
+      while (watchStore && !stop.aborted) {
+        const proof = await untilStopped(() => readProof(watchStore, pending.binding.requestId, clock(), runtime.target), stop);
+        if (!proof || stop.aborted) return;
+        if (proof.state === 'received') {
+          validateBinding(pending.binding, clock(), runtime.target);
+          confirmed.abort(new DOMException('Authoritative callback confirmed', 'AbortError'));
+          trace('dispatch.watch', 'confirmed');
+          return;
+        }
+        if (dependencies.sleep) await untilStopped(() => dependencies.sleep(1000), stop);
+        else await new Promise(resolve => {
+          const finish = () => { clearTimeout(timer); stop.removeEventListener('abort', finish); resolve(); };
+          const timer = setTimeout(finish, 1000);
+          stop.addEventListener('abort', finish, { once: true });
+          if (stop.aborted) finish();
+        });
+      }
+    } catch { trace('dispatch.watch', 'unavailable'); }
+  })();
+  await Promise.all([dispatch, watcher]);
+}
+
+function ticketOwner(action, reviewer, original, target) {
+  return action === 'adminAdditionCheckRead' ? additionCheckHash(original, reviewer, target)
+    : hash(JSON.stringify([action, target, 'rev', reviewer || null]));
+}
+function validateTicketPending(pending, input, reviewer, now, target) {
+  validateBinding(pending?.binding, now, target);
+  if (!exactKeys(pending.ticket, ['ownerHash', 'deadlineAt'])
+    || pending.binding.requestId !== input.requestId || pending.binding.action !== input.action
+    || (pending.reviewer ?? null) !== (reviewer || null)
+    || pending.ticket.ownerHash !== ticketOwner(input.action, reviewer, input.original, target)
+    || pending.ticket.deadlineAt !== pending.binding.createdAt + READ_OBSERVATION_MS
+    || (input.action === 'adminAdditionCheckRead'
+      ? pending.binding.originalHash !== pending.ticket.ownerHash || pending.binding.date !== input.original.date
+        || additionCheckHash(pending.original, reviewer, target) !== pending.ticket.ownerHash
+      : Object.hasOwn(pending, 'original'))) fail(409, 'Read ticket belongs to a different request.');
+  if (now >= pending.ticket.deadlineAt) fail(410, 'Read observation ended. No fresh result is confirmed.');
+  return pending;
+}
+
+// Short start/status reads share one immutable ticket. Status never dispatches,
+// and an ambiguous start cannot authorize a second Google request. The caller
+// retains its existing authentication and returns only its permitted response.
+export async function readCallbackTicket(request, runtime, reviewer, options, dependencies = {}) {
+  const path = new URL(request.url).pathname, scoped = callbackRuntime(request, path, dependencies);
+  if (!scoped || scoped.target !== runtime.target || !['/api/m1-manager-review', '/api/m1-admin-add-check'].includes(path)) fail(403, 'Revolution scoped read required.');
+  const action = options?.action || (reviewer ? 'managerReviewRead' : 'managerReviewBadgeRead');
+  const addition = action === 'adminAdditionCheckRead', badge = action === 'managerReviewBadgeRead';
+  if (!['managerReviewRead', 'managerReviewBadgeRead', 'adminAdditionCheckRead'].includes(action)
+    || addition !== (path === '/api/m1-admin-add-check') || (badge ? reviewer != null || request.method !== 'GET' : !reviewer || request.method !== 'POST')
+    || (addition ? !options?.original || typeof options.original !== 'object' : options?.original !== undefined)
+    || !['start', 'status'].includes(options?.operation) || !validId(options?.requestId)) fail(400, 'An identified read ticket is required.');
+  if (options.operation === 'start' && typeof dependencies.context?.waitUntil !== 'function') fail(503, 'Review status unavailable.');
+  const target = runtime.target, clock = dependencies.clock || Date.now, started = clock();
+  const input = { ...options, action };
+  const trace = dependencies.readTrace || createReadTrace(input.requestId, dependencies, request.headers.get(READ_ID_HEADER));
+  try {
+    const store = await traceReadStage(trace, 'storage.open', () => dependencies.store || proofStore({}, target));
+    let pending;
+    if (input.operation === 'start') {
+      const ownerHash = ticketOwner(action, reviewer, input.original, target);
+      const proposed = { binding: { ...makeBinding(input.requestId, started, action, target), ...(addition ? { originalHash: ownerHash, date: input.original.date } : {}) },
+        ...(reviewer ? { reviewer } : {}), ...(addition ? { original: input.original } : {}),
+        ticket: { ownerHash, deadlineAt: started + READ_OBSERVATION_MS } };
+      validateTicketPending(proposed, input, reviewer, clock(), target);
+      const created = await traceReadStage(trace, 'pending.write', () => store.set(key(input.requestId, 'pending', target), JSON.stringify(proposed), { onlyIfNew: true }));
+      pending = await traceReadStage(trace, 'pending.readback', () => readEntry(store, input.requestId, 'pending', target));
+      if (!pending || ![true, false].includes(created?.modified)) fail(503, 'Pending read was not confirmed centrally. Nothing was sent.');
+      validateTicketPending(pending, input, reviewer, clock(), target);
+      if (created.modified) {
+        if (JSON.stringify(pending) !== JSON.stringify(proposed)) fail(503, 'Pending read did not match. Nothing was sent.');
+        dependencies.context.waitUntil(dispatchReadTicket(store, pending, runtime, { ...dependencies, readTrace: trace }));
+      }
+    } else {
+      pending = await traceReadStage(trace, 'pending.readback', () => readEntry(store, input.requestId, 'pending', target));
+      if (!pending) throw Object.assign(new ProofError(404, 'No pending read request.'), { code: 'READ_TICKET_MISSING' });
+      validateTicketPending(pending, input, reviewer, clock(), target);
+    }
+    const proof = await traceReadStage(trace, 'result.storage.read', () => readProof(store, input.requestId, clock(), target));
+    validateTicketPending(pending, input, reviewer, clock(), target);
+    return { state: proof.state, requestId: input.requestId, expiresAt: pending.binding.expiresAt, deadlineAt: pending.ticket.deadlineAt,
+      ...(proof.state === 'received' ? { result: proof.result } : {}) };
+  } finally { if (options.operation === 'start') scheduleReadCleanup(dependencies, trace, target); }
 }
 
 // Only the normal Revolution initial read and public aggregate call this.

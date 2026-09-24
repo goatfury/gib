@@ -1087,6 +1087,7 @@
   <script src="./added-classes.js"></script>
   <script src="./removal-journal.js"></script>
   <script src="../manager-review-config.generated.js"></script>
+  <script src="../manager-read-client.js"></script>
   <script src="./manager-review.js"></script>
   <script src="./read-callback-proof.js"></script>
   <script>
@@ -3686,7 +3687,8 @@
         const headers = { 'Content-Type': 'application/json' };
         if (adminRequestToken) headers[ADMIN_REQUEST_HEADER] = adminRequestToken;
         const traceId = globalThis.location?.origin === 'https://deploy-preview-89--gib-live.netlify.app'
-          && url === '/api/m1-manager-review' && body?.action === 'read' ? globalThis.crypto?.randomUUID?.() : null;
+          && url === '/api/m1-manager-review' && body?.action === 'read'
+          ? body.readRequest?.requestId || globalThis.crypto?.randomUUID?.() : null;
         const traceStarted = Date.now();
         if (traceId) headers['X-GIB-M1-Read-ID'] = traceId;
         const traceRead = (state, status, requestId) => {

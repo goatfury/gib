@@ -23,6 +23,23 @@ function managerAttendanceHash_(records) {
 function managerRequestHash_(reviewer, input) {
   return managerHash_([reviewer, input.requestId, input.date, input.action, input.revision, input.attendanceHash, input.scheduleHash, input.decisions]);
 }
+function managerAdditionCheckHash_(original, reviewer, target) {
+  var fields = ['requestId', 'date', 'classLabel', 'duration', 'instructor', 'site', 'notes', 'reason'];
+  if (['test', 'production'].indexOf(target) < 0 || GIB_M1_ADMIN_NAMES_.indexOf(reviewer) < 0
+    || !original || Array.isArray(original) || JSON.stringify(Object.keys(original).sort()) !== JSON.stringify(fields.slice().sort())
+    || typeof original.requestId !== 'string' || !/^(?:m1-\d{4}-\d{2}-\d{2}-[0-9a-f]{24}|manager-add-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/.test(original.requestId)
+    || (target === 'production' && original.requestId.indexOf('m1-') !== 0)
+    || typeof original.date !== 'string' || !validCalendarDate_(original.date) || original.date < '2026-09-07'
+    || (original.requestId.indexOf('m1-') === 0 && original.requestId.slice(3, 13) !== original.date)
+    || typeof original.duration !== 'number' || !isFinite(original.duration) || original.duration <= 0 || original.duration > 8
+    || original.site !== 'Rev') throw new Error('Invalid original addition binding.');
+  [['classLabel', 200, false], ['instructor', 100, false], ['notes', 400, true], ['reason', 240, false]].forEach(function(rule) {
+    var value = original[rule[0]];
+    if (typeof value !== 'string' || value !== safeText_(value, rule[1], rule[2]) || (rule[0] === 'reason' && value.length < 3)) throw new Error('Invalid original addition binding.');
+  });
+  if (target === 'test' && !obviousTestValue_(original.instructor)) throw new Error('Synthetic TEST original required.');
+  return managerHash_(['adminAdditionCheckRead', target, 'rev', reviewer].concat(fields.map(function(field) { return original[field]; })));
+}
 function managerJournal_(spreadsheet, create) {
   var headers = ['Request ID', 'Gym', 'Date', 'Revision', 'Reviewer', 'Time', 'Action', 'Attendance hash', 'Schedule hash', 'Decisions', 'Reviewed data', 'Request hash'];
   var sheet = spreadsheet.getSheetByName('Manager Reviews');
@@ -68,10 +85,13 @@ function managerDay_(date, state, events) {
 function managerReviewAction_(body, readTrace) {
   var target = configuredDeploymentTarget_();
   if (!managerReviewEnabled_() || requestTarget_(body) !== target || !adminActionAuthorized_(body)) return rejectedAuthResult_();
-  if (['managerReviewRead', 'managerReviewSave'].indexOf(body.action) < 0 && !(body.action === 'managerReviewVoid' && managerReviewTestEnabled_())) return rejectedAuthResult_();
+  if (['managerReviewRead', 'managerReviewSave', 'adminAdditionCheckRead'].indexOf(body.action) < 0 && !(body.action === 'managerReviewVoid' && managerReviewTestEnabled_())) return rejectedAuthResult_();
   var gym = typeof GIB_M1_RICHMOND_INSTALLATION_ !== 'undefined' ? 'richmond' : 'rev';
   if (body.gym !== gym || body.from !== '2026-09-07' || body.to !== todayNewYork_()) return rejectedAuthResult_();
-  var trace = body.action === 'managerReviewRead' && typeof readTrace === 'function' ? readTrace : function() {};
+  var additionCheck = body.action === 'adminAdditionCheckRead';
+  if (additionCheck && (gym !== 'rev' || body.originalHash !== managerAdditionCheckHash_(body.original, body.adminName, target)
+    || body.date !== body.original.date || body.date > body.to || body.check !== undefined)) return rejectedAuthResult_();
+  var trace = (body.action === 'managerReviewRead' || additionCheck) && typeof readTrace === 'function' ? readTrace : function() {};
   var lock = LockService.getScriptLock();
   trace('google.lock', 'waiting');
   if (!lock.tryLock(10000)) {
@@ -88,7 +108,7 @@ function managerReviewAction_(body, readTrace) {
     if (state.records.length > 20000) throw new Error('Attendance range too large.');
     var journal = managerJournal_(spreadsheet, false);
     if (journal.events.some(function(e) { return e.gym !== gym; })) throw new Error('Wrong gym in review journal.');
-    if (body.action === 'managerReviewRead') {
+    if (body.action === 'managerReviewRead' || additionCheck) {
       var days = [];
       var stamp = new Date(body.from + 'T12:00:00Z').getTime();
       for (var i = 0; i <= 3660; i++, stamp += 86400000) {
@@ -98,6 +118,17 @@ function managerReviewAction_(body, readTrace) {
       }
       if (!days.length || days[days.length - 1].date !== body.to) throw new Error('Review date range incomplete.');
       var result = { ok: true, schema: 'm1-manager-review/v1', complete: true, target: target, gym: gym, from: body.from, to: body.to, days: days };
+      if (additionCheck) {
+        // dailyReviewAction_ owns no lock. Read its exact audit/removal contract
+        // while this one attendance lock also protects the manager snapshot.
+        var dailyBody = { action: 'dailyReview', target: target, token: body.token, adminActionToken: body.adminActionToken, date: body.date };
+        if (target === 'production') { dailyBody.removalVersion = 'revolution-instructor-removal-v1'; dailyBody.installation = 'rev'; dailyBody.environment = target; }
+        var daily = JSON.parse(dailyReviewAction_(dailyBody).getContent());
+        if (daily.ok !== true || daily.date !== body.date) throw new Error('Daily addition proof unavailable.');
+        result = { ok: true, schema: 'm1-admin-addition-check/v1', target: target, gym: gym, originalHash: body.originalHash,
+          date: body.date, reviewer: body.adminName,
+          dailyRead: { ok: true, test: target === 'test', adminName: body.adminName, date: daily.date, records: daily.records, warnings: daily.warnings, auditHistory: daily.auditHistory }, ledger: result };
+      }
       if (body.check && GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) >= 0) {
         var checked = journal.events.filter(function(e) { return e.requestId === body.check.requestId; });
         if (checked.length && checked[0].requestHash !== managerRequestHash_(body.adminName, body.check)) return jsonResult_({ ok: false, message: 'Review request identity conflict.' });
