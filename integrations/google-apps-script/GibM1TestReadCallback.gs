@@ -5,9 +5,9 @@ var GIB_M1_TEST_READ_CALLBACK_SCHEMA_ = 'm1-test-read-callback/v1';
 // Editor-armed diagnostic only; no HTTP action exposes these receipts.
 var GIB_M1_READ_TRACE_WINDOW_ = 'M1_TEST_READ_TRACE_UNTIL';
 var GIB_M1_READ_TRACE_PREFIX_ = 'M1_TEST_READ_TRACE_V1_';
-var GIB_M1_READ_TRACE_STAGES_ = ['google.request', 'google.envelope', 'google.binding', 'google.fault', 'google.lock', 'google.read', 'google.decode', 'google.result', 'google.payload', 'google.signature', 'google.expiry', 'google.callback', 'google.ack'];
-var GIB_M1_READ_TRACE_STATES_ = ['accepted', 'validated', 'rejected', 'armed', 'skipped', 'waiting', 'acquired', 'unavailable', 'released', 'start', 'response', 'failed'];
-var GIB_M1_READ_TRACE_ERRORS_ = ['none', 'validation_rejected', 'read_rejected', 'payload_limit', 'expired', 'thrown_exception', 'callback_http', 'ack_invalid_json', 'ack_mismatch', 'ack_read_exception'];
+var GIB_M1_READ_TRACE_STAGES_ = ['google.request', 'google.envelope', 'google.binding', 'google.binding-age', 'google.fault', 'google.lock', 'google.read', 'google.decode', 'google.result', 'google.payload', 'google.signature', 'google.expiry', 'google.callback', 'google.ack'];
+var GIB_M1_READ_TRACE_STATES_ = ['accepted', 'validated', 'rejected', 'past', 'future', 'armed', 'skipped', 'waiting', 'acquired', 'unavailable', 'released', 'start', 'response', 'failed'];
+var GIB_M1_READ_TRACE_ERRORS_ = ['none', 'validation_rejected', 'binding_shape', 'binding_scope', 'binding_reviewer', 'binding_id', 'binding_time', 'binding_future', 'binding_expired', 'read_rejected', 'payload_limit', 'expired', 'thrown_exception', 'callback_http', 'ack_invalid_json', 'ack_mismatch', 'ack_read_exception'];
 function gibM1ReadTraceKeys_(properties, now) {
   var keys = properties.getKeys().filter(function(key) { return /^M1_TEST_READ_TRACE_V1_\d{13}_[0-9a-f-]{36}$/.test(key); });
   var expired = keys.filter(function(key) { return Number(key.slice(GIB_M1_READ_TRACE_PREFIX_.length, GIB_M1_READ_TRACE_PREFIX_.length + 13)) <= now; });
@@ -60,8 +60,8 @@ function gibM1ReadTraceReceipt_(requestId, started) {
     active = until > started && until <= started + 20 * 60000;
   } catch (_) {} // Diagnostics never gate the authoritative read or callback.
   return {
-    event: function(stage, state, status) {
-      try { if (active && events.length < 16) events.push({ stage: stage, state: state, elapsedMs: Math.max(0, Date.now() - started), status: status }); } catch (_) {}
+    event: function(stage, state, status, elapsedMs) {
+      try { if (active && events.length < 16) events.push({ stage: stage, state: state, elapsedMs: elapsedMs === undefined ? Math.max(0, Date.now() - started) : elapsedMs, status: status }); } catch (_) {}
     },
     finish: function(stage, error, status, acknowledged) {
       if (!active) return;
@@ -136,11 +136,11 @@ function gibM1TestReadCallback_(body) {
     if (!gibM1TestReadCallbackEnabled_() || !adminActionAuthorized_(body)) return rejectedAuthResult_();
     var b = body.binding;
     receipt = gibM1ReadTraceReceipt_(b && b.requestId, now);
-    trace = function(stage, state, status) {
+    trace = function(stage, state, status, elapsedMs) {
       // Allow-listed diagnostic data only; never raw errors, response bodies or secrets.
       try {
-        receipt.event(stage, state, status);
-        var event = gibM1SanitizeReadReceipt_({ requestId: b && b.requestId, events: [{ stage: stage, state: state, status: status, elapsedMs: Math.max(0, Date.now() - now) }] });
+        receipt.event(stage, state, status, elapsedMs);
+        var event = gibM1SanitizeReadReceipt_({ requestId: b && b.requestId, events: [{ stage: stage, state: state, status: status, elapsedMs: elapsedMs === undefined ? Math.max(0, Date.now() - now) : elapsedMs }] });
         console.log('M1_TEST_READ_STAGE ' + JSON.stringify({ requestId: event.requestId, stage: event.events[0].stage,
           state: event.events[0].state, elapsedMs: event.events[0].elapsedMs, status: event.events[0].status }));
       } catch (_) {}
@@ -154,13 +154,20 @@ function gibM1TestReadCallback_(body) {
     trace(stage, 'validated');
     stage = 'google.binding';
     var fields = ['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt'];
-    if (!b || JSON.stringify(Object.keys(b).sort()) !== JSON.stringify(fields.sort())
-      || b.schema !== GIB_M1_TEST_READ_CALLBACK_SCHEMA_ || b.target !== 'test' || b.gym !== 'rev'
+    var rejection = null;
+    if (!b || JSON.stringify(Object.keys(b).sort()) !== JSON.stringify(fields.sort())) rejection = 'binding_shape';
+    else if (b.schema !== GIB_M1_TEST_READ_CALLBACK_SCHEMA_ || b.target !== 'test' || b.gym !== 'rev'
       || ['managerReviewRead', 'managerReviewBadgeRead'].indexOf(b.action) < 0 || b.from !== body.from || b.to !== body.to
-      || (b.action === 'managerReviewRead' ? GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) < 0 : body.adminName !== undefined)
-      || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(b.requestId)
-      || !Number.isSafeInteger(b.createdAt) || b.createdAt > now || b.expiresAt !== b.createdAt + 60000
-      || now >= b.expiresAt) { error = 'validation_rejected'; trace(stage, 'rejected'); return rejectedAuthResult_(); }
+    ) rejection = 'binding_scope';
+    else if (b.action === 'managerReviewRead' ? GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) < 0 : body.adminName !== undefined) rejection = 'binding_reviewer';
+    else if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(b.requestId)) rejection = 'binding_id';
+    else if (!Number.isSafeInteger(b.createdAt) || b.expiresAt !== b.createdAt + 60000) rejection = 'binding_time';
+    else {
+      trace('google.binding-age', b.createdAt > now ? 'future' : 'past', null, Math.abs(now - b.createdAt));
+      if (b.createdAt > now) rejection = 'binding_future';
+      else if (now >= b.expiresAt) rejection = 'binding_expired';
+    }
+    if (rejection) { error = rejection; trace(stage, 'rejected'); return rejectedAuthResult_(); }
     trace(stage, 'validated');
     var lateTest = gibM1ConsumeLateBadge_(b);
     trace('google.fault', lateTest ? 'armed' : 'skipped');

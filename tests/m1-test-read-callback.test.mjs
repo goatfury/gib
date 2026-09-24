@@ -184,10 +184,10 @@ test('editor-armed receipts cover authenticated validation rejection and a reque
   const success = googleReceipts(g)[0];
   assert.equal(success.requestId, id); assert.equal(success.acknowledged, true); assert.equal(success.error, 'none'); assert.equal(success.status, 200);
   assert.ok(success.events.some(e => e.stage === 'google.lock' && e.state === 'released'));
-  for (const change of [body => { body.gym = 'richmond'; }, body => { body.binding.expiresAt++; }, body => { body.binding.requestId = 'private-untrusted-value'; }]) {
+  for (const [change, expected] of [[body => { body.gym = 'richmond'; }, 'validation_rejected'], [body => { body.binding.expiresAt++; }, 'binding_time'], [body => { body.binding.requestId = 'private-untrusted-value'; }, 'binding_id']]) {
     const body = structuredClone(g.body); change(body);
     g.ctx.gibM1TestReadCallback_(body);
-    assert.equal(googleReceipts(g).at(-1).error, 'validation_rejected');
+    assert.equal(googleReceipts(g).at(-1).error, expected);
   }
   assert.equal(googleReceipts(g).at(-1).requestId, null);
   const before = structuredClone([...g.properties]);
@@ -195,6 +195,24 @@ test('editor-armed receipts cover authenticated validation rejection and a reque
   assert.deepEqual([...g.properties], before);
   assert.doesNotMatch(JSON.stringify([...g.properties]) + g.logs.join('\n'), /private-untrusted|synthetic-test|Andrew|script\.google/);
   assert.equal(g.sent.length, 1);
+});
+
+test('binding diagnostics distinguish every existing rejection check without accepting future or expired requests', () => {
+  const cases = [
+    [body => { body.binding.extra = true; }, 'binding_shape'],
+    [body => { body.binding.gym = 'richmond'; }, 'binding_scope'],
+    [body => { body.adminName = 'unlisted'; }, 'binding_reviewer'],
+    [body => { body.binding.createdAt = now + 500; body.binding.expiresAt = now + 60500; }, 'binding_future'],
+    [body => { body.binding.createdAt = now - 60000; body.binding.expiresAt = now; }, 'binding_expired']
+  ];
+  for (const [change, expected] of cases) {
+    const g = googleHarness(); g.ctx.testRevolutionStartReadTrace(); change(g.body);
+    g.ctx.gibM1TestReadCallback_(g.body);
+    const result = googleReceipts(g)[0];
+    assert.equal(result.error, expected); assert.equal(g.sent.length, 0);
+    if (expected === 'binding_future') assert.deepEqual(result.events.find(e => e.stage === 'google.binding-age'), { stage: 'google.binding-age', state: 'future', elapsedMs: 400, status: null });
+    assert.equal(Object.hasOwn(result, 'createdAt'), false);
+  }
 });
 
 test('Google failure receipts distinguish thrown read/parse/transport exceptions, rejection, non-success HTTP and wrong acknowledgments', () => {
