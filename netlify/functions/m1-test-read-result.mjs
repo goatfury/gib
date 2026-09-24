@@ -1,7 +1,8 @@
 import { jsonResponse } from './_lib/m1-common.mjs';
 import { CALLBACK_PATH, LIVE_CALLBACK_PATH, ProofError, SIGNATURE_HEADER, acceptResult, createReadTrace, traceReadStage, validId, callbackRuntime, proofStore } from './_lib/m1-test-read-callback.mjs';
 
-export const config = { path: [CALLBACK_PATH, LIVE_CALLBACK_PATH], rateLimit: { windowLimit: 40, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
+// Netlify's source parser requires literal routes, including inside arrays.
+export const config = { path: ['/api/m1-test-read-result', '/api/m1-manager-read-result'], rateLimit: { windowLimit: 40, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 export async function handleReadResult(request, dependencies = {}) {
   const path = new URL(request.url).pathname;
   const runtime = [CALLBACK_PATH, LIVE_CALLBACK_PATH].includes(path) && callbackRuntime(request, path, dependencies);
