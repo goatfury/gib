@@ -1,5 +1,7 @@
 # Revolution manager-review release preparation — not authorized
 
+**September 25 checkpoint:** the proposed live session remains paused. Stu's two confirmed requests are being implemented only in Revolution TEST: a capture-only daily attendance digest and reviewed recovery of forgotten Staff Clock finishes. See [the TEST operating notes](m1-attendance-digest-staff-recovery-test.md). The historical approval and release sequence below does not authorize or cover those new features. PR89 stays draft and unmerged; no live release, recipient configuration, new access or session with Stu is approved.
+
 PR89 remains draft and unmerged. Andrew's current instruction authorizes Revolution TEST work only: no live release, permission change or session with Stu is authorized. The steps below are retained release preparation, not an approval request. The final PR receipt identifies the tested candidate commit, TEST deployment and receiver version; a later explicit approval must name those reviewed sources before any live action.
 
 ## Proposed approval

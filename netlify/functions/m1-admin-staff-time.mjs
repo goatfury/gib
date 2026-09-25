@@ -18,6 +18,8 @@ import {
   sanitizeStaffTimeHistoryPageRequest,
   sanitizeStaffShiftLookup,
   sanitizeStaffShiftLookupRequest,
+  sanitizeStaffRecoveryDecisionRequest,
+  sanitizeStaffRecoveryResponse,
   sanitizeStaffTimeReview,
   sanitizeStaffViewPage,
   sanitizeStaffViewPageRequest,
@@ -26,6 +28,7 @@ import {
 } from './_lib/m1-staff-clock-contracts.mjs';
 import { validExactProductionRequest } from './_lib/m1-production-runtime.mjs';
 import { staffClockEnabled } from './_lib/m1-installation.mjs';
+import { managerReviewScope } from './_lib/m1-manager-scope.mjs';
 
 export const ADMIN_STAFF_TIME_PATH = '/.netlify/functions/m1-admin-staff-time';
 export const ADMIN_STAFF_TIME_SITE = 'Rev';
@@ -124,6 +127,15 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
   }
   const parsed = await readJson(request, MAX_REQUEST_BYTES);
   if (parsed.response) return parsed.response;
+  const operation = parsed.value.operation;
+  const recoveryOperation = operation === 'recoveryReview' || operation === 'recoveryDecide';
+  if (recoveryOperation) {
+    const scope = managerReviewScope(request, dependencies);
+    if (target !== 'test' || scope?.target !== 'test' || scope.profile.installationId !== 'rev'
+      || new URL(request.url).origin !== 'https://deploy-preview-89--gib-live.netlify.app') {
+      return jsonResponse(404, { ok: false, message: 'Staff recovery is disabled for this installation.' });
+    }
+  }
 
   const runtime = runtimeConfig(dependencies.env || process.env, {
     admin: true,
@@ -136,7 +148,6 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
   const auth = requireAdmin(request, runtime, dependencies.now ?? Date.now());
   if (auth.response) return auth.response;
 
-  const operation = parsed.value.operation;
   if (
     operation !== 'review'
     && operation !== 'reviewPage'
@@ -145,11 +156,39 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
     && operation !== 'correct'
     && operation !== 'adjust'
     && operation !== 'void'
+    && !recoveryOperation
   ) {
     return jsonResponse(400, { ok: false, message: 'Staff time request was rejected.' });
   }
   const fetchImpl = dependencies.fetch || fetch;
   const dateNow = dependencies.dateNow || new Date();
+
+  if (recoveryOperation) {
+    const value = operation === 'recoveryDecide' ? sanitizeStaffRecoveryDecisionRequest(parsed.value, { now: dateNow }) : null;
+    if (operation === 'recoveryDecide' ? !value : !exactObjectKeys(parsed.value, ['operation'])) {
+      return jsonResponse(400, { ok: false, message: 'Staff recovery request was rejected.' });
+    }
+    const expected = value ? { ...value, adminName: auth.session.adminName } : null;
+    const data = value ? { decision: { ...value }, adminName: auth.session.adminName } : {};
+    if (data.decision) delete data.decision.operation;
+    const google = await postGoogle(runtime, value ? 'staffRecoveryDecide' : 'staffRecoveryReview', data, fetchImpl);
+    if (value) {
+      const mutationFailure = adminMutationFailureResponse(google, operation);
+      if (mutationFailure) return mutationFailure;
+    }
+    // A central decision can be recorded after the request was validated.
+    const result = google.readable
+      ? sanitizeStaffRecoveryResponse(google.value, target, {
+        now: new Date((dependencies.clock || Date.now)()), expected
+      }) : null;
+    if (!result) {
+      return jsonResponse(googleFailureClass(google) === 'UNREACHABLE' ? 504 : 502, {
+        ok: false, code: 'STAFF_RECOVERY_UNCONFIRMED',
+        message: 'Staff recovery could not be confirmed. Keep the original request; do not submit a different decision.'
+      });
+    }
+    return jsonResponse(200, { ok: true, test: runtime.preview, adminName: auth.session.adminName, ...result });
+  }
 
   if (operation === 'review') {
     if (!exactObjectKeys(parsed.value, ['operation'])) {
@@ -427,4 +466,4 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
   });
 }
 
-export default request => handleAdminStaffTime(request);
+export default (request, context) => handleAdminStaffTime(request, { context });

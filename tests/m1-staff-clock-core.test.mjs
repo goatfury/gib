@@ -59,6 +59,10 @@ function totalFor(review, period, staffId = 'mandy-test') {
 
 const ADJUSTMENT_REQUEST_ID = 'gib-m1-staff-request-123e4567-e89b-42d3-a456-426614174000';
 
+function recoveredStart(previous, timestamp, overrides = {}) {
+  return staffRecord({ timestamp, recoveryRequestId: ADJUSTMENT_REQUEST_ID, previousClockInPunchId: previous.punchId, ...overrides });
+}
+
 test('Staff punch IDs are permanent, scoped UUID-v4 values and fail closed without secure randomness', () => {
   const cryptoApi = {
     randomUUID: () => 'ABCDEF12-3456-4ABC-8DEF-1234567890AB'
@@ -113,6 +117,129 @@ test('Staff members and records use one strict browser-safe contract', () => {
     { ...base, linkedPunchId: 'bad' },
     { ...base, unexpected: true }
   ]) assert.equal(validStaffRecord(changed), false, JSON.stringify(changed));
+});
+
+test('recovery metadata is a complete Tablet Clock In pair and participates in permanent-record identity', () => {
+  const oldStart = staffRecord(), current = recoveredStart(oldStart, '2026-08-18T15:00:00-04:00');
+  assert.equal(validStaffRecord(current), true);
+  assert.equal(sameStaffRecord(current, { ...current }), true);
+  const { recoveryRequestId, previousClockInPunchId, ...ordinary } = current;
+  assert.equal(sameStaffRecord(current, ordinary), false);
+  for (const invalid of [
+    { ...ordinary, recoveryRequestId }, { ...ordinary, previousClockInPunchId },
+    { ...current, recoveryRequestId: '' }, { ...current, previousClockInPunchId: '' },
+    { ...current, recoveryRequestId: 'bad' }, { ...current, previousClockInPunchId: 'bad' },
+    { ...current, recoveryRequestId: null }, { ...current, previousClockInPunchId: current.punchId },
+    { ...current, punchAction: 'clockOut' }, { ...current, source: 'Admin-added' }
+  ]) assert.equal(validStaffRecord(invalid), false, JSON.stringify(invalid));
+  const exact = mergeStaffRecords([current], [{ ...current }]);
+  assert.deepEqual(exact.records, [current]); assert.deepEqual(exact.attention, []);
+  const conflict = mergeStaffRecords([current], [{ ...current, recoveryRequestId: 'gib-m1-staff-request-223e4567-e89b-42d3-a456-426614174000' }]);
+  assert.deepEqual(conflict.records, [current]); assert.equal(conflict.attention[0].code, 'CONFLICTING_DUPLICATE');
+});
+
+test('an explicit recovery boundary preserves the missing finish and starts only the new real shift, including a same-day return', () => {
+  for (const oldTime of ['2026-08-17T09:00:00-04:00', '2026-08-18T09:00:00-04:00']) {
+    const previous = staffRecord({ timestamp: oldTime }), current = recoveredStart(previous, '2026-08-18T15:00:00-04:00');
+    const records = [previous, current], before = structuredClone(records);
+    const state = evaluateStaffState('mandy-test', records, { now: '2026-08-18T16:00:00-04:00' });
+    assert.equal(state.clockedIn, true); assert.equal(state.clockInRecord.punchId, current.punchId);
+    assert.equal(state.nextPunchAction, 'clockOut'); assert.equal(state.needsAttention, true);
+    assert.deepEqual(state.completedShifts, []);
+    assert.deepEqual(state.recoveryPending, [{ recoveryRequestId: current.recoveryRequestId, previousClockInPunchId: previous.punchId, newClockInPunchId: current.punchId, timestamp: current.timestamp, date: current.date }]);
+    assert.equal(state.attention[0].code, 'MISSING_CLOCK_OUT_RECOVERY');
+    assert.equal(state.attention[0].punchId, previous.punchId); assert.equal(state.attention[0].date, previous.date);
+    assert.deepEqual(records, before, 'no timestamp, record or prior finish is invented');
+  }
+});
+
+test('unresolved prior recovery does not absorb later shifts or block later real punching, and payroll remains flagged', () => {
+  const oldStart = staffRecord({ timestamp: '2026-08-17T09:00:00-04:00' });
+  const current = recoveredStart(oldStart, '2026-08-18T09:00:00-04:00');
+  const currentEnd = staffRecord({ timestamp: '2026-08-18T11:00:00-04:00', punchAction: 'clockOut' });
+  const laterShift = shift('2026-08-18T13:00:00-04:00', '2026-08-18T14:30:00-04:00');
+  const records = [oldStart, current, currentEnd, ...laterShift];
+  const state = evaluateStaffState('mandy-test', records, { now: '2026-08-18T15:00:00-04:00' });
+  assert.equal(state.clockedIn, false); assert.equal(state.nextPunchAction, 'clockIn');
+  assert.equal(state.needsAttention, true); assert.equal(state.recoveryPending.length, 1);
+  assert.deepEqual(state.completedShifts.map(item => item.elapsedMilliseconds), [2 * 3600000, 1.5 * 3600000]);
+  const review = buildStaffReview({ confirmedRecords: records, now: '2026-08-18T15:00:00-04:00' });
+  assert.equal(totalFor(review, 'current').totalMilliseconds, 3.5 * 3600000);
+  assert.equal(totalFor(review, 'current').needsAttention, true);
+  const newStart = staffRecord({ timestamp: '2026-08-18T15:00:00-04:00' });
+  const reopened = evaluateStaffState('mandy-test', [...records, newStart], { now: '2026-08-18T15:05:00-04:00' });
+  assert.equal(reopened.nextPunchAction, 'clockOut'); assert.equal(reopened.clockInRecord.punchId, newStart.punchId);
+});
+
+test('an approved prior finish resolves only its exact recovery boundary, including a finish equal to the new start', () => {
+  for (const finish of ['2026-08-18T11:00:00-04:00', '2026-08-18T15:00:00-04:00']) {
+    const previous = staffRecord({ timestamp: '2026-08-18T09:00:00-04:00' });
+    const current = recoveredStart(previous, '2026-08-18T15:00:00-04:00');
+    // Assign the earlier lexical ID to the new start to exercise tie ordering.
+    const approvedFinish = staffRecord({ timestamp: finish, punchAction: 'clockOut', source: 'Admin-added', adminName: 'Andrew Smith', linkedPunchId: previous.punchId });
+    const currentFinish = staffRecord({ timestamp: '2026-08-18T17:00:00-04:00', punchAction: 'clockOut' });
+    const state = evaluateStaffState('mandy-test', [current, approvedFinish, previous, currentFinish], { now: '2026-08-18T18:00:00-04:00' });
+    assert.equal(state.clockedIn, false); assert.equal(state.nextPunchAction, 'clockIn');
+    assert.deepEqual(state.recoveryPending, []); assert.deepEqual(state.attention, []);
+    assert.equal(state.completedShifts.length, 2);
+    assert.equal(state.completedShifts[0].clockIn.punchId, previous.punchId);
+    assert.equal(state.completedShifts[1].clockIn.punchId, current.punchId);
+    assert.equal(state.completedShifts[1].elapsedMilliseconds, 2 * 3600000);
+  }
+});
+
+test('unknown, other-staff, wrong-site, reused and chronologically conflicting recovery links fail closed', () => {
+  const previous = staffRecord({ timestamp: '2026-08-18T09:00:00-04:00' });
+  const current = recoveredStart(previous, '2026-08-18T15:00:00-04:00');
+  const next = recoveredStart(current, '2026-08-18T17:00:00-04:00', { recoveryRequestId: 'gib-m1-staff-request-223e4567-e89b-42d3-a456-426614174000' });
+  const cases = [
+    [current],
+    [{ ...previous, staffId: 'other-test' }, current],
+    [{ ...previous, site: 'OTHER TEST' }, current],
+    [{ ...previous, status: 'VOID' }, current],
+    [previous, { ...current, timestamp: '2026-08-18T08:00:00-04:00' }],
+    [previous, { ...current, timestamp: previous.timestamp }],
+    [previous, current, { ...next, previousClockInPunchId: previous.punchId }],
+    [previous, current, { ...next, recoveryRequestId: current.recoveryRequestId }],
+    [previous, current, staffRecord({ timestamp: '2026-08-18T15:30:00-04:00', punchAction: 'clockOut', source: 'Admin-added', linkedPunchId: previous.punchId }), next],
+    [...shift('2026-08-18T07:00:00-04:00', '2026-08-18T08:00:00-04:00'), previous, { ...current, previousClockInPunchId: nextPunchId() }]
+  ];
+  for (const records of cases) {
+    const state = evaluateStaffState('mandy-test', records, { now: '2026-08-18T18:00:00-04:00' });
+    assert.equal(state.nextPunchAction, null, JSON.stringify(records));
+    assert.equal(state.clockedIn, null); assert.equal(state.needsAttention, true);
+    assert.ok(state.attention.some(item => ['INVALID_RECOVERY_BOUNDARY', 'SIMULTANEOUS_PUNCHES'].includes(item.code)));
+  }
+});
+
+test('multiple explicit missing finishes remain pending separately and unrelated contradictions still block', () => {
+  const previous = staffRecord({ timestamp: '2026-08-17T09:00:00-04:00' });
+  const current = recoveredStart(previous, '2026-08-18T09:00:00-04:00');
+  const next = recoveredStart(current, '2026-08-18T15:00:00-04:00', { recoveryRequestId: 'gib-m1-staff-request-223e4567-e89b-42d3-a456-426614174000' });
+  const state = evaluateStaffState('mandy-test', [previous, current, next], { now: '2026-08-18T16:00:00-04:00' });
+  assert.equal(state.recoveryPending.length, 2); assert.equal(state.nextPunchAction, 'clockOut'); assert.deepEqual(state.completedShifts, []);
+  const invalid = evaluateStaffState('mandy-test', [previous, current, next, staffRecord({ timestamp: '2026-08-18T16:00:00-04:00' })], { now: '2026-08-18T17:00:00-04:00' });
+  assert.equal(invalid.nextPunchAction, null); assert.equal(invalid.attention.at(-1).code, 'REPEATED_CLOCK_IN');
+  const duplicate = evaluateStaffState('mandy-test', [previous, current, next], { now: '2026-08-18T16:00:00-04:00', attention: [{ code: 'CONFLICTING_DUPLICATE', staffId: 'mandy-test' }] });
+  assert.equal(duplicate.nextPunchAction, null); assert.equal(duplicate.clockedIn, null);
+  const staleCurrent = evaluateStaffState('mandy-test', [previous, current], { now: '2026-08-19T09:00:00-04:00', recoveryEnabled: true });
+  assert.equal(staleCurrent.nextPunchAction, null); assert.ok(staleCurrent.attention.some(item => item.code === 'MISSING_CLOCK_OUT'));
+});
+
+test('the opt-in recovery flow preserves a genuine overnight Clock Out through 18 hours without accepting an overlong or contradictory shift', () => {
+  const overnight = staffRecord({ timestamp: '2026-08-17T22:00:00-04:00' });
+  const at = '2026-08-18T06:00:00-04:00';
+  assert.equal(evaluateStaffState('mandy-test', [overnight], { now: at }).nextPunchAction, null);
+  const enabled = evaluateStaffState('mandy-test', [overnight], { now: at, recoveryEnabled: true });
+  assert.equal(enabled.nextPunchAction, 'clockOut'); assert.equal(enabled.clockedIn, true);
+  assert.equal(enabled.needsAttention, true); assert.deepEqual(enabled.recoveryPending, []);
+  assert.equal(evaluateStaffState('mandy-test', [overnight], { now: '2026-08-18T16:00:00-04:00', recoveryEnabled: true }).nextPunchAction, 'clockOut');
+  assert.equal(evaluateStaffState('mandy-test', [overnight], { now: '2026-08-18T16:00:01-04:00', recoveryEnabled: true }).nextPunchAction, null);
+  assert.equal(evaluateStaffState('mandy-test', [overnight], { now: at, recoveryEnabled: true, attention: [{ code: 'CONFLICTING_DUPLICATE', staffId: 'mandy-test' }] }).nextPunchAction, null);
+  const projection = buildStaffReview({ confirmedRecords: [overnight], now: at, recoveryEnabled: true });
+  assert.equal(projection.staffStates[0].nextPunchAction, 'clockOut');
+  const finished = evaluateStaffState('mandy-test', [overnight, staffRecord({ timestamp: at, punchAction: 'clockOut' })], { now: at, recoveryEnabled: true });
+  assert.equal(finished.completedShifts[0].elapsedMilliseconds, 8 * 3600000); assert.equal(finished.needsAttention, false);
 });
 
 test('adjusted records require one complete, strict evidence set and include it in identity', () => {

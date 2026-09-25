@@ -2,7 +2,8 @@ import {
   jsonResponse,
   postGoogle,
   readJson,
-  runtimeConfig
+  runtimeConfig,
+  safeText
 } from './_lib/m1-common.mjs';
 import {
   MAX_STAFF_CLOCK_PUNCHES,
@@ -13,6 +14,8 @@ import {
   sanitizeStaffClockPunch,
   sanitizeStaffClockSnapshot,
   sanitizeStaffClockSyncResults,
+  sanitizeStaffRecoveryRequest,
+  sanitizeStaffRecoveryResponse,
   sanitizeStaffViewPage,
   sanitizeStaffViewPageRequest
 } from './_lib/m1-staff-clock-contracts.mjs';
@@ -23,6 +26,7 @@ import {
   validExactProductionRequest
 } from './_lib/m1-production-runtime.mjs';
 import { staffClockEnabled } from './_lib/m1-installation.mjs';
+import { managerReviewScope } from './_lib/m1-manager-scope.mjs';
 
 export const STAFF_CLOCK_PATH = '/api/m1-staff-clock';
 
@@ -122,6 +126,17 @@ export async function handleStaffClock(request, dependencies = {}) {
   }
 
   const env = dependencies.env || process.env;
+  const parsed = await readJson(request, MAX_REQUEST_BYTES);
+  if (parsed.response) return parsed.response;
+  const operation = parsed.value.operation;
+  const recoveryOperation = operation === 'recoveryRead' || operation === 'recover';
+  if (recoveryOperation) {
+    const scope = managerReviewScope(request, dependencies);
+    if (target !== 'test' || scope?.target !== 'test' || scope.profile.installationId !== 'rev'
+      || new URL(request.url).origin !== 'https://deploy-preview-89--gib-live.netlify.app') {
+      return jsonResponse(404, { ok: false, message: 'Staff recovery is disabled for this installation.' });
+    }
+  }
   let runtime = null;
   let productionDeviceCredential = '';
   if (target === 'production') {
@@ -143,10 +158,7 @@ export async function handleStaffClock(request, dependencies = {}) {
     productionDeviceCredential = device.credential;
   }
 
-  const parsed = await readJson(request, MAX_REQUEST_BYTES);
-  if (parsed.response) return parsed.response;
-  const operation = parsed.value.operation;
-  if (operation !== 'snapshot' && operation !== 'snapshotPage' && operation !== 'sync') {
+  if (operation !== 'snapshot' && operation !== 'snapshotPage' && operation !== 'sync' && !recoveryOperation) {
     return jsonResponse(400, { ok: false, message: 'Staff Clock request was rejected.' });
   }
   if (target === 'test') runtime = previewRuntimeConfig(env, request.url);
@@ -157,6 +169,30 @@ export async function handleStaffClock(request, dependencies = {}) {
         ? 'TEST Staff Clock is not configured.'
         : 'Production Staff Clock is not configured.'
     });
+  }
+
+  if (recoveryOperation) {
+    const options = { requireTestName: true, now: dependencies.dateNow || new Date() };
+    const value = operation === 'recover' ? sanitizeStaffRecoveryRequest(parsed.value, options) : null;
+    if (operation === 'recover' ? !value : !exactObjectKeys(parsed.value, ['operation'])) {
+      return jsonResponse(400, { ok: false, message: 'Staff recovery request was rejected.' });
+    }
+    const data = value ? { recovery: { requestId: value.requestId, previousClockInPunchId: value.previousClockInPunchId,
+      punch: value.punch, proposedFinishAt: value.proposedFinishAt } } : {};
+    const google = await postGoogle(runtime, value ? 'staffRecoveryStart' : 'staffRecoveryRead', data, dependencies.fetch || fetch);
+    if (value && google.readable && exactObjectKeys(google.value, ['ok', 'result', 'message'])
+      && google.value.ok === false && ['conflict', 'rejected'].includes(google.value.result)
+      && safeText(google.value.message, 240) && safeText(google.value.message, 240) === google.value.message) {
+      return jsonResponse(google.value.result === 'conflict' ? 409 : 400, { ...google.value });
+    }
+    // The receiver may save after the request-time clock. Validate its receipt
+    // against delivery time, while leaving incoming punch validation unchanged.
+    const result = google.readable
+      ? sanitizeStaffRecoveryResponse(google.value, target, {
+        ...options, now: new Date((dependencies.clock || Date.now)()), expected: value
+      }) : null;
+    if (!result) return upstreamFailure(target, google, operation);
+    return jsonResponse(200, successBody(target, result));
   }
 
   if (operation === 'snapshot') {
@@ -271,4 +307,4 @@ export async function handleStaffClock(request, dependencies = {}) {
     : {});
 }
 
-export default request => handleStaffClock(request);
+export default (request, context) => handleStaffClock(request, { context });

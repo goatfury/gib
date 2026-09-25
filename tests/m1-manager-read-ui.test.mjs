@@ -48,6 +48,7 @@ function manager(target = 'test', options = {}) {
     run: ({ ticket, send, retain = () => {} }) => { retain({ ...ticket, dispatched: true }); return send({ operation: ticket.dispatched ? 'status' : 'start', requestId: ticket.requestId }, { timeoutMs: 25000 }); }
   };
   const ctx = vm.createContext({ document, Date, console: { ...console, warn: (...args) => warnings.push(args) }, GIBM1ReadClient: readClient, addEventListener: (name, fn) => { events[name] = fn; }, crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' }, FormData: class { constructor(form) { return Object.entries(form.fields); } }, sessionStorage: { getItem: key => remembered.get(key) || null, setItem: (key, value) => remembered.set(key, value), removeItem: key => remembered.delete(key) }, M1_MANAGER_REVIEW_CONFIG: { enabled: options.enabled ?? true, target } });
+  ctx.location = { search: options.search || '' };
   vm.runInContext(source('m1/admin/manager-review.js'), ctx);
   const ui = ctx.GIBM1ManagerReview.create({ request: (...args) => { const d = deferred(); calls.push({ ...d, args }); return d.promise; }, site: 'Rev', onUnauthorized: () => unauthorized++, openLegacy: date => { legacyCalls.push(date); return options.legacyResult ?? true; }, additionRequestId: date => { additionDates.push(date); return `m1-${date}-${'a'.repeat(24)}`; }, ...options });
   const root = made[0];
@@ -61,6 +62,16 @@ const reviewView = (target = 'test') => {
     classes: [{ label: '9:00 AM BJJ', scheduled: true, outcome: '', records: [] }] });
   return value;
 };
+
+test('digest date links open the requested existing day while a retained original save keeps its own day', async () => {
+  const h = manager('test', { search: '?reviewDate=2026-09-22' });
+  const opened = h.ui.open();
+  const response = result(2);
+  response.days.push({ ...response.days[0], date: '2026-09-22' });
+  h.calls[0].resolve(response); await opened;
+  assert.match(h.root.innerHTML, /value="2026-09-22" selected/);
+  assert.match(source('m1/admin/manager-review.js'), /pending = stored; selected = stored.body.date \|\| selected/);
+});
 const reviewReceipt = (original, target = 'test') => ({ ok: true, target, test: target === 'test',
   receipt: { saved: true, requestId: original.requestId, revision: original.revision + 1 } });
 

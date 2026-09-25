@@ -769,6 +769,7 @@
         </div>
       </header>
 
+      <section id="attendanceDigest" class="panel section" aria-label="Attendance reminder preview" hidden></section>
       <nav id="managerModes" class="mode-switch" role="tablist" aria-label="Admin mode">
         <a id="dailyModeControl" class="mode-control" href="#sign-ins" role="tab" aria-controls="sign-ins" aria-selected="true">Daily sign-ins</a>
         <a id="staffModeControl" class="mode-control" href="#staff-time" role="tab" aria-controls="staff-time" aria-selected="false">Staff Clock</a>
@@ -955,6 +956,7 @@
             </form>
           </section>
 
+          <section id="staffRecoveryReview" class="staff-time-block staff-time-attention" aria-label="Earlier shift proposals" hidden></section>
           <section id="staffNeedsAttentionSection" class="staff-time-block staff-time-attention" aria-labelledby="staffAttentionHeading">
             <h3 id="staffAttentionHeading">Needs attention</h3>
             <div id="staffNeedsAttention" class="staff-time-list" aria-live="polite" aria-busy="false">
@@ -1089,6 +1091,8 @@
   <script src="../manager-review-config.generated.js"></script>
   <script src="../manager-read-client.js"></script>
   <script src="./manager-review.js"></script>
+  <script src="./staff-recovery.js"></script>
+  <script src="./attendance-digest.js"></script>
   <script src="./read-callback-proof.js"></script>
   <script>
     (() => {
@@ -1126,6 +1130,12 @@
       const ADMIN_MUTATIONS_ENABLED = !IS_RICHMOND_PRODUCTION
         || (INSTALLATION.activation === 'active' && INSTALLATION.writesEnabled === true);
       const STAFF_CLOCK_ENABLED = INSTALLATION.featureFlags.staffClock === true;
+      const RECOVERY_PILOT_TARGET = globalThis.M1_MANAGER_REVIEW_CONFIG?.target;
+      const RECOVERY_PILOT_ENABLED = INSTALLATION.installationId === 'rev'
+        && globalThis.M1_MANAGER_REVIEW_CONFIG?.enabled === true
+        && location.protocol === 'https:' && !location.port
+        && RECOVERY_PILOT_TARGET === 'test'
+        && location.origin === 'https://deploy-preview-89--gib-live.netlify.app';
       const STAFF_CLOCK_PAIRING_ENABLED = INSTALLATION.featureFlags.staffClockPairing === true;
       const STAFF_CLOCK_PAIRING_CONFIG = INSTALLATION.staffClockPairing;
       const TABLET_PAIRING_AVAILABLE = STAFF_CLOCK_ENABLED
@@ -1261,6 +1271,8 @@
       let reviewLoaded = false;
       let addedClasses = null;
       let managerDayReview = null;
+      let staffRecoveryReview = null;
+      let attendanceDigest = null;
       let currentDate = '';
       let currentRecords = [];
       let currentWarnings = [];
@@ -2181,7 +2193,7 @@
         ];
         const optionalKeys = [
           'adminName', 'linkedPunchId', 'originalTimestamp', 'originalDate',
-          'adjustmentRequestId'
+          'adjustmentRequestId', 'recoveryRequestId', 'previousClockInPunchId'
         ];
         if (!isObject(value)) return false;
         const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);
@@ -2194,6 +2206,7 @@
         const hasAdjustment = Object.hasOwn(value, 'originalTimestamp')
           || Object.hasOwn(value, 'originalDate')
           || Object.hasOwn(value, 'adjustmentRequestId');
+        const hasRecovery = Object.hasOwn(value, 'recoveryRequestId') || Object.hasOwn(value, 'previousClockInPunchId');
         return STAFF_PUNCH_ID_PATTERN.test(value.punchId)
           && validStaffTimestamp(value.timestamp)
           && validReviewDate(value.date)
@@ -2216,6 +2229,10 @@
             )
           )
           && (!hasLinkedPunchId || STAFF_PUNCH_ID_PATTERN.test(value.linkedPunchId))
+          && (!hasRecovery || (value.source === 'Tablet' && value.punchAction === 'clockIn'
+            && STAFF_REQUEST_ID_PATTERN.test(value.recoveryRequestId)
+            && STAFF_PUNCH_ID_PATTERN.test(value.previousClockInPunchId)
+            && value.previousClockInPunchId !== value.punchId))
           && (!hasAdjustment || (
             Object.hasOwn(value, 'originalTimestamp')
             && Object.hasOwn(value, 'originalDate')
@@ -3707,15 +3724,16 @@
           : 0;
         let response;
         let data = null;
+        const readDigest = options.method === 'GET' && /^\/api\/m1-attendance-digest(?:\?|$)/.test(url);
         try {
           response = await fetch(url, {
-            method: 'POST',
+            method: readDigest ? 'GET' : 'POST',
             headers,
             credentials: 'same-origin',
             mode: 'same-origin',
             redirect: 'error',
             cache: 'no-store',
-            body: JSON.stringify(body),
+            ...(readDigest ? {} : { body: JSON.stringify(body) }),
             ...(controller ? { signal: controller.signal } : {})
           });
           try { data = await response.json(); } catch {}
@@ -3769,6 +3787,8 @@
 
       function setLoggedOut(message = '') {
         if (managerDayReview) managerDayReview.clear();
+        if (typeof staffRecoveryReview !== 'undefined' && staffRecoveryReview) staffRecoveryReview.clear();
+        if (typeof attendanceDigest !== 'undefined' && attendanceDigest) attendanceDigest.clear();
         if (typeof closeRemovalForLogout === 'function') closeRemovalForLogout();
         reviewLoaded = false;
         if (addedClasses) addedClasses.setActive(false);
@@ -3885,6 +3905,8 @@
             : 'Richmond TEST Sheet'
           : testMode ? 'TEST copied Sheet' : 'Production-ready session'}`;
         applyManagerMode();
+        if (typeof staffRecoveryReview !== 'undefined' && staffRecoveryReview) void staffRecoveryReview.open();
+        if (typeof attendanceDigest !== 'undefined' && attendanceDigest) void attendanceDigest.open();
         if (firstEntry) {
           window.requestAnimationFrame(() => {
             window.requestAnimationFrame(() => window.scrollTo(0, 0));
@@ -7177,6 +7199,18 @@
         return loadReview(date || currentDate || defaultYesterday());
       }
 
+      staffRecoveryReview = globalThis.GIBM1StaffRecovery?.create({
+        root: $('#staffRecoveryReview'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
+        enabled: STAFF_CLOCK_ENABLED && RECOVERY_PILOT_ENABLED, getAdmin: () => currentAdminName,
+        timestampForInputs: staffTimestampForInputs,
+        onUnauthorized: () => setLoggedOut('Admin login required.'),
+        onChanged: () => loadStaffTime({ quiet: true })
+      });
+      attendanceDigest = globalThis.GIBM1AttendanceDigest?.create({
+        root: $('#attendanceDigest'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
+        enabled: RECOVERY_PILOT_ENABLED && RECOVERY_PILOT_TARGET === 'test', getAdmin: () => currentAdminName,
+        onUnauthorized: () => setLoggedOut('Admin login required.')
+      });
       managerDayReview = globalThis.GIBM1ManagerReview?.create({
         request: requestJson,
         site: SITE,

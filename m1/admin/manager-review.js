@@ -13,7 +13,7 @@
     root.id = 'managerDayReview';
     document.getElementById('sign-ins').prepend(root);
     document.body.classList.add('manager-pilot');
-    let data, selected = '', active = false, busy = false, generation = 0, pending = null;
+    let data, selected = /(?:^|[?&])reviewDate=(\d{4}-\d{2}-\d{2})(?:&|$)/.exec(globalThis.location?.search || '')?.[1] || '', active = false, busy = false, generation = 0, pending = null;
     let inFlight = null, recoveryFlight = null, reading = false, unavailable = false;
     let dialog;
     const storageKey = 'm1-manager-pending-v1';
