@@ -28,13 +28,26 @@ function gibM1DigestCleanup_(properties, now) {
     return keys.length;
   } catch (_) { return 200; }
 }
-function gibM1DigestReceipt_(properties, binding, started, code, status, acknowledged, state) {
+function gibM1DigestResponseCode_(code) {
+  // Only fixed categories from the TEST callback contract may enter diagnostics.
+  // Never persist its response message, body, URL or any unrecognized error text.
+  var allowed = ['DIGEST_SCOPE_REQUIRED', 'DIGEST_RUNTIME_UNAVAILABLE', 'DIGEST_AUTHENTICATION_FAILED',
+    'DIGEST_INVALID_JSON', 'DIGEST_INVALID_ENVELOPE', 'DIGEST_BINDING_MISMATCH', 'DIGEST_REQUEST_EXPIRED',
+    'DIGEST_GYM_MISMATCH', 'DIGEST_MANUAL_REQUEST_MISSING', 'DIGEST_RESULT_CONFLICT', 'DIGEST_REQUEST_MISSING',
+    'DIGEST_STORAGE_INCOMPLETE', 'DIGEST_STORAGE_UNCONFIRMED', 'DIGEST_CONFIGURATION_UNAVAILABLE',
+    'DIGEST_OUTBOX_INCOMPLETE', 'DIGEST_OUTBOX_UNCONFIRMED', 'DIGEST_CAPTURE_CONFLICT',
+    'DIGEST_CAPTURE_UNCONFIRMED', 'DIGEST_CAPTURE_STATUS_UNCONFIRMED', 'DIGEST_JOB_UNAVAILABLE',
+    'RESPONSE_NOT_JSON', 'RESPONSE_CODE_UNAVAILABLE'];
+  return allowed.indexOf(code) >= 0 ? code : 'RESPONSE_CODE_UNAVAILABLE';
+}
+function gibM1DigestReceipt_(properties, binding, started, code, status, acknowledged, state, responseCode) {
   try {
     var now = Date.now();
     if (gibM1DigestCleanup_(properties, now) >= 160) return;
     properties.setProperty(GIB_M1_DIGEST_RECEIPT_ + String(now + 86400000) + '_' + Utilities.getUuid(),
       JSON.stringify({ requestId: binding.requestId, mode: binding.mode, code: code, status: status,
-        acknowledged: acknowledged, state: state, elapsedMs: Math.max(0, now - started) }));
+        acknowledged: acknowledged, state: state, elapsedMs: Math.max(0, now - started),
+        responseCode: responseCode == null ? null : gibM1DigestResponseCode_(responseCode) }));
   } catch (_) { console.log('M1_TEST_DIGEST_RECEIPT_UNAVAILABLE'); }
 }
 function gibM1DigestStaffRead_(body) {
@@ -68,7 +81,7 @@ function gibM1DigestDispatch_(binding) {
   var payload = {};
   Object.keys(binding).forEach(function(key) { payload[key] = binding[key]; });
   payload.gyms = [{ gym: 'rev', attendance: attendance, staff: staff }];
-  var raw = JSON.stringify(payload), status = null, acknowledged = false, state = null, code = 'DELIVERY_UNAVAILABLE';
+  var raw = JSON.stringify(payload), status = null, acknowledged = false, state = null, code = 'DELIVERY_UNAVAILABLE', responseCode = null;
   try {
     if (Date.now() >= binding.expiresAt) throw new Error('DIGEST_EXPIRED');
     if (Utilities.newBlob(raw).getBytes().length > 400000) { code = 'PAYLOAD_TOO_LARGE'; throw new Error(code); }
@@ -79,15 +92,17 @@ function gibM1DigestDispatch_(binding) {
     var response = UrlFetchApp.fetch(GIB_M1_DIGEST_URL_, { method: 'post', contentType: 'application/json',
       payload: raw, headers: { 'X-GIB-M1-Digest-Signature': signature }, followRedirects: false, muteHttpExceptions: true });
     status = response.getResponseCode();
+    responseCode = 'RESPONSE_NOT_JSON';
     var result = JSON.parse(response.getContentText());
+    responseCode = gibM1DigestResponseCode_(result && result.code);
     var messageId = binding.mode === 'scheduled' ? 'm1-test-daily-' + binding.jobDate : 'm1-test-manual-' + binding.requestId;
     acknowledged = status >= 200 && status < 300 && result && result.ok === true && result.accepted === true
       && result.requestId === binding.requestId && ['not-due', 'awaiting-configuration', 'captured', 'suppressed', 'failed'].indexOf(result.state) >= 0
       && (['not-due', 'awaiting-configuration'].indexOf(result.state) >= 0 ? result.messageId === null : result.messageId === messageId);
-    if (acknowledged) { state = result.state; code = state === 'failed' ? 'CAPTURE_FAILED' : 'ACKNOWLEDGED'; }
+    if (acknowledged) { state = result.state; code = state === 'failed' ? 'CAPTURE_FAILED' : 'ACKNOWLEDGED'; responseCode = null; }
     else code = status >= 200 && status < 300 ? 'ACKNOWLEDGMENT_INVALID' : 'DELIVERY_HTTP_FAILURE';
   } catch (_) { code = code === 'PAYLOAD_TOO_LARGE' ? code : Date.now() >= binding.expiresAt ? 'REQUEST_EXPIRED' : 'DELIVERY_UNAVAILABLE'; }
-  gibM1DigestReceipt_(properties, binding, started, code, status, acknowledged, state);
+  gibM1DigestReceipt_(properties, binding, started, code, status, acknowledged, state, responseCode);
   return { ok: acknowledged, requestId: binding.requestId, state: state, code: code };
 }
 function gibM1AttendanceDigestCapture_(body) {

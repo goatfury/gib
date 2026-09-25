@@ -4,6 +4,8 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../m1/admin/staff-recovery.js', import.meta.url), 'utf8');
+const adminCss = readFileSync(new URL('../m1/admin/index.html', import.meta.url), 'utf8');
+const sharedMessageDisplay = /\bdisplay:\s*([^;]+);/.exec(/\.message\s*\{([^}]*)\}/.exec(adminCss)[1])[1].trim();
 const UUID = number => `${String(number).padStart(8, '0')}-1111-4111-8111-111111111111`;
 const requestId = number => `gib-m1-staff-request-${UUID(number)}`;
 const punchId = number => `gib-m1-staff-${UUID(number)}`;
@@ -26,7 +28,7 @@ const decidedItem = (body, changes = {}) => item({ status: body.decision === 'ap
 const fields = () => ({ finishDate: '2026-09-21', finishTime: '17:00:00', finishOffset: '-04:00', reason: 'Verified prior finish' });
 function runtime(options = {}) {
   const events = {}, calls = [], storage = options.storage || new Map(), confirmations = [];
-  const status = { textContent: '', className: '' };
+  const status = { textContent: '', className: '', style: {} };
   const root = { hidden: true, innerHTML: '', attributes: {}, addEventListener: (name, handler) => { events[name] = handler; },
     setAttribute(name, value) { this.attributes[name] = value; }, querySelector: () => status, replaceChildren() { this.innerHTML = ''; } };
   let sequence = 10, admin = 'Andrew Smith', unauthorized = 0, changed = 0;
@@ -61,6 +63,24 @@ test('pending proposals and unknown finishes stay visibly separate from approved
   const pending = h.submit('approve', { ...fields(), finishDate: '', finishTime: '', finishOffset: '' }); await pending;
   assert.equal(h.calls.length, 1); assert.equal(h.storage.size, 0);
   assert.match(h.status.textContent, /valid Eastern finish/);
+});
+
+test('rendered proposal warnings and status override the actual Admin CSS hidden default', async () => {
+  assert.equal(sharedMessageDisplay, 'none', 'exercise the real shared CSS that caused the hosted defect');
+  const h = runtime(); await h.open(response([item({ conflicts: ['previous-punch-void'] })]));
+  const messages = [...h.root.innerHTML.matchAll(/<p([^>]*\bclass="message(?: [^"]*)?"[^>]*)>([^<]+)<\/p>/g)];
+  assert.ok(messages.length >= 2, 'VOID and pending payroll explanations are rendered');
+  for (const [, attributes] of messages) {
+    const inlineDisplay = /\bstyle="[^\"]*display:\s*([^;\"]+)/.exec(attributes)?.[1].trim();
+    assert.equal(inlineDisplay || sharedMessageDisplay, 'block', 'nonempty proposal messages must be visible under Admin CSS');
+  }
+  assert.equal(h.status.style.display, 'none', 'an empty status stays hidden');
+  await h.submit('approve');
+  assert.match(h.status.textContent, /Linked VOID records need review/);
+  assert.equal(h.status.style.display || sharedMessageDisplay, 'block');
+  const refresh = h.ui.refresh(); await flush(); h.calls.at(-1).reject(new Error('offline')); await refresh;
+  assert.match(h.status.textContent, /unavailable/);
+  assert.equal(h.status.style.display || sharedMessageDisplay, 'block');
 });
 
 test('linked VOID conflicts preserve history, block approval and still permit explicit rejection', async () => {

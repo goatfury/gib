@@ -125,6 +125,9 @@
       const status = el('p', note || (busy ? 'Checking capture status…' : pending
         ? 'The original capture is not yet confirmed. Check its status before another capture.'
         : current ? 'Ready to capture a preview. Sending remains off.' : 'Capture status unavailable.'), 'message');
+      // Admin's shared .message style starts hidden. Match showMessage's
+      // explicit display override so progress and failures are actually visible.
+      status.style.display = 'block';
       status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); root.append(status);
       const capture = data?.latest;
       if (!capture) return;

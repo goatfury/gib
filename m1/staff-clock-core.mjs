@@ -399,7 +399,11 @@ export function evaluateStaffState(staffId, records = [], options = {}) {
       const validPrevious = previous.length === 1
         && previous[0].punchAction === 'clockIn'
         && previous[0].staffId === staffId
-        && previous[0].site === record.site
+        // The gated TEST recovery can link the existing historical TEST alias
+        // to its canonical site without changing either permanent record.
+        && (previous[0].site === record.site || (
+          options.recoveryEnabled === true && previous[0].site === 'Rev TEST' && record.site === 'Rev'
+        ))
         && Date.parse(previous[0].timestamp) < Date.parse(record.timestamp);
       const uniqueBoundary = boundaries.filter(item => item.previousClockInPunchId === record.previousClockInPunchId).length === 1
         && boundaries.filter(item => item.recoveryRequestId === record.recoveryRequestId).length === 1;

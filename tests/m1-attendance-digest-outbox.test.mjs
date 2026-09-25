@@ -203,3 +203,33 @@ test('manual delivery failure recovers the original captured artifact without a 
   assert.equal(h.calls.length, 1); assert.equal([...h.store.entries.keys()].filter(key => key.startsWith('captures/')).length, 1);
   assert.equal([...h.store.entries.keys()].filter(key => key.startsWith('failures/')).length, 1);
 });
+
+test('scope, unavailable runtime and signature rejection have distinct sanitized categories without touching capture storage', async () => {
+  for (const [mode, status, code, stage] of [['scope', 403, 'DIGEST_SCOPE_REQUIRED', 'job.scope'],
+    ['runtime', 503, 'DIGEST_RUNTIME_UNAVAILABLE', 'job.runtime'],
+    ['signature', 403, 'DIGEST_AUTHENTICATION_FAILED', 'job.authentication']]) {
+    const h = harness(), logs = [];
+    h.deps.traceLog = (prefix, raw) => logs.push([prefix, JSON.parse(raw)]);
+    h.deps.context.requestId = 'sanitized-invocation-123';
+    if (mode === 'scope') h.deps.context.site.id = 'wrong-site';
+    if (mode === 'runtime') h.deps.env = { ...env, GIB_TEST_ADMIN_ACTION_TOKEN: '' };
+    const response = await handleAttendanceDigestJob(job(body(), mode === 'signature' ? { signature: '0'.repeat(64) } : {}), h.deps);
+    assert.equal(response.status, status, mode); assert.deepEqual(await response.json(), { ok: false, code }, mode);
+    assert.equal(h.store.entries.size, 0); assert.equal(h.scheduleCalls.length, 0);
+    assert.equal(logs.length, 1); assert.equal(logs[0][0], 'M1_TEST_DIGEST_JOB_STAGE');
+    assert.deepEqual(logs[0][1], { requestId: mode === 'signature' ? id : null, invocation: 'sanitized-invocation-123', stage, status, code, elapsedMs: 0 });
+    assert.doesNotMatch(JSON.stringify(logs), /synthetic-admin-secret|synthetic-transport-secret|attendanceHash|gyms|staffName|6:00|http/);
+  }
+});
+
+test('diagnostic logging failures cannot change capture or expose unallowlisted error contents', async () => {
+  const h = harness(); h.deps.traceLog = () => { throw new Error('logging unavailable'); };
+  assert.equal((await handleAttendanceDigestJob(job(body()), h.deps)).status, 200);
+  const broken = harness(), logs = [];
+  broken.deps.traceLog = (prefix, raw) => logs.push([prefix, JSON.parse(raw)]);
+  broken.store.getWithMetadata = async () => { throw Object.assign(new Error('PRIVATE payload'), { code: 'PRIVATE_ERROR_CONTENT' }); };
+  const response = await handleAttendanceDigestJob(job(body()), broken.deps);
+  assert.equal(response.status, 503); assert.deepEqual(await response.json(), { ok: false, code: 'DIGEST_JOB_UNAVAILABLE' });
+  assert.equal(logs[0][1].stage, 'job.capture'); assert.equal(logs[0][1].requestId, id);
+  assert.doesNotMatch(JSON.stringify(logs), /PRIVATE/);
+});

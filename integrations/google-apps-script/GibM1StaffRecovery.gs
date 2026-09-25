@@ -16,7 +16,11 @@ function testRevolutionStaffRecoveryLostReply() {
 }
 function testRevolutionStaffRecoveryLostReplyReceipt() {
   if (!staffRecoveryEnabled_()) throw new Error('Revolution TEST project required.');
-  return JSON.parse(PropertiesService.getScriptProperties().getProperty('M1_TEST_STAFF_RECOVERY_RECEIPT') || 'null');
+  var stored = JSON.parse(PropertiesService.getScriptProperties().getProperty('M1_TEST_STAFF_RECOVERY_RECEIPT') || 'null');
+  var receipt = stored && GIB_M1_STAFF_REQUEST_ID_PATTERN_.test(stored.requestId) && stored.stage === 'saved-before-reply-loss'
+    ? { requestId: stored.requestId, stage: stored.stage } : null;
+  console.log(JSON.stringify(receipt));
+  return receipt;
 }
 function staffRecoveryTestFault_(stage, item) {
   if (!staffRecoveryEnabled_()) return false;
@@ -76,6 +80,14 @@ function staffRecoverySamePunch_(record, punch) {
   return record && ['ACTIVE', 'VOID'].indexOf(record.status) >= 0 && record.source === 'Tablet' && !record.adminName
     && JSON.stringify(staffRecoveryPunchBody_(record)) === JSON.stringify(punch);
 }
+function staffRecoverySameSite_(previousSite, currentSite) {
+  // Earlier TEST tablets stored their display label. Recognize only that
+  // historical Revolution TEST label; never rewrite either permanent record.
+  return previousSite === currentSite || (previousSite === 'Rev TEST' && currentSite === 'Rev'
+    && configuredDeploymentTarget_() === 'test'
+    && typeof GIB_M1_RICHMOND_INSTALLATION_ === 'undefined'
+    && typeof GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ === 'undefined');
+}
 function staffRecoveryHistoryRoster_(staffState) {
   // Current availability controls new punches, not validation of immutable
   // history. Keep exact roster identities without mutating their active flags.
@@ -128,7 +140,7 @@ function staffRecoveryState_(spreadsheet, options) {
         || value.proposedBy !== parsed.candidate.staffName || value.proposedAt !== entry.time) staffRecoveryFail_();
       var input = parsed.input, previous = raw.byId[input.previousClockInPunchId], next = raw.byId[input.punch.punchId];
       if (!previous || previous.action !== 'clockIn' || previous.staffId !== parsed.candidate.staffId
-        || previous.site !== 'Rev' || previous.timestamp !== value.previousClockInAt || prior[previous.punchId] || newIds[input.punch.punchId]
+        || !staffRecoverySameSite_(previous.site, parsed.candidate.site) || previous.timestamp !== value.previousClockInAt || prior[previous.punchId] || newIds[input.punch.punchId]
         || Date.parse(input.punch.timestamp) <= previous.timestampMs
         || (input.proposedFinishAt !== null && !staffRecoveryFinishValid_(input.proposedFinishAt, previous.timestamp, input.punch.timestamp))) staffRecoveryFail_();
       if (next && !staffRecoverySamePunch_(next, input.punch)) staffRecoveryFail_();
@@ -188,7 +200,7 @@ function staffRecoveryBoundary_(record, records, open, shifts, seen) {
   var previous = records.filter(function(value) { return value.punchId === record.previousClockInPunchId; });
   if (!GIB_M1_STAFF_REQUEST_ID_PATTERN_.test(record.recoveryRequestId) || previous.length !== 1
     || record.source !== 'Tablet' || previous[0].action !== 'clockIn' || previous[0].staffId !== record.staffId
-    || previous[0].site !== record.site || previous[0].timestampMs >= record.timestampMs
+    || !staffRecoverySameSite_(previous[0].site, record.site) || previous[0].timestampMs >= record.timestampMs
     || seen[record.recoveryRequestId] || seen[record.previousClockInPunchId]) return false;
   var latest = shifts.length ? shifts[shifts.length - 1] : null;
   if (open ? open.punchId !== previous[0].punchId : !latest || latest.clockIn.punchId !== previous[0].punchId || latest.clockOut.timestampMs > record.timestampMs) return false;
@@ -229,6 +241,7 @@ function staffRecoveryAction_(body) {
       var effective = staffClockApplyAdjustments_(state.raw, adjustment), current = staffClockAnalyze_(state.staff, effective).byStaff[parsed.candidate.staffId];
       var previous = current && current.open;
       if (!previous || previous.punchId !== input.previousClockInPunchId || previous.timestamp !== state.raw.byId[previous.punchId].timestamp
+        || !staffRecoverySameSite_(previous.site, parsed.candidate.site)
         || current.structuralContradiction || current.issues.some(function(issue) { return ['missing_clock_out', 'missing_clock_out_recovery'].indexOf(issue.code) < 0; })
         || parsed.candidate.timestampMs <= current.last.timestampMs || parsed.candidate.timestampMs > Date.now() + 5 * 60 * 1000
         || (!existing && (state.raw.byId[parsed.candidate.punchId] || state.items.some(function(item) { return item.previousClockInPunchId === previous.punchId; })))

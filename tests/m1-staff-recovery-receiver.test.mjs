@@ -135,6 +135,68 @@ test('an exact retry or lost reply reuses original request, punch, proposal and 
   assert.equal(h.snapshot(), before); assert.equal(h.sheets.get('Staff Recovery').values.length, 2); assert.equal(h.sheets.get('Staff Time').values.length, 3);
 });
 
+test('historical Revolution TEST site labels retain exact rows and recover a durable canonical new start after lost confirmation', () => {
+  const now = '2026-09-25T18:10:00-04:00';
+  const h = harness({ previousAt: '2026-08-19T07:17:31-04:00', now });
+  h.sheets.get('Staff Time').values[1][6] = 'Rev TEST';
+  const originalPrevious = structuredClone(h.sheets.get('Staff Time').values[1]);
+  const original = recovery({ punch: punch({ timestamp: '2026-09-25T17:56:06-04:00' }), proposedFinishAt: '2026-08-19T12:00:00-04:00' });
+  h.ctx.testRevolutionStaffRecoveryLostReply();
+  assert.equal(start(h, original).ok, false, 'only the fully saved ordinary confirmation is lost');
+  assert.deepEqual(h.sheets.get('Staff Time').values[1], originalPrevious);
+  const durable = h.snapshot();
+  assert.equal(readRecovery(h).ok, false, 'one read fault is consumed');
+  const recovered = readRecovery(h);
+  assert.equal(recovered.ok, true, JSON.stringify(recovered));
+  assert.equal(recovered.recovery.items[0].requestId, original.requestId);
+  assert.equal(recovered.recovery.items[0].punch.site, 'Rev');
+  assert.equal(start(h, original).ok, true, 'exact retained original confirms without a replacement punch');
+  assert.equal(h.snapshot(), durable);
+  assert.equal(h.sheets.get('Staff Recovery').values.length, 2);
+  assert.equal(h.sheets.get('Staff Time').values.filter(row => row[0] === original.punch.punchId).length, 1);
+  for (const action of ['staffClockSnapshot', 'staffTimeReview', 'staffClockSnapshotV2', 'staffTimeReviewV2']) {
+    const response = h.post(action.startsWith('staffClock') ? kiosk(action) : admin(action));
+    assert.equal(response.ok, true, JSON.stringify(response));
+    if (action.endsWith('V2')) {
+      const validator = action.startsWith('staffClock') ? sanitizeStaffClockSnapshot : sanitizeStaffTimeReview;
+      assert.ok(validator(response, 'test', { now: new Date(now) }), action);
+    }
+  }
+  const out = punch({ punchId: IDS.out, timestamp: '2026-09-25T18:00:00-04:00', punchAction: 'clockOut' });
+  assert.equal(h.post(kiosk('staffClockPunch', { punches: [out] })).results[0].result, 'added');
+  const review = h.post(admin('staffTimeReview'));
+  assert.equal(totals(review).totalSeconds, 234, 'only the actual new shift contributes hours');
+  assert.ok(review.needsAttention.some(item => item.code === 'missing_clock_out_recovery' && item.linkedPunchIds.includes(IDS.previous)));
+  const approval = decision({ finishAt: original.proposedFinishAt });
+  assert.equal(decide(h, approval).ok, true, 'manager can confirm the actual earlier finish');
+  const finishRows = h.sheets.get('Staff Time').values.filter(row => row[0] === approval.punchId);
+  assert.equal(finishRows.length, 1); assert.equal(finishRows[0][1], original.proposedFinishAt);
+  assert.equal(finishRows[0][5], 'clockOut'); assert.equal(finishRows[0][11], 'Admin-added');
+  const auditRows = h.sheets.get('Staff Time Audit').values.filter(row => row[0] === approval.requestId);
+  assert.equal(auditRows.length, 1); assert.equal(auditRows[0][5], original.proposedFinishAt);
+  assert.equal(auditRows[0][6], 'clockOut'); assert.equal(auditRows[0][9], approval.punchId);
+  const approved = h.snapshot();
+  assert.equal(decide(h, approval).ok, true); assert.equal(h.snapshot(), approved, 'same original decision preserves one finish and one audit');
+  assert.deepEqual(h.sheets.get('Staff Time').values[1], originalPrevious);
+  h.ctx.GIB_M1_MANAGER_REVIEW_TEST_ENABLED = false;
+  assert.equal(h.post(admin('staffTimeReview')).ok, true, 'stored history remains readable when new entry controls are disabled');
+});
+
+test('recovery site compatibility rejects other gyms and environments before persisting a request', () => {
+  for (const site of ['Richmond', 'Richmond TEST', 'rev test', 'Rev test']) {
+    const h = harness(); h.sheets.get('Staff Time').values[1][6] = site;
+    const before = h.snapshot();
+    assert.equal(start(h).ok, false);
+    assert.equal(h.snapshot(), before);
+  }
+  const h = harness();
+  assert.equal(h.ctx.staffRecoverySameSite_('Rev TEST', 'Rev'), true);
+  h.ctx.GIB_M1_ALLOWED_TARGET = 'production';
+  assert.equal(h.ctx.staffRecoverySameSite_('Rev TEST', 'Rev'), false);
+  h.ctx.GIB_M1_ALLOWED_TARGET = 'test'; h.ctx.GIB_M1_RICHMOND_INSTALLATION_ = true;
+  assert.equal(h.ctx.staffRecoverySameSite_('Rev TEST', 'Rev'), false);
+});
+
 test('start failures after journaling or after punch persistence recover exactly once with the original request', () => {
   for (const phase of ['before', 'after']) {
     const h = harness(); h.failOnce(event => event.sheet === 'Staff Time', phase);
@@ -312,6 +374,7 @@ test('existing audited VOID preserves linked recovery history and surfaces the c
 
 test('editor-only TEST fault loses one proven start reply and one read while preserving every punch, original ID and journal', () => {
   const h = harness();
+  const logs = []; h.ctx.console.log = value => logs.push(value);
   assert.equal(h.ctx.testRevolutionStaffRecoveryLostReply().armed, true);
   assert.equal(start(h).ok, false);
   const durable = h.snapshot();
@@ -322,6 +385,7 @@ test('editor-only TEST fault loses one proven start reply and one read while pre
   assert.equal(start(h).ok, true, 'the exact original retry confirms without another write');
   assert.equal(h.snapshot(), durable);
   assert.deepEqual(JSON.parse(JSON.stringify(h.ctx.testRevolutionStaffRecoveryLostReplyReceipt())), { requestId: IDS.recovery, stage: 'saved-before-reply-loss' });
+  assert.deepEqual(logs, [JSON.stringify({ requestId: IDS.recovery, stage: 'saved-before-reply-loss' })]);
   assert.deepEqual(h.locks(), { acquired: 4, released: 4, locked: false });
   assert.equal(h.post(kiosk('testRevolutionStaffRecoveryLostReply')).ok, false, 'no public arming operation');
 });

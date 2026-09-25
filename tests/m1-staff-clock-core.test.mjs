@@ -171,6 +171,36 @@ test('unresolved prior recovery does not absorb later shifts or block later real
   assert.equal(reopened.nextPunchAction, 'clockOut'); assert.equal(reopened.clockInRecord.punchId, newStart.punchId);
 });
 
+test('gated TEST recovery links the historical Rev TEST site without rewriting records or inventing old hours', () => {
+  const previous = staffRecord({ timestamp: '2026-08-17T09:00:00-04:00', site: 'Rev TEST' });
+  const current = recoveredStart(previous, '2026-08-18T09:00:00-04:00', { site: 'Rev' });
+  const records = [previous, current], original = structuredClone(records);
+  const now = '2026-08-18T12:00:00-04:00';
+  const open = evaluateStaffState('mandy-test', records, { now, recoveryEnabled: true });
+  assert.equal(open.nextPunchAction, 'clockOut'); assert.equal(open.clockInRecord.punchId, current.punchId);
+  assert.deepEqual(open.completedShifts, []); assert.equal(open.recoveryPending[0].previousClockInPunchId, previous.punchId);
+  const finish = staffRecord({ timestamp: '2026-08-18T11:00:00-04:00', punchAction: 'clockOut', site: 'Rev' });
+  const review = buildStaffReview({ confirmedRecords: [...records, finish], now, recoveryEnabled: true });
+  assert.equal(review.staffStates[0].nextPunchAction, 'clockIn');
+  assert.equal(totalFor(review, 'current').totalMilliseconds, 2 * 3600000);
+  assert.equal(totalFor(review, 'current').needsAttention, true);
+  assert.deepEqual(records, original); assert.equal(sameStaffRecord(previous, { ...previous, site: 'Rev' }), false);
+});
+
+test('the historical TEST site alias is unavailable with recovery disabled and never broadens other recovery site matches', () => {
+  for (const [oldSite, newSite, enabled] of [
+    ['Rev TEST', 'Rev', undefined], ['Rev TEST', 'Rev', false], ['Rev TEST', 'Rev', 'true'],
+    ['Rev TEST', 'Richmond', true], ['Richmond', 'Rev', true], ['Richmond TEST', 'Richmond', true],
+    ['Rev', 'Rev TEST', true], ['Rev Test', 'Rev', true], ['OTHER TEST', 'Rev', true]
+  ]) {
+    const previous = staffRecord({ timestamp: '2026-08-17T09:00:00-04:00', site: oldSite });
+    const current = recoveredStart(previous, '2026-08-18T09:00:00-04:00', { site: newSite });
+    const state = evaluateStaffState('mandy-test', [previous, current], { now: '2026-08-18T10:00:00-04:00', recoveryEnabled: enabled });
+    assert.equal(state.nextPunchAction, null, JSON.stringify([oldSite, newSite, enabled]));
+    assert.equal(state.clockedIn, null); assert.equal(state.attention[0].code, 'INVALID_RECOVERY_BOUNDARY');
+  }
+});
+
 test('an approved prior finish resolves only its exact recovery boundary, including a finish equal to the new start', () => {
   for (const finish of ['2026-08-18T11:00:00-04:00', '2026-08-18T15:00:00-04:00']) {
     const previous = staffRecord({ timestamp: '2026-08-18T09:00:00-04:00' });

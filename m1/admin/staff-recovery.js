@@ -94,7 +94,7 @@
       && new Set(result.recovery.items.map(item => item.requestId)).size === result.recovery.items.length;
     function status(note, success = false) {
       const node = root.querySelector('[data-recovery-status]');
-      if (node) { node.textContent = note; node.className = `message${success ? ' success' : ''}`; }
+      if (node) { node.textContent = note; node.className = `message${success ? ' success' : ''}`; node.style.display = note ? 'block' : 'none'; }
     }
     const label = value => value ? `${value.slice(0, 10)} ${value.slice(11, 19)} ET (${value.slice(-6)})` : 'Don’t know';
     const draftFor = item => drafts.get(item.requestId) || { finishDate: item.proposedFinishAt?.slice(0, 10) || '',
@@ -109,17 +109,17 @@
         <p class="record-detail">Employee proposals do not count as approved payroll time. Approve a verified finish or reject it and leave the earlier shift unresolved.</p>
         <p data-recovery-status class="message" role="status" aria-live="polite"></p>
         <button class="btn ghost small" type="button" data-recovery-action="refresh" ${busy || reading ? 'disabled' : ''}>Refresh finish proposals</button>
-        ${pending ? `<p class="message">${pendingOwn ? 'A decision is waiting for central confirmation. Retry keeps the original IDs and audit identity.' : 'A previous reviewer’s decision still needs confirmation. Reopen this page as that reviewer before retrying.'}</p><button class="btn" type="button" data-recovery-action="retry" ${!pendingOwn || busy || reading ? 'disabled' : ''}>Retry same decision</button>` : ''}
-        ${invalidJournal ? '<p class="message">The saved decision could not be read safely. Decisions are blocked; the retained request has not been discarded.</p>' : ''}
+        ${pending ? `<p class="message" style="display:block">${pendingOwn ? 'A decision is waiting for central confirmation. Retry keeps the original IDs and audit identity.' : 'A previous reviewer’s decision still needs confirmation. Reopen this page as that reviewer before retrying.'}</p><button class="btn" type="button" data-recovery-action="retry" ${!pendingOwn || busy || reading ? 'disabled' : ''}>Retry same decision</button>` : ''}
+        ${invalidJournal ? '<p class="message" style="display:block">The saved decision could not be read safely. Decisions are blocked; the retained request has not been discarded.</p>' : ''}
         ${!items ? `<p>${reading ? 'Loading finish proposals…' : 'Finish proposals unavailable. Unresolved shifts still need review.'}</p>`
           : unavailable ? '<p>Finish proposals unavailable. Previously loaded proposals are not safe to approve.</p>' : items.length === 0 ? '<p>No finish proposals in the confirmed central read.</p>' : ''}
         ${items ? items.map(item => `<article class="staff-time-block" data-recovery-id="${escape(item.requestId)}">
           <h4>${escape(item.staffName)}</h4><p class="record-detail">Earlier clock-in: ${escape(label(item.previousClockInAt))}<br>New shift started: ${escape(label(item.startedAt))}</p>
           <p>Employee proposed finish: <strong>${escape(label(item.proposedFinishAt))}</strong></p>
           <p class="record-detail">Proposed by ${escape(item.proposedBy)} · ${escape(label(item.proposedAt))}</p>
-          ${item.conflicts.length ? `<p class="message">${item.conflicts.map(code => escape(conflictLabels[code])).join('. ')}. VOID history is preserved; this proposal cannot be approved. Review the linked records in the existing Staff Clock tools.</p>` : ''}
-          ${item.status === 'approved' ? `<p class="message${item.conflicts.length ? '' : ' success'}">${item.conflicts.length ? 'Historical approval (linked records need review)' : 'Approved payroll finish'}: ${escape(label(item.decision.finishAt))} · ${escape(item.decision.adminName)} · ${escape(label(item.decision.decidedAt))}</p>`
-            : `<p class="message">${item.status === 'rejected' ? `Rejected by ${escape(item.decision.adminName)}. Earlier shift remains unresolved.` : 'Pending manager approval — no approved finish for payroll.'}</p>
+          ${item.conflicts.length ? `<p class="message" style="display:block">${item.conflicts.map(code => escape(conflictLabels[code])).join('. ')}. VOID history is preserved; this proposal cannot be approved. Review the linked records in the existing Staff Clock tools.</p>` : ''}
+          ${item.status === 'approved' ? `<p class="message${item.conflicts.length ? '' : ' success'}" style="display:block">${item.conflicts.length ? 'Historical approval (linked records need review)' : 'Approved payroll finish'}: ${escape(label(item.decision.finishAt))} · ${escape(item.decision.adminName)} · ${escape(label(item.decision.decidedAt))}</p>`
+            : `<p class="message" style="display:block">${item.status === 'rejected' ? `Rejected by ${escape(item.decision.adminName)}. Earlier shift remains unresolved.` : 'Pending manager approval — no approved finish for payroll.'}</p>
             <form data-recovery-form="${escape(item.requestId)}" novalidate><fieldset ${disabled ? 'disabled' : ''}>
             <legend>Review this prior finish</legend><div class="staff-fix-grid">
             <label>Approved finish date<input name="finishDate" type="date" value="${escape(draftFor(item).finishDate)}"></label>
@@ -129,7 +129,7 @@
             <div class="form-actions"><button class="btn primary" type="submit" data-recovery-decision="approve" ${item.conflicts.length ? 'disabled' : ''}>Approve finish</button><button class="btn ghost" type="submit" data-recovery-decision="reject">Reject proposal</button></div>
             </fieldset><button class="btn ghost" type="button" data-recovery-action="cancel" ${busy || reading || pending || invalidJournal ? 'disabled' : ''}>Cancel changes</button></form>`}</article>`).join('') : ''}
         ${[...drafts].filter(([id]) => !items?.some(item => item.requestId === id && item.status !== 'approved')).map(([id, draft]) =>
-          `<form data-recovery-form="${escape(id)}"><p class="message">An unfinished decision can no longer be applied to the current proposal. Its unsent entries are retained below; cancel them to refresh.</p>
+          `<form data-recovery-form="${escape(id)}"><p class="message" style="display:block">An unfinished decision can no longer be applied to the current proposal. Its unsent entries are retained below; cancel them to refresh.</p>
           <p class="record-detail">Finish: ${escape(draft.finishDate)} ${escape(draft.finishTime)} (${escape(draft.finishOffset)})<br>Reason: ${escape(draft.reason)}</p>
           <button class="btn ghost" type="button" data-recovery-action="cancel" ${busy || reading || pending || invalidJournal ? 'disabled' : ''}>Cancel changes</button></form>`).join('')}`;
       status(note);

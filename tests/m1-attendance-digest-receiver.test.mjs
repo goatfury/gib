@@ -178,7 +178,8 @@ test('Google signature uses exact purpose and raw body; Netlify accepts it and r
   assert.deepEqual(authenticateDigestJob(raw, signature, { target: 'test', adminActionToken: secret }, now).binding, binding());
   const wrongPurpose = createHmac('sha256', secret).update('m1-other-purpose/v1\n' + raw).digest('hex');
   for (const [body, signatureValue, target] of [[raw, wrongPurpose, 'test'], [raw + ' ', signature, 'test'], [raw, signature, 'production']]) {
-    assert.throws(() => authenticateDigestJob(body, signatureValue, { target, adminActionToken: secret }, now), /DIGEST_AUTHENTICATION_FAILED/);
+    assert.throws(() => authenticateDigestJob(body, signatureValue, { target, adminActionToken: secret }, now),
+      target === 'production' ? /DIGEST_RUNTIME_UNAVAILABLE/ : /DIGEST_AUTHENTICATION_FAILED/);
   }
   assert.throws(() => authenticateDigestJob(raw, signature, { target: 'test', adminActionToken: secret }, now + 60000), /DIGEST_REQUEST_EXPIRED/);
   assert.equal(request.body.gyms.length, 1); assert.equal(request.body.gyms[0].gym, 'rev');
@@ -219,6 +220,7 @@ test('only the exact matching successful acknowledgment and message ID count; fa
   assert.equal(wrongMode.context.gibM1DigestDispatch_(binding({ mode: 'scheduled' })).ok, false);
   const nonJSON = harness({ httpStatus: 503, response: 'synthetic private upstream error page' });
   assert.equal(nonJSON.manual().ok, false); assert.equal(nonJSON.receipts()[0].value.status, 503);
+  assert.equal(nonJSON.receipts()[0].value.responseCode, 'RESPONSE_NOT_JSON');
   assert.equal(JSON.stringify(nonJSON.receipts()).includes('private'), false);
 });
 
@@ -228,7 +230,7 @@ test('one failed callback leaves an independent sanitized receipt that later suc
   assert.equal(h.manual().ok, true); assert.equal(h.receipts().length, 2);
   assert.deepEqual(h.receipts().find(entry => entry.key === original.key), original);
   for (const { key, value } of h.receipts()) {
-    assert.deepEqual(Object.keys(value).sort(), ['acknowledged', 'code', 'elapsedMs', 'mode', 'requestId', 'state', 'status']);
+    assert.deepEqual(Object.keys(value).sort(), ['acknowledged', 'code', 'elapsedMs', 'mode', 'requestId', 'responseCode', 'state', 'status']);
     assert.ok([now + 86400000, now + 86400001].includes(Number(key.match(/_(\d{13})_/)[1])));
     assert.equal(JSON.stringify(value).includes(secret), false); assert.equal(JSON.stringify(value).includes('private'), false);
   }
@@ -238,6 +240,37 @@ test('one failed callback leaves an independent sanitized receipt that later suc
   h.advance(86400000 - 1); h.context.gibM1DigestCleanup_(h.store, h.stamp());
   assert.equal(h.receipts().length, 1, 'first receipt expires exactly after 24 hours without deleting later receipt');
   h.advance(1); h.context.gibM1DigestCleanup_(h.store, h.stamp()); assert.equal(h.receipts().length, 0);
+});
+
+test('non-success callback receipts distinguish fixed scope, runtime and authentication rejections without retaining response contents', () => {
+  for (const [responseCode, httpStatus] of [['DIGEST_SCOPE_REQUIRED', 403], ['DIGEST_RUNTIME_UNAVAILABLE', 503],
+    ['DIGEST_AUTHENTICATION_FAILED', 403], ['DIGEST_BINDING_MISMATCH', 409], ['DIGEST_REQUEST_EXPIRED', 410],
+    ['DIGEST_STORAGE_UNCONFIRMED', 503]]) {
+    const h = harness({ httpStatus, response: { ok: false, code: responseCode, message: 'synthetic private response contents',
+      token: secret, signedUrl: 'https://example.invalid/private-token' } });
+    assert.equal(h.manual().ok, false); const failure = h.receipts()[0];
+    assert.equal(failure.value.status, httpStatus); assert.equal(failure.value.responseCode, responseCode);
+    assert.equal(failure.value.acknowledged, false); assert.equal(failure.value.requestId, id);
+    assert.equal(failure.value.code, 'DELIVERY_HTTP_FAILURE');
+    h.settings.httpStatus = 200; delete h.settings.response;
+    assert.equal(h.manual().ok, true); assert.deepEqual(h.receipts().find(entry => entry.key === failure.key), failure);
+    assert.equal(h.receipts().at(-1).value.responseCode, null);
+    assert.doesNotMatch(JSON.stringify(h.receipts()) + JSON.stringify(h.logs), /private|synthetic-digest-admin-secret|example\.invalid/);
+  }
+});
+
+test('unknown callback error codes are redacted, including direct receipt calls; malformed acknowledgments stay unconfirmed', () => {
+  for (const code of [undefined, 'SECRET_PRIVATE_RESPONSE', { secret }, ['DIGEST_AUTHENTICATION_FAILED']]) {
+    const h = harness({ httpStatus: 403, response: { ok: false, code, message: 'synthetic private detail' } });
+    assert.equal(h.manual().ok, false); assert.equal(h.receipts()[0].value.responseCode, 'RESPONSE_CODE_UNAVAILABLE');
+    assert.doesNotMatch(JSON.stringify(h.receipts()), /SECRET|private|synthetic-digest-admin-secret/);
+  }
+  const h = harness();
+  h.context.gibM1DigestReceipt_(h.store, binding(), now, 'DELIVERY_HTTP_FAILURE', 403, false, null, secret);
+  assert.equal(h.receipts()[0].value.responseCode, 'RESPONSE_CODE_UNAVAILABLE');
+  h.settings.response = { ok: true, accepted: true, requestId: 'different', state: 'captured', messageId: 'm1-test-manual-' + id,
+    code: 'DIGEST_AUTHENTICATION_FAILED' };
+  assert.equal(h.manual().ok, false); assert.equal(h.receipts().at(-1).value.acknowledged, false);
 });
 
 test('expired and oversized UTF-8 results do not dispatch, and retain a bounded failure receipt', () => {

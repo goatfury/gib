@@ -55,7 +55,8 @@ export function validateDigestBinding(binding, now) {
   return binding;
 }
 export function authenticateDigestJob(raw, header, runtime, now) {
-  if (runtime?.target !== 'test' || !/^[0-9a-f]{64}$/.test(header || '') || !constantTimeSecretEqual(header, digestSignature(raw, runtime.adminActionToken))) digestFail(403, 'DIGEST_AUTHENTICATION_FAILED');
+  if (runtime?.target !== 'test') digestFail(503, 'DIGEST_RUNTIME_UNAVAILABLE');
+  if (!/^[0-9a-f]{64}$/.test(header || '') || !constantTimeSecretEqual(header, digestSignature(raw, runtime.adminActionToken))) digestFail(403, 'DIGEST_AUTHENTICATION_FAILED');
   let body;
   try { body = JSON.parse(raw); } catch { digestFail(400, 'DIGEST_INVALID_JSON'); }
   if (!exact(body, [...bindingKeys, 'gyms'])) digestFail(400, 'DIGEST_INVALID_ENVELOPE');

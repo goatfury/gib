@@ -4,6 +4,14 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../m1/admin/attendance-digest.js', import.meta.url), 'utf8');
+const adminCss = readFileSync(new URL('../m1/admin/index.html', import.meta.url), 'utf8');
+const sharedMessageDisplay = /\bdisplay:\s*([^;]+);/.exec(/\.message\s*\{([^}]*)\}/.exec(adminCss)[1])[1].trim();
+function visibleStatus(h) {
+  const status = h.nodes.findLast(node => node.attributes.role === 'status' && h.root.contains(node));
+  assert.ok(status, 'the rendered digest must have a live status node');
+  assert.equal(status.style.display || sharedMessageDisplay, 'block', 'status must override the real Admin .message display:none rule');
+  return status;
+}
 const ID = '00000000-0000-4000-8000-000000000001';
 const KEY = 'm1-attendance-digest-test-rev-pending-v1';
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
@@ -72,6 +80,14 @@ test('digest panel requires explicit TEST Revolution gate and authentication', a
   }
   const h = harness(); h.logout(); await h.ui.open();
   assert.equal(h.calls.length, 0); assert.equal(h.root.hidden, true);
+});
+
+test('rendered digest loading and failure status override the actual Admin CSS hidden default', async () => {
+  assert.equal(sharedMessageDisplay, 'none', 'exercise the real shared CSS that caused the hosted defect');
+  const h = harness(); const opening = h.ui.open();
+  assert.match(visibleStatus(h).textContent, /Checking capture status/);
+  h.calls[0].reject(new Error('offline')); await opening;
+  assert.match(visibleStatus(h).textContent, /Capture status unavailable/);
 });
 
 test('open only reads configuration, shows unconfigured addresses, and isolates HTML from the Admin document', async () => {
@@ -153,9 +169,11 @@ test('pending check is bounded and a later manual check remains read-only', asyn
   await opening;
   assert.equal(h.calls.length, 12); assert.equal(h.timers.size, 0);
   assert.match(h.root.textContent, /Automatic checking has stopped/);
+  assert.match(visibleStatus(h).textContent, /Automatic checking has stopped/);
   assert.equal(h.control('capture').disabled, true);
   h.click('refresh'); assert.equal(h.calls.length, 13); assert.equal(h.calls[12].args[1], undefined);
   h.calls[12].reject(new Error('offline')); await flush();
+  assert.match(visibleStatus(h).textContent, /not.*confirmed|unavailable/i);
   assert.equal(h.storage.has(KEY), true);
 });
 
