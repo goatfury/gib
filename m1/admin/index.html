@@ -770,6 +770,7 @@
       </header>
 
       <section id="attendanceDigest" class="panel section" aria-label="Attendance reminder preview" hidden></section>
+      <section id="attendanceEmail" class="panel section" aria-label="Proposed TEST email" hidden></section>
       <nav id="managerModes" class="mode-switch" role="tablist" aria-label="Admin mode">
         <a id="dailyModeControl" class="mode-control" href="#sign-ins" role="tab" aria-controls="sign-ins" aria-selected="true">Daily sign-ins</a>
         <a id="staffModeControl" class="mode-control" href="#staff-time" role="tab" aria-controls="staff-time" aria-selected="false">Staff Clock</a>
@@ -1093,6 +1094,7 @@
   <script src="./manager-review.js"></script>
   <script src="./staff-recovery.js"></script>
   <script src="./attendance-digest.js"></script>
+  <script src="./attendance-email.js"></script>
   <script src="./read-callback-proof.js"></script>
   <script>
     (() => {
@@ -1273,6 +1275,7 @@
       let managerDayReview = null;
       let staffRecoveryReview = null;
       let attendanceDigest = null;
+      let attendanceEmail = null;
       let currentDate = '';
       let currentRecords = [];
       let currentWarnings = [];
@@ -3724,7 +3727,7 @@
           : 0;
         let response;
         let data = null;
-        const readDigest = options.method === 'GET' && /^\/api\/m1-attendance-digest(?:\?|$)/.test(url);
+        const readDigest = options.method === 'GET' && /^\/api\/m1-attendance-digest(?:-email)?(?:\?|$)/.test(url);
         try {
           response = await fetch(url, {
             method: readDigest ? 'GET' : 'POST',
@@ -3789,6 +3792,7 @@
         if (managerDayReview) managerDayReview.clear();
         if (typeof staffRecoveryReview !== 'undefined' && staffRecoveryReview) staffRecoveryReview.clear();
         if (typeof attendanceDigest !== 'undefined' && attendanceDigest) attendanceDigest.clear();
+        if (typeof attendanceEmail !== 'undefined' && attendanceEmail) attendanceEmail.clear();
         if (typeof closeRemovalForLogout === 'function') closeRemovalForLogout();
         reviewLoaded = false;
         if (addedClasses) addedClasses.setActive(false);
@@ -3907,6 +3911,11 @@
         applyManagerMode();
         if (typeof staffRecoveryReview !== 'undefined' && staffRecoveryReview) void staffRecoveryReview.open();
         if (typeof attendanceDigest !== 'undefined' && attendanceDigest) void attendanceDigest.open();
+        if (attendanceEmail && new URLSearchParams(location.search).get('emailTest') === 'andrew-v1') {
+          void attendanceEmail.open().then(loaded => {
+            if (loaded && location.hash === '#attendanceEmail') window.requestAnimationFrame(() => $('#attendanceEmail').scrollIntoView({ block: 'start' }));
+          });
+        }
         if (firstEntry) {
           window.requestAnimationFrame(() => {
             window.requestAnimationFrame(() => window.scrollTo(0, 0));
@@ -7208,6 +7217,11 @@
       });
       attendanceDigest = globalThis.GIBM1AttendanceDigest?.create({
         root: $('#attendanceDigest'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
+        enabled: RECOVERY_PILOT_ENABLED && RECOVERY_PILOT_TARGET === 'test', getAdmin: () => currentAdminName,
+        onUnauthorized: () => setLoggedOut('Admin login required.')
+      });
+      attendanceEmail = globalThis.GIBM1AttendanceEmail?.create({
+        root: $('#attendanceEmail'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
         enabled: RECOVERY_PILOT_ENABLED && RECOVERY_PILOT_TARGET === 'test', getAdmin: () => currentAdminName,
         onUnauthorized: () => setLoggedOut('Admin login required.')
       });
