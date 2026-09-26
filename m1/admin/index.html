@@ -3911,7 +3911,7 @@
         applyManagerMode();
         if (typeof staffRecoveryReview !== 'undefined' && staffRecoveryReview) void staffRecoveryReview.open();
         if (typeof attendanceDigest !== 'undefined' && attendanceDigest) void attendanceDigest.open();
-        if (attendanceEmail && new URLSearchParams(location.search).get('emailTest') === 'andrew-v1') {
+        if (attendanceEmail && location.hash === '#attendanceEmail') {
           void attendanceEmail.open().then(loaded => {
             if (loaded && location.hash === '#attendanceEmail') window.requestAnimationFrame(() => $('#attendanceEmail').scrollIntoView({ block: 'start' }));
           });
