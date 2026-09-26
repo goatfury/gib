@@ -3,17 +3,29 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { buildTestDigestEmail } from '../netlify/functions/_lib/m1-attendance-digest-email-proposal.mjs';
+import { deliverTestDigestEmail, readTestDigestEmailDelivery } from '../netlify/functions/_lib/m1-attendance-digest-email-delivery.mjs';
 
 const source = readFileSync(new URL('../m1/admin/attendance-email.js', import.meta.url), 'utf8');
 const adminCss = readFileSync(new URL('../m1/admin/index.html', import.meta.url), 'utf8');
 const sharedMessageDisplay = /\bdisplay:\s*([^;]+);/.exec(/\.message\s*\{([^}]*)\}/.exec(adminCss)[1])[1].trim();
 const SIGNINS = 'https://deploy-preview-89--gib-live.netlify.app/m1/admin/?reviewDate=2026-09-26#sign-ins';
 const STAFF = 'https://deploy-preview-89--gib-live.netlify.app/m1/admin/#staff-time';
+const MESSAGE_ID = 'm1-test-email-andrew-20260926-v1';
+const HASH = 'a'.repeat(64);
+const delivery = (state, options = {}) => ({ state, messageId: MESSAGE_ID, hash: HASH, code: 'TEST_OUTCOME', deliveryConfirmed: false,
+  attemptCount: ['pending', 'unknown', 'accepted', 'rejected'].includes(state) ? 1 : 0, retryAllowed: false,
+  ...(state === 'accepted' ? { providerId: '49a3999c-0ce1-4ea6-ab68-afcd6dc2e794', acceptedAt: 100000 } : {}), ...options });
 const response = (state = 'not-started') => ({ ok: true, target: 'test', sendingEnabled: false, recurringEnabled: false,
   message: { messageId: 'm1-test-email-andrew-20260926-v1', hash: 'a'.repeat(64), from: 'TEST Digest <test@example.com>', to: ['andrew@example.com'],
     subject: 'TEST attendance email', html: `<h1>TEST example</h1><a href="${SIGNINS}">Example sign-ins</a><a href="${STAFF}">Example Staff Clock</a>`,
     text: `Synthetic example\n${SIGNINS}\n${STAFF}`, synthetic: true, target: 'test' },
-  delivery: { state }, recipientSettings: { andrew: { address: 'andrew@example.com', source: 'existing Netlify account' }, stu: { address: null } }, provider: 'resend' });
+  delivery: delivery(state), recipientSettings: { andrew: { address: 'andrew@example.com', source: 'existing Netlify account' }, stu: { address: null } }, provider: 'resend' });
+const sendReply = (state, options) => ({ ok: state === 'accepted', target: 'test', recurringEnabled: false, delivery: delivery(state, options) });
+const enabled = (state = 'not-started', retryAllowed = false) => {
+  const value = response(state); value.sendingEnabled = true;
+  if (retryAllowed) Object.assign(value.delivery, { retryAllowed: true, retryBefore: 10000000 });
+  return value;
+};
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 
 function harness(options = {}) {
@@ -42,7 +54,8 @@ function harness(options = {}) {
     request: (...args) => new Promise((resolve, reject) => calls.push({ args, resolve, reject })), onUnauthorized: () => unauthorized++, ...options });
   const current = tag => nodes.filter(node => node.tag === tag && root.contains(node));
   return { ui, root, calls, nodes, current, setAdmin: value => { admin = value; }, unauthorized: () => unauthorized,
-    click() { const target = current('button').find(node => node.dataset.emailAction === 'refresh'); root.events.click({ target }); },
+    click(action = 'refresh') { const target = current('button').find(node => node.dataset.emailAction === action); if (target) root.events.click({ target }); },
+    button(action) { return current('button').find(node => node.dataset.emailAction === action); },
     status() { const node = nodes.findLast(node => node.attributes.role === 'status' && root.contains(node)); assert.ok(node);
       assert.equal(node.style.display || sharedMessageDisplay, 'block', 'status must override the actual Admin display:none default'); return node.textContent; } };
 }
@@ -71,6 +84,7 @@ test('normal preview is GET only, identifies the exact recipient and offers no s
 test('the actual immutable server proposal renders without changing its subject, body or fixed review links', async () => {
   const h = harness(), value = response();
   value.message = buildTestDigestEmail(value.recipientSettings.andrew.address);
+  value.delivery.hash = value.message.hash;
   await open(h, value);
   assert.match(h.status(), /Preview loaded/);
   assert.equal(h.current('iframe')[0].srcdoc.includes(value.message.html), true);
@@ -187,11 +201,180 @@ test('foreign, unsafe or incomplete responses cannot become a current preview', 
     value => { value.recipientSettings.andrew.address = 'different@example.com'; }, value => { value.recipientSettings.andrew.source = 'invented'; },
     value => { value.recipientSettings.stu.address = 'stu@example.com'; }, value => { value.message.subject = 'bad\r\nsubject'; },
     value => { value.message.from = 'bad\r\nfrom'; }, value => { value.message.html = ''; }, value => { value.message.text = ''; },
-    value => { value.delivery.state = 'delivered'; }, value => { delete value.recipientSettings; }
+    value => { value.delivery.state = 'delivered'; }, value => { delete value.recipientSettings; },
+    value => { value.delivery.hash = 'b'.repeat(64); }, value => { value.delivery.messageId = 'another-message'; },
+    value => { value.delivery.deliveryConfirmed = true; }, value => { value.delivery.retryAllowed = 'true'; },
+    value => { value.delivery.attemptCount = -1; }, value => { value.delivery = delivery('accepted', { providerId: null }); },
+    value => { value.delivery = delivery('unknown', { retryAllowed: true }); }
   ];
   for (const mutate of mutations) {
     const h = harness(), value = response(); mutate(value); await open(h, value);
     assert.match(h.status(), /status unavailable/); assert.equal(h.current('iframe').length, 0);
     assert.doesNotMatch(h.root.textContent, /Preview loaded|Not sent|No send has been started/);
+  }
+});
+
+test('enabled first send posts only the immutable approved identity once, then reads its retained acceptance', async () => {
+  const h = harness(); await open(h, enabled());
+  assert.equal(h.button('send').textContent, 'Send approved TEST email');
+  h.click('send'); h.click('send'); h.click('refresh'); const overlapping = h.ui.open();
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[1].args[0], '/api/m1-attendance-digest-email'); assert.equal(h.calls[1].args[2].method, 'POST');
+  assert.equal(h.calls[1].args[2].timeoutMs, 30000);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[1].args[1])), { action: 'sendApprovedTest', messageId: MESSAGE_ID, hash: HASH });
+  assert.equal(Object.isFrozen(h.calls[1].args[1]), true);
+  h.calls[1].resolve(sendReply('accepted')); await flush();
+  assert.equal(h.calls.length, 3); assert.equal(h.calls[2].args[2].method, 'GET'); assert.equal(h.calls[2].args[1], undefined);
+  h.calls[2].resolve(enabled('accepted')); await overlapping;
+  assert.match(h.status(), /Accepted by Resend\. Delivery to the inbox is not confirmed/);
+  assert.equal(h.button('send'), undefined); h.click('send'); assert.equal(h.calls.length, 3);
+  assert.equal(h.calls.filter(call => call.args[2].method === 'POST').length, 1);
+});
+
+test('switching sending off preserves accepted history and never offers another send', async () => {
+  const h = harness(); await open(h, response('accepted'));
+  assert.match(h.root.textContent, /Accepted by Resend\. Delivery to the inbox is not confirmed/);
+  assert.match(h.root.textContent, /Sending is off/); assert.equal(h.button('send'), undefined);
+  assert.equal(h.calls.length, 1);
+});
+
+test('rejected, unknown and pending replies use preserved adapter error data and a single read without automatic retry', async () => {
+  for (const state of ['rejected', 'unknown', 'pending']) {
+    const h = harness(); await open(h, enabled()); h.click('send');
+    h.calls[1].reject(Object.assign(new Error('The request did not complete.'), { status: 200, data: sendReply(state) })); await flush();
+    assert.match(h.status(), state === 'rejected' ? /Rejected by Resend/ : state === 'unknown' ? /Send outcome unknown/ : /send request is pending/);
+    assert.equal(h.calls.length, 3); h.calls[2].resolve(enabled(state)); await flush();
+    assert.equal(h.calls.length, 3); assert.equal(h.button('send'), undefined);
+    assert.equal(h.calls.filter(call => call.args[2].method === 'POST').length, 1);
+  }
+});
+
+test('explicit server-authorized recovery reuses the exact original identity and never creates a replacement', async () => {
+  for (const state of ['unknown', 'rejected']) {
+    const h = harness(); await open(h, enabled()); h.click('send');
+    const original = h.calls[1].args[1]; h.calls[1].reject(new Error('Lost response')); await flush();
+    h.calls[2].resolve(enabled(state, true)); await flush();
+    assert.equal(h.calls.length, 3); assert.equal(h.button('send').textContent, 'Retry this same TEST email');
+    h.click('send'); h.click('send'); assert.equal(h.calls.length, 4);
+    assert.equal(h.calls[3].args[1], original, 'the same immutable object is reused');
+    h.calls[3].resolve(sendReply('accepted')); await flush(); h.calls[4].resolve(enabled('accepted')); await flush();
+    assert.equal(h.calls.filter(call => call.args[2].method === 'POST').length, 2); assert.equal(h.button('send'), undefined);
+  }
+});
+
+test('reload reads retained uncertainty and needs an explicit permitted same-ID recovery click', async () => {
+  const h = harness(); await open(h, enabled('unknown', true));
+  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].args[2].method, 'GET');
+  assert.equal(h.button('send').textContent, 'Retry this same TEST email');
+  h.click('send'); assert.equal(h.calls[1].args[1].messageId, MESSAGE_ID); assert.equal(h.calls[1].args[1].hash, HASH);
+  h.calls[1].reject(new Error('offline')); await flush(); h.calls[2].reject(new Error('offline')); await flush();
+  assert.match(h.status(), /Send outcome unknown/); assert.equal(h.button('send'), undefined); assert.equal(h.calls.length, 3);
+});
+
+test('lost reply and unavailable retained read leave the original pending until manual read recovery', async () => {
+  const h = harness(); await open(h, enabled()); h.click('send');
+  h.calls[1].reject(new Error('Lost response')); await flush(); h.calls[2].reject(new Error('Offline')); await flush();
+  assert.match(h.status(), /Send outcome unknown.*no automatic retry/i); assert.equal(h.button('send'), undefined);
+  assert.equal(h.calls.length, 3); h.click('refresh'); assert.equal(h.calls[3].args[2].method, 'GET');
+  h.calls[3].resolve(enabled('accepted')); await flush(); assert.match(h.root.textContent, /Accepted by Resend/);
+  assert.equal(h.calls.filter(call => call.args[2].method === 'POST').length, 1); assert.equal(h.button('send'), undefined);
+});
+
+test('no retained attempt after uncertain dispatch does not silently become a new first send', async () => {
+  const h = harness(); await open(h, enabled()); h.click('send'); h.calls[1].reject(new Error('Lost response')); await flush();
+  h.calls[2].resolve(enabled()); await flush();
+  assert.equal(h.button('send'), undefined); assert.match(h.root.textContent, /Send outcome unknown\. No retained attempt was found/);
+  assert.doesNotMatch(h.root.textContent, /No send has been started/);
+});
+
+test('accepted receipt remains send-blocking when status read fails or later contradicts it', async () => {
+  const h = harness(); await open(h, enabled()); h.click('send'); h.calls[1].resolve(sendReply('accepted')); await flush();
+  h.calls[2].reject(new Error('Offline')); await flush();
+  assert.match(h.status(), /Accepted by Resend\. Delivery to the inbox is not confirmed/); assert.equal(h.button('send'), undefined);
+  h.click('refresh'); h.calls[3].resolve(enabled('unknown', true)); await flush();
+  assert.equal(h.button('send'), undefined); assert.match(h.status(), /status unavailable/);
+  assert.equal(h.calls.filter(call => call.args[2].method === 'POST').length, 1);
+});
+
+test('changed message hash or an unrelated send receipt cannot release the retained original', async () => {
+  const h = harness(); await open(h, enabled()); h.click('send');
+  h.calls[1].resolve(sendReply('accepted', { hash: 'b'.repeat(64) })); await flush();
+  assert.doesNotMatch(h.status(), /Accepted by Resend/);
+  const changed = enabled('unknown', true); changed.message.hash = changed.delivery.hash = 'b'.repeat(64);
+  h.calls[2].resolve(changed); await flush();
+  assert.match(h.status(), /Send outcome unknown/); assert.equal(h.button('send'), undefined);
+  h.click('refresh'); h.calls[3].resolve(changed); await flush();
+  assert.equal(h.button('send'), undefined); assert.equal(h.calls.filter(call => call.args[2].method === 'POST').length, 1);
+});
+
+test('late send completion cannot apply after logout or reviewer change and never dispatches a follow-up read in that session', async () => {
+  for (const leave of [h => h.setAdmin(''), h => h.ui.clear(), h => h.setAdmin('Stu')]) {
+    const h = harness(); await open(h, enabled()); h.click('send'); leave(h);
+    h.calls[1].resolve(sendReply('accepted')); await flush();
+    assert.equal(h.calls.length, 2); assert.equal(h.root.hidden, true); assert.equal(h.root.textContent, '');
+  }
+});
+
+test('send or readback authentication failures use the existing handler without retrying', async () => {
+  for (const stage of ['send', 'read']) {
+    const h = harness(); await open(h, enabled()); h.click('send');
+    if (stage === 'read') { h.calls[1].resolve(sendReply('accepted')); await flush(); }
+    h.calls.at(-1).reject(Object.assign(new Error('Authentication required'), { status: 401 })); await flush();
+    assert.equal(h.unauthorized(), 1); assert.equal(h.root.hidden, true); assert.equal(h.root.textContent, '');
+    assert.equal(h.calls.filter(call => call.args[2].method === 'POST').length, 1);
+  }
+});
+
+test('server switch and pending, accepted, disabled, blocked or retry-disallowed states never offer a send', async () => {
+  for (const value of [response(), response('unknown'), enabled('pending'), enabled('accepted'), enabled('disabled'), enabled('blocked'), enabled('unknown'), enabled('rejected')]) {
+    const h = harness(); await open(h, value); assert.equal(h.button('send'), undefined); h.click('send'); assert.equal(h.calls.length, 1);
+  }
+});
+
+test('normal UI interoperates with the real durable delivery/read contract, including explicit recovery after a lost provider reply', async () => {
+  for (const loseReply of [false, true]) {
+    const message = buildTestDigestEmail('andrew@example.com'), entries = new Map(), providerCalls = [];
+    let version = 0, sequence = 0;
+    const env = { GIB_M1_DIGEST_TEST_SEND_ENABLED: 'true', GIB_M1_DIGEST_TEST_APPROVED_MESSAGE_ID: message.messageId,
+      GIB_M1_DIGEST_TEST_APPROVED_MESSAGE_HASH: message.hash, GIB_M1_DIGEST_TEST_APPROVED_RECIPIENT: message.to[0],
+      GIB_M1_DIGEST_TEST_RESEND_API_KEY: 'synthetic-unit-test-key' };
+    const deps = { env, scope: { target: 'test', profile: { installationId: 'rev' } }, now: () => 100000,
+      uuid: () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`,
+      deliveryStore: {
+        async getWithMetadata(key) { return structuredClone(entries.get(key) || null); },
+        async set(key, raw, options) {
+          const previous = entries.get(key);
+          if (options.onlyIfNew && previous || options.onlyIfMatch && options.onlyIfMatch !== previous?.etag) return { modified: false };
+          entries.set(key, { etag: 'v' + ++version, data: JSON.parse(raw) }); return { modified: true };
+        }
+      },
+      fetch: async (url, options) => {
+        providerCalls.push({ url, body: options.body, id: options.headers['Idempotency-Key'] });
+        if (loseReply && providerCalls.length === 1) throw new Error('Synthetic response loss');
+        return new Response(JSON.stringify({ id: '49a3999c-0ce1-4ea6-ab68-afcd6dc2e794' }), { status: 200 });
+      }
+    };
+    const read = async () => ({ ...enabled(), sendingEnabled: env.GIB_M1_DIGEST_TEST_SEND_ENABLED === 'true', message,
+      delivery: await readTestDigestEmailDelivery(message, deps) });
+    const h = harness(); await open(h, await read());
+    const attempt = async () => {
+      h.click('send'); const call = h.calls.at(-1);
+      assert.deepEqual(JSON.parse(JSON.stringify(call.args[1])), { action: 'sendApprovedTest', messageId: message.messageId, hash: message.hash });
+      const result = await deliverTestDigestEmail(message, deps);
+      const reply = { ok: result.state === 'accepted', target: 'test', recurringEnabled: false, delivery: result };
+      if (reply.ok) call.resolve(reply); else call.reject(Object.assign(new Error('Non-accepted result'), { status: 200, data: reply }));
+      await flush(); assert.equal(h.calls.at(-1).args[2].method, 'GET'); h.calls.at(-1).resolve(await read()); await flush();
+    };
+    await attempt();
+    if (loseReply) {
+      assert.match(h.root.textContent, /Send outcome unknown/); assert.equal(providerCalls.length, 1);
+      assert.equal(h.button('send').textContent, 'Retry this same TEST email'); await attempt();
+      assert.equal(providerCalls[1].id, providerCalls[0].id); assert.equal(providerCalls[1].body, providerCalls[0].body);
+    }
+    assert.match(h.root.textContent, /Accepted by Resend\. Delivery to the inbox is not confirmed/);
+    assert.equal(h.button('send'), undefined);
+    env.GIB_M1_DIGEST_TEST_SEND_ENABLED = 'false'; await open(h, await read());
+    assert.match(h.root.textContent, /Accepted by Resend/); assert.match(h.root.textContent, /Sending is off/);
+    assert.equal(providerCalls.length, loseReply ? 2 : 1); assert.equal(h.button('send'), undefined);
   }
 });

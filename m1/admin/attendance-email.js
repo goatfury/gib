@@ -10,11 +10,24 @@
   const PREVIEW_CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'";
   const clean = value => typeof value === 'string' ? value.trim() : '';
   const email = value => typeof value === 'string' && value.length <= 254 && /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(value);
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  function validDelivery(value, message) {
+    return value && STATES.has(value.state) && value.messageId === message?.messageId && value.hash === message.hash
+      && value.deliveryConfirmed === false && typeof value.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(value.code)
+      && Number.isSafeInteger(value.attemptCount) && value.attemptCount >= 0 && value.attemptCount <= 64
+      && typeof value.retryAllowed === 'boolean'
+      && (!value.retryAllowed || (['unknown', 'rejected'].includes(value.state) && value.attemptCount > 0
+        && Number.isSafeInteger(value.retryBefore) && value.retryBefore > 0))
+      && (value.state !== 'not-started' || (value.attemptCount === 0 && !value.retryAllowed))
+      && (!['pending', 'rejected', 'accepted'].includes(value.state) || value.attemptCount > 0)
+      && (value.state !== 'accepted' || (!value.retryAllowed && UUID.test(value.providerId)
+        && Number.isSafeInteger(value.acceptedAt) && value.acceptedAt >= 0));
+  }
   function valid(value) {
     const message = value?.message;
     return value?.ok === true && value.target === 'test' && typeof value.sendingEnabled === 'boolean'
       && value.recurringEnabled === false && value.provider === 'resend'
-      && STATES.has(value.delivery?.state) && message?.messageId === MESSAGE_ID
+      && message?.messageId === MESSAGE_ID && validDelivery(value.delivery, message)
       && /^[0-9a-f]{64}$/.test(message.hash) && message.synthetic === true && message.target === 'test'
       && typeof message.from === 'string' && clean(message.from) && message.from.length <= 320 && !/[\r\n]/.test(message.from)
       && Array.isArray(message.to) && message.to.length === 1 && email(message.to[0])
@@ -29,7 +42,7 @@
     if (enabled !== true || target !== 'test' || site !== 'Rev' || !root
       || typeof request !== 'function' || typeof getAdmin !== 'function') return null;
     const document = root.ownerDocument || global.document;
-    let active = false, generation = 0, owner = '', busy = false, current = false, data = null, note = '', flight = null;
+    let active = false, generation = 0, owner = '', busy = false, current = false, data = null, note = '', flight = null, original = null, accepted = false;
     const reviewer = () => clean(getAdmin());
     const el = (tag, text = '', className = '') => {
       const node = document.createElement(tag); node.textContent = text;
@@ -37,7 +50,7 @@
       return node;
     };
     function clear() {
-      generation++; active = false; owner = ''; busy = false; current = false; data = null; note = ''; flight = null;
+      generation++; active = false; owner = ''; busy = false; current = false; data = null; note = ''; flight = null; original = null; accepted = false;
       root.replaceChildren(); root.hidden = true;
     }
     function stillCurrent(own) {
@@ -46,6 +59,7 @@
       return true;
     }
     function deliveryText(state) {
+      if (original && state === 'not-started') return 'Send outcome unknown. No retained attempt was found; delivery is not confirmed.';
       return {
         'not-started': 'No send has been started.',
         disabled: 'Sending is disabled. Check the retained status; delivery is not confirmed.',
@@ -56,14 +70,26 @@
         blocked: 'Sending is blocked. No delivery is confirmed.'
       }[state];
     }
+    function canSend() {
+      if (!active || reviewer() !== owner || busy || accepted || !current || data?.sendingEnabled !== true) return false;
+      if (original && (data.message.messageId !== original.messageId || data.message.hash !== original.hash)) return false;
+      return (!original && data.delivery.state === 'not-started')
+        || (['unknown', 'rejected'].includes(data.delivery.state) && data.delivery.retryAllowed === true);
+    }
     function render() {
       if (!stillCurrent(generation)) return;
       root.hidden = false; root.setAttribute('aria-busy', String(busy));
       root.replaceChildren(el('h2', 'Proposed single TEST email'));
-      root.append(el('p', 'Preview only. This screen cannot send an email.'));
+      root.append(el('p', 'The approved single TEST email and its retained send status. Recurring sending stays off.'));
       const refresh = el('button', 'Refresh preview', 'btn');
       refresh.type = 'button'; refresh.disabled = busy; refresh.dataset.emailAction = 'refresh';
       root.append(refresh);
+      if (canSend()) {
+        const retry = data.delivery.state !== 'not-started';
+        const send = el('button', retry ? 'Retry this same TEST email' : 'Send approved TEST email', 'btn');
+        send.type = 'button'; send.dataset.emailAction = 'send'; root.append(send);
+        if (retry) root.append(el('p', 'The server permits recovery of this exact original message. This does not create a new message.', 'muted'));
+      }
       const status = el('p', note || (busy ? 'Loading email preview…' : 'Email preview status unavailable.'), 'message');
       status.style.display = 'block'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); root.append(status);
       if (!data) return;
@@ -115,7 +141,10 @@
           const value = await request(API, undefined, { method: 'GET', timeoutMs: 12000 });
           if (!stillCurrent(own)) return false;
           if (!valid(value)) throw new Error('Incomplete email preview');
-          data = value; current = true; note = 'Preview loaded. No send action is available here.';
+          if (original && (value.message.messageId !== original.messageId || value.message.hash !== original.hash)) throw new Error('Original message changed');
+          if (accepted && value.delivery.state !== 'accepted') throw new Error('Provider acceptance status changed');
+          if (value.delivery.state === 'accepted') accepted = true;
+          data = value; current = true; note = 'Preview loaded. Retained send status checked.';
           return true;
         } catch (error) {
           if (!stillCurrent(own)) return false;
@@ -130,10 +159,60 @@
       });
       return flight;
     }
+    function send() {
+      if (!stillCurrent(generation) || !canSend() || flight) return Promise.resolve(false);
+      original = original || Object.freeze({ action: 'sendApprovedTest', messageId: data.message.messageId, hash: data.message.hash });
+      const retainedOriginal = original, own = generation, message = data.message;
+      busy = true; current = false; note = 'Sending the approved single TEST email. Waiting for its retained outcome…'; render();
+      const operation = (async () => {
+        let receipt = null;
+        try {
+          let reply;
+          try { reply = await request(API, retainedOriginal, { method: 'POST', timeoutMs: 30000 }); }
+          catch (error) {
+            if (!stillCurrent(own)) return false;
+            if (error?.status === 401) { clear(); if (typeof onUnauthorized === 'function') onUnauthorized(); return false; }
+            reply = error?.data;
+          }
+          if (!stillCurrent(own)) return false;
+          if (reply?.target === 'test' && reply.recurringEnabled === false
+            && typeof reply.ok === 'boolean' && validDelivery(reply.delivery, message)
+            && reply.ok === (reply.delivery.state === 'accepted')) receipt = reply.delivery;
+          if (receipt?.state === 'accepted') accepted = true;
+          note = (receipt ? deliveryText(receipt.state) + ' ' : 'The send result is not yet confirmed. ')
+            + 'Checking the retained outcome…'; render();
+          // A single read resolves a lost reply. Recovery never automatically sends.
+          const value = await request(API, undefined, { method: 'GET', timeoutMs: 12000 });
+          if (!stillCurrent(own)) return false;
+          if (!valid(value) || value.message.messageId !== retainedOriginal.messageId || value.message.hash !== retainedOriginal.hash)
+            throw new Error('Original email outcome unavailable');
+          data = value; current = true;
+          if (value.delivery.state === 'accepted') accepted = true;
+          note = receipt?.state === 'accepted' && value.delivery.state !== 'accepted'
+            ? 'Provider acceptance was confirmed, but the retained status changed. Delivery is not confirmed; further sending is blocked.'
+            : 'Retained send outcome checked. ' + deliveryText(value.delivery.state);
+          if (receipt?.state === 'accepted' && value.delivery.state !== 'accepted') current = false;
+          return true;
+        } catch (error) {
+          if (!stillCurrent(own)) return false;
+          if (error?.status === 401) { clear(); if (typeof onUnauthorized === 'function') onUnauthorized(); return false; }
+          current = false;
+          note = (receipt ? deliveryText(receipt.state) + ' ' : 'Send outcome unknown. ')
+            + 'The retained status could not be refreshed. Use Refresh preview; no automatic retry will be sent.';
+          return false;
+        }
+      })();
+      flight = operation.finally(() => {
+        if (!stillCurrent(own)) return;
+        busy = false; flight = null; render();
+      });
+      return flight;
+    }
     root.addEventListener('click', event => {
       const control = event.target.closest('[data-email-action]');
-      if (!control || !root.contains(control) || control.disabled || control.dataset.emailAction !== 'refresh') return;
-      void open();
+      if (!control || !root.contains(control) || control.disabled) return;
+      if (control.dataset.emailAction === 'refresh') void open();
+      else if (control.dataset.emailAction === 'send') void send();
     });
     root.hidden = true;
     return Object.freeze({ open, clear });
