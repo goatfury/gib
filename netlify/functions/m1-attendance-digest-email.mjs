@@ -30,7 +30,7 @@ export async function handleAttendanceDigestEmail(request, dependencies = {}) {
       const delivery = await readTestDigestEmailDelivery(message, deps);
       return jsonResponse(200, { ok: true, target: 'test', sendingEnabled: env.GIB_M1_DIGEST_TEST_SEND_ENABLED === 'true', recurringEnabled: false,
         provider: 'resend', message, delivery,
-        recipientSettings: { andrew: { address: message.to[0], source: 'existing Netlify account' }, stu: { address: null } } });
+        recipientSettings: { andrew: { address: message.to[0], source: 'user-confirmed TEST recipient' }, stu: { address: null } } });
     }
     const parsed = await readJson(request, 2048);
     if (parsed.response) return parsed.response;

@@ -19,7 +19,7 @@ const response = (state = 'not-started') => ({ ok: true, target: 'test', sending
   message: { messageId: 'm1-test-email-andrew-20260926-v1', hash: 'a'.repeat(64), from: 'TEST Digest <test@example.com>', to: ['andrew@example.com'],
     subject: 'TEST attendance email', html: `<h1>TEST example</h1><a href="${SIGNINS}">Example sign-ins</a><a href="${STAFF}">Example Staff Clock</a>`,
     text: `Synthetic example\n${SIGNINS}\n${STAFF}`, synthetic: true, target: 'test' },
-  delivery: delivery(state), recipientSettings: { andrew: { address: 'andrew@example.com', source: 'existing Netlify account' }, stu: { address: null } }, provider: 'resend' });
+  delivery: delivery(state), recipientSettings: { andrew: { address: 'andrew@example.com', source: 'user-confirmed TEST recipient' }, stu: { address: null } }, provider: 'resend' });
 const sendReply = (state, options) => ({ ok: state === 'accepted', target: 'test', recurringEnabled: false, delivery: delivery(state, options) });
 const enabled = (state = 'not-started', retryAllowed = false) => {
   const value = response(state); value.sendingEnabled = true;
@@ -76,6 +76,8 @@ test('normal preview is GET only, identifies the exact recipient and offers no s
   assert.match(h.root.textContent, /Sending is off\. Recurring sending is off/);
   assert.match(h.root.textContent, /To: andrew@example.com/); assert.match(h.root.textContent, /From: TEST Digest <test@example.com>/);
   assert.match(h.root.textContent, /Subject: TEST attendance email/); assert.match(h.root.textContent, /Stu: address not configured/);
+  assert.match(h.root.textContent, /Recipient source: user-confirmed TEST recipient/);
+  assert.doesNotMatch(h.root.textContent, /existing Netlify account/);
   assert.deepEqual(h.current('button').map(node => node.textContent), ['Refresh preview']);
   for (const tag of ['input', 'form', 'textarea', 'select']) assert.equal(h.current(tag).length, 0);
   assert.match(h.status(), /Preview loaded/);
@@ -83,10 +85,13 @@ test('normal preview is GET only, identifies the exact recipient and offers no s
 
 test('the actual immutable server proposal renders without changing its subject, body or fixed review links', async () => {
   const h = harness(), value = response();
+  value.recipientSettings.andrew.address = 'revbjjops@gmail.com';
   value.message = buildTestDigestEmail(value.recipientSettings.andrew.address);
   value.delivery.hash = value.message.hash;
   await open(h, value);
   assert.match(h.status(), /Preview loaded/);
+  assert.match(h.root.textContent, /To: revbjjops@gmail.com/);
+  assert.match(h.root.textContent, /Recipient source: user-confirmed TEST recipient/);
   assert.equal(h.current('iframe')[0].srcdoc.includes(value.message.html), true);
   assert.equal(h.current('pre')[0].textContent, value.message.text);
   assert.match(h.root.textContent, /Subject: \[TEST — SYNTHETIC\]/);
@@ -199,6 +204,7 @@ test('foreign, unsafe or incomplete responses cannot become a current preview', 
     value => { value.message.messageId = 'another-message'; }, value => { value.message.hash = 'not-a-hash'; },
     value => { value.message.to.push('stu@example.com'); }, value => { value.message.to[0] = 'not-an-address'; },
     value => { value.recipientSettings.andrew.address = 'different@example.com'; }, value => { value.recipientSettings.andrew.source = 'invented'; },
+    value => { value.recipientSettings.andrew.source = 'existing Netlify account'; },
     value => { value.recipientSettings.stu.address = 'stu@example.com'; }, value => { value.message.subject = 'bad\r\nsubject'; },
     value => { value.message.from = 'bad\r\nfrom'; }, value => { value.message.html = ''; }, value => { value.message.text = ''; },
     value => { value.delivery.state = 'delivered'; }, value => { delete value.recipientSettings; },

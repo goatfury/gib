@@ -35,7 +35,7 @@
       && typeof message.html === 'string' && message.html.length > 0 && message.html.length <= 100000
       && typeof message.text === 'string' && message.text.length > 0 && message.text.length <= 100000
       && value.recipientSettings?.andrew?.address === message.to[0]
-      && value.recipientSettings.andrew.source === 'existing Netlify account'
+      && value.recipientSettings.andrew.source === 'user-confirmed TEST recipient'
       && value.recipientSettings.stu?.address === null;
   }
   function create({ root, request, enabled, target, site, getAdmin, onUnauthorized }) {
@@ -102,7 +102,7 @@
       }
       const message = data.message;
       root.append(el('p', 'To: ' + message.to[0]));
-      root.append(el('p', 'Recipient source: existing Netlify account. Stu: address not configured.', 'muted'));
+      root.append(el('p', 'Recipient source: user-confirmed TEST recipient. Stu: address not configured.', 'muted'));
       root.append(el('p', 'From: ' + message.from)); root.append(el('p', 'Subject: ' + message.subject));
       root.append(el('p', 'Synthetic examples only. These examples do not describe actual recorded work.', 'manager-warning'));
       const details = el('details'); details.open = true; details.append(el('summary', 'Rendered email preview'));

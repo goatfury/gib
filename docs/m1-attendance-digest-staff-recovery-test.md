@@ -1,5 +1,13 @@
 # Attendance reminders and forgotten clock-outs — Revolution TEST
 
+## Current single-email account choice
+
+Andrew chose `revbjjops@gmail.com` for both the free Resend account and the single synthetic TEST recipient, replacing the earlier personal address before any send. The hosted retained status was freshly read as **No send has been started** with sending off. Keep the original message ID `m1-test-email-andrew-20260926-v1`; the updated recipient-bound hash is `e6d9cb9ef42a36302b7a5f1a70d9c6a6d82ec3840b29a27d17af3a85d1499115`. This is one test, not a second message. The three recipient/hash settings were updated only in Revolution deploy-preview Functions; the send switch remains false. The original prepared content and sender are unchanged except for the recipient displayed in the message. Existing history, if any appeared, would block this changed hash rather than replacing a retained send.
+
+Prefer business identities for business tools and ask before using Andrew's personal email for a new service or sign-in. Andrew wants a possible future review of historical personal/business account mixing; no account migration or cleanup is authorized by that note. This preference is also saved in the enclosing Codex workspace instructions. The account-source label now accurately says **user-confirmed TEST recipient**; the prior Netlify-account attribution is retained below only as historical evidence.
+
+Resend sign-in with the business account is verified. Its API keys page reported no existing keys; a sending-access-only creation form is prepared, but no key has been created or read by the agent. Private credential handoff and the actual one-email send remain outstanding at this checkpoint. Historical personal-address preparation notes below are superseded by this account choice, not erased.
+
 This work is confined to https://deploy-preview-89--gib-live.netlify.app/m1/admin/ and the separate Revolution TEST Google project. PR89 remains draft and unmerged. Both production gyms, Richmond deployments and permissions are outside this change. No TEST records move to live data, and neither Walter record is a QA fixture.
 
 ## Daily digest

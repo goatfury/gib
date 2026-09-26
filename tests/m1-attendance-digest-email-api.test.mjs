@@ -35,6 +35,22 @@ test('authenticated preview is exactly the proposed synthetic payload without ch
   assert.equal(response.status, 200); assert.deepEqual(data.message, buildTestDigestEmail(env.GIB_M1_DIGEST_TEST_EMAIL_RECIPIENT));
   assert.equal(data.sendingEnabled, false); assert.equal(data.recurringEnabled, false);
   assert.equal(data.delivery.state, 'not-started'); assert.equal(data.recipientSettings.stu.address, null);
+  assert.deepEqual(data.recipientSettings.andrew, { address: env.GIB_M1_DIGEST_TEST_EMAIL_RECIPIENT, source: 'user-confirmed TEST recipient' });
+  assert.equal(h.writes(), 0); assert.equal(h.sends(), 0);
+});
+
+test('a user-confirmed recipient change before any attempt preserves the one message ID and changes only recipient-bound content', async () => {
+  const h = setup();
+  const prior = await (await handleAttendanceDigestEmail(request(), h.deps)).json();
+  h.deps.env = { ...env, GIB_M1_DIGEST_TEST_EMAIL_RECIPIENT: 'revbjjops@gmail.com' };
+  const next = await (await handleAttendanceDigestEmail(request(), h.deps)).json();
+  assert.equal(prior.delivery.state, 'not-started'); assert.equal(next.delivery.state, 'not-started');
+  assert.equal(next.message.messageId, prior.message.messageId); assert.notEqual(next.message.hash, prior.message.hash);
+  assert.deepEqual(next.message, buildTestDigestEmail('revbjjops@gmail.com'));
+  assert.deepEqual(next.message.to, ['revbjjops@gmail.com']);
+  for (const field of ['subject', 'from', 'synthetic', 'target']) assert.equal(next.message[field], prior.message[field]);
+  for (const field of ['html', 'text']) assert.equal(next.message[field], prior.message[field].replaceAll(env.GIB_M1_DIGEST_TEST_EMAIL_RECIPIENT, 'revbjjops@gmail.com'));
+  assert.deepEqual(next.recipientSettings.andrew, { address: 'revbjjops@gmail.com', source: 'user-confirmed TEST recipient' });
   assert.equal(h.writes(), 0); assert.equal(h.sends(), 0);
 });
 
