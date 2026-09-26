@@ -56,13 +56,13 @@
       && receipt.revision === pending.body.revision + 1
       && ['requestId', 'recoveryRequestId', 'decision', 'finishAt', 'punchId', 'reason'].every(key => receipt[key] === pending.body[key]);
   }
-  globalThis.GIBM1StaffRecovery = Object.freeze({ create({ root, request, site, target, enabled, getAdmin,
-    timestampForInputs, onUnauthorized = () => {}, onChanged = () => {}, confirm = message => globalThis.confirm(message) }) {
+  globalThis.GIBM1StaffRecovery = Object.freeze({ create({ root, request, site, target, enabled, getAdmin, getSession,
+    timestampForInputs, onUnauthorized = () => {}, onChanged = () => {} }) {
     if (!root || site !== 'Rev' || enabled !== true || !['test', 'production'].includes(target)
-      || typeof request !== 'function' || typeof getAdmin !== 'function' || typeof timestampForInputs !== 'function') return null;
+      || typeof request !== 'function' || typeof getAdmin !== 'function' || typeof getSession !== 'function' || typeof timestampForInputs !== 'function') return null;
     const storageKey = `m1-staff-recovery-admin-v1:${site}:${target}`;
     let active = false, admin = '', generation = 0, items = null, unavailable = false, busy = false;
-    let pending = null, invalidJournal = false, reading = null;
+    let pending = null, invalidJournal = false, reading = null, confirmation = null;
     const drafts = new Map();
     function retain(value) {
       if (value) {
@@ -99,6 +99,14 @@
     const label = value => value ? `${value.slice(0, 10)} ${value.slice(11, 19)} ET (${value.slice(-6)})` : 'Don’t know';
     const draftFor = item => drafts.get(item.requestId) || { finishDate: item.proposedFinishAt?.slice(0, 10) || '',
       finishTime: item.proposedFinishAt?.slice(11, 19) || '', finishOffset: item.proposedFinishAt?.slice(-6) || '', reason: '' };
+    // Compare all validated proposal evidence, independently of JSON property order.
+    const proposalState = item => JSON.stringify(itemFields.map(key => key === 'punch' ? punchFields.map(field => item.punch[field])
+      : key === 'decision' && item.decision ? receiptFields.map(field => item.decision[field])
+        : key === 'conflicts' ? [...item.conflicts].sort() : item[key]));
+    function closeConfirmation() {
+      if (!confirmation) return;
+      confirmation.dialog.close(); confirmation.dialog.remove(); confirmation = null;
+    }
     function render(note = '') {
       if (!active) return;
       root.hidden = false;
@@ -137,6 +145,7 @@
     async function load() {
       if (!active || busy || getAdmin() !== admin) return;
       if (reading) return reading;
+      if (confirmation) { status('Confirm this decision or go back before refreshing. Your unfinished entries are still here.'); return; }
       if (drafts.size) { status('Finish or cancel the current decision before refreshing. Your unfinished entries are still here.'); return; }
       const own = generation;
       const task = (async () => {
@@ -197,7 +206,7 @@
       const form = event.target.closest('[data-recovery-form]');
       if (!form) return;
       event.preventDefault();
-      if (!active || busy || reading || unavailable || pending || invalidJournal || getAdmin() !== admin) return;
+      if (!active || busy || reading || confirmation || unavailable || pending || invalidJournal || getAdmin() !== admin) return;
       const item = items?.find(row => row.requestId === form.dataset.recoveryForm);
       const decision = event.submitter?.dataset.recoveryDecision;
       if (!item || item.status === 'approved' || !['approve', 'reject'].includes(decision)) return;
@@ -208,20 +217,74 @@
       if (!text(reason, 240) || reason.length < 3 || /^[=+\-@]/.test(reason) || (decision === 'approve' && (!['-04:00', '-05:00'].includes(fields.finishOffset) || !boundedFinish(finishAt, item)))) {
         status('Enter a reason of at least three characters. To approve, enter a valid Eastern finish after the earlier clock-in, within 18 hours, and no later than the new shift.'); return;
       }
-      if (!confirm(`${decision === 'approve' ? `Approve ${label(finishAt)} as the previous finish` : 'Reject the proposal and leave the earlier shift unresolved'} for ${item.staffName}?\n\nReason: ${reason}`)) return;
+      drafts.set(item.requestId, fields);
+      const dialog = document.createElement('dialog'); dialog.className = 'manager-dialog';
+      dialog.setAttribute('aria-label', decision === 'approve' ? 'Confirm previous shift finish approval' : 'Confirm previous shift proposal rejection');
+      dialog.innerHTML = `<h2>${decision === 'approve' ? 'Approve previous shift finish?' : 'Reject previous shift proposal?'}</h2>
+        <p><strong>${escape(item.staffName)}</strong></p>
+        <p>Previous shift started: <strong>${escape(label(item.previousClockInAt))}</strong><br>Newer shift started: ${escape(label(item.startedAt))}</p>
+        <p>Employee proposed finish: <strong>${escape(label(item.proposedFinishAt))}</strong></p>
+        ${decision === 'approve' ? `<p>Finish to approve: <strong>${escape(label(finishAt))}</strong></p><p>This adds an audited finish for the previous shift. Original punches and the newer shift stay unchanged.</p>`
+          : '<p>This rejects the proposal. The previous shift stays unresolved; no finish time or worked hours will be guessed.</p>'}
+        <p>Reason: <strong>${escape(reason)}</strong></p><p>Reviewer: ${escape(admin)}</p>
+        <p data-confirmation-status class="manager-note" role="status" aria-live="polite"></p>
+        <div class="manager-controls"><button type="button" class="btn" data-confirmation-back>Go back</button><button type="button" class="btn primary" data-confirmation-submit>${decision === 'approve' ? 'Confirm approval' : 'Confirm rejection'}</button></div>`;
+      confirmation = { dialog, item, state: proposalState(item), decision, finishAt, reason, adminName: admin, session: getSession(), own: generation, checking: false };
+      const goBack = () => { if (confirmation?.dialog === dialog && !confirmation.checking) closeConfirmation(); };
+      dialog.querySelector('[data-confirmation-back]').addEventListener('click', goBack);
+      dialog.addEventListener('cancel', event => { event.preventDefault(); goBack(); });
+      dialog.querySelector('[data-confirmation-submit]').addEventListener('click', confirmDecision);
+      root.append(dialog); dialog.showModal();
+    }
+    async function confirmDecision() {
+      const reviewed = confirmation;
+      if (!reviewed || reviewed.checking || busy || reading || pending || invalidJournal) return;
+      if (!current(reviewed.own) || reviewed.adminName !== admin || reviewed.session !== getSession()) {
+        closeConfirmation(); render('Your Admin session changed. Reopen the proposals and review this decision again. Nothing was sent.'); return;
+      }
+      reviewed.checking = true;
+      const confirmButton = reviewed.dialog.querySelector('[data-confirmation-submit]');
+      const backButton = reviewed.dialog.querySelector('[data-confirmation-back]');
+      const message = reviewed.dialog.querySelector('[data-confirmation-status]');
+      confirmButton.disabled = true; backButton.disabled = true;
+      message.textContent = 'Checking the current proposal before saving…';
+      try {
+        const result = await request(endpoint, { operation: 'recoveryReview' });
+        if (confirmation !== reviewed) return;
+        if (!current(reviewed.own) || reviewed.adminName !== admin || reviewed.session !== getSession()) {
+          closeConfirmation(); render('Your Admin session changed. Reopen the proposals and review this decision again. Nothing was sent.'); return;
+        }
+        if (!readIsValid(result)) throw new Error('Unconfirmed read');
+        const latest = result.recovery.items.find(item => item.requestId === reviewed.item.requestId);
+        if (!latest || proposalState(latest) !== reviewed.state) {
+          items = result.recovery.items; unavailable = false; closeConfirmation();
+          render('This proposal changed. Review the current details before making a fresh decision. Your unsent entries are retained; nothing was sent.'); return;
+        }
+      } catch (error) {
+        if (confirmation !== reviewed) return;
+        if (!current(reviewed.own) || reviewed.adminName !== admin || reviewed.session !== getSession()) {
+          closeConfirmation(); render('Your Admin session changed. Reopen the proposals and review this decision again. Nothing was sent.'); return;
+        }
+        message.textContent = 'The current proposal could not be confirmed. Nothing was sent. Try confirming again when the connection returns, or go back to your unchanged entries.';
+        if (error?.status === 401 || error?.status === 403) onUnauthorized();
+        return;
+      } finally {
+        if (confirmation === reviewed) { reviewed.checking = false; confirmButton.disabled = false; backButton.disabled = false; }
+      }
       try {
         const body = { operation: 'recoveryDecide', requestId: `gib-m1-staff-request-${crypto.randomUUID()}`,
-          recoveryRequestId: item.requestId, revision: item.revision, decision, finishAt,
-          punchId: decision === 'approve' ? `gib-m1-staff-${crypto.randomUUID()}` : null, reason };
+          recoveryRequestId: reviewed.item.requestId, revision: reviewed.item.revision, decision: reviewed.decision, finishAt: reviewed.finishAt,
+          punchId: reviewed.decision === 'approve' ? `gib-m1-staff-${crypto.randomUUID()}` : null, reason: reviewed.reason };
         if (!validDecision(body, true)) throw new Error('Invalid identity');
         retain({ version: 1, site, target, adminName: admin, body });
-      } catch { status('The original decision could not be retained safely. Nothing was sent.'); return; }
+      } catch { closeConfirmation(); render('The original decision could not be retained safely. Nothing was sent.'); return; }
+      closeConfirmation();
       await send();
     }
     root.addEventListener('submit', submit);
     function rememberDraft(event) {
       const form = event.target.closest('[data-recovery-form]');
-      if (form && active && !busy && !reading && !pending && !invalidJournal) drafts.set(form.dataset.recoveryForm, Object.fromEntries(new FormData(form)));
+      if (form && active && !busy && !reading && !confirmation && !pending && !invalidJournal) drafts.set(form.dataset.recoveryForm, Object.fromEntries(new FormData(form)));
     }
     root.addEventListener('input', rememberDraft);
     root.addEventListener('change', rememberDraft);
@@ -229,7 +292,7 @@
       const action = event.target.closest('[data-recovery-action]')?.dataset.recoveryAction;
       if (action === 'refresh') void load();
       if (action === 'retry') void send();
-      if (action === 'cancel' && active && !busy && !reading && !pending && !invalidJournal) {
+      if (action === 'cancel' && active && !busy && !reading && !confirmation && !pending && !invalidJournal) {
         const form = event.target.closest('[data-recovery-form]');
         if (form) { drafts.delete(form.dataset.recoveryForm); render(); }
       }
@@ -237,13 +300,14 @@
     return Object.freeze({
       open() {
         if (active && getAdmin() === admin) return load();
+        closeConfirmation();
         generation += 1; admin = getAdmin(); active = text(admin);
         items = null; reading = null; busy = false; drafts.clear(); unavailable = false;
         if (!active) { root.hidden = true; root.replaceChildren(); return Promise.resolve(); }
         restore(); return load();
       },
       refresh: load,
-      clear() { generation += 1; active = false; admin = ''; items = null; reading = null; busy = false; drafts.clear(); root.hidden = true; root.replaceChildren(); },
+      clear() { closeConfirmation(); generation += 1; active = false; admin = ''; items = null; reading = null; busy = false; drafts.clear(); root.hidden = true; root.replaceChildren(); },
       hasPendingSave: () => Boolean(pending) || invalidJournal
     });
   } });

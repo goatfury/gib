@@ -7202,7 +7202,7 @@
       staffRecoveryReview = globalThis.GIBM1StaffRecovery?.create({
         root: $('#staffRecoveryReview'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
         enabled: STAFF_CLOCK_ENABLED && RECOVERY_PILOT_ENABLED, getAdmin: () => currentAdminName,
-        timestampForInputs: staffTimestampForInputs,
+        getSession: () => adminRequestToken, timestampForInputs: staffTimestampForInputs,
         onUnauthorized: () => setLoggedOut('Admin login required.'),
         onChanged: () => loadStaffTime({ quiet: true })
       });

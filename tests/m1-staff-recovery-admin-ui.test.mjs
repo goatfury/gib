@@ -27,30 +27,62 @@ const receipt = (body, changes = {}) => ({ requestId: body.requestId, recoveryRe
 const decidedItem = (body, changes = {}) => item({ status: body.decision === 'approve' ? 'approved' : 'rejected', revision: body.revision + 1, decision: receipt(body), ...changes });
 const fields = () => ({ finishDate: '2026-09-21', finishTime: '17:00:00', finishOffset: '-04:00', reason: 'Verified prior finish' });
 function runtime(options = {}) {
-  const events = {}, calls = [], storage = options.storage || new Map(), confirmations = [];
+  const events = {}, calls = [], preflights = [], storage = options.storage || new Map(), confirmations = [];
+  let dialog = null, latestRead = null, checkingConfirmation = false;
   const status = { textContent: '', className: '', style: {} };
   const root = { hidden: true, innerHTML: '', attributes: {}, addEventListener: (name, handler) => { events[name] = handler; },
-    setAttribute(name, value) { this.attributes[name] = value; }, querySelector: () => status, replaceChildren() { this.innerHTML = ''; } };
-  let sequence = 10, admin = 'Andrew Smith', unauthorized = 0, changed = 0;
+    setAttribute(name, value) { this.attributes[name] = value; }, querySelector: () => status, append() {}, replaceChildren() { this.innerHTML = ''; } };
+  let sequence = 10, admin = 'Andrew Smith', session = 'fake-session-one', unauthorized = 0, changed = 0;
   const context = vm.createContext({ Date, Intl, Object, Set, JSON, Promise, crypto: { randomUUID: () => UUID(++sequence) },
+    document: { createElement(tag) {
+      assert.equal(tag, 'dialog');
+      const nodes = new Map(), listeners = {};
+      const created = { innerHTML: '', attributes: {}, open: false, listeners,
+        setAttribute(name, value) { this.attributes[name] = value; },
+        addEventListener(name, handler) { listeners[name] = handler; },
+        querySelector(selector) {
+          if (!nodes.has(selector)) nodes.set(selector, { textContent: '', disabled: false, listeners: {},
+            addEventListener(name, handler) { this.listeners[name] = handler; } });
+          return nodes.get(selector);
+        },
+        showModal() { this.open = true; dialog = this; confirmations.push(this.innerHTML); },
+        close() { this.open = false; }, remove() { if (dialog === this) dialog = null; }
+      };
+      return created;
+    } },
     sessionStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => { if (options.storageFails) throw new Error('Storage unavailable'); if (!options.storageNoop) storage.set(key, value); }, removeItem: key => storage.delete(key) },
     FormData: class { constructor(form) { return Object.entries(form.fields); } } });
   vm.runInContext(source, context);
-  const ui = context.GIBM1StaffRecovery.create({ root, site: 'Rev', target: 'test', enabled: true, getAdmin: () => admin,
+  const ui = context.GIBM1StaffRecovery.create({ root, site: 'Rev', target: 'test', enabled: true, getAdmin: () => admin, getSession: () => session,
     timestampForInputs: (date, time, offset, required) => required && date && time && offset ? `${date}T${time.length === 5 ? `${time}:00` : time}${offset}` : '',
-    request: (url, body) => { const call = deferred(); calls.push({ ...call, url, body: copy(body), journalAtDispatch: storage.get(storageKey) }); return call.promise; },
-    confirm: message => { confirmations.push(message); return options.confirmed !== false; },
+    request: (url, body) => {
+      const call = { ...deferred(), url, body: copy(body), journalAtDispatch: storage.get(options.target === 'production' ? storageKey.replace(':test', ':production') : storageKey) };
+      if (checkingConfirmation && body.operation === 'recoveryReview') {
+        preflights.push(call);
+        if (!options.deferPreflight) call.resolve(copy(latestRead));
+      } else calls.push(call);
+      return call.promise.then(value => { if (body.operation === 'recoveryReview') latestRead = copy(value); return value; });
+    },
     onUnauthorized: () => unauthorized++, onChanged: () => changed++, ...options });
-  return { ui, root, status, storage, calls, confirmations, events, setAdmin: value => { admin = value; }, unauthorized: () => unauthorized, changed: () => changed,
+  const begin = (decision = 'approve', values = fields(), id = requestId(1)) => { const form = { fields: values, dataset: { recoveryForm: id } }; return events.submit({ target: { closest: () => form }, submitter: { dataset: { recoveryDecision: decision } }, preventDefault() {} }); };
+  const confirm = () => { checkingConfirmation = true; const task = dialog?.querySelector('[data-confirmation-submit]').listeners.click(); checkingConfirmation = false; return task; };
+  const goBack = () => dialog?.querySelector('[data-confirmation-back]').listeners.click();
+  return { ui, root, status, storage, calls, preflights, confirmations, events, begin, confirm, goBack, dialog: () => dialog, allocatedIds: () => sequence - 10,
+    setAdmin: value => { admin = value; }, setSession: value => { session = value; }, unauthorized: () => unauthorized, changed: () => changed,
     async open(value = response()) { const result = ui.open(); await flush(); calls.at(-1).resolve(value); await result; },
     click(action, id = requestId(1)) { return events.click({ target: { closest: selector => ({ dataset: selector === '[data-recovery-form]' ? { recoveryForm: id } : { recoveryAction: action } }) } }); },
-    submit(decision = 'approve', values = fields(), id = requestId(1)) { const form = { fields: values, dataset: { recoveryForm: id } }; return events.submit({ target: { closest: () => form }, submitter: { dataset: { recoveryDecision: decision } }, preventDefault() {} }); },
+    submit(decision = 'approve', values = fields(), id = requestId(1)) {
+      const prior = dialog, opened = begin(decision, values, id);
+      if (!dialog || dialog === prior) return opened;
+      if (options.confirmed === false) { goBack(); return opened; }
+      return confirm();
+    },
     edit(values = fields(), id = requestId(1)) { events.input({ target: { closest: () => ({ fields: values, dataset: { recoveryForm: id } }) } }); }
   };
 }
 
 test('requires explicit Revolution target and feature gate before creating any UI or requests', () => {
-  for (const options of [{ enabled: false }, { enabled: undefined }, { site: 'RICH' }, { target: 'preview' }, { timestampForInputs: null }]) {
+  for (const options of [{ enabled: false }, { enabled: undefined }, { site: 'RICH' }, { target: 'preview' }, { timestampForInputs: null }, { getSession: null }]) {
     const h = runtime(options); assert.equal(h.ui, null); assert.equal(h.calls.length, 0); assert.equal(h.root.hidden, true);
   }
 });
@@ -148,7 +180,7 @@ test('approval checks exact Eastern offset and prior shift bounds before confirm
 test('saving one proposal preserves unfinished entries on another proposal', async () => {
   const other = item({ requestId: requestId(3) }), h = runtime(); await h.open(response([item(), other]));
   h.edit({ ...fields(), reason: 'Unfinished second decision', finishTime: '16:20:00' }, other.requestId);
-  const saving = h.submit(); const original = h.calls[1].body;
+  const saving = h.submit(); await flush(); const original = h.calls[1].body;
   assert.match(h.root.innerHTML, /value="Unfinished second decision"/);
   assert.match(h.root.innerHTML, /value="16:20:00"/);
   h.calls[1].resolve({ ...response([decidedItem(original), other]), receipt: receipt(original) }); await saving;
@@ -194,7 +226,7 @@ test('malformed, mismatched, wrong-reviewer and wrong-environment receipts retai
     r => { r.receipt.finishAt = '2026-09-21T16:59:00-04:00'; }, r => { r.test = false; }, r => { r.receipt.extra = true; }, r => { r.receipt.decidedAt = '2026-09-23T12:00:00-05:00'; }, r => { r.recovery.items[0].punch.site = 'RICH'; },
     r => { r.recovery.items = []; }, r => { r.recovery.items = [item()]; }, r => { r.recovery.items[0].decision.requestId = requestId(888); }];
   for (const mutate of mutations) {
-    const h = runtime(); await h.open(); const pending = h.submit(); const original = h.calls[1].body;
+    const h = runtime(); await h.open(); const pending = h.submit(); await flush(); const original = h.calls[1].body;
     const value = { ...response([decidedItem(original)]), receipt: receipt(original) }; mutate(value); h.calls[1].resolve(value); await pending;
     assert.equal(h.ui.hasPendingSave(), true); assert.deepEqual(JSON.parse(h.storage.get(storageKey)).body, original);
     assert.equal(h.changed(), 0); assert.match(h.status.textContent, /not confirmed/);
@@ -202,7 +234,7 @@ test('malformed, mismatched, wrong-reviewer and wrong-environment receipts retai
 });
 
 test('lost responses retry exactly the original IDs, decision and reviewer after reopening, without an automatic write', async () => {
-  const storage = new Map(), first = runtime({ storage }); await first.open(); const saving = first.submit();
+  const storage = new Map(), first = runtime({ storage }); await first.open(); const saving = first.submit(); await flush();
   const original = first.calls[1].body; first.calls[1].reject(new Error('Lost reply')); await saving; first.ui.clear();
   const h = runtime({ storage }); await h.open(); assert.equal(h.calls.length, 1); assert.equal(h.calls[0].body.operation, 'recoveryReview');
   h.click('retry'); h.click('retry'); await flush(); assert.equal(h.calls.length, 2); assert.deepEqual(h.calls[1].body, original);
@@ -212,7 +244,7 @@ test('lost responses retry exactly the original IDs, decision and reviewer after
 
 test('authenticated readback can confirm the exact lost receipt, but a later different receipt cannot', async () => {
   for (const matches of [true, false]) {
-    const storage = new Map(), first = runtime({ storage }); await first.open(); const saving = first.submit();
+    const storage = new Map(), first = runtime({ storage }); await first.open(); const saving = first.submit(); await flush();
     const original = first.calls[1].body; first.calls[1].reject(new Error('Lost reply')); await saving; first.ui.clear();
     const h = runtime({ storage }), actual = decidedItem(original);
     if (!matches) { actual.revision = 2; actual.decision = receipt(original, { requestId: requestId(777), revision: 2 }); }
@@ -221,7 +253,7 @@ test('authenticated readback can confirm the exact lost receipt, but a later dif
 });
 
 test('retrying an original rejection after a later approval confirms its original audit without calling the shift unresolved', async () => {
-  const h = runtime(); await h.open(); const saving = h.submit('reject'), original = h.calls[1].body;
+  const h = runtime(); await h.open(); const saving = h.submit('reject'); await flush(); const original = h.calls[1].body;
   h.calls[1].reject(new Error('Lost rejection reply')); await saving;
   h.click('retry'); const later = { ...original, requestId: requestId(777), revision: 1, decision: 'approve', finishAt: '2026-09-21T17:00:00-04:00', punchId: punchId(777) };
   h.calls[2].resolve({ ...response([decidedItem(later)]), receipt: receipt(original) }); await flush();
@@ -231,7 +263,7 @@ test('retrying an original rejection after a later approval confirms its origina
 });
 
 test('another reviewer cannot retry a retained decision or be shown stale completion from an earlier session', async () => {
-  const storage = new Map(), first = runtime({ storage }); await first.open(); const saving = first.submit(); const original = first.calls[1].body;
+  const storage = new Map(), first = runtime({ storage }); await first.open(); const saving = first.submit(); await flush(); const original = first.calls[1].body;
   first.ui.clear(); first.calls[1].resolve({ ...response([decidedItem(original)]), receipt: receipt(original) }); await saving;
   assert.equal(first.root.innerHTML, ''); assert.equal(first.changed(), 0); assert.equal(storage.size, 1);
   const h = runtime({ storage }); h.setAdmin('Stuart Turner'); await h.open(response([item()], { adminName: 'Stuart Turner' }));
@@ -241,7 +273,7 @@ test('another reviewer cannot retry a retained decision or be shown stale comple
 
 test('a proved revision conflict requires a fresh read and explicit new decision, while 401 retains the original', async () => {
   for (const status of [409, 401]) {
-    const h = runtime(); await h.open(); const saving = h.submit(); h.calls[1].reject(Object.assign(new Error('Rejected'), { status })); await saving;
+    const h = runtime(); await h.open(); const saving = h.submit(); await flush(); h.calls[1].reject(Object.assign(new Error('Rejected'), { status })); await saving;
     assert.equal(h.ui.hasPendingSave(), status !== 409); assert.equal(h.unauthorized(), status === 401 ? 1 : 0);
     assert.equal(h.calls.length, 2); assert.equal(h.changed(), 0);
     if (status === 409) { assert.match(h.status.textContent, /changed before/); await h.submit(); assert.equal(h.calls.length, 2); }
@@ -251,7 +283,7 @@ test('a proved revision conflict requires a fresh read and explicit new decision
 test('a conflict with another unfinished draft leaves Cancel accessible so a fresh read is possible', async () => {
   const other = item({ requestId: requestId(3) }), h = runtime(); await h.open(response([item(), other]));
   h.edit({ ...fields(), reason: 'Keep this unfinished draft' }, other.requestId);
-  const saving = h.submit(); h.calls[1].reject(Object.assign(new Error('Revision conflict'), { status: 409 })); await saving;
+  const saving = h.submit(); await flush(); h.calls[1].reject(Object.assign(new Error('Revision conflict'), { status: 409 })); await saving;
   await h.ui.refresh(); assert.equal(h.calls.length, 2); assert.match(h.root.innerHTML, /value="Keep this unfinished draft"/);
   assert.match(h.root.innerHTML, /<fieldset disabled>/);
   assert.match(h.root.innerHTML, /<\/fieldset><button[^>]*data-recovery-action="cancel" >Cancel changes<\/button>/,
@@ -263,7 +295,7 @@ test('a conflict with another unfinished draft leaves Cancel accessible so a fre
 test('a concurrently approved proposal keeps its now-unusable draft visible with an enabled Cancel', async () => {
   const other = item({ requestId: requestId(3) }), h = runtime(); await h.open(response([item(), other]));
   h.edit({ ...fields(), reason: 'Unsent second proposal reason' }, other.requestId);
-  const saving = h.submit(), original = h.calls[1].body;
+  const saving = h.submit(); await flush(); const original = h.calls[1].body;
   const concurrent = { ...original, requestId: requestId(888), recoveryRequestId: other.requestId, punchId: punchId(888) };
   h.calls[1].resolve({ ...response([decidedItem(original), decidedItem(concurrent, { requestId: other.requestId })]), receipt: receipt(original) }); await saving;
   assert.match(h.root.innerHTML, /unfinished decision can no longer be applied/);
@@ -277,7 +309,7 @@ test('a concurrently approved proposal keeps its now-unusable draft visible with
 
 test('rejected proposals can be explicitly revised and later approved without changing the original recovery ID', async () => {
   const oldBody = { requestId: requestId(8), recoveryRequestId: requestId(1), revision: 0, decision: 'reject', finishAt: null, punchId: null, reason: 'Finish still unknown' };
-  const h = runtime(); await h.open(response([decidedItem(oldBody)])); const saving = h.submit('approve'); const body = h.calls[1].body;
+  const h = runtime(); await h.open(response([decidedItem(oldBody)])); const saving = h.submit('approve'); await flush(); const body = h.calls[1].body;
   assert.equal(body.recoveryRequestId, requestId(1)); assert.equal(body.revision, 1); assert.notEqual(body.requestId, oldBody.requestId);
   h.calls[1].resolve({ ...response([decidedItem(body)]), receipt: receipt(body) }); await saving;
   assert.match(h.root.innerHTML, /Approved payroll finish/); assert.equal(h.changed(), 1);
@@ -287,4 +319,108 @@ test('displayed names and reasons cannot inject markup, and production requires 
   const h = runtime({ target: 'production' }); const unsafe = item({ staffName: '<img src=x>', proposedBy: '<img src=x>' }); unsafe.punch.staffName = unsafe.staffName;
   await h.open(response([unsafe], { test: false })); assert.match(h.root.innerHTML, /&lt;img src=x&gt;/); assert.doesNotMatch(h.root.innerHTML, /<img src=x>/);
   assert.doesNotMatch(h.root.innerHTML, / · TEST/);
+});
+
+test('on-page approval and rejection show the complete decision; Go back and Escape preserve unsent entries without IDs or writes', async () => {
+  assert.doesNotMatch(source, /globalThis\.confirm|\bconfirm\(/, 'no native confirmation or automatic approval fallback');
+  for (const decision of ['approve', 'reject']) {
+    const h = runtime(); await h.open();
+    const entered = { ...fields(), finishTime: '16:45:00', reason: 'Checked <original> shift notes' };
+    h.edit(entered); const unchangedForm = h.root.innerHTML;
+    await h.begin(decision, entered);
+    const dialog = h.dialog(); assert.equal(dialog.open, true);
+    assert.match(dialog.innerHTML, /QA Staff/);
+    assert.match(dialog.innerHTML, /Previous shift started:.*2026-09-21 09:00:00/);
+    assert.match(dialog.innerHTML, /Newer shift started: 2026-09-22 09:00:00/);
+    assert.match(dialog.innerHTML, /Employee proposed finish:.*2026-09-21 17:00:00/);
+    assert.match(dialog.innerHTML, /Checked &lt;original&gt; shift notes/);
+    assert.match(dialog.innerHTML, /Go back/);
+    assert.match(dialog.innerHTML, decision === 'approve' ? /Confirm approval/ : /Confirm rejection/);
+    assert.match(dialog.innerHTML, decision === 'approve' ? /Finish to approve:.*2026-09-21 16:45:00/ : /no finish time or worked hours will be guessed/);
+    assert.equal(h.calls.length, 1); assert.equal(h.preflights.length, 0); assert.equal(h.storage.size, 0); assert.equal(h.allocatedIds(), 0);
+    h.goBack(); assert.equal(h.dialog(), null); assert.equal(h.root.innerHTML, unchangedForm);
+    await h.ui.refresh(); assert.equal(h.calls.length, 1); assert.match(h.status.textContent, /unfinished entries/);
+    await h.begin(decision, entered); let prevented = false;
+    h.dialog().listeners.cancel({ preventDefault() { prevented = true; } });
+    assert.equal(prevented, true); assert.equal(h.dialog(), null); assert.equal(h.root.innerHTML, unchangedForm);
+    assert.equal(h.storage.size, 0); assert.equal(h.allocatedIds(), 0);
+  }
+});
+
+test('explicit confirmation freshly checks the proposal and prevents duplicate confirmation and save clicks in TEST and production', async () => {
+  for (const target of ['test', 'production']) {
+    for (const decision of ['approve', 'reject']) {
+      const h = runtime({ target, deferPreflight: true }); await h.open(response([item()], { test: target === 'test' }));
+      await h.begin(decision); const saving = h.confirm(); h.confirm(); await h.begin(decision);
+      assert.equal(h.preflights.length, 1); assert.equal(h.calls.length, 1);
+      assert.equal(h.dialog().querySelector('[data-confirmation-submit]').disabled, true);
+      h.goBack(); assert.equal(h.dialog().open, true, 'a confirmed check cannot be dismissed mid-dispatch');
+      assert.equal(h.allocatedIds(), 0); assert.equal(h.storage.size, 0); assert.equal(h.preflights[0].journalAtDispatch, undefined);
+      const reordered = Object.fromEntries(Object.entries(item()).reverse());
+      reordered.punch = Object.fromEntries(Object.entries(reordered.punch).reverse());
+      h.preflights[0].resolve(response([reordered], { test: target === 'test' })); await flush();
+      assert.equal(h.dialog(), null); assert.equal(h.calls.length, 2);
+      const original = h.calls[1].body;
+      assert.equal(original.decision, decision); assert.deepEqual(JSON.parse(h.calls[1].journalAtDispatch).body, original);
+      assert.equal(h.allocatedIds(), decision === 'approve' ? 2 : 1);
+      h.confirm(); h.click('retry'); await h.begin(decision); assert.equal(h.calls.length, 2);
+      h.calls[1].resolve(response([decidedItem(original)], { test: target === 'test', receipt: receipt(original) })); await saving;
+      assert.equal(h.storage.size, 0); assert.equal(h.changed(), 1);
+    }
+  }
+});
+
+test('every changed or absent proposal requires fresh review before allocating a decision identity', async () => {
+  const rejected = { requestId: requestId(77), recoveryRequestId: requestId(1), revision: 0, decision: 'reject', finishAt: null, punchId: null, reason: 'Other reviewer checked' };
+  const changed = [[], [item({ proposedFinishAt: '2026-09-21T16:30:00-04:00' })], [item({ proposedAt: '2026-09-22T09:01:00-04:00' })],
+    [item({ conflicts: ['previous-punch-void'] })], [decidedItem(rejected)]];
+  for (const latest of changed) {
+    const h = runtime({ deferPreflight: true }); await h.open();
+    await h.begin('approve', { ...fields(), reason: 'Retain my unsent review reason' });
+    const checking = h.confirm(); h.preflights[0].resolve(response(latest)); await checking;
+    assert.equal(h.dialog(), null); assert.match(h.status.textContent, /proposal changed/);
+    assert.match(h.root.innerHTML, /Retain my unsent review reason/);
+    assert.equal(h.calls.length, 1); assert.equal(h.storage.size, 0); assert.equal(h.allocatedIds(), 0);
+  }
+});
+
+test('reviewer changes, same-reviewer session changes, and logout/reopen invalidate the open confirmation', async () => {
+  for (const duringRead of [false, true]) {
+    for (const changed of ['reviewer', 'session']) {
+      const h = runtime({ deferPreflight: true }); await h.open(); await h.begin();
+      const checking = duringRead ? h.confirm() : null;
+      if (changed === 'reviewer') h.setAdmin('Stuart Turner'); else h.setSession('fake-session-two');
+      if (duringRead) h.preflights[0].resolve(response());
+      await (duringRead ? checking : h.confirm());
+      assert.equal(h.dialog(), null); assert.match(h.status.textContent, /session changed/);
+      assert.equal(h.preflights.length, duringRead ? 1 : 0); assert.equal(h.calls.length, 1);
+      assert.equal(h.storage.size, 0); assert.equal(h.allocatedIds(), 0);
+    }
+  }
+  const h = runtime({ deferPreflight: true }); await h.open(); await h.begin(); const checking = h.confirm();
+  h.ui.clear(); await h.open(); h.preflights[0].resolve(response()); await checking;
+  assert.equal(h.dialog(), null); assert.equal(h.calls.length, 2); assert.equal(h.storage.size, 0); assert.equal(h.allocatedIds(), 0);
+  assert.match(h.root.innerHTML, /Pending manager approval/);
+  assert.match(adminCss, /function setLoggedOut[\s\S]*?staffRecoveryReview\.clear\(\)/, 'real logout clears the UI generation');
+  assert.match(adminCss, /GIBM1StaffRecovery\?\.create\([\s\S]*?getSession:\s*\(\)\s*=>\s*adminRequestToken/, 'the actual Admin session is included in confirmation checks');
+  const expired = runtime({ deferPreflight: true }); await expired.open(); await expired.begin(); const expiredCheck = expired.confirm();
+  expired.setSession('fake-session-renewed'); expired.preflights[0].reject(new Error('Connection interrupted')); await expiredCheck;
+  assert.equal(expired.dialog(), null); assert.match(expired.status.textContent, /session changed/);
+  assert.equal(expired.storage.size, 0); assert.equal(expired.allocatedIds(), 0);
+});
+
+test('failed or incomplete fresh reads retain the confirmation and draft, then recover without duplicate IDs or writes', async () => {
+  for (const failure of ['offline', 'incomplete', 'wrong-environment', 'unauthorized']) {
+    const h = runtime({ deferPreflight: true }); await h.open(); await h.begin(); const checking = h.confirm();
+    if (failure === 'offline' || failure === 'unauthorized') h.preflights[0].reject(Object.assign(new Error('Read failed'), { status: failure === 'unauthorized' ? 401 : 503 }));
+    else h.preflights[0].resolve(failure === 'incomplete' ? { ok: true } : response([item()], { test: false }));
+    await checking;
+    assert.match(h.dialog().querySelector('[data-confirmation-status]').textContent, /Nothing was sent/);
+    assert.equal(h.dialog().querySelector('[data-confirmation-submit]').disabled, false);
+    assert.equal(h.allocatedIds(), 0); assert.equal(h.storage.size, 0); assert.equal(h.calls.length, 1);
+    assert.equal(h.unauthorized(), failure === 'unauthorized' ? 1 : 0);
+    const retry = h.confirm(); h.preflights[1].resolve(response()); await flush();
+    const original = h.calls[1].body; h.calls[1].resolve(response([decidedItem(original)], { receipt: receipt(original) })); await retry;
+    assert.equal(h.preflights.length, 2); assert.equal(h.calls.length, 2); assert.equal(h.allocatedIds(), 2); assert.equal(h.storage.size, 0);
+  }
 });
