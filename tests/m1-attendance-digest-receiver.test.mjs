@@ -69,10 +69,14 @@ function harness(options = {}) {
     PropertiesService: { getScriptProperties: () => store },
     LockService: { getScriptLock: () => lock },
     Utilities: {
+      Charset: { UTF_8: 'UTF-8' },
       getUuid: () => '00000000-0000-4000-8000-' + String(++serial).padStart(12, '0'),
       formatDate(value, timezone, pattern) { assert.equal(timezone, 'America/New_York'); assert.equal(pattern, 'yyyy-MM-dd'); return localDate(value); },
       newBlob: value => ({ getBytes: () => [...Buffer.from(value, 'utf8')] }),
-      computeHmacSha256Signature(value, key) { return [...createHmac('sha256', key).update(value).digest()].map(byte => byte > 127 ? byte - 256 : byte); }
+      computeHmacSha256Signature(value, key, charset) {
+        assert.equal(charset, 'UTF-8', 'request signing must explicitly select UTF-8');
+        return [...createHmac('sha256', key).update(value, 'utf8').digest()].map(byte => byte > 127 ? byte - 256 : byte);
+      }
     },
     gibM1TestReadCallbackEnabled_: () => settings.enabled !== false,
     configuredReceiverSecret_: () => transportSecret,
@@ -110,8 +114,9 @@ function harness(options = {}) {
       assert.equal(init.followRedirects, false); assert.equal(init.muteHttpExceptions, true);
       const body = JSON.parse(init.payload); requests.push({ url, init: plain(init), body }); events.push({ kind: 'dispatch' });
       if (settings.deliveryThrows) throw new Error('synthetic private response URL or body');
-      const response = settings.response ?? { ok: true, accepted: true, requestId: body.requestId, state: 'captured',
-        messageId: body.mode === 'scheduled' ? 'm1-test-daily-' + body.jobDate : 'm1-test-manual-' + body.requestId };
+      const response = (typeof settings.response === 'function' ? settings.response(body) : settings.response) ?? { ok: true, accepted: true, requestId: body.requestId, state: 'captured',
+        messageId: body.mode === 'rehearsal' ? 'm1-test-rehearsal-' + body.rehearsalId + '-' + body.jobDate :
+          body.mode === 'scheduled' ? 'm1-test-daily-' + body.jobDate : 'm1-test-manual-' + body.requestId };
       return { getResponseCode: () => settings.httpStatus ?? 200, getContentText: () => typeof response === 'string' ? response : JSON.stringify(response) };
     } }
   });
@@ -172,9 +177,11 @@ test('both independent read locks release before the single synchronous fixed-de
 });
 
 test('Google signature uses exact purpose and raw body; Netlify accepts it and rejects cross-purpose, changed-body and live replay', () => {
-  const h = harness(); assert.equal(h.manual().ok, true);
+  const unicode = ledger(); unicode.days.at(-1).warnings.push({ code: 'SYNTHETIC', message: 'QA TEST — café 中文 🥋' });
+  const h = harness({ ledger: unicode }); assert.equal(h.manual().ok, true);
   const request = h.requests[0], raw = request.init.payload, signature = request.init.headers['X-GIB-M1-Digest-Signature'];
   assert.equal(signature, digestSignature(raw, secret));
+  assert.match(raw, /QA TEST — café 中文 🥋/);
   assert.deepEqual(authenticateDigestJob(raw, signature, { target: 'test', adminActionToken: secret }, now).binding, binding());
   const wrongPurpose = createHmac('sha256', secret).update('m1-other-purpose/v1\n' + raw).digest('hex');
   for (const [body, signatureValue, target] of [[raw, wrongPurpose, 'test'], [raw + ' ', signature, 'test'], [raw, signature, 'production']]) {
@@ -313,5 +320,79 @@ test('scheduled storage failure is recorded without throwing into Google failure
     assert.doesNotThrow(() => h.context.testRevolutionAttendanceDigestTick());
     assert.equal(h.requests.length, 1); assert.equal(h.receipts().length, 2);
     assert.deepEqual(h.receipts().find(entry => entry.key === failure.key), failure);
+  }
+});
+
+const rehearsalLease = (patch = {}) => ({ rehearsalId: '00000000-0000-4000-8000-000000000099', createdAt: now,
+  cutoffAt: now + 120000, expiresAt: now + 1800000, jobDate: date, synthetic: true, state: 'armed', ...patch });
+const rehearsalKey = 'M1_TEST_DIGEST_REHEARSAL_LEASE';
+function armRehearsal(h, lease = rehearsalLease()) {
+  h.context.GIB_M1_DIGEST_REHEARSAL_PUBLIC_LEASE_ = lease;
+  h.context.testRevolutionAttendanceDigestRehearsalArm();
+}
+
+test('rehearsal public metadata must be exact, TEST-only and expiring; repeat arming cannot replace or extend the active lease', () => {
+  assert.match(source, /var GIB_M1_DIGEST_REHEARSAL_PUBLIC_LEASE_ = null;/);
+  for (const patch of [{ expiresAt: now + 1800001 }, { cutoffAt: now + 60000 }, { cutoffAt: now + 180000 },
+    { rehearsalId: 'not-an-id' }, { synthetic: false }, { state: 'expired' }, { jobDate: '2026-09-25' }, { extra: true }]) {
+    const h = harness(); assert.throws(() => armRehearsal(h, rehearsalLease(patch)), /DIGEST_REHEARSAL_INVALID/);
+    assert.equal(h.properties.has(rehearsalKey), false); assert.equal(h.requests.length, 0);
+  }
+  const disabled = harness({ enabled: false }); assert.throws(() => armRehearsal(disabled), /Revolution TEST project required/);
+  const h = harness(); armRehearsal(h); const original = h.properties.get(rehearsalKey); armRehearsal(h);
+  assert.equal(h.properties.get(rehearsalKey), original);
+  assert.throws(() => armRehearsal(h, rehearsalLease({ rehearsalId: id })), /DIGEST_REHEARSAL_CONFLICT/);
+  assert.equal(h.properties.get(rehearsalKey), original); assert.equal(h.requests.length, 0);
+});
+
+test('rehearsal tick sends a fresh persisted, signed, empty-gyms request without reading or changing authoritative records', () => {
+  const h = harness(); armRehearsal(h); h.context.GIB_M1_DIGEST_REHEARSAL_PUBLIC_LEASE_ = null;
+  h.context.testRevolutionAttendanceDigestRehearsalTick(); h.advance(60000); h.context.testRevolutionAttendanceDigestRehearsalTick();
+  assert.equal(h.requests.length, 2); assert.notEqual(h.requests[0].body.requestId, h.requests[1].body.requestId);
+  assert.equal(h.events.some(event => ['attendance', 'staff', 'lock'].includes(event.kind)), false);
+  for (const request of h.requests) {
+    assert.deepEqual(request.body.gyms, []); assert.equal(request.body.rehearsalId, rehearsalLease().rehearsalId);
+    assert.equal(request.body.mode, 'rehearsal'); assert.equal(request.body.target, 'test'); assert.equal(request.body.expiresAt, request.body.createdAt + 60000);
+    const job = authenticateDigestJob(request.init.payload, request.init.headers['X-GIB-M1-Digest-Signature'], { target: 'test', adminActionToken: secret }, request.body.createdAt);
+    assert.equal(job.binding.rehearsalId, rehearsalLease().rehearsalId); assert.deepEqual(job.gyms, []);
+  }
+  assert.equal(h.receipts().every(receipt => receipt.value.mode === 'rehearsal' && receipt.value.acknowledged), true);
+});
+
+test('rehearsal final minute and expiry stop dispatch automatically; explicit stop preserves all pending requests and receipts', () => {
+  for (const elapsed of [1740000, 1800000, 1800001]) {
+    const h = harness(); armRehearsal(h); h.advance(elapsed);
+    assert.doesNotThrow(() => h.context.testRevolutionAttendanceDigestRehearsalTick());
+    assert.equal(h.requests.length, 0); assert.equal(h.properties.has(rehearsalKey), false);
+    assert.equal(h.logs.at(-1), 'M1_TEST_DIGEST_REHEARSAL_FINISHED');
+  }
+  const h = harness(); armRehearsal(h); h.context.testRevolutionAttendanceDigestRehearsalTick();
+  const preserved = [...h.properties.entries()].filter(([key]) => key !== rehearsalKey);
+  h.context.testRevolutionAttendanceDigestRehearsalStop();
+  assert.deepEqual([...h.properties.entries()], preserved);
+  h.context.testRevolutionAttendanceDigestRehearsalTick(); assert.equal(h.requests.length, 1);
+});
+
+test('rehearsal acknowledgments bind exact request and isolated artifact; before-due requires null and errors retain sanitized categories', () => {
+  for (const patch of [{ requestId: 'wrong' }, { messageId: 'm1-test-daily-' + date }, { state: 'not-due' }, { state: 'awaiting-configuration', messageId: null }]) {
+    const h = harness({ response: body => ({ ok: true, accepted: true, requestId: body.requestId, state: 'captured',
+      messageId: 'm1-test-rehearsal-' + body.rehearsalId + '-' + body.jobDate, ...patch }) });
+    armRehearsal(h); h.context.testRevolutionAttendanceDigestRehearsalTick(); assert.equal(h.receipts()[0].value.acknowledged, false);
+  }
+  const beforeDue = harness({ response: body => ({ ok: true, accepted: true, requestId: body.requestId, state: 'not-due', messageId: null }) });
+  armRehearsal(beforeDue); beforeDue.context.testRevolutionAttendanceDigestRehearsalTick(); assert.equal(beforeDue.receipts()[0].value.acknowledged, true);
+  for (const responseCode of ['DIGEST_REHEARSAL_EXPIRED', 'DIGEST_REHEARSAL_MISSING', 'DIGEST_REHEARSAL_INVALID', 'DIGEST_REHEARSAL_UNAVAILABLE']) {
+    const h = harness({ httpStatus: 410, response: { ok: false, code: responseCode, message: 'synthetic private contents' } });
+    armRehearsal(h); h.context.testRevolutionAttendanceDigestRehearsalTick();
+    assert.equal(h.receipts()[0].value.responseCode, responseCode); assert.doesNotMatch(JSON.stringify(h.receipts()), /private/);
+  }
+});
+
+test('rehearsal pending persistence failures cannot dispatch or throw into trigger failure emails', () => {
+  for (const fault of ['failPendingWrite', 'failPendingReadback']) {
+    const h = harness({ [fault]: true }); armRehearsal(h);
+    assert.doesNotThrow(() => h.context.testRevolutionAttendanceDigestRehearsalTick()); assert.equal(h.requests.length, 0);
+    assert.equal(h.receipts()[0].value.code, 'DIGEST_REHEARSAL_UNAVAILABLE'); assert.equal(h.receipts()[0].value.acknowledged, false);
+    assert.equal(h.events.some(event => ['attendance', 'staff', 'lock'].includes(event.kind)), false);
   }
 });
