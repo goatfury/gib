@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildTestDigestEmail } from '../netlify/functions/_lib/m1-attendance-digest-email-proposal.mjs';
-import { deliverTestDigestEmail, readTestDigestEmailDelivery, hashTestDigestEmail } from '../netlify/functions/_lib/m1-attendance-digest-email-delivery.mjs';
+import { deliverTestDigestEmail, readTestDigestEmailDelivery, hashTestDigestEmail, testDigestEmailReadiness } from '../netlify/functions/_lib/m1-attendance-digest-email-delivery.mjs';
 
 const START = Date.parse('2026-09-26T20:00:00Z');
 const ID = 'm1-test-email-andrew-20260926-v1';
@@ -44,6 +44,28 @@ test('the transport hashes exactly the immutable builder proposal and never defa
   }
   assert.equal(h.calls.length, 0); assert.equal(h.writes.length, 0); assert.equal(h.reads.length, 0);
   assert.equal((await h.read()).state, 'not-started'); assert.equal(h.writes.length, 0);
+});
+
+test('readiness evaluates independent local checks while OFF without reading storage, sending or exposing configuration values', () => {
+  const h = harness(); h.env.GIB_M1_DIGEST_TEST_SEND_ENABLED = 'false';
+  h.env.GIB_M1_DIGEST_TEST_APPROVED_MESSAGE_ID = 'different-private-approved-id';
+  h.env.GIB_M1_DIGEST_TEST_APPROVED_MESSAGE_HASH = 'f'.repeat(64);
+  h.env.GIB_M1_DIGEST_TEST_APPROVED_RECIPIENT = 'private-other@example.test';
+  h.env.GIB_M1_DIGEST_TEST_RESEND_API_KEY = 'private malformed key';
+  const result = testDigestEmailReadiness(h.message, h.deps);
+  assert.deepEqual(result, { scopeValid: true, messageValid: true, sendingEnabled: false,
+    approvedMessageIdMatches: false, approvedMessageHashMatches: false, approvedRecipientMatches: false,
+    providerCredentialConfigured: false, codes: ['TEST_SENDING_DISABLED', 'EXACT_MESSAGE_APPROVAL_REQUIRED', 'TEST_PROVIDER_NOT_CONFIGURED'] });
+  const encoded = JSON.stringify(result);
+  for (const value of Object.values(h.env)) if (value !== 'false') assert.equal(encoded.includes(value), false);
+  assert.doesNotMatch(encoded, /credentialFingerprint|keyLength/);
+  assert.equal(h.reads.length, 0); assert.equal(h.writes.length, 0); assert.equal(h.calls.length, 0);
+  const configured = harness(), ready = testDigestEmailReadiness(configured.message, configured.deps);
+  assert.deepEqual(ready.codes, []); assert.equal(ready.providerCredentialConfigured, true);
+  assert.equal(configured.calls.length, 0, 'credential presence does not test provider authentication');
+  const invalid = testDigestEmailReadiness(null, { env: {}, scope: null });
+  assert.equal(invalid.scopeValid, false); assert.equal(invalid.messageValid, false);
+  assert.equal(Object.entries(invalid).every(([key, value]) => key === 'codes' || typeof value === 'boolean'), true);
 });
 
 test('wrong gym, production, missing exact approval and absent credentials cause no storage or provider writes', async () => {

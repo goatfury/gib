@@ -38,15 +38,32 @@ function base(message, state, code, details = {}) {
   return { state, code, messageId: MESSAGE_ID, hash: typeof message?.hash === 'string' && /^[0-9a-f]{64}$/.test(message.hash) ? message.hash : null,
     deliveryConfirmed: false, attemptCount: 0, retryAllowed: false, ...details };
 }
-function gate(message, deps) {
-  if (!scopeIsValid(deps)) return base(message, 'blocked', 'TEST_REVOLUTION_REQUIRED');
-  if (env(deps, 'GIB_M1_DIGEST_TEST_SEND_ENABLED') !== 'true') return base(message, 'disabled', 'TEST_SENDING_DISABLED');
-  if (!validMessage(message)) return base(message, 'blocked', 'INVALID_TEST_MESSAGE');
-  if (env(deps, 'GIB_M1_DIGEST_TEST_APPROVED_MESSAGE_ID') !== message.messageId
-    || env(deps, 'GIB_M1_DIGEST_TEST_APPROVED_MESSAGE_HASH') !== message.hash
-    || env(deps, 'GIB_M1_DIGEST_TEST_APPROVED_RECIPIENT') !== message.to[0]) return base(message, 'blocked', 'EXACT_MESSAGE_APPROVAL_REQUIRED');
+// Current local configuration only. No credential value/fingerprint, storage
+// operation or provider request is needed, even when the send switch is off.
+export function testDigestEmailReadiness(message, deps = {}) {
   const key = env(deps, 'GIB_M1_DIGEST_TEST_RESEND_API_KEY');
-  if (typeof key !== 'string' || !key || key.length > 1024 || /\s/.test(key)) return base(message, 'disabled', 'TEST_PROVIDER_NOT_CONFIGURED');
+  const messageValid = Boolean(validMessage(message));
+  const checks = { scopeValid: scopeIsValid(deps), messageValid,
+    sendingEnabled: env(deps, 'GIB_M1_DIGEST_TEST_SEND_ENABLED') === 'true',
+    approvedMessageIdMatches: messageValid && env(deps, 'GIB_M1_DIGEST_TEST_APPROVED_MESSAGE_ID') === message.messageId,
+    approvedMessageHashMatches: messageValid && env(deps, 'GIB_M1_DIGEST_TEST_APPROVED_MESSAGE_HASH') === message.hash,
+    approvedRecipientMatches: messageValid && env(deps, 'GIB_M1_DIGEST_TEST_APPROVED_RECIPIENT') === message.to[0],
+    providerCredentialConfigured: typeof key === 'string' && Boolean(key) && key.length <= 1024 && !/\s/.test(key) };
+  const codes = [];
+  if (!checks.scopeValid) codes.push('TEST_REVOLUTION_REQUIRED');
+  if (!checks.sendingEnabled) codes.push('TEST_SENDING_DISABLED');
+  if (!checks.messageValid) codes.push('INVALID_TEST_MESSAGE');
+  if (!checks.approvedMessageIdMatches || !checks.approvedMessageHashMatches || !checks.approvedRecipientMatches) codes.push('EXACT_MESSAGE_APPROVAL_REQUIRED');
+  if (!checks.providerCredentialConfigured) codes.push('TEST_PROVIDER_NOT_CONFIGURED');
+  return { ...checks, codes };
+}
+function gate(message, deps) {
+  const checks = testDigestEmailReadiness(message, deps);
+  if (!checks.scopeValid) return base(message, 'blocked', 'TEST_REVOLUTION_REQUIRED');
+  if (!checks.sendingEnabled) return base(message, 'disabled', 'TEST_SENDING_DISABLED');
+  if (!checks.messageValid) return base(message, 'blocked', 'INVALID_TEST_MESSAGE');
+  if (!checks.approvedMessageIdMatches || !checks.approvedMessageHashMatches || !checks.approvedRecipientMatches) return base(message, 'blocked', 'EXACT_MESSAGE_APPROVAL_REQUIRED');
+  if (!checks.providerCredentialConfigured) return base(message, 'disabled', 'TEST_PROVIDER_NOT_CONFIGURED');
   return null;
 }
 async function storeFor(deps) {

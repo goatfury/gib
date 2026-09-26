@@ -39,6 +39,28 @@ test('authenticated preview is exactly the proposed synthetic payload without ch
   assert.equal(h.writes(), 0); assert.equal(h.sends(), 0);
 });
 
+test('authenticated GET diagnoses missing setup independently of OFF with no values, secrets, writes or provider calls', async () => {
+  const h = setup();
+  h.deps.env = { ...env, GIB_M1_DIGEST_TEST_SEND_ENABLED: 'false',
+    GIB_M1_DIGEST_TEST_APPROVED_MESSAGE_ID: 'private-wrong-identity',
+    GIB_M1_DIGEST_TEST_APPROVED_MESSAGE_HASH: 'f'.repeat(64),
+    GIB_M1_DIGEST_TEST_APPROVED_RECIPIENT: 'private-other@example.test',
+    GIB_M1_DIGEST_TEST_RESEND_API_KEY: 'private malformed credential' };
+  const response = await handleAttendanceDigestEmail(request(), h.deps), data = await response.json();
+  assert.equal(response.status, 200); assert.equal(data.delivery.state, 'not-started');
+  assert.deepEqual(data.readiness, { scopeValid: true, messageValid: true, sendingEnabled: false,
+    approvedMessageIdMatches: false, approvedMessageHashMatches: false, approvedRecipientMatches: false,
+    providerCredentialConfigured: false, codes: ['TEST_SENDING_DISABLED', 'EXACT_MESSAGE_APPROVAL_REQUIRED', 'TEST_PROVIDER_NOT_CONFIGURED'] });
+  assert.doesNotMatch(JSON.stringify(data), /private-wrong-identity|private-other|private malformed|credentialFingerprint|keyLength/);
+  assert.equal(JSON.stringify(data.readiness).includes('f'.repeat(64)), false);
+  assert.equal(h.writes(), 0); assert.equal(h.sends(), 0);
+  h.deps.deliveryStore.getWithMetadata = async () => { throw new Error('Storage unavailable'); };
+  const failedRead = await (await handleAttendanceDigestEmail(request(), h.deps)).json();
+  assert.deepEqual(failedRead.readiness, data.readiness); assert.equal(failedRead.delivery.state, 'unknown');
+  assert.equal(failedRead.delivery.code, 'DELIVERY_STORAGE_UNAVAILABLE');
+  assert.equal(h.writes(), 0); assert.equal(h.sends(), 0);
+});
+
 test('a user-confirmed recipient change before any attempt preserves the one message ID and changes only recipient-bound content', async () => {
   const h = setup();
   const prior = await (await handleAttendanceDigestEmail(request(), h.deps)).json();

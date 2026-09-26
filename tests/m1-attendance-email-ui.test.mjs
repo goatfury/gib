@@ -12,6 +12,9 @@ const SIGNINS = 'https://deploy-preview-89--gib-live.netlify.app/m1/admin/?revie
 const STAFF = 'https://deploy-preview-89--gib-live.netlify.app/m1/admin/#staff-time';
 const MESSAGE_ID = 'm1-test-email-andrew-20260926-v1';
 const HASH = 'a'.repeat(64);
+const readiness = (sendingEnabled = false, changes = {}) => ({ scopeValid: true, messageValid: true, sendingEnabled,
+  approvedMessageIdMatches: true, approvedMessageHashMatches: true, approvedRecipientMatches: true,
+  providerCredentialConfigured: true, codes: sendingEnabled ? [] : ['TEST_SENDING_DISABLED'], ...changes });
 const delivery = (state, options = {}) => ({ state, messageId: MESSAGE_ID, hash: HASH, code: 'TEST_OUTCOME', deliveryConfirmed: false,
   attemptCount: ['pending', 'unknown', 'accepted', 'rejected'].includes(state) ? 1 : 0, retryAllowed: false,
   ...(state === 'accepted' ? { providerId: '49a3999c-0ce1-4ea6-ab68-afcd6dc2e794', acceptedAt: 100000 } : {}), ...options });
@@ -19,10 +22,10 @@ const response = (state = 'not-started') => ({ ok: true, target: 'test', sending
   message: { messageId: 'm1-test-email-andrew-20260926-v1', hash: 'a'.repeat(64), from: 'TEST Digest <test@example.com>', to: ['andrew@example.com'],
     subject: 'TEST attendance email', html: `<h1>TEST example</h1><a href="${SIGNINS}">Example sign-ins</a><a href="${STAFF}">Example Staff Clock</a>`,
     text: `Synthetic example\n${SIGNINS}\n${STAFF}`, synthetic: true, target: 'test' },
-  delivery: delivery(state), recipientSettings: { andrew: { address: 'andrew@example.com', source: 'user-confirmed TEST recipient' }, stu: { address: null } }, provider: 'resend' });
+  delivery: delivery(state), readiness: readiness(), recipientSettings: { andrew: { address: 'andrew@example.com', source: 'user-confirmed TEST recipient' }, stu: { address: null } }, provider: 'resend' });
 const sendReply = (state, options) => ({ ok: state === 'accepted', target: 'test', recurringEnabled: false, delivery: delivery(state, options) });
 const enabled = (state = 'not-started', retryAllowed = false) => {
-  const value = response(state); value.sendingEnabled = true;
+  const value = response(state); value.sendingEnabled = true; value.readiness = readiness(true);
   if (retryAllowed) Object.assign(value.delivery, { retryAllowed: true, retryBefore: 10000000 });
   return value;
 };
@@ -335,6 +338,76 @@ test('server switch and pending, accepted, disabled, blocked or retry-disallowed
   for (const value of [response(), response('unknown'), enabled('pending'), enabled('accepted'), enabled('disabled'), enabled('blocked'), enabled('unknown'), enabled('rejected')]) {
     const h = harness(); await open(h, value); assert.equal(h.button('send'), undefined); h.click('send'); assert.equal(h.calls.length, 1);
   }
+});
+
+test('current read-only setup distinguishes independent OFF failures without inventing an original attempt or testing delivery', async () => {
+  const h = harness(), value = response();
+  value.readiness = readiness(false, { approvedMessageHashMatches: false, approvedRecipientMatches: false,
+    providerCredentialConfigured: false, codes: ['TEST_SENDING_DISABLED', 'EXACT_MESSAGE_APPROVAL_REQUIRED', 'TEST_PROVIDER_NOT_CONFIGURED'] });
+  await open(h, value);
+  assert.match(h.root.textContent, /Sending is off/);
+  assert.match(h.root.textContent, /Current setup: approved content does not match; approved recipient does not match; provider credential is missing or malformed/);
+  assert.match(h.root.textContent, /do not test provider authentication, storage writes or delivery/);
+  assert.match(h.root.textContent, /Current retained status: No send has been started/);
+  assert.doesNotMatch(h.root.textContent, /Original attempt:/); assert.equal(h.calls.length, 1); assert.equal(h.button('send'), undefined);
+  for (const bad of [{ ...readiness(), providerCredentialConfigured: 'private-key' }, { ...readiness(), codes: ['PRIVATE_UNREVIEWED_VALUE'] }, { ...readiness(), extra: 'private-key' }]) {
+    const invalid = harness(); await open(invalid, { ...response(), readiness: bad });
+    assert.match(invalid.root.textContent, /Current setup: configuration checks are unavailable/);
+    assert.doesNotMatch(invalid.root.textContent, /private-key|PRIVATE_UNREVIEWED_VALUE/);
+  }
+});
+
+test('validated blocked or disabled POST categories survive empty readback and further Refresh without another send', async () => {
+  for (const [state, code, reason] of [
+    ['blocked', 'EXACT_MESSAGE_APPROVAL_REQUIRED', /exact message approval did not match/],
+    ['disabled', 'TEST_PROVIDER_NOT_CONFIGURED', /provider credential was missing or malformed/],
+    ['disabled', 'TEST_SENDING_DISABLED', /sending was off/]
+  ]) {
+    const h = harness(); await open(h, enabled()); h.click('send');
+    h.calls[1].reject(Object.assign(new Error('Request stopped'), { status: state === 'disabled' ? 403 : 200, data: sendReply(state, { code }) })); await flush();
+    h.calls[2].resolve(response()); await flush();
+    assert.match(h.root.textContent, /Original attempt: This attempt stopped before dispatch/); assert.match(h.root.textContent, reason);
+    assert.ok(h.root.textContent.includes(code)); assert.match(h.root.textContent, /Current retained status: Send outcome unknown\. No retained attempt was found/);
+    assert.match(h.root.textContent, /Current setup: local configuration checks match/);
+    assert.doesNotMatch(h.root.textContent, /No send has been started/); assert.equal(h.button('send'), undefined);
+    h.click('refresh'); h.calls[3].resolve(response()); await flush();
+    assert.ok(h.root.textContent.includes(code)); assert.match(h.root.textContent, reason);
+    assert.equal(h.calls.filter(call => call.args[2].method === 'POST').length, 1);
+    h.click('refresh'); h.calls[4].resolve(response('accepted')); await flush();
+    assert.match(h.root.textContent, /Accepted by Resend\. Delivery to the inbox is not confirmed/);
+    assert.doesNotMatch(h.root.textContent, /Original attempt:|stopped before dispatch/); assert.equal(h.button('send'), undefined);
+  }
+});
+
+test('storage uncertainty is not replaced by setup readiness or a pre-dispatch failure category', async () => {
+  const h = harness(); await open(h, enabled()); h.click('send');
+  h.calls[1].resolve(sendReply('disabled', { code: 'TEST_PROVIDER_NOT_CONFIGURED' })); await flush();
+  const unavailable = response('unknown'); unavailable.delivery = delivery('unknown', { code: 'DELIVERY_STORAGE_UNAVAILABLE', attemptCount: 0 });
+  h.calls[2].resolve(unavailable); await flush();
+  assert.match(h.root.textContent, /Original attempt: This attempt stopped before dispatch/);
+  assert.match(h.root.textContent, /Current retained status: Send outcome unknown/);
+  assert.doesNotMatch(h.root.textContent, /No send has been started|No retained attempt was found/);
+  assert.equal(h.button('send'), undefined); assert.equal(h.calls.length, 3);
+  const uncertain = harness(); await open(uncertain, enabled()); uncertain.click('send');
+  uncertain.calls[1].resolve(sendReply('unknown', { code: 'PENDING_STORAGE_UNCONFIRMED', attemptCount: 0 })); await flush();
+  uncertain.calls[2].resolve(unavailable); await flush();
+  assert.match(uncertain.root.textContent, /Original attempt: The original attempt could not be confirmed in central storage/);
+  assert.match(uncertain.root.textContent, /Current retained status: Send outcome unknown/);
+  assert.equal(uncertain.button('send'), undefined);
+});
+
+test('only exact-bound allowlisted POST evidence can label the original failure and logout removes it', async () => {
+  for (const changes of [{ hash: 'b'.repeat(64) }, { messageId: 'another-message' }, { code: 'UNREVIEWED_ERROR' }, { state: 'unknown' }]) {
+    const h = harness(); await open(h, enabled()); h.click('send');
+    h.calls[1].resolve(sendReply('disabled', { code: 'TEST_PROVIDER_NOT_CONFIGURED', ...changes })); await flush();
+    h.calls[2].resolve(response()); await flush();
+    assert.doesNotMatch(h.root.textContent, /Original attempt:|stopped before dispatch/);
+    assert.equal(h.calls.filter(call => call.args[2].method === 'POST').length, 1);
+  }
+  const h = harness(); await open(h, enabled()); h.click('send');
+  h.calls[1].resolve(sendReply('disabled', { code: 'TEST_PROVIDER_NOT_CONFIGURED' })); await flush();
+  h.calls[2].resolve(response()); await flush(); assert.match(h.root.textContent, /Original attempt:/);
+  h.ui.clear(); await open(h, response()); assert.doesNotMatch(h.root.textContent, /Original attempt:/);
 });
 
 test('normal UI interoperates with the real durable delivery/read contract, including explicit recovery after a lost provider reply', async () => {

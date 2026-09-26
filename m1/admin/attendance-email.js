@@ -3,6 +3,23 @@
   const API = '/api/m1-attendance-digest-email';
   const MESSAGE_ID = 'm1-test-email-andrew-20260926-v1';
   const STATES = new Set(['not-started', 'disabled', 'pending', 'unknown', 'accepted', 'rejected', 'blocked']);
+  const READINESS_CHECKS = ['scopeValid', 'messageValid', 'sendingEnabled', 'approvedMessageIdMatches',
+    'approvedMessageHashMatches', 'approvedRecipientMatches', 'providerCredentialConfigured'];
+  const READINESS_CODES = new Set(['TEST_REVOLUTION_REQUIRED', 'TEST_SENDING_DISABLED', 'INVALID_TEST_MESSAGE',
+    'EXACT_MESSAGE_APPROVAL_REQUIRED', 'TEST_PROVIDER_NOT_CONFIGURED']);
+  // These are validated outcomes of this POST, not claims about all earlier
+  // attempts. Keep them separate from later configuration and storage reads.
+  const ATTEMPT_FAILURES = Object.freeze({
+    TEST_REVOLUTION_REQUIRED: ['blocked', 'This attempt stopped before dispatch because the Revolution TEST scope was not confirmed.'],
+    TEST_SENDING_DISABLED: ['disabled', 'This attempt stopped before dispatch because sending was off.'],
+    INVALID_TEST_MESSAGE: ['blocked', 'This attempt stopped before dispatch because the exact TEST message was not valid.'],
+    EXACT_MESSAGE_APPROVAL_REQUIRED: ['blocked', 'This attempt stopped before dispatch because the exact message approval did not match.'],
+    TEST_PROVIDER_NOT_CONFIGURED: ['disabled', 'This attempt stopped before dispatch because the provider credential was missing or malformed.'],
+    CLOCK_UNAVAILABLE: ['blocked', 'This attempt stopped before dispatch because the server clock could not be checked.'],
+    ATTEMPT_ID_INVALID: ['blocked', 'This attempt stopped before dispatch because its attempt identity was invalid.'],
+    ATTEMPT_CLAIM_INVALID: ['blocked', 'This attempt stopped before dispatch because its retained claim was invalid.'],
+    PENDING_STORAGE_UNCONFIRMED: ['unknown', 'The original attempt could not be confirmed in central storage. Delivery remains unconfirmed.']
+  });
   const LINKS = [
     ['Example sign-in review · September 26', 'https://deploy-preview-89--gib-live.netlify.app/m1/admin/?reviewDate=2026-09-26#sign-ins'],
     ['Example Staff Clock review', 'https://deploy-preview-89--gib-live.netlify.app/m1/admin/#staff-time']
@@ -23,6 +40,12 @@
       && (value.state !== 'accepted' || (!value.retryAllowed && UUID.test(value.providerId)
         && Number.isSafeInteger(value.acceptedAt) && value.acceptedAt >= 0));
   }
+  function validReadiness(value, sendingEnabled) {
+    return value && Object.keys(value).length === READINESS_CHECKS.length + 1
+      && READINESS_CHECKS.every(key => typeof value[key] === 'boolean') && value.sendingEnabled === sendingEnabled
+      && Array.isArray(value.codes) && value.codes.length <= READINESS_CODES.size
+      && new Set(value.codes).size === value.codes.length && value.codes.every(code => READINESS_CODES.has(code));
+  }
   function valid(value) {
     const message = value?.message;
     return value?.ok === true && value.target === 'test' && typeof value.sendingEnabled === 'boolean'
@@ -42,7 +65,7 @@
     if (enabled !== true || target !== 'test' || site !== 'Rev' || !root
       || typeof request !== 'function' || typeof getAdmin !== 'function') return null;
     const document = root.ownerDocument || global.document;
-    let active = false, generation = 0, owner = '', busy = false, current = false, data = null, note = '', flight = null, original = null, accepted = false;
+    let active = false, generation = 0, owner = '', busy = false, current = false, data = null, note = '', flight = null, original = null, accepted = false, attemptFailure = null;
     const reviewer = () => clean(getAdmin());
     const el = (tag, text = '', className = '') => {
       const node = document.createElement(tag); node.textContent = text;
@@ -50,7 +73,7 @@
       return node;
     };
     function clear() {
-      generation++; active = false; owner = ''; busy = false; current = false; data = null; note = ''; flight = null; original = null; accepted = false;
+      generation++; active = false; owner = ''; busy = false; current = false; data = null; note = ''; flight = null; original = null; accepted = false; attemptFailure = null;
       root.replaceChildren(); root.hidden = true;
     }
     function stillCurrent(own) {
@@ -76,6 +99,19 @@
       return (!original && data.delivery.state === 'not-started')
         || (['unknown', 'rejected'].includes(data.delivery.state) && data.delivery.retryAllowed === true);
     }
+    function setupText() {
+      const checks = data?.readiness;
+      if (!validReadiness(checks, data?.sendingEnabled)) return 'Current setup: configuration checks are unavailable.';
+      const issues = [];
+      if (!checks.scopeValid) issues.push('Revolution TEST scope is not confirmed');
+      if (!checks.messageValid) issues.push('the exact TEST message is invalid');
+      if (!checks.approvedMessageIdMatches) issues.push('approved message identity does not match');
+      if (!checks.approvedMessageHashMatches) issues.push('approved content does not match');
+      if (!checks.approvedRecipientMatches) issues.push('approved recipient does not match');
+      if (!checks.providerCredentialConfigured) issues.push('provider credential is missing or malformed');
+      return 'Current setup: ' + (issues.length ? issues.join('; ') + '.' : 'local configuration checks match.')
+        + ' These checks do not test provider authentication, storage writes or delivery.';
+    }
     function render() {
       if (!stillCurrent(generation)) return;
       root.hidden = false; root.setAttribute('aria-busy', String(busy));
@@ -92,13 +128,17 @@
       }
       const status = el('p', note || (busy ? 'Loading email preview…' : 'Email preview status unavailable.'), 'message');
       status.style.display = 'block'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); root.append(status);
+      if (attemptFailure && !accepted && original?.messageId === attemptFailure.messageId && original?.hash === attemptFailure.hash) {
+        root.append(el('p', 'Original attempt: ' + ATTEMPT_FAILURES[attemptFailure.code][1] + ' (' + attemptFailure.code + ')', 'manager-warning'));
+      }
       if (!data) return;
       if (!current) root.append(el('p', 'Stale preview: this is the last loaded message. Current send status is unknown.', 'manager-warning'));
       else {
-        root.append(el('p', deliveryText(data.delivery.state)));
+        root.append(el('p', 'Current retained status: ' + deliveryText(data.delivery.state)));
         root.append(el('p', data.sendingEnabled
           ? 'Only the separately approved single TEST message can be sent. Recurring sending is off.'
           : 'Sending is off. Recurring sending is off.', 'muted'));
+        root.append(el('p', setupText(), 'muted'));
       }
       const message = data.message;
       root.append(el('p', 'To: ' + message.to[0]));
@@ -178,6 +218,9 @@
           if (reply?.target === 'test' && reply.recurringEnabled === false
             && typeof reply.ok === 'boolean' && validDelivery(reply.delivery, message)
             && reply.ok === (reply.delivery.state === 'accepted')) receipt = reply.delivery;
+          if (receipt && Object.hasOwn(ATTEMPT_FAILURES, receipt.code) && ATTEMPT_FAILURES[receipt.code][0] === receipt.state) {
+            attemptFailure = Object.freeze({ messageId: receipt.messageId, hash: receipt.hash, code: receipt.code });
+          }
           if (receipt?.state === 'accepted') accepted = true;
           note = (receipt ? deliveryText(receipt.state) + ' ' : 'The send result is not yet confirmed. ')
             + 'Checking the retained outcome…'; render();

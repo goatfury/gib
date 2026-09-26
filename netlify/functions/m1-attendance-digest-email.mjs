@@ -2,7 +2,7 @@ import { jsonResponse, readJson, requireAdmin, runtimeConfig } from './_lib/m1-c
 import { attendanceDigestScope } from './m1-attendance-digest.mjs';
 import { DIGEST_ORIGIN } from './_lib/m1-attendance-digest.mjs';
 import { buildTestDigestEmail, TEST_EMAIL_MESSAGE_ID } from './_lib/m1-attendance-digest-email-proposal.mjs';
-import { deliverTestDigestEmail, readTestDigestEmailDelivery } from './_lib/m1-attendance-digest-email-delivery.mjs';
+import { deliverTestDigestEmail, readTestDigestEmailDelivery, testDigestEmailReadiness } from './_lib/m1-attendance-digest-email-delivery.mjs';
 
 export const config = { path: '/api/m1-attendance-digest-email', rateLimit: { windowLimit: 20, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 
@@ -29,7 +29,7 @@ export async function handleAttendanceDigestEmail(request, dependencies = {}) {
     if (request.method === 'GET') {
       const delivery = await readTestDigestEmailDelivery(message, deps);
       return jsonResponse(200, { ok: true, target: 'test', sendingEnabled: env.GIB_M1_DIGEST_TEST_SEND_ENABLED === 'true', recurringEnabled: false,
-        provider: 'resend', message, delivery,
+        provider: 'resend', message, delivery, readiness: testDigestEmailReadiness(message, deps),
         recipientSettings: { andrew: { address: message.to[0], source: 'user-confirmed TEST recipient' }, stu: { address: null } } });
     }
     const parsed = await readJson(request, 2048);
