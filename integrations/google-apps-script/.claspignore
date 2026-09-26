@@ -1,4 +1,8 @@
 **/*
 !Code.gs
 !GibM1Receiver.gs
+!GibM1ManagerReview.gs
+!GibM1TestReadCallback.gs
+!GibM1StaffRecovery.gs
+!GibM1AttendanceDigest.gs
 !appsscript.json

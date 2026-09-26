@@ -9,5 +9,11 @@
 [functions."m1-schedule"]
   included_files = ["m1/shared-schedule.json", "m1/richmond-schedule.json"]
 
+[functions."m1-manager-review"]
+  included_files = ["m1/shared-schedule.json", "m1/richmond-schedule.json"]
+
 [context."agent/m1-richmond-installation-preview".environment]
   GIB_M1_INSTALLATION = "richmond"
+
+[context."feature/m1-manager-day-review-20260922".environment]
+  GIB_M1_MANAGER_REVIEW_PILOT = "true"

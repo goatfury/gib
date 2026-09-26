@@ -7,6 +7,7 @@
   <link rel="icon" href="data:,">
   <title>Admin — Daily Sign-in Review</title>
   <link rel="stylesheet" href="./added-classes.css">
+  <link rel="stylesheet" href="./manager-review.css">
   <style>
     :root {
       color-scheme: dark;
@@ -768,6 +769,8 @@
         </div>
       </header>
 
+      <section id="attendanceDigest" class="panel section" aria-label="Attendance reminder preview" hidden></section>
+      <section id="attendanceEmail" class="panel section" aria-label="Proposed TEST email" hidden></section>
       <nav id="managerModes" class="mode-switch" role="tablist" aria-label="Admin mode">
         <a id="dailyModeControl" class="mode-control" href="#sign-ins" role="tab" aria-controls="sign-ins" aria-selected="true">Daily sign-ins</a>
         <a id="staffModeControl" class="mode-control" href="#staff-time" role="tab" aria-controls="staff-time" aria-selected="false">Staff Clock</a>
@@ -954,6 +957,7 @@
             </form>
           </section>
 
+          <section id="staffRecoveryReview" class="staff-time-block staff-time-attention" aria-label="Earlier shift proposals" hidden></section>
           <section id="staffNeedsAttentionSection" class="staff-time-block staff-time-attention" aria-labelledby="staffAttentionHeading">
             <h3 id="staffAttentionHeading">Needs attention</h3>
             <div id="staffNeedsAttention" class="staff-time-list" aria-live="polite" aria-busy="false">
@@ -1085,6 +1089,13 @@
   <script src="../temporary-classes-core.js"></script>
   <script src="./added-classes.js"></script>
   <script src="./removal-journal.js"></script>
+  <script src="../manager-review-config.generated.js"></script>
+  <script src="../manager-read-client.js"></script>
+  <script src="./manager-review.js"></script>
+  <script src="./staff-recovery.js"></script>
+  <script src="./attendance-digest.js"></script>
+  <script src="./attendance-email.js"></script>
+  <script src="./read-callback-proof.js"></script>
   <script>
     (() => {
       'use strict';
@@ -1121,6 +1132,12 @@
       const ADMIN_MUTATIONS_ENABLED = !IS_RICHMOND_PRODUCTION
         || (INSTALLATION.activation === 'active' && INSTALLATION.writesEnabled === true);
       const STAFF_CLOCK_ENABLED = INSTALLATION.featureFlags.staffClock === true;
+      const RECOVERY_PILOT_TARGET = globalThis.M1_MANAGER_REVIEW_CONFIG?.target;
+      const RECOVERY_PILOT_ENABLED = INSTALLATION.installationId === 'rev'
+        && globalThis.M1_MANAGER_REVIEW_CONFIG?.enabled === true
+        && location.protocol === 'https:' && !location.port
+        && RECOVERY_PILOT_TARGET === 'test'
+        && location.origin === 'https://deploy-preview-89--gib-live.netlify.app';
       const STAFF_CLOCK_PAIRING_ENABLED = INSTALLATION.featureFlags.staffClockPairing === true;
       const STAFF_CLOCK_PAIRING_CONFIG = INSTALLATION.staffClockPairing;
       const TABLET_PAIRING_AVAILABLE = STAFF_CLOCK_ENABLED
@@ -1255,6 +1272,10 @@
       let scheduleRenderPending = false;
       let reviewLoaded = false;
       let addedClasses = null;
+      let managerDayReview = null;
+      let staffRecoveryReview = null;
+      let attendanceDigest = null;
+      let attendanceEmail = null;
       let currentDate = '';
       let currentRecords = [];
       let currentWarnings = [];
@@ -1892,6 +1913,11 @@
       }
 
       function validAuditRecord(value, expectedDate) {
+        const managerTestVoid = typeof testMode !== 'undefined' && testMode
+          && globalThis.M1_MANAGER_REVIEW_CONFIG?.enabled === true
+          && value?.site === (typeof IS_RICHMOND !== 'undefined' && IS_RICHMOND ? 'Richmond' : 'Rev')
+          && /\b(test|fake|demo|qa)\b|do not pay/i.test(value?.instructor || '')
+          && /^(?:gib-admin-manager-add-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|gib-admin-m1-\d{4}-\d{2}-\d{2}-[0-9a-f]{24})$/.test(value?.linkedRecordId || '');
         return exactObjectKeys(value, [
           'auditId',
           'actionNumber',
@@ -1934,6 +1960,7 @@
           && ['added', 'already exists', 'voided'].includes(value.result)
           && (
             value.result !== 'voided'
+            || managerTestVoid
             || (typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED)
             || (
               typeof IS_RICHMOND_PRODUCTION !== 'undefined'
@@ -1945,7 +1972,7 @@
             value.result === 'added'
               ? value.linkedRecordId.startsWith('gib-admin-')
               : value.result === 'voided'
-                ? (typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED
+                ? managerTestVoid || (typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED
                   ? value.site === 'Rev' && REV_REMOVAL_ID.test(value.linkedRecordId)
                   : RICHMOND_PRODUCTION_ROW_ID_PATTERN.test(value.linkedRecordId))
                 : true
@@ -2169,7 +2196,7 @@
         ];
         const optionalKeys = [
           'adminName', 'linkedPunchId', 'originalTimestamp', 'originalDate',
-          'adjustmentRequestId'
+          'adjustmentRequestId', 'recoveryRequestId', 'previousClockInPunchId'
         ];
         if (!isObject(value)) return false;
         const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);
@@ -2182,6 +2209,7 @@
         const hasAdjustment = Object.hasOwn(value, 'originalTimestamp')
           || Object.hasOwn(value, 'originalDate')
           || Object.hasOwn(value, 'adjustmentRequestId');
+        const hasRecovery = Object.hasOwn(value, 'recoveryRequestId') || Object.hasOwn(value, 'previousClockInPunchId');
         return STAFF_PUNCH_ID_PATTERN.test(value.punchId)
           && validStaffTimestamp(value.timestamp)
           && validReviewDate(value.date)
@@ -2204,6 +2232,10 @@
             )
           )
           && (!hasLinkedPunchId || STAFF_PUNCH_ID_PATTERN.test(value.linkedPunchId))
+          && (!hasRecovery || (value.source === 'Tablet' && value.punchAction === 'clockIn'
+            && STAFF_REQUEST_ID_PATTERN.test(value.recoveryRequestId)
+            && STAFF_PUNCH_ID_PATTERN.test(value.previousClockInPunchId)
+            && value.previousClockInPunchId !== value.punchId))
           && (!hasAdjustment || (
             Object.hasOwn(value, 'originalTimestamp')
             && Object.hasOwn(value, 'originalDate')
@@ -3674,6 +3706,18 @@
       async function requestJson(url, body, options = {}) {
         const headers = { 'Content-Type': 'application/json' };
         if (adminRequestToken) headers[ADMIN_REQUEST_HEADER] = adminRequestToken;
+        const traceId = globalThis.location?.origin === 'https://deploy-preview-89--gib-live.netlify.app'
+          && url === '/api/m1-manager-review' && body?.action === 'read'
+          ? body.readRequest?.requestId || globalThis.crypto?.randomUUID?.() : null;
+        const traceStarted = Date.now();
+        if (traceId) headers['X-GIB-M1-Read-ID'] = traceId;
+        const traceRead = (state, status, requestId) => {
+          if (traceId) { try { console.info('M1_TEST_READ_CLIENT', JSON.stringify({ clientId: traceId,
+            requestId: /^[0-9a-f-]{36}$/.test(requestId || '') ? requestId : null,
+            stage: 'admin.delivery', state, status: Number.isInteger(status) ? status : null,
+            elapsedMs: Date.now() - traceStarted })); } catch {} }
+        };
+        traceRead('start');
         const timeoutMs = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0
           ? options.timeoutMs
           : 0;
@@ -3683,19 +3727,22 @@
           : 0;
         let response;
         let data = null;
+        const readDigest = options.method === 'GET' && /^\/api\/m1-attendance-digest(?:-email)?(?:\?|$)/.test(url);
         try {
           response = await fetch(url, {
-            method: 'POST',
+            method: readDigest ? 'GET' : 'POST',
             headers,
             credentials: 'same-origin',
             mode: 'same-origin',
             redirect: 'error',
             cache: 'no-store',
-            body: JSON.stringify(body),
+            ...(readDigest ? {} : { body: JSON.stringify(body) }),
             ...(controller ? { signal: controller.signal } : {})
           });
           try { data = await response.json(); } catch {}
+          if (traceId) traceRead(response.ok && data?.ok === true ? 'received' : 'failed', response.status, response.headers?.get('X-GIB-M1-Read-ID'));
         } catch (error) {
+          traceRead(controller?.signal.aborted ? 'timeout' : 'network');
           if (controller?.signal.aborted) {
             const timeoutError = new Error(clean(options.timeoutMessage)
               || 'The request took too long to complete.');
@@ -3742,6 +3789,10 @@
       }
 
       function setLoggedOut(message = '') {
+        if (managerDayReview) managerDayReview.clear();
+        if (typeof staffRecoveryReview !== 'undefined' && staffRecoveryReview) staffRecoveryReview.clear();
+        if (typeof attendanceDigest !== 'undefined' && attendanceDigest) attendanceDigest.clear();
+        if (typeof attendanceEmail !== 'undefined' && attendanceEmail) attendanceEmail.clear();
         if (typeof closeRemovalForLogout === 'function') closeRemovalForLogout();
         reviewLoaded = false;
         if (addedClasses) addedClasses.setActive(false);
@@ -3858,6 +3909,13 @@
             : 'Richmond TEST Sheet'
           : testMode ? 'TEST copied Sheet' : 'Production-ready session'}`;
         applyManagerMode();
+        if (typeof staffRecoveryReview !== 'undefined' && staffRecoveryReview) void staffRecoveryReview.open();
+        if (typeof attendanceDigest !== 'undefined' && attendanceDigest) void attendanceDigest.open();
+        if (attendanceEmail && location.hash === '#attendanceEmail') {
+          void attendanceEmail.open().then(loaded => {
+            if (loaded && location.hash === '#attendanceEmail') window.requestAnimationFrame(() => $('#attendanceEmail').scrollIntoView({ block: 'start' }));
+          });
+        }
         if (firstEntry) {
           window.requestAnimationFrame(() => {
             window.requestAnimationFrame(() => window.scrollTo(0, 0));
@@ -3896,12 +3954,13 @@
           }
           if (requestedManagerMode() === 'staff-time') {
             const staffLoad = loadStaffTime();
-            const dailyLoad = loadReview(defaultYesterday());
+            const dailyLoad = managerDayReview ? managerDayReview.open() : loadReview(defaultYesterday());
             await staffLoad;
             applyManagerMode({ focus: true });
             await dailyLoad;
           } else {
-            await loadReview(defaultYesterday());
+            if (managerDayReview) await managerDayReview.open();
+            else await loadReview(defaultYesterday());
             if (STAFF_CLOCK_ENABLED) await loadStaffTime();
           }
           openWorkspaceTask();
@@ -4941,6 +5000,12 @@
       }
 
       function openRemoval(record) {
+        if (typeof managerDayReview !== 'undefined' && managerDayReview?.hasPendingSave()) {
+          toast('Check the original save in Manager day review before another edit.'); return;
+        }
+        if (typeof managerDayReview !== 'undefined' && managerDayReview && !reviewLoaded && !savedRemoval) {
+          toast('Load fresh Daily Review records before removing a sign-in.'); return;
+        }
         if (!REV_REMOVAL_ENABLED || removalWorking) return;
         if (savedRemoval?.unreadable) { toast('The saved removal needs a record review.'); return; }
         if (!savedRemoval && record.removal?.pending && validReviewRecord(record, '', { allowRevolutionRemoval: true })) {
@@ -4994,6 +5059,12 @@
       }
 
       async function runRemoval(operation) {
+        if (typeof managerDayReview !== 'undefined' && managerDayReview?.hasPendingSave()) {
+          showMessage($('#removalStatus'), 'Check the original save in Manager day review before another edit.'); return;
+        }
+        if (typeof managerDayReview !== 'undefined' && managerDayReview && !reviewLoaded && !savedRemoval) {
+          showMessage($('#removalStatus'), 'Load fresh Daily Review records before removing a sign-in.'); return;
+        }
         if (removalWorking || !REV_REMOVAL_ENABLED || !removalSelection) return;
         if (operation === 'remove' && savedRemoval && !removalResubmitAllowed) return;
         if (!savedRemoval) {
@@ -5462,6 +5533,10 @@
       }
 
       async function loadReview(dateString, options = {}) {
+        if (typeof managerDayReview !== 'undefined' && managerDayReview?.hasPendingSave()) {
+          showMessage($('#reviewMessage'), 'A save is still unconfirmed. Check the original save in Manager day review before reloading or editing.');
+          return false;
+        }
         if (!schedule) return false;
         const preserveOnFailure = options.preserveOnFailure === true;
         const expectedAdditionInteraction = options.additionInteractionGeneration;
@@ -5495,6 +5570,11 @@
           const data = await requestJson(API.review, { date: dateString,
             ...(typeof REV_REMOVAL_ENABLED !== 'undefined' && REV_REMOVAL_ENABLED ? { removalVersion: REV_REMOVAL_VERSION } : {}) });
           if (generation !== reviewLoadGeneration) return false;
+          if (typeof managerDayReview !== 'undefined' && managerDayReview?.hasPendingSave()) {
+            reviewLoaded = false;
+            showMessage($('#reviewMessage'), 'A save is still unconfirmed. Check the original save before loading fresh Daily Review records.');
+            return false;
+          }
           if (
             Number.isInteger(expectedAdditionInteraction)
             && expectedAdditionInteraction !== additionInteractionGeneration
@@ -6605,6 +6685,11 @@
       }
 
       async function addInstructor(form) {
+        const manager = typeof managerDayReview === 'undefined' ? null : managerDayReview;
+        if (manager && (!reviewLoaded || manager.hasPendingSave() || legacyWritePending())) {
+          showMessage(form.querySelector('.add-status'), 'Load fresh Daily Review records and confirm any original save before another edit.');
+          return;
+        }
         if (
           typeof ADMIN_MUTATIONS_ENABLED !== 'undefined'
           && !ADMIN_MUTATIONS_ENABLED
@@ -6620,7 +6705,6 @@
         const { date, classLabel, site, duration, instructor, reason } = addition;
         const key = `${date}|${normalize(classLabel)}|${normalize(site)}|${normalize(instructor)}`;
         if (inFlightAdditions.has(key)) return;
-        inFlightAdditions.add(key);
         clearClassOutcome();
         setAdditionWorking(form, true, `Adding ${instructor}…`);
         const interactionGeneration = additionInteractionGeneration;
@@ -6630,11 +6714,18 @@
           }
         }, 3_000);
         let completed = false;
+        let request = null;
+        let managerSaveStarted = false;
         try {
-          const request = Object.freeze({
+          request = Object.freeze({
             requestId: requestIdForAddition(form, addition),
             ...addition
           });
+          if (manager) {
+            managerSaveStarted = manager.beginExternalSave(API.add, request);
+            if (!managerSaveStarted) return;
+          }
+          inFlightAdditions.add(key);
           const { data } = await requestAdditionWithReconciliation(request, () => {});
           if (!validAdminAdditionResponse(data, {
             requestId: request.requestId,
@@ -6649,8 +6740,10 @@
           })) {
             throw new Error('The correction could not be confirmed.');
           }
-          clearAdditionRequestId(form);
           completed = true;
+          inFlightAdditions.delete(key);
+          if (managerSaveStarted) manager.finishExternalSave(request, true);
+          clearAdditionRequestId(form);
           if (
             interactionGeneration !== additionInteractionGeneration
             || currentDate !== date
@@ -6672,12 +6765,15 @@
           } else {
             showMessage(
               form.querySelector('.add-status'),
-              'Could not confirm the sign-in. Nothing else should be submitted yet. Try again later or use the Sheet.'
+              managerSaveStarted
+                ? 'Could not confirm the sign-in. Use Retry / check the same save in Manager day review before another edit.'
+                : 'Could not confirm the sign-in. Nothing else should be submitted yet. Try again later or use the Sheet.'
             );
           }
         } finally {
           window.clearTimeout(slowTimer);
           inFlightAdditions.delete(key);
+          if (managerSaveStarted && !completed) manager.finishExternalSave(request, false);
           setAdditionWorking(form, false);
           if (completed) {
             form.reset();
@@ -7102,6 +7198,45 @@
           location.hash = '#attention';
           await loadReview(date);
         }
+      });
+      function legacyWritePending() {
+        return Boolean(removalWorking || savedRemoval || inFlightAdditions.size);
+      }
+
+      async function openLegacyReview(date) {
+        if (managerDayReview?.hasPendingSave()) return false;
+        return loadReview(date || currentDate || defaultYesterday());
+      }
+
+      staffRecoveryReview = globalThis.GIBM1StaffRecovery?.create({
+        root: $('#staffRecoveryReview'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
+        enabled: STAFF_CLOCK_ENABLED && RECOVERY_PILOT_ENABLED, getAdmin: () => currentAdminName,
+        getSession: () => adminRequestToken, timestampForInputs: staffTimestampForInputs,
+        onUnauthorized: () => setLoggedOut('Admin login required.'),
+        onChanged: () => loadStaffTime({ quiet: true })
+      });
+      attendanceDigest = globalThis.GIBM1AttendanceDigest?.create({
+        root: $('#attendanceDigest'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
+        enabled: RECOVERY_PILOT_ENABLED && RECOVERY_PILOT_TARGET === 'test', getAdmin: () => currentAdminName,
+        onUnauthorized: () => setLoggedOut('Admin login required.')
+      });
+      attendanceEmail = globalThis.GIBM1AttendanceEmail?.create({
+        root: $('#attendanceEmail'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
+        enabled: RECOVERY_PILOT_ENABLED && RECOVERY_PILOT_TARGET === 'test', getAdmin: () => currentAdminName,
+        onUnauthorized: () => setLoggedOut('Admin login required.')
+      });
+      managerDayReview = globalThis.GIBM1ManagerReview?.create({
+        request: requestJson,
+        site: SITE,
+        openLegacy: openLegacyReview,
+        legacyWritePending,
+        validateAdditionResult: (result, body) => validAdminAdditionResponse(result, {
+          requestId: body.requestId, adminName: currentAdminName, date: body.date,
+          classLabel: body.classLabel, duration: body.duration, instructor: body.instructor,
+          site: body.site, reason: body.reason, notes: body.notes
+        }),
+        additionRequestId: uniqueRequestId,
+        onUnauthorized: () => setLoggedOut('Admin login required.')
       });
       initialize();
     })();

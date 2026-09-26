@@ -75,3 +75,38 @@ jobs:
 
       - name: Run all candidate M1 and promotion tests
         run: node --test tests/m1-*.test.mjs tests/promotions*.test.mjs
+
+  richmond-test-package:
+    name: Package Richmond TEST pilot (no deployment)
+    if: github.head_ref == 'feature/m1-manager-day-review-20260922'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+      - run: npm ci
+      - name: Build existing Richmond TEST profile
+        env:
+          GIB_M1_INSTALLATION: richmond
+          GIB_M1_ENVIRONMENT: test
+          GIB_M1_MANAGER_REVIEW_PILOT: 'true'
+          CONTEXT: deploy-preview
+        run: npm run build
+      - name: Package functions with the pinned hosting packager
+        run: |
+          npm install --prefix .m1-test-packager --no-audit --no-fund @netlify/zip-it-and-ship-it@14.5.4 netlify-cli@26.0.1
+          node tools/package-m1-richmond-test.mjs
+      - name: Verify the actual upload client consumes routes and runtime metadata (offline)
+        run: |
+          M1_TEST_UPLOAD_CLIENT_ROOT="$PWD/.m1-test-packager/node_modules/netlify-cli" node --test tests/m1-richmond-upload-package.test.mjs
+          node tools/prepare-m1-richmond-test-upload.mjs .m1-richmond-test-package .m1-test-packager/node_modules/netlify-cli "$(git rev-parse HEAD)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: richmond-test-${{ github.event.pull_request.head.sha }}
+          path: .m1-richmond-test-package/
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: error

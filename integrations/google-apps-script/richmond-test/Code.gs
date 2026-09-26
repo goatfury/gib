@@ -1,5 +1,6 @@
 /* Richmond BJJ M1 isolated TEST receiver entrypoint. */
 var GIB_M1_ALLOWED_TARGET = 'test';
+var GIB_M1_MANAGER_REVIEW_TEST_ENABLED = true;
 var GIB_M1_REQUIRE_PERSISTED_TARGET_LOCK = true;
 var GIB_M1_ALLOW_RECEIVER_TOKEN_OVERRIDE = false;
 var GIB_M1_REQUIRE_EXACT_SIGNINS_SCHEMA = true;
@@ -84,7 +85,7 @@ function gibM1RichmondObviousTestValue_(value) {
 
 function gibM1RichmondActionValid_(body) {
   var action = cleanText_(body && body.action);
-  if (['kioskSignIn', 'dailyReview', 'instructorSearch', 'addMissedInstructor'].indexOf(action) === -1) {
+  if (['kioskSignIn', 'dailyReview', 'instructorSearch', 'addMissedInstructor', 'managerReviewRead', 'managerReviewSave', 'managerReviewVoid'].indexOf(action) === -1) {
     return false;
   }
   if (action === 'kioskSignIn') {

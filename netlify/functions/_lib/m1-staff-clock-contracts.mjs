@@ -233,7 +233,9 @@ function sanitizeRecord(input, options = {}) {
     'linkedPunchId',
     'originalTimestamp',
     'originalDate',
-    'adjustmentRequestId'
+    'adjustmentRequestId',
+    'recoveryRequestId',
+    'previousClockInPunchId'
   ];
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const actualKeys = Object.keys(input);
@@ -260,6 +262,14 @@ function sanitizeRecord(input, options = {}) {
   const adjustmentRequestId = hasAdjustment && typeof input.adjustmentRequestId === 'string'
     ? input.adjustmentRequestId
     : '';
+  const hasRecovery = Object.hasOwn(input, 'recoveryRequestId')
+    || Object.hasOwn(input, 'previousClockInPunchId');
+  if (hasRecovery && (
+    source !== 'Tablet' || input.punchAction !== 'clockIn'
+    || typeof input.recoveryRequestId !== 'string' || !STAFF_REQUEST_ID_PATTERN.test(input.recoveryRequestId)
+    || typeof input.previousClockInPunchId !== 'string' || !STAFF_PUNCH_ID_PATTERN.test(input.previousClockInPunchId)
+    || input.previousClockInPunchId === input.punchId
+  )) return null;
   const value = {
     punchId: typeof input.punchId === 'string' && STAFF_PUNCH_ID_PATTERN.test(input.punchId)
       ? input.punchId
@@ -335,11 +345,153 @@ function sanitizeRecord(input, options = {}) {
     output.originalDate = originalDate;
     output.adjustmentRequestId = adjustmentRequestId;
   }
+  if (hasRecovery) {
+    output.recoveryRequestId = input.recoveryRequestId;
+    output.previousClockInPunchId = input.previousClockInPunchId;
+  }
   return Object.freeze(output);
 }
 
 export function sanitizeStaffClockSnapshot(input, expectedTarget, options = {}) {
   return sanitizeStaffViewSummary(input, expectedTarget, options, false);
+}
+
+// Recovery is a separate bounded contract. Ordinary queued punches retain their
+// exact ten-field wire shape and can never supply authoritative recovery links.
+export const MAX_STAFF_RECOVERY_ITEMS = 100;
+const RECOVERY_DECISION_KEYS = ['requestId', 'recoveryRequestId', 'revision', 'decision',
+  'finishAt', 'punchId', 'reason', 'adminName', 'decidedAt'];
+const RECOVERY_CONFLICTS = new Set(['previous-punch-void', 'new-punch-void', 'finish-punch-void']);
+
+function recoveryTimestamp(value, now) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}-0[45]:00$/u.test(value)
+    && validNewYorkTimestamp(value, '', now, 0);
+}
+
+export function sanitizeStaffRecoveryRequest(input, options = {}) {
+  if (!exactObjectKeys(input, ['operation', 'requestId', 'previousClockInPunchId', 'punch', 'proposedFinishAt'])
+    || input.operation !== 'recover'
+    || typeof input.requestId !== 'string' || !STAFF_REQUEST_ID_PATTERN.test(input.requestId)
+    || typeof input.previousClockInPunchId !== 'string' || !STAFF_PUNCH_ID_PATTERN.test(input.previousClockInPunchId)) return null;
+  const now = options.now || new Date();
+  const punch = sanitizeStaffClockPunch(input.punch, { ...options, now });
+  if (!punch || punch.punchAction !== 'clockIn' || punch.site !== 'Rev'
+    || punch.punchId === input.previousClockInPunchId || !recoveryTimestamp(punch.timestamp, now)
+    || (input.proposedFinishAt !== null && (!recoveryTimestamp(input.proposedFinishAt, now)
+      || Date.parse(input.proposedFinishAt) > Date.parse(punch.timestamp)))) return null;
+  return Object.freeze({ operation: 'recover', requestId: input.requestId,
+    previousClockInPunchId: input.previousClockInPunchId, punch, proposedFinishAt: input.proposedFinishAt });
+}
+
+export function sanitizeStaffRecoveryDecisionRequest(input, options = {}) {
+  if (!exactObjectKeys(input, ['operation', 'requestId', 'recoveryRequestId', 'revision', 'decision', 'finishAt', 'punchId', 'reason'])
+    || input.operation !== 'recoveryDecide'
+    || typeof input.requestId !== 'string' || !STAFF_REQUEST_ID_PATTERN.test(input.requestId)
+    || typeof input.recoveryRequestId !== 'string' || !STAFF_REQUEST_ID_PATTERN.test(input.recoveryRequestId)
+    || input.requestId === input.recoveryRequestId
+    || !Number.isSafeInteger(input.revision) || input.revision < 0 || input.revision >= Number.MAX_SAFE_INTEGER
+    || !['approve', 'reject'].includes(input.decision)) return null;
+  const reason = exactText(input.reason, 240);
+  if (!reason || reason.length < 3) return null;
+  if (input.decision === 'approve') {
+    if (!recoveryTimestamp(input.finishAt, options.now || new Date())
+      || typeof input.punchId !== 'string' || !STAFF_PUNCH_ID_PATTERN.test(input.punchId)) return null;
+  } else if (input.finishAt !== null || input.punchId !== null) return null;
+  return Object.freeze({ ...input, reason });
+}
+
+function sanitizeRecoveryDecision(input, options) {
+  if (!exactObjectKeys(input, RECOVERY_DECISION_KEYS) || !ADMIN_NAMES.has(input.adminName)
+    || !recoveryTimestamp(input.decidedAt, options.now || new Date())
+    || !Number.isSafeInteger(input.revision) || input.revision < 1) return null;
+  const { adminName, decidedAt, ...body } = input;
+  const request = sanitizeStaffRecoveryDecisionRequest({ ...body, revision: input.revision - 1, operation: 'recoveryDecide' }, options);
+  return request ? Object.freeze({ ...body, adminName, decidedAt }) : null;
+}
+
+function sanitizeRecoveryItem(input, options) {
+  if (!exactObjectKeys(input, ['requestId', 'staffId', 'staffName', 'previousClockInPunchId', 'previousClockInAt',
+    'newClockInPunchId', 'startedAt', 'proposedFinishAt', 'proposedBy', 'proposedAt', 'status', 'revision', 'decision', 'punch', 'conflicts'])
+    || !Array.isArray(input.conflicts) || input.conflicts.length > 3
+    || new Set(input.conflicts).size !== input.conflicts.length
+    || input.conflicts.some(value => !RECOVERY_CONFLICTS.has(value))
+    || (input.conflicts.includes('finish-punch-void') && input.status !== 'approved')) return null;
+  const start = sanitizeStaffRecoveryRequest({ operation: 'recover', requestId: input.requestId,
+    previousClockInPunchId: input.previousClockInPunchId, punch: input.punch, proposedFinishAt: input.proposedFinishAt }, options);
+  const now = options.now || new Date();
+  if (!start || input.staffId !== start.punch.staffId || input.staffName !== start.punch.staffName
+    || input.newClockInPunchId !== start.punch.punchId || input.startedAt !== start.punch.timestamp
+    || input.proposedBy !== input.staffName || !recoveryTimestamp(input.previousClockInAt, now)
+    || !recoveryTimestamp(input.proposedAt, now)
+    || Date.parse(input.previousClockInAt) >= Date.parse(input.startedAt)
+    || Date.parse(input.proposedAt) < Date.parse(input.startedAt)
+    || (input.proposedFinishAt !== null && (Date.parse(input.proposedFinishAt) <= Date.parse(input.previousClockInAt)
+      || Date.parse(input.proposedFinishAt) - Date.parse(input.previousClockInAt) > MAX_STAFF_SHIFT_MS))
+    || !Number.isSafeInteger(input.revision) || input.revision < 0
+    || !['pending', 'rejected', 'approved'].includes(input.status)) return null;
+  const decision = input.decision === null ? null : sanitizeRecoveryDecision(input.decision, options);
+  if (input.status === 'pending') {
+    if (input.decision !== null || input.revision !== 0) return null;
+  } else if (!decision || decision.recoveryRequestId !== input.requestId || decision.revision !== input.revision
+    || decision.decision !== (input.status === 'approved' ? 'approve' : 'reject')
+    || Date.parse(decision.decidedAt) < Date.parse(input.proposedAt)
+    || (decision.decision === 'approve' && (Date.parse(decision.finishAt) <= Date.parse(input.previousClockInAt)
+      || Date.parse(decision.finishAt) > Date.parse(input.startedAt)
+      || Date.parse(decision.finishAt) - Date.parse(input.previousClockInAt) > MAX_STAFF_SHIFT_MS
+      || [input.previousClockInPunchId, input.newClockInPunchId].includes(decision.punchId)))) return null;
+  return Object.freeze({ ...input, punch: start.punch, decision, conflicts: Object.freeze([...input.conflicts]) });
+}
+
+export function sanitizeStaffRecoveryResponse(input, expectedTarget, options = {}) {
+  const expected = options.expected;
+  const hasReceipt = Boolean(expected);
+  if (!['test', 'production'].includes(expectedTarget)
+    || !exactObjectKeys(input, hasReceipt ? ['ok', 'target', 'recovery', 'receipt'] : ['ok', 'target', 'recovery'])
+    || input.ok !== true || input.target !== expectedTarget || staffContractJsonByteLength(input) > MAX_STAFF_PAGE_BYTES
+    || !exactObjectKeys(input.recovery, ['enabled', 'items']) || input.recovery.enabled !== true) return null;
+  const validation = { ...options, requireTestName: expectedTarget === 'test' };
+  const items = sanitizeUniqueArray(input.recovery.items, MAX_STAFF_RECOVERY_ITEMS,
+    item => sanitizeRecoveryItem(item, validation), item => item.requestId);
+  if (!items) return null;
+  const newIds = new Set(), previousIds = new Set(), decisionIds = new Set(), finishIds = new Set();
+  for (const item of items) {
+    if (newIds.has(item.newClockInPunchId) || previousIds.has(item.previousClockInPunchId)
+      || (item.decision && decisionIds.has(item.decision.requestId))
+      || (item.decision?.punchId && finishIds.has(item.decision.punchId))) return null;
+    newIds.add(item.newClockInPunchId); previousIds.add(item.previousClockInPunchId);
+    if (item.decision) decisionIds.add(item.decision.requestId);
+    if (item.decision?.punchId) finishIds.add(item.decision.punchId);
+  }
+  if (items.some(item => item.decision && (items.some(other => other.requestId === item.decision.requestId)
+    || (item.decision.punchId && (newIds.has(item.decision.punchId) || previousIds.has(item.decision.punchId)))))) return null;
+  const recovery = Object.freeze({ enabled: true, items: Object.freeze(items) });
+  if (!hasReceipt) return Object.freeze({ recovery });
+  if (expected.operation === 'recover') {
+    const receipt = input.receipt;
+    const item = items.find(value => value.requestId === expected.requestId);
+    if (!exactObjectKeys(receipt, ['requestId', 'previousClockInPunchId', 'newClockInPunchId', 'startedAt', 'proposedFinishAt', 'status'])
+      || !item || item.conflicts.includes('new-punch-void')
+      || receipt.requestId !== expected.requestId || receipt.previousClockInPunchId !== expected.previousClockInPunchId
+      || receipt.newClockInPunchId !== expected.punch.punchId || receipt.startedAt !== expected.punch.timestamp
+      || receipt.proposedFinishAt !== expected.proposedFinishAt || receipt.status !== 'pending'
+      || item.previousClockInPunchId !== expected.previousClockInPunchId || item.proposedFinishAt !== expected.proposedFinishAt
+      || Object.keys(expected.punch).some(key => item.punch[key] !== expected.punch[key])) return null;
+    return Object.freeze({ recovery, receipt: Object.freeze({ ...receipt }) });
+  }
+  if (expected.operation !== 'recoveryDecide') return null;
+  const receipt = sanitizeRecoveryDecision(input.receipt, validation);
+  const item = items.find(value => value.requestId === expected.recoveryRequestId);
+  if (!receipt || !item || !item.decision
+    || item.revision < receipt.revision
+    || (item.revision === receipt.revision && RECOVERY_DECISION_KEYS.some(key => item.decision[key] !== receipt[key]))
+    || Date.parse(receipt.decidedAt) < Date.parse(item.proposedAt)
+    || (receipt.decision === 'approve' && (Date.parse(receipt.finishAt) <= Date.parse(item.previousClockInAt)
+      || Date.parse(receipt.finishAt) > Date.parse(item.startedAt)
+      || Date.parse(receipt.finishAt) - Date.parse(item.previousClockInAt) > MAX_STAFF_SHIFT_MS
+      || [item.previousClockInPunchId, item.newClockInPunchId].includes(receipt.punchId)))
+    || receipt.revision !== expected.revision + 1
+    || ['requestId', 'recoveryRequestId', 'decision', 'finishAt', 'punchId', 'reason', 'adminName'].some(key => receipt[key] !== expected[key])) return null;
+  return Object.freeze({ recovery, receipt });
 }
 
 function validResultLink(value) {

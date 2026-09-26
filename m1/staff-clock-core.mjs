@@ -2,6 +2,7 @@ export const STAFF_CLOCK_TIME_ZONE = 'America/New_York';
 export const STAFF_PAY_PERIOD_ANCHOR = '2026-08-10';
 export const STAFF_OPEN_SHIFT_LIMIT_MS = 18 * 60 * 60 * 1_000;
 export const STAFF_PUNCH_ID_PATTERN = /^gib-m1-staff-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const STAFF_REQUEST_ID_PATTERN = /^gib-m1-staff-request-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/u;
@@ -28,7 +29,9 @@ const OPTIONAL_RECORD_KEYS = Object.freeze([
   'linkedPunchId',
   'originalTimestamp',
   'originalDate',
-  'adjustmentRequestId'
+  'adjustmentRequestId',
+  'recoveryRequestId',
+  'previousClockInPunchId'
 ]);
 const ALLOWED_RECORD_KEYS = new Set([...REQUIRED_RECORD_KEYS, ...OPTIONAL_RECORD_KEYS]);
 const RECORD_ACTIONS = new Set(['clockIn', 'clockOut']);
@@ -104,7 +107,9 @@ function recordFingerprint(record) {
     record.linkedPunchId || '',
     record.originalTimestamp || '',
     record.originalDate || '',
-    record.adjustmentRequestId || ''
+    record.adjustmentRequestId || '',
+    record.recoveryRequestId || '',
+    record.previousClockInPunchId || ''
   ]);
 }
 
@@ -256,7 +261,18 @@ export function validStaffRecord(value) {
       || !validStaffDate(value.originalDate)
       || value.originalTimestamp.slice(0, 10) !== value.originalDate
       || typeof value.adjustmentRequestId !== 'string'
-      || !/^gib-m1-staff-request-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.adjustmentRequestId)
+      || !STAFF_REQUEST_ID_PATTERN.test(value.adjustmentRequestId)
+    )
+  ) return false;
+  if (
+    (Object.hasOwn(value, 'recoveryRequestId') || Object.hasOwn(value, 'previousClockInPunchId'))
+    && (
+      value.source !== 'Tablet'
+      || value.punchAction !== 'clockIn'
+      || typeof value.recoveryRequestId !== 'string'
+      || !STAFF_REQUEST_ID_PATTERN.test(value.recoveryRequestId)
+      || !validStaffPunchId(value.previousClockInPunchId)
+      || value.previousClockInPunchId === value.punchId
     )
   ) return false;
   return true;
@@ -344,13 +360,24 @@ export function evaluateStaffState(staffId, records = [], options = {}) {
   const externalAttention = suppliedAttention.filter(item => item?.staffId === staffId);
   const active = records
     .filter(record => record.staffId === staffId && record.status === 'ACTIVE')
-    .sort(compareRecords);
+    .sort((left, right) => {
+      const elapsed = Date.parse(left.timestamp) - Date.parse(right.timestamp);
+      if (elapsed) return elapsed;
+      // An approved previous finish may equal the explicitly linked new start.
+      // Put that finish first; the loop still rejects every unrelated tie.
+      if (left.recoveryRequestId && right.punchAction === 'clockOut') return 1;
+      if (right.recoveryRequestId && left.punchAction === 'clockOut') return -1;
+      return compareRecords(left, right);
+    });
+  const allActive = records.filter(record => record.status === 'ACTIVE');
+  const boundaries = allActive.filter(record => record.recoveryRequestId);
   const staffName = active.at(-1)?.staffName
     || records.filter(record => record.staffId === staffId).at(-1)?.staffName
     || options.staffName
     || staffId;
   const attention = [...externalAttention];
   const completedShifts = [];
+  const recoveryPending = [];
   let openClockIn = null;
   let latestRecord = null;
   let structuralContradiction = false;
@@ -358,10 +385,56 @@ export function evaluateStaffState(staffId, records = [], options = {}) {
   for (let index = 0; index < active.length && !structuralContradiction; index += 1) {
     const record = active[index];
     const next = active[index + 1];
-    if (next && Date.parse(next.timestamp) === Date.parse(record.timestamp)) {
+    const linkedFinishAtNewStart = record.punchAction === 'clockOut'
+      && next?.recoveryRequestId
+      && openClockIn?.punchId === next.previousClockInPunchId;
+    if (next && Date.parse(next.timestamp) === Date.parse(record.timestamp) && !linkedFinishAtNewStart) {
       attention.push(attentionItem('SIMULTANEOUS_PUNCHES', staffId, record));
       structuralContradiction = true;
       break;
+    }
+    if (record.recoveryRequestId) {
+      const previous = allActive.filter(item => item.punchId === record.previousClockInPunchId);
+      const lastCompleted = completedShifts.at(-1);
+      const validPrevious = previous.length === 1
+        && previous[0].punchAction === 'clockIn'
+        && previous[0].staffId === staffId
+        // The gated TEST recovery can link the existing historical TEST alias
+        // to its canonical site without changing either permanent record.
+        && (previous[0].site === record.site || (
+          options.recoveryEnabled === true && previous[0].site === 'Rev TEST' && record.site === 'Rev'
+        ))
+        && Date.parse(previous[0].timestamp) < Date.parse(record.timestamp);
+      const uniqueBoundary = boundaries.filter(item => item.previousClockInPunchId === record.previousClockInPunchId).length === 1
+        && boundaries.filter(item => item.recoveryRequestId === record.recoveryRequestId).length === 1;
+      const exactOpen = openClockIn?.punchId === record.previousClockInPunchId;
+      const exactClosed = !openClockIn
+        && lastCompleted?.clockIn.punchId === record.previousClockInPunchId
+        && Date.parse(lastCompleted.clockOut.timestamp) <= Date.parse(record.timestamp);
+      if (!validPrevious || !uniqueBoundary || (!exactOpen && !exactClosed)) {
+        attention.push(attentionItem('INVALID_RECOVERY_BOUNDARY', staffId, record));
+        structuralContradiction = true;
+        break;
+      }
+      if (exactOpen) {
+        const boundary = {
+          recoveryRequestId: record.recoveryRequestId,
+          previousClockInPunchId: openClockIn.punchId,
+          newClockInPunchId: record.punchId,
+          timestamp: record.timestamp,
+          date: record.date
+        };
+        recoveryPending.push(boundary);
+        attention.push(attentionItem('MISSING_CLOCK_OUT_RECOVERY', staffId, openClockIn, {
+          recoveryRequestId: boundary.recoveryRequestId,
+          newClockInPunchId: boundary.newClockInPunchId
+        }));
+      }
+      // An explicit boundary preserves the unresolved old start without
+      // fabricating its finish or hours. Only the new real shift can accrue.
+      openClockIn = record;
+      latestRecord = record;
+      continue;
     }
     if (!openClockIn) {
       if (record.punchAction === 'clockOut') {
@@ -381,6 +454,12 @@ export function evaluateStaffState(staffId, records = [], options = {}) {
     }
     if (record.punchAction === 'clockIn') {
       attention.push(attentionItem('REPEATED_CLOCK_IN', staffId, record));
+      structuralContradiction = true;
+      break;
+    }
+    if (record.linkedPunchId && recoveryPending.some(item => item.previousClockInPunchId === record.linkedPunchId)) {
+      // A late correction for the old shift cannot silently close the new one.
+      attention.push(attentionItem('INVALID_RECOVERY_BOUNDARY', staffId, record));
       structuralContradiction = true;
       break;
     }
@@ -420,16 +499,24 @@ export function evaluateStaffState(staffId, records = [], options = {}) {
   const needsAttention = attention.length > 0;
   const stateUnknown = structuralContradiction || externalAttention.length > 0;
   const clockedIn = stateUnknown ? null : Boolean(openClockIn);
+  const ordinaryOvernightFinish = options.recoveryEnabled === true && openClockIn
+    && now.getTime() >= Date.parse(openClockIn.timestamp)
+    && now.getTime() - Date.parse(openClockIn.timestamp) <= STAFF_OPEN_SHIFT_LIMIT_MS;
+  const blockingAttention = stateUnknown || attention.some(item => (
+    item.code !== 'MISSING_CLOCK_OUT_RECOVERY'
+    && !(ordinaryOvernightFinish && item.code === 'MISSING_CLOCK_OUT' && item.punchId === openClockIn.punchId)
+  ));
   return {
     staffId,
     staffName,
     clockedIn,
     clockInRecord: clockedIn ? openClockIn : null,
     latestRecord,
-    nextPunchAction: needsAttention ? null : (clockedIn ? 'clockOut' : 'clockIn'),
+    nextPunchAction: blockingAttention ? null : (clockedIn ? 'clockOut' : 'clockIn'),
     needsAttention,
     attention: uniqueAttention(attention),
-    completedShifts
+    completedShifts,
+    recoveryPending
   };
 }
 
@@ -475,7 +562,8 @@ export function buildStaffReview({
   confirmedRecords = [],
   pendingRecords = [],
   staffMembers = [],
-  now = new Date()
+  now = new Date(),
+  recoveryEnabled = false
 } = {}) {
   if (!Array.isArray(staffMembers) || !staffMembers.every(validStaffMember)) {
     throw new Error('The active Staff Clock list was invalid.');
@@ -490,7 +578,7 @@ export function buildStaffReview({
   const staffStates = identities.map(member => evaluateStaffState(
     member.staffId,
     merged.records,
-    { now: currentTime, attention: merged.attention, staffName: member.staffName }
+    { now: currentTime, attention: merged.attention, staffName: member.staffName, recoveryEnabled }
   ));
   const attention = uniqueAttention(staffStates.flatMap(state => state.attention));
   const periods = payPeriodOptions(today);

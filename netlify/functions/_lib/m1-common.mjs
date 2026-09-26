@@ -8,6 +8,8 @@ import {
   deploymentInstallationProfile,
   remoteBackendEnabled
 } from './m1-installation.mjs';
+import { traceGoogle, safeAdditionTraceId } from './m1-google-trace.mjs';
+import { nativeHttpsControl } from './m1-google-native-control.mjs';
 
 export const ADMIN_NAMES = Object.freeze(['Andrew Smith', 'Stuart Turner']);
 export const ADMIN_COOKIE = 'gib_m1_admin_session';
@@ -447,7 +449,58 @@ export function validNonFutureDate(value, now = new Date()) {
     && text <= nyDate(now);
 }
 
-export async function postGoogle(config, action, data, fetchImpl = fetch) {
+// TEST diagnostics deliberately exclude URLs, bodies, identities and error messages.
+// Both review paths use this boundary so their upstream timings can be compared.
+export async function postGoogle(config, action, data, fetchImpl = fetch, nativeHttpsImpl = nativeHttpsControl) {
+  // The paired deployed experiment supports this exact TEST read boundary only.
+  // Keep writes, Richmond and production on their existing transport.
+  const nativeRead = config.target === 'test' && config.installationId === 'rev'
+    && config.testNativeHttps === true && ['dailyReview', 'managerReviewRead'].includes(action);
+  const transport = nativeRead ? nativeHttpsImpl : fetchImpl;
+  const readRetry = !nativeRead && config.target === 'test' && config.testReadRetry === true
+    && ['dailyReview', 'managerReviewRead'].includes(action);
+  const additionTrace = config.target === 'test' && config.installationId === 'rev'
+    && config.testTrace === true && action === 'addMissedInstructor';
+  const requestId = additionTrace ? safeAdditionTraceId(data?.requestId) : undefined;
+  let result;
+  for (let attempt = 1; attempt <= (readRetry ? 2 : 1); attempt++) {
+    const started = Date.now();
+    let finalHost = 'unavailable', redirected = false;
+    result = await traceGoogle({ target: config.target, enabled: config.testTrace, action, gym: config.installationId, attempt, requestId, variant: nativeRead ? 'native-https' : 'current' }, () => postGoogleRequest(config, action, data, async (...args) => {
+      const response = await transport(...args);
+      try {
+        const host = new URL(response.url).hostname;
+        finalHost = ['script.google.com', 'script.googleusercontent.com'].includes(host) ? host : 'other';
+      } catch { /* Test responses may not have a URL. */ }
+      redirected = response.redirected === true;
+      return response;
+    }));
+    if (config.target === 'test' && (additionTrace || ['dailyReview', 'managerReviewRead', 'managerReviewSave', 'managerReviewVoid'].includes(action))) {
+      try { console.info('M1_TEST_GOOGLE', JSON.stringify({
+        action, gym: config.installationId === 'richmond' ? 'richmond' : 'rev', attempt,
+        ...(requestId ? { requestId } : {}),
+        elapsedMs: Date.now() - started, status: result.status, finalHost, redirected,
+        result: result.readable && result.value?.ok === true ? 'OK' : googleFailureClass(result),
+        ...(result.transportCode ? { transportCode: result.transportCode } : {})
+      })); } catch { /* Passive diagnostics must never affect a request. */ }
+    }
+    // Repeat only pure TEST reads after an unreadable transport response. Never
+    // repeat a write, rejection, stale-view conflict, or valid-but-invalid contract.
+    // Each attempt retains the existing 25-second deadline and full validation.
+    const transient = ['UNREACHABLE', 'READ_FAILED', 'EMPTY', 'HTML'].includes(result.failureClass)
+      || (result.failureClass === 'HTTP_FAILURE' && [404, 408, 429, 500, 502, 503, 504].includes(result.status));
+    if (!transient) break;
+  }
+  return result;
+}
+
+function safeTransportCode(error) {
+  const allowed = ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET'];
+  if (['TimeoutError', 'AbortError'].includes(error?.name)) return error.name;
+  return allowed.includes(error?.cause?.code) ? error.cause.code : 'OTHER';
+}
+
+async function postGoogleRequest(config, action, data, fetchImpl = fetch) {
   let response;
   try {
     const body = {
@@ -476,8 +529,8 @@ export async function postGoogle(config, action, data, fetchImpl = fetch) {
       redirect: 'follow',
       signal: AbortSignal.timeout(25_000)
     });
-  } catch {
-    return { readable: false, status: 0, failureClass: 'UNREACHABLE' };
+  } catch (error) {
+    return { readable: false, status: 0, failureClass: 'UNREACHABLE', transportCode: safeTransportCode(error) };
   }
 
   const declaredLength = response.headers.get('content-length');

@@ -84,6 +84,12 @@ const BASELINE_FIELD_IDS = Object.freeze([
 const PROMOTIONS_NAVIGATION_BUTTON_IDS = Object.freeze([
   'openPromotionsLog'
 ]);
+const STAFF_RECOVERY_BUTTON_IDS = Object.freeze([
+  'staffRecoveryOpen', 'staffRecoveryStart', 'staffRecoveryCancel', 'staffRecoveryRetry'
+]);
+const STAFF_RECOVERY_FIELD_IDS = Object.freeze([
+  'staffRecoveryUnknown', 'staffRecoveryFinish'
+]);
 
 const REPARENT_MAP = Object.freeze({
   signinsCard: 'recentSigninsSlot',
@@ -199,17 +205,24 @@ test('device maintenance keeps status and recovery disclosures behind the main A
 });
 
 test('every inherited control remains unique and connected after organization', () => {
-  // Keep the complete inventory exact: the optional log adds one entry after
-  // Sign In while every inherited control keeps its relative order.
+  // Keep both additions explicit and every inherited control in its original
+  // relative order. Recovery sits between the Staff action and its Done button.
   assert.deepEqual(elementIds(['button']), [
     ...BASELINE_BUTTON_IDS.slice(0, 3),
     ...PROMOTIONS_NAVIGATION_BUTTON_IDS,
-    ...BASELINE_BUTTON_IDS.slice(3)
+    ...BASELINE_BUTTON_IDS.slice(3, 6),
+    ...STAFF_RECOVERY_BUTTON_IDS,
+    ...BASELINE_BUTTON_IDS.slice(6)
   ]);
-  assert.deepEqual(elementIds(['input', 'select', 'textarea', 'datalist']), [...BASELINE_FIELD_IDS]);
+  assert.deepEqual(elementIds(['input', 'select', 'textarea', 'datalist']), [
+    ...BASELINE_FIELD_IDS.slice(0, 4),
+    ...STAFF_RECOVERY_FIELD_IDS,
+    ...BASELINE_FIELD_IDS.slice(4)
+  ]);
   assert.equal((kiosk.match(/<input[^>]*\bdata-series-day\b[^>]*>/giu) || []).length, 7);
 
-  for (const id of [...BASELINE_BUTTON_IDS, ...PROMOTIONS_NAVIGATION_BUTTON_IDS, ...BASELINE_FIELD_IDS, 'dailyReviewLink']) {
+  for (const id of [...BASELINE_BUTTON_IDS, ...PROMOTIONS_NAVIGATION_BUTTON_IDS, ...STAFF_RECOVERY_BUTTON_IDS,
+    ...BASELINE_FIELD_IDS, ...STAFF_RECOVERY_FIELD_IDS, 'dailyReviewLink']) {
     assert.equal((kiosk.match(new RegExp(`\\bid="${escapeRegExp(id)}"`, 'gu')) || []).length, 1, id);
   }
 
@@ -232,6 +245,14 @@ test('every inherited control remains unique and connected after organization', 
       `${id} must remain connected to ${action}`
     );
   }
+
+  for (const id of ['staffRecoveryOpen', 'staffRecoveryCancel', 'staffRecoveryRetry']) {
+    assert.equal((staffClockClient.match(new RegExp(`\\$\\('#${id}'\\)\\.addEventListener\\('click'`, 'gu')) || []).length,
+      1, `${id} must retain its one recovery action binding`);
+  }
+  assert.match(openingTag('staffRecoveryStart'), /type="submit"/u);
+  assert.match(staffClockClient, /\$\('#staffRecoveryForm'\)\.addEventListener\('submit', startStaffRecovery\)/u);
+  assert.match(staffClockClient, /\$\('#staffRecoveryUnknown'\)\.addEventListener\('change'/u);
 
   for (const [id, action] of [
     ['btnStaffClockAction', 'performStaffClockAction'],

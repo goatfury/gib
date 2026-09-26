@@ -140,6 +140,9 @@
     box-shadow: none;
   }
 
+  #staffRecovery input[type="checkbox"] { width: auto; margin-right: 8px; }
+  #staffRecoveryForm { display: grid; gap: 12px; }
+  #staffRecoveryForm[hidden], #staffRecovery[hidden] { display: none; }
   /* Class list */
   #classListWrap {
     width: 100%;
@@ -944,9 +947,12 @@ body.admin-mode .container { max-width: 1120px; }
   .device-tools-menu[open] > button { position: absolute; right: 0; top: 100%; z-index: 8; min-width: 200px; box-shadow: 0 8px 24px #0008; }
   #managerWorkspaceLink { min-height: 44px; text-decoration: none; }
 </style>
-<script src="./installation-profile.generated.js?v=2026-09-13-kiosk-walk-away-c"></script>
-<script src="./temporary-classes-core.js?v=2026-09-13-kiosk-walk-away-c"></script>
-<script src="./added-classes-kiosk.js?v=2026-09-13-kiosk-walk-away-c"></script>
+<script src="./installation-profile.generated.js?v=2026-09-25-recovery-a"></script>
+<script src="./temporary-classes-core.js?v=2026-09-25-recovery-a"></script>
+<script src="./added-classes-kiosk.js?v=2026-09-25-recovery-a"></script>
+<script src="./manager-review-config.generated.js?v=2026-09-25-recovery-a"></script>
+<script src="./manager-read-client.js?v=2026-09-26-manager-ticket-a"></script>
+<script src="./manager-review-badge.js?v=2026-09-22-manager-pilot-a"></script>
 </head>
 <body>
 <div class="container">
@@ -1054,6 +1060,21 @@ body.admin-mode .container { max-width: 1120px; }
       </div>
       <button id="btnStaffClockAction" class="btn brand" type="button" disabled>Clock in</button>
     </div>
+    <section id="staffRecovery" class="staff-clock-availability" aria-label="Earlier shift" hidden>
+      <p id="staffRecoveryStatus" role="status" aria-live="polite"></p>
+      <button id="staffRecoveryOpen" class="btn" type="button">Start a new shift instead</button>
+      <form id="staffRecoveryForm" hidden>
+        <p>Your earlier hours stay pending until a manager checks them. This does not change your earlier clock-in.</p>
+        <label><input id="staffRecoveryUnknown" type="checkbox" checked> I’m not sure when I finished</label>
+        <div class="staff-clock-field"><label for="staffRecoveryFinish">Earlier finish (New York time)</label>
+          <input id="staffRecoveryFinish" type="datetime-local" disabled></div>
+        <div class="staff-clock-availability-actions">
+          <button id="staffRecoveryStart" class="btn brand" type="submit">Start new shift now</button>
+          <button id="staffRecoveryCancel" class="btn" type="button">Cancel</button>
+        </div>
+      </form>
+      <button id="staffRecoveryRetry" class="btn" type="button" hidden>Retry saved new shift</button>
+    </section>
     <div id="staffClockConfirmation" class="staff-clock-confirmation" role="status" aria-live="polite" aria-atomic="true" hidden>
       <div>
         <div id="staffClockConfirmationTitle" class="staff-clock-confirmation-title"></div>
@@ -1464,10 +1485,10 @@ import {
   syncFailureCode,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-09-13-kiosk-walk-away-c';
+} from './sync-core.mjs?v=2026-09-25-recovery-a';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-09-13-kiosk-walk-away-c';
+const OFFLINE_SHELL_REVISION = '2026-09-25-recovery-a';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -4911,6 +4932,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-09-13-kiosk-walk-away-c"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-09-25-recovery-a"></script>
 </body>
 </html>

@@ -2065,6 +2065,37 @@ test('50,000 declared records persist a bounded canonical baseline and exact que
   assert.equal(Object.hasOwn(persisted.baseline, 'todayPunches'), false);
 });
 
+test('pilot recovery permits only a genuine current overnight finish or explicit recovery attention; other baseline conflicts remain blocking', () => {
+  const makeStatus = enabled => Function('mergeStaffRecords', 'evaluateStaffState', 'fmtDate', 'STAFF_RECOVERY_ENABLED', `
+    ${namedFunctionSource(clientSource, 'combinedStaffClockRecords')}
+    ${namedFunctionSource(clientSource, 'staffClockBaselineOpenRecord')}
+    return (${namedFunctionSource(clientSource, 'staffClockStatusFor')});
+  `)(mergeStaffRecords, evaluateStaffState, newYorkDate, enabled);
+  const clockInAt = '2026-08-18T23:00:00-04:00';
+  const state = { version: 2, overlay: [], queue: [], baseline: {
+    clockedInNow: [{ punchId: fullRecord.punchId, staffId: fullRecord.staffId, staffName: fullRecord.staffName, clockInAt }],
+    needsAttention: [{ staffId: fullRecord.staffId, code: 'missing_clock_out', linkedPunchIds: [fullRecord.punchId], message: 'Earlier open shift' }]
+  } };
+  const now = new Date('2026-08-19T02:00:00-04:00');
+  assert.equal(makeStatus(false)(fullRecord.staffId, state, now).nextPunchAction, null);
+  assert.equal(makeStatus(true)(fullRecord.staffId, state, now).nextPunchAction, 'clockOut');
+  state.baseline.needsAttention[0].code = 'conflicting_punch';
+  assert.equal(makeStatus(true)(fullRecord.staffId, state, now).nextPunchAction, null);
+  state.baseline.needsAttention[0].code = 'missing_clock_out_recovery';
+  assert.equal(makeStatus(true)(fullRecord.staffId, state, now).nextPunchAction, 'clockOut');
+  state.baseline.needsAttention[0].code = 'missing_clock_out';
+  assert.equal(makeStatus(true)(fullRecord.staffId, state, new Date('2026-08-20T02:00:00-04:00')).nextPunchAction, null);
+});
+
+test('browser record normalizer preserves exact linked recovery metadata and rejects partial or misbound pairs', () => {
+  const normalize = browserRecordNormalizer();
+  const linked = { ...fullRecord, recoveryRequestId: 'gib-m1-staff-request-223e4567-e89b-42d3-a456-426614174000',
+    previousClockInPunchId: 'gib-m1-staff-323e4567-e89b-42d3-a456-426614174000' };
+  assert.deepEqual(normalize(linked), linked);
+  for (const bad of [{ ...linked, previousClockInPunchId: '' }, { ...linked, recoveryRequestId: '' },
+    { ...linked, previousClockInPunchId: linked.punchId }, { ...linked, punchAction: 'clockOut' }]) assert.equal(normalize(bad), null);
+});
+
 test('authoritative open state plus offline and accepted overlays produce one exact shift', () => {
   const statusFor = Function('mergeStaffRecords', 'evaluateStaffState', 'fmtDate', `
     ${namedFunctionSource(clientSource, 'combinedStaffClockRecords')}

@@ -157,6 +157,19 @@ function adReceiverV2_(e) {
     }
 
     var action = cleanText_(body.action);
+    if (action === 'attendanceDigestCapture') {
+      return typeof gibM1AttendanceDigestCapture_ === 'function' ? gibM1AttendanceDigestCapture_(body) : rejectedAuthResult_();
+    }
+    if (['staffRecoveryRead', 'staffRecoveryStart', 'staffRecoveryReview', 'staffRecoveryDecide'].indexOf(action) >= 0) {
+      return typeof staffRecoveryAction_ === 'function' ? staffRecoveryAction_(body) : rejectedAuthResult_();
+    }
+    if (action === 'managerReviewReadCallbackProof' || action === 'managerReviewReadCallback') {
+      return typeof gibM1TestReadCallback_ === 'function' ? gibM1TestReadCallback_(body) : rejectedAuthResult_();
+    }
+    if (action === 'managerReviewRead' || action === 'managerReviewSave' || action === 'managerReviewVoid') {
+      if (typeof managerReviewAction_ !== 'function') return rejectedAuthResult_();
+      return managerReviewAction_(body);
+    }
     var legacyKioskRequest = !action && Array.isArray(body.rows);
     if (!action && Array.isArray(body.rows)) action = 'kioskSignIn';
 
@@ -1914,13 +1927,15 @@ function readAdminAuditHistory_(spreadsheet, date, options) {
         || (
           result !== 'added'
           && result !== 'already exists'
-          && !(result === 'voided' && (richmondInstructorVoidAuditContractEnabled_() || revolutionRemovalEnabled_()))
+          && !(result === 'voided' && (richmondInstructorVoidAuditContractEnabled_() || revolutionRemovalEnabled_() || (typeof managerReviewTestEnabled_ === 'function' && managerReviewTestEnabled_())))
         )
         || exactText_(row[10]).length > GIB_M1_RECORD_ID_MAX_
         || (result === 'added' && exactText_(row[10]).indexOf('gib-admin-') !== 0)
-        || (result === 'voided' && !(revolutionRemovalEnabled_()
-          ? revolutionRemovalId_(exactText_(row[10])) && revolutionRemovalHistoryComplete_(spreadsheet, row)
-          : GIB_M1_PRODUCTION_ROW_ID_PATTERN_.test(exactText_(row[10]))))
+        || (result === 'voided' && !((typeof managerReviewTestEnabled_ === 'function' && managerReviewTestEnabled_())
+          ? managerReviewHistoryComplete_(spreadsheet, row)
+          : revolutionRemovalEnabled_()
+            ? revolutionRemovalId_(exactText_(row[10])) && revolutionRemovalHistoryComplete_(spreadsheet, row)
+            : GIB_M1_PRODUCTION_ROW_ID_PATTERN_.test(exactText_(row[10]))))
       ) {
         warnings.push({
           displayId: auditId,
@@ -1995,7 +2010,7 @@ function appendAdminAudit_(sheet, value, result, linkedRecordId) {
     (
       result !== 'added'
       && result !== 'already exists'
-      && !(result === 'voided' && (richmondInstructorVoidAuditContractEnabled_() || revolutionRemovalEnabled_()))
+      && !(result === 'voided' && (richmondInstructorVoidAuditContractEnabled_() || revolutionRemovalEnabled_() || (typeof managerReviewEnabled_ === 'function' && managerReviewEnabled_())))
     )
     || linkedId !== exactText_(linkedRecordId)
   ) {
@@ -2980,6 +2995,10 @@ function staffClockPublicRecord_(record) {
     value.originalDate = record.originalDate;
     value.adjustmentRequestId = record.adjustmentRequestId;
   }
+  if (record.recoveryRequestId) {
+    value.recoveryRequestId = record.recoveryRequestId;
+    value.previousClockInPunchId = record.previousClockInPunchId;
+  }
   return value;
 }
 
@@ -3041,7 +3060,7 @@ function staffClockTimeRecordFromRow_(row, sheetRow, staffState, byId) {
   };
 }
 
-function staffClockReadTime_(spreadsheet, staffState) {
+function staffClockReadTime_(spreadsheet, staffState, options) {
   var configuration = staffClockDeploymentConfiguration_();
   if (!configuration) {
     throw new Error('Staff Clock is not configured for this deployment.');
@@ -3059,7 +3078,9 @@ function staffClockReadTime_(spreadsheet, staffState) {
     records.push(record);
     byId[record.punchId] = record;
   });
-  return { sheet: source.sheet, records: records, byId: byId };
+  var state = { sheet: source.sheet, records: records, byId: byId };
+  return !(options && options.skipRecovery) && typeof staffRecoveryOverlay_ === 'function'
+    ? staffRecoveryOverlay_(spreadsheet, state) : state;
 }
 
 function staffClockAuditAction_(value) {
@@ -3486,15 +3507,26 @@ function staffClockAnalyze_(staffState, timeState) {
     var records = timeState.records.filter(function(record) {
       return record.staffId === staff.staffId && record.status === 'ACTIVE';
     }).sort(function(left, right) {
-      return left.timestampMs - right.timestampMs || left.sheetRow - right.sheetRow;
+      return left.timestampMs - right.timestampMs
+        || (left.recoveryRequestId && right.action === 'clockOut' ? 1 : right.recoveryRequestId && left.action === 'clockOut' ? -1 : 0)
+        || left.sheetRow - right.sheetRow;
     });
     var staffIssues = [];
     var shifts = [];
     var open = null;
+    var recoverySeen = {};
     var structuralContradiction = false;
     for (var recordIndex = 0; recordIndex < records.length && !structuralContradiction; recordIndex += 1) {
       var record = records[recordIndex];
       if (record.action === 'clockIn') {
+        if (record.recoveryRequestId) {
+          if (typeof staffRecoveryBoundary_ !== 'function' || !staffRecoveryBoundary_(record, records, open, shifts, recoverySeen)) {
+            staffIssues.push(staffClockIssue_(staff, 'invalid_recovery_boundary', 'The earlier and new Staff shifts need manager review.', [record]));
+            open = null; structuralContradiction = true; continue;
+          }
+          if (open) staffIssues.push(staffClockIssue_(staff, 'missing_clock_out_recovery', 'An earlier shift finish still needs manager review.', [open, record]));
+          open = record; continue;
+        }
         if (open) {
           staffIssues.push(staffClockIssue_(
             staff,
@@ -3734,6 +3766,10 @@ function staffClockRelevantRecords_(
     addedDependency = false;
     Object.keys(requiredIds).forEach(function(punchId) {
       var record = timeState.byId[punchId];
+      if (record && record.previousClockInPunchId && !requiredIds[record.previousClockInPunchId] && timeState.byId[record.previousClockInPunchId]) {
+        requiredIds[record.previousClockInPunchId] = true;
+        addedDependency = true;
+      }
       if (
         record
         && record.linkedPunchId
@@ -3883,6 +3919,18 @@ function staffClockSelectRecords_(
     }
     adjustmentPartnersById[adjustment.clockInPunchId].push(adjustment.clockOutPunchId);
     adjustmentPartnersById[adjustment.clockOutPunchId].push(adjustment.clockInPunchId);
+  });
+  function recoveryDependency(left, right) {
+    if (!byId[left] || !byId[right]) throw new Error('Staff recovery boundary evidence is incomplete.');
+    if (!adjustmentPartnersById[left]) adjustmentPartnersById[left] = [];
+    if (!adjustmentPartnersById[right]) adjustmentPartnersById[right] = [];
+    adjustmentPartnersById[left].push(right); adjustmentPartnersById[right].push(left);
+  }
+  records.filter(function(record) { return record.recoveryRequestId; }).forEach(function(record) {
+    recoveryDependency(record.punchId, record.previousClockInPunchId);
+    analysis.completedShifts.forEach(function(shift) {
+      if (shift.clockIn.punchId === record.previousClockInPunchId) recoveryDependency(shift.clockIn.punchId, shift.clockOut.punchId);
+    });
   });
   Object.keys(adjustmentPartnersById).forEach(function(punchId) {
     if (adjustmentUnitByPunchId[punchId]) return;
@@ -6003,7 +6051,8 @@ function staffClockPunchAction_(body) {
       var effectiveTimeState = staffClockApplyAdjustments_(timeState, adjustmentState);
       var analysis = staffClockAnalyze_(staffState, effectiveTimeState);
       var current = analysis.byStaff[candidate.staffId];
-      if (current.issues.length) {
+      var recoveryAllowsPunch = typeof staffRecoveryMayPunch_ === 'function' && staffRecoveryMayPunch_(current, candidate);
+      if (current.issues.length && !recoveryAllowsPunch) {
         return { punchId: candidate.punchId, result: 'needs attention', linkedPunchId: '' };
       }
       var expectedAction = current.open ? 'clockOut' : 'clockIn';
@@ -6169,13 +6218,19 @@ function staffClockCorrectionRecordForRequest_(timeState, requestId) {
 
 function staffTimeCorrectAction_(body) {
   return staffClockWithLock_('Staff time was busy. Nothing changed.', function() {
+    return staffTimeCorrectUnlocked_(body);
+  });
+}
+// The recovery decision holds this same lock and reuses the established audited
+// missed-punch write without nesting another ScriptLock.
+function staffTimeCorrectUnlocked_(body, options) {
     var spreadsheet = openExpectedSpreadsheet_(body);
     var staffState = staffClockStaffState_(spreadsheet);
     var value = validateStaffTimeCorrection_(body, staffState);
     if (!value) {
       return jsonResult_({ ok: false, result: 'rejected', message: 'The Staff time correction was rejected.' });
     }
-    var timeState = staffClockReadTime_(spreadsheet, staffState);
+    var timeState = staffClockReadTime_(spreadsheet, staffState, options);
     var auditState = staffClockReadAudit_(spreadsheet, staffState, timeState);
     var adjustmentState = staffClockAdjustmentSheetState_(
       spreadsheet,
@@ -6239,7 +6294,6 @@ function staffTimeCorrectAction_(body) {
       linked,
       audit
     );
-  });
 }
 
 function validateStaffTimeAdjustment_(body) {

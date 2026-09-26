@@ -14,6 +14,8 @@ import {
 } from './_lib/m1-admin-contracts.mjs';
 import { deploymentInstallationProfile } from './_lib/m1-installation.mjs';
 import { removalReadEnvelope } from './_lib/m1-revolution-removal.mjs';
+import { MANAGER_REVIEW_ENABLED } from './_lib/m1-manager-review.generated.mjs';
+import { nativeHttpsControl } from './_lib/m1-google-native-control.mjs';
 
 function reviewFailureResponse(google) {
   const failureClass = googleFailureClass(google);
@@ -55,7 +57,8 @@ export async function handleAdminReview(request, dependencies = {}) {
   const auth = requireAdmin(request, config, dependencies.now || Date.now());
   if (auth.response) return auth.response;
 
-  const removal = removalReadEnvelope(parsed.value, deploymentInstallationProfile(dependencies.installationId, dependencies.environment, dependencies.activation), config);
+  const profile = deploymentInstallationProfile(dependencies.installationId, dependencies.environment, dependencies.activation);
+  const removal = removalReadEnvelope(parsed.value, profile, config);
   if (!exactDateRequest(parsed.value, removal)) {
     return jsonResponse(400, { ok: false, message: 'Choose today or an earlier valid date.' });
   }
@@ -67,7 +70,7 @@ export async function handleAdminReview(request, dependencies = {}) {
   const allowInstructorSigninVoid = config.installationId === 'richmond'
     && config.environment === 'production';
   const google = await postGoogle(
-    config,
+    { ...config, installationId: profile.installationId, testNativeHttps: MANAGER_REVIEW_ENABLED, testReadRetry: MANAGER_REVIEW_ENABLED, testTrace: MANAGER_REVIEW_ENABLED },
     'dailyReview',
     {
       date,
@@ -76,14 +79,23 @@ export async function handleAdminReview(request, dependencies = {}) {
         voidEligibilityVersion: RICHMOND_INSTRUCTOR_SIGNIN_VOID_ELIGIBILITY_VERSION
       } : {})
     },
-    dependencies.fetch || fetch
+    dependencies.fetch || fetch,
+    dependencies.nativeHttps || dependencies.fetch || nativeHttpsControl
   );
   const review = google.readable && google.value && google.value.ok === true
     ? sanitizeDailyReviewPayload(google.value, date, {
-      allowInstructorSigninVoid, allowRevolutionRemoval: Boolean(removal)
+      allowInstructorSigninVoid, allowRevolutionRemoval: Boolean(removal),
+      managerReviewTestSite: MANAGER_REVIEW_ENABLED && config.target === 'test'
+        ? config.installationId === 'richmond' ? 'Richmond' : 'Rev'
+        : ''
     })
     : null;
-  if (!review) return reviewFailureResponse(google);
+  if (!review) {
+    if (config.target === 'test' && google.readable && google.value?.ok === true) {
+      console.info('M1_TEST_CONTRACT', JSON.stringify({ action: 'dailyReview', result: 'CONTRACT_MISMATCH' }));
+    }
+    return reviewFailureResponse(google);
+  }
 
   return jsonResponse(200, {
     ok: true,

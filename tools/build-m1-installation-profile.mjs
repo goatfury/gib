@@ -20,6 +20,21 @@ if (!profile) {
 }
 
 const source = browserInstallationProfileSource(profile);
+const managerReviewTestEnabled = process.env.GIB_M1_MANAGER_REVIEW_PILOT === 'true';
+const managerReviewLiveEnabled = process.env.GIB_M1_MANAGER_REVIEW_LIVE_PILOT === 'true';
+if (managerReviewTestEnabled && managerReviewLiveEnabled) {
+  throw new Error('Manager day review cannot enable TEST and production in the same build.');
+}
+if (managerReviewTestEnabled && (!['deploy-preview', 'branch-deploy', 'dev'].includes(process.env.CONTEXT || '') || (profile.installationId === 'richmond' && profile.environment !== 'test'))) {
+  throw new Error('Manager day review requires an explicit TEST preview build.');
+}
+if (managerReviewLiveEnabled && (profile.installationId !== 'rev' || process.env.CONTEXT !== 'production')) {
+  throw new Error('The live manager day review pilot requires an explicit Revolution production build.');
+}
+const managerReviewEnabled = managerReviewTestEnabled || managerReviewLiveEnabled;
+const managerReviewTarget = managerReviewLiveEnabled ? 'production' : managerReviewTestEnabled ? 'test' : 'disabled';
+await writeFile(new URL('../m1/manager-review-config.generated.js', import.meta.url), `globalThis.M1_MANAGER_REVIEW_CONFIG = Object.freeze(${JSON.stringify({ enabled: managerReviewEnabled, target: managerReviewTarget })});\n`);
+await writeFile(new URL('../netlify/functions/_lib/m1-manager-review.generated.mjs', import.meta.url), `export const MANAGER_REVIEW_ENABLED = ${managerReviewEnabled};\nexport const MANAGER_REVIEW_TARGET = ${JSON.stringify(managerReviewTarget)};\n`);
 const promotionsTestEnabled = process.env.GIB_PROMOTIONS_TEST_ENABLED === 'true';
 const promotionsLiveEnabled = process.env.GIB_PROMOTIONS_LIVE_ENABLED === 'true';
 if (promotionsTestEnabled && promotionsLiveEnabled) {

@@ -34,6 +34,14 @@ const STAFF_CLOCK_CLIENT_URL = new URL(
   `staff-clock-client.mjs?v=${encodeURIComponent(SHELL_REVISION)}`,
   SCOPE_URL
 ).href;
+const STAFF_RECOVERY_CLIENT_URL = new URL(
+  `staff-recovery-client.mjs?v=${encodeURIComponent(SHELL_REVISION)}`,
+  SCOPE_URL
+).href;
+const MANAGER_REVIEW_CONFIG_URL = new URL(
+  `manager-review-config.generated.js?v=${encodeURIComponent(SHELL_REVISION)}`,
+  SCOPE_URL
+).href;
 const KIOSK_ENHANCEMENTS_CSS_URL = new URL(
   `kiosk-enhancements.css?v=${encodeURIComponent(SHELL_REVISION)}`,
   SCOPE_URL
@@ -53,6 +61,8 @@ const SHELL_URLS = Object.freeze([
   SYNC_CORE_URL,
   STAFF_CLOCK_CORE_URL,
   STAFF_CLOCK_CLIENT_URL,
+  STAFF_RECOVERY_CLIENT_URL,
+  MANAGER_REVIEW_CONFIG_URL,
   KIOSK_ENHANCEMENTS_CSS_URL,
   KIOSK_ENHANCEMENTS_URL,
   KIOSK_ENHANCEMENTS_CORE_URL,

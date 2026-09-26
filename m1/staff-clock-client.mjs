@@ -7,7 +7,8 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-09-13-kiosk-walk-away-c';
+} from './staff-clock-core.mjs?v=2026-09-25-recovery-a';
+import { createStaffRecovery, staffRecoveryEnabled, staffRecoveryFinish } from './staff-recovery-client.mjs?v=2026-09-25-recovery-a';
 
 const installationProfile = globalThis.M1_INSTALLATION_PROFILE;
 const STAFF_CLOCK_PAIRING_ENABLED = installationProfile?.featureFlags?.staffClockPairing === true;
@@ -45,6 +46,12 @@ const STAFF_CLOCK_STATE_VERSION = 2;
 const STAFF_CLOCK_MAX_INCLUDED_RECORDS = 500;
 const STAFF_CLOCK_MAX_ATTENTION_GROUPS = 600;
 const $ = selector => document.querySelector(selector);
+const STAFF_RECOVERY_ENABLED = staffRecoveryEnabled(installationProfile, globalThis.M1_MANAGER_REVIEW_CONFIG, location);
+const STAFF_RECOVERY_TARGET = IS_PRODUCTION_ORIGIN ? 'production' : 'test';
+const STAFF_RECOVERY_KEY = `gib_m1b_staff_recovery_pending_v1:${installationProfile?.installationId}:${STAFF_RECOVERY_TARGET}`;
+let staffRecovery = null;
+let staffRecoveryMessage = '';
+let staffRecoveryFormFor = '';
 
 function fmtDate(value) {
   const parts = {};
@@ -78,7 +85,9 @@ function fmtDate(value) {
     'linkedPunchId',
     'originalTimestamp',
     'originalDate',
-    'adjustmentRequestId'
+    'adjustmentRequestId',
+    'recoveryRequestId',
+    'previousClockInPunchId'
   ]);
   const STAFF_SYNC_BATCH_SIZE = 20;
   let staffClockPeople = [];
@@ -169,7 +178,9 @@ function fmtDate(value) {
       'linkedPunchId',
       'originalTimestamp',
       'originalDate',
-      'adjustmentRequestId'
+      'adjustmentRequestId',
+      'recoveryRequestId',
+      'previousClockInPunchId'
     ]);
     if (
       !requiredKeys.every(key => Object.hasOwn(value, key))
@@ -192,7 +203,11 @@ function fmtDate(value) {
       linkedPunchId: String(value.linkedPunchId || ''),
       originalTimestamp: String(value.originalTimestamp || ''),
       originalDate: String(value.originalDate || ''),
-      adjustmentRequestId: String(value.adjustmentRequestId || '')
+      adjustmentRequestId: String(value.adjustmentRequestId || ''),
+      ...(value.recoveryRequestId || value.previousClockInPunchId ? {
+        recoveryRequestId: String(value.recoveryRequestId || ''),
+        previousClockInPunchId: String(value.previousClockInPunchId || '')
+      } : {})
     };
     if (
       !STAFF_PUNCH_ID_PATTERN.test(record.punchId)
@@ -722,16 +737,22 @@ function fmtDate(value) {
       open ? [staffClockBaselineOpenRecord(open), ...merged.records] : merged.records,
       {
       now,
-      attention: merged.attention
+      attention: merged.attention,
+      recoveryEnabled: typeof STAFF_RECOVERY_ENABLED !== 'undefined' && STAFF_RECOVERY_ENABLED
       }
     );
     const baselineAttention = state.baseline?.needsAttention
       .filter(item => item.staffId === staffId) || [];
-    return baselineAttention.length
+    const blockingBaseline = baselineAttention.filter(item => !(typeof STAFF_RECOVERY_ENABLED !== 'undefined' && STAFF_RECOVERY_ENABLED
+      && (item.code === 'missing_clock_out_recovery' || (item.code === 'missing_clock_out'
+        && evaluated.nextPunchAction === 'clockOut' && open && item.linkedPunchIds.includes(open.punchId)
+        && now.getTime() - Date.parse(open.clockInAt) >= 0 && now.getTime() - Date.parse(open.clockInAt) <= 18 * 60 * 60 * 1000))));
+    return blockingBaseline.length
       ? {
           ...evaluated,
           needsAttention: true,
-          attention: baselineAttention.map(item => ({
+          nextPunchAction: null,
+          attention: blockingBaseline.map(item => ({
             code: item.code,
             punchId: item.linkedPunchIds[0] || '',
             message: item.message
@@ -789,6 +810,127 @@ function fmtDate(value) {
 
   function createStaffClockPunchId() {
     return createStaffPunchId();
+  }
+
+  function staffRecoveryPendingFor(staffId) {
+    try { return staffRecovery.pending()?.punch.staffId === staffId; }
+    catch { return true; }
+  }
+
+  function renderStaffRecovery() {
+    const panel = $('#staffRecovery');
+    if (!panel) return;
+    const person = selectedStaffClockPerson();
+    let pending;
+    try { pending = staffRecovery.pending(); }
+    catch (error) {
+      panel.hidden = false;
+      $('#staffRecoveryStatus').textContent = error.message;
+      $('#staffRecoveryOpen').hidden = true;
+      $('#staffRecoveryForm').hidden = true;
+      $('#staffRecoveryRetry').hidden = true;
+      return;
+    }
+    if (staffClockConfirmationActive && !pending) { panel.hidden = true; return; }
+    const state = person ? staffClockStatusFor(person.staffId) : null;
+    const open = state?.clockInRecord;
+    const hasPendingHours = state?.attention?.some(item => ['MISSING_CLOCK_OUT_RECOVERY', 'missing_clock_out_recovery'].includes(item.code))
+      || (person && loadStaffClockState().baseline?.needsAttention.some(item => item.staffId === person.staffId && item.code === 'missing_clock_out_recovery'));
+    panel.hidden = !pending && (!person || (!open && !hasPendingHours && !staffRecoveryMessage));
+    $('#staffRecoveryOpen').hidden = Boolean(pending) || !open || staffClockAvailability !== 'ready';
+    $('#staffRecoveryOpen').disabled = staffRecovery.busy();
+    $('#staffRecoveryRetry').hidden = !pending;
+    $('#staffRecoveryRetry').disabled = staffRecovery.busy() || navigator.onLine === false;
+    $('#staffRecoveryForm').hidden = Boolean(pending) || !open || staffRecoveryFormFor !== open.punchId;
+    $('#staffRecoveryStatus').textContent = pending
+      ? `${pending.punch.staffName}: new shift from ${formatStaffClockTime(pending.punch.timestamp)} is saved on this tablet, waiting for central confirmation. The previous shift is unchanged. ${staffRecovery.busy() ? 'Checking…' : 'It will retry when connected.'}`
+      : staffRecoveryMessage || (hasPendingHours
+        ? 'Previous shift hours are pending manager review and are not included in approved hours.'
+        : open ? 'Forgot to clock out from an earlier shift? Start your new shift now and send the earlier finish for manager review.' : '');
+  }
+
+  async function startStaffRecovery(event) {
+    event.preventDefault();
+    if (!staffRecovery || staffRecovery.busy() || staffClockAvailability !== 'ready') return;
+    const person = selectedStaffClockPerson();
+    if (!person) return;
+    const current = staffClockStatusFor(person.staffId);
+    const previous = current.clockInRecord;
+    if (!previous || previous.punchId !== staffRecoveryFormFor) return;
+    try {
+      const when = newYorkStaffTimestamp(new Date());
+      const unsure = $('#staffRecoveryUnknown').checked;
+      const finishAt = unsure ? null : staffRecoveryFinish($('#staffRecoveryFinish').value);
+      if (!unsure && (!finishAt || Date.parse(finishAt) <= Date.parse(previous.timestamp) || Date.parse(finishAt) > Date.parse(when.timestamp)
+        || Date.parse(finishAt) - Date.parse(previous.timestamp) > 18 * 60 * 60 * 1000)) {
+        throw new Error('Choose an earlier finish after that shift began. If the time is uncertain, select “I’m not sure.”');
+      }
+      const original = {
+        operation: 'recover', requestId: `gib-m1-staff-request-${crypto.randomUUID()}`,
+        previousClockInPunchId: previous.punchId,
+        punch: { punchId: createStaffClockPunchId(), timestamp: when.timestamp, date: when.date,
+          staffId: person.staffId, staffName: person.staffName, punchAction: 'clockIn',
+          site: installationProfile.siteCode,
+          device: 'Staff Clock tablet', build: BUILD, note: '' },
+        proposedFinishAt: finishAt
+      };
+      await staffRecovery.begin(original);
+    } catch (error) {
+      staffRecoveryMessage = error.message;
+      renderStaffClock();
+    }
+  }
+
+  function initializeStaffRecovery() {
+    if (!STAFF_RECOVERY_ENABLED) return;
+    staffRecovery = createStaffRecovery({ storage: localStorage, key: STAFF_RECOVERY_KEY, target: STAFF_RECOVERY_TARGET,
+      post: body => {
+        if (navigator.onLine === false) throw new Error('Waiting for a connection.');
+        return postStaffClock(body);
+      },
+      onConfirmed: async (original, item) => {
+        const record = normalizeStaffClockRecord({ ...original.punch, status: 'ACTIVE', source: 'Tablet',
+          recoveryRequestId: original.requestId, previousClockInPunchId: original.previousClockInPunchId });
+        if (!record) throw new Error('The confirmed new shift could not be verified.');
+        const state = loadStaffClockState();
+        const existing = state.overlay.find(value => value.punchId === record.punchId);
+        if (existing && !sameStaffClockRecord(existing, record)) throw new Error('The saved new shift differs from the confirmed record.');
+        saveStaffClockState({ ...state, overlay: existing ? state.overlay : [...state.overlay, record] });
+        staffClockStateRevision += 1;
+        staffRecoveryFormFor = '';
+        staffRecoveryMessage = item.status === 'approved'
+          ? 'New shift confirmed. The previous shift was approved by a manager.'
+          : 'New shift confirmed. Previous shift hours are pending manager review and are not included in approved hours.';
+      },
+      onChange: (state, original, error) => {
+        if (error?.staffClockStatus === 401 && IS_PRODUCTION_ORIGIN) showStaffClockAuthorizationRequired();
+        if (state === 'confirmed' && !staffClockConfirmationActive && selectedStaffClockPerson()?.staffId === original.punch.staffId) {
+          showStaffClockConfirmation({ staffId: original.punch.staffId, staffName: original.punch.staffName }, original.punch, { waiting: false });
+        }
+        renderStaffClock();
+        if (state === 'confirmed') void refreshStaffClockSnapshot();
+      }
+    });
+    $('#staffRecoveryOpen').addEventListener('click', () => {
+      const previous = staffClockStatusFor(selectedStaffClockPerson()?.staffId).clockInRecord;
+      if (!previous || staffRecovery.busy()) return;
+      staffRecoveryFormFor = previous.punchId;
+      staffRecoveryMessage = `Earlier shift started ${new Intl.DateTimeFormat('en-US', { timeZone: TZ, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(previous.timestamp))}. Your new shift starts when you press “Start new shift now.”`;
+      $('#staffRecoveryUnknown').checked = true;
+      $('#staffRecoveryFinish').disabled = true;
+      renderStaffRecovery();
+    });
+    $('#staffRecoveryUnknown').addEventListener('change', () => { $('#staffRecoveryFinish').disabled = $('#staffRecoveryUnknown').checked; });
+    $('#staffRecoveryCancel').addEventListener('click', () => { staffRecoveryFormFor = ''; staffRecoveryMessage = ''; renderStaffRecovery(); });
+    $('#staffRecoveryForm').addEventListener('submit', startStaffRecovery);
+    $('#staffRecoveryRetry').addEventListener('click', () => void staffRecovery.retryOriginal());
+    $('#staffClockName').addEventListener('change', () => { staffRecoveryFormFor = ''; staffRecoveryMessage = ''; renderStaffRecovery(); });
+    const resume = () => { if (!document.hidden && navigator.onLine !== false && staffClockAvailability !== 'authorization-required') void staffRecovery.resume(); };
+    window.addEventListener('online', resume);
+    window.addEventListener('pageshow', resume);
+    document.addEventListener('visibilitychange', resume);
+    window.setInterval(resume, STAFF_CLOCK_RETRY_INTERVAL_MS);
+    resume();
   }
 
   function showStaffClockConfirmation(person, punch, options = {}) {
@@ -874,6 +1016,7 @@ function fmtDate(value) {
 
   function renderStaffClock() {
     updateStaffClockDelivery();
+    if (typeof staffRecovery !== 'undefined' && staffRecovery) renderStaffRecovery();
     if (staffClockConfirmationActive) return;
     if (staffClockAvailability !== 'ready') {
       $('#btnStaffClockAction').disabled = true;
@@ -892,7 +1035,15 @@ function fmtDate(value) {
     }
 
     const current = staffClockStatusFor(person.staffId);
-    if (current.needsAttention) {
+    if (typeof staffRecovery !== 'undefined' && staffRecovery && staffRecoveryPendingFor(person.staffId)) {
+      statusElement.textContent = 'New shift waiting for confirmation';
+      statusElement.className = 'staff-clock-status warn';
+      action.textContent = 'Waiting to confirm';
+      action.dataset.action = '';
+      action.disabled = true;
+      return;
+    }
+    if (current.needsAttention && !(typeof STAFF_RECOVERY_ENABLED !== 'undefined' && STAFF_RECOVERY_ENABLED && current.nextPunchAction)) {
       statusElement.textContent = 'Needs attention';
       statusElement.classList.add('warn');
       action.textContent = 'Admin review needed';
@@ -920,13 +1071,14 @@ function fmtDate(value) {
     ) return;
     const person = selectedStaffClockPerson();
     if (!person) return;
+    if (typeof staffRecovery !== 'undefined' && staffRecovery && staffRecoveryPendingFor(person.staffId)) return;
     const action = $('#btnStaffClockAction');
     const state = loadStaffClockState();
     const current = staffClockStatusFor(person.staffId, state);
     const expectedAction = current.clockedIn ? 'clockOut' : 'clockIn';
     const statusElement = $('#staffClockStatus');
 
-    if (current.needsAttention) {
+    if (current.needsAttention && !(typeof STAFF_RECOVERY_ENABLED !== 'undefined' && STAFF_RECOVERY_ENABLED && current.nextPunchAction)) {
       statusElement.textContent = 'Needs attention';
       statusElement.classList.add('warn');
       action.disabled = true;
@@ -2316,6 +2468,7 @@ function refreshStaffAdminWhenVisible() {
 }
 
 function initializeStaffClockClient() {
+  initializeStaffRecovery();
   $('#staffClockName')?.addEventListener('change', renderStaffClock);
   $('#btnStaffClockAction')?.addEventListener('click', performStaffClockAction);
   $('#btnStaffClockDone')?.addEventListener('click', resetStaffClockCard);
