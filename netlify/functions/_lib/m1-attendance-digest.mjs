@@ -24,6 +24,7 @@ export function defaultDigestConfiguration(scope, env = {}) {
   const dailyLocalTime = env.GIB_M1_ATTENDANCE_DIGEST_LOCAL_TIME || '22:00';
   if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(dailyLocalTime)) throw new Error('Digest time configuration is invalid.');
   return { schema: DIGEST_SCHEMA, target: 'test', sendingEnabled: false, dailyLocalTime,
+    ...(scope.syntheticRehearsal === true ? { syntheticRehearsal: true } : {}),
     cutoffConfirmed: env.GIB_M1_DIGEST_CUTOFF_CONFIRMED === 'true', timezone: DIGEST_TIMEZONE,
     recipients: [{ key: 'andrew', name: 'Andrew', address: address('GIB_M1_ATTENDANCE_DIGEST_ANDREW_EMAIL') },
       { key: 'stu', name: 'Stu', address: address('GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL') }],
@@ -136,14 +137,18 @@ export function buildAttendanceDigest({ jobDate, snapshots, schedules, configura
   }
   const itemCount = groups.reduce((n, group) => n + group.items.length, 0);
   return { schema: DIGEST_SCHEMA, target: 'test', date: jobDate, generatedAt: new Date(now).toISOString(), sendingEnabled: false,
+    ...(configuration.syntheticRehearsal === true ? { syntheticRehearsal: true } : {}),
     recipients: configuration.recipients, groups, readFailures, itemCount, shouldCapture: itemCount > 0 || readFailures.length > 0 };
 }
 
 export function renderAttendanceDigest(digest) {
-  const subject = `TEST attendance attention · ${digest.date}${digest.readFailures.length ? ' · check incomplete' : ''}`;
+  const synthetic = digest.syntheticRehearsal === true;
+  const subject = `${synthetic ? 'SYNTHETIC REHEARSAL · ' : ''}TEST attendance attention · ${digest.date}${digest.readFailures.length ? ' · check incomplete' : ''}`;
+  const introduction = synthetic ? 'Controlled synthetic rehearsal. These are isolated fixtures, not real attendance or instructions to correct records. No real closing time has been confirmed.'
+    : 'Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.';
   const to = digest.recipients.map(r => `${r.name}${r.address ? ' <' + r.address + '>' : ' (address not configured)'}`).join(', ');
   const lines = ['TEST CAPTURE — actual email sending is disabled.', 'To: ' + to, 'Subject: ' + subject, '',
-    'Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.'];
+    introduction];
   let html = '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + escape(subject) + '</title><body style="margin:0;background:#f3f5f7;color:#17212c;font:16px/1.55 Arial,sans-serif"><main style="max-width:680px;margin:24px auto;padding:28px;background:white;border:1px solid #dce2e8;border-radius:12px"><p style="font-size:13px;font-weight:bold;color:#795714">TEST CAPTURE · sending disabled</p><h1 style="font-size:25px;line-height:1.2">Attendance that needs attention</h1><p>' + escape(digest.date) + ' · Eastern time</p><p><strong>To:</strong> ' + escape(to) + '</p><p>Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.</p>';
   for (const group of digest.groups) {
     const failures = digest.readFailures.filter(f => f.gym === group.gym);
@@ -151,7 +156,7 @@ export function renderAttendanceDigest(digest) {
     lines.push('', group.name); html += '<h2 style="font-size:20px;margin-top:28px">' + escape(group.name) + '</h2>';
     if (group.items.length) {
       html += '<ul style="padding-left:22px">';
-      for (const item of group.items) { lines.push(`${item.date} — ${item.summary}`, item.url); html += '<li style="margin:12px 0"><strong>' + escape(item.date) + '</strong> — ' + escape(item.summary) + '<br><a href="' + escape(item.url) + '">Open authenticated correction screen</a></li>'; }
+      for (const item of group.items) { lines.push(`${item.date} — ${item.summary}`, ...(synthetic ? [] : [item.url])); html += '<li style="margin:12px 0"><strong>' + escape(item.date) + '</strong> — ' + escape(item.summary) + (synthetic ? '' : '<br><a href="' + escape(item.url) + '">Open authenticated correction screen</a>') + '</li>'; }
       html += '</ul>';
     }
     if (failures.length) {
@@ -163,6 +168,7 @@ export function renderAttendanceDigest(digest) {
   if (!digest.shouldCapture) { lines.push('', 'No outstanding items were found in the complete checks. No daily email is needed.'); html += '<p>No outstanding items were found in the complete checks. No daily email is needed.</p>'; }
   lines.push('', 'Late uploads and corrections are checked again in the next digest. A day being unreviewed alone is not an email trigger.', 'This is a capture preview; real delivery has not been tested.');
   html += '<hr style="border:0;border-top:1px solid #dce2e8;margin:28px 0"><p style="font-size:13px;color:#546171">Late uploads and corrections are checked again in the next digest. A day being unreviewed alone is not an email trigger.</p><p style="font-size:13px;color:#546171">This is a capture preview; real delivery has not been tested.</p></main></body></html>';
+  if (synthetic) html = html.replace('Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.', escape(introduction));
   return { subject, html, text: lines.join('\n') };
 }
 

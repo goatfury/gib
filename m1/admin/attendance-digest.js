@@ -2,6 +2,7 @@
   'use strict';
   const API = '/api/m1-attendance-digest';
   const KEY = 'm1-attendance-digest-test-rev-pending-v1';
+  const REHEARSAL_KEY = 'm1-attendance-digest-test-rev-rehearsal-v1';
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const TERMINAL = new Set(['captured', 'suppressed', 'failed', 'expired']);
   const clean = value => typeof value === 'string' ? value.trim() : '';
@@ -18,6 +19,7 @@
     let active = false, generation = 0, busy = false, current = false;
     let data = null, pending = null, storageBlocked = false, note = '', flight = null;
     let draftTime = '', timeConfirmed = false;
+    let rehearsal = null;
     const timers = new Map(), downloads = new Set();
     const authenticated = () => Boolean(clean(getAdmin()));
     const live = own => active && generation === own && authenticated();
@@ -59,8 +61,43 @@
         note = 'The previous capture could not be verified on this browser. New captures are paused.';
       }
     }
+    function rememberRehearsal(value) {
+      const serialized = JSON.stringify(value);
+      global.sessionStorage.setItem(REHEARSAL_KEY, serialized);
+      if (global.sessionStorage.getItem(REHEARSAL_KEY) !== serialized) throw new Error('Rehearsal journal unavailable');
+      rehearsal = value;
+    }
+    function restoreRehearsal() {
+      rehearsal = null;
+      try {
+        const raw = global.sessionStorage.getItem(REHEARSAL_KEY);
+        if (raw) {
+          const value = JSON.parse(raw);
+          if (!value || Object.keys(value).sort().join('|') !== 'rehearsalId|startedAt'
+            || !UUID.test(value.rehearsalId) || !Number.isSafeInteger(value.startedAt) || value.startedAt < 0) throw new Error('Invalid rehearsal journal');
+          rehearsal = value;
+        }
+        const params = global.location?.href ? new global.URL(global.location.href).searchParams : null;
+        if (params?.has('digestRehearsal')) {
+          const id = params.get('digestRehearsal');
+          if (params.getAll('digestRehearsal').length !== 1 || !UUID.test(id)
+            || (rehearsal && rehearsal.rehearsalId !== id)) throw new Error('Invalid rehearsal link');
+          if (!rehearsal) rememberRehearsal({ rehearsalId: id, startedAt: Date.now() });
+        }
+      } catch {
+        storageBlocked = true;
+        note = 'The original rehearsal or its link could not be verified. New actions are paused.';
+      }
+    }
+    function validRehearsal(value) {
+      return value && rehearsal && value.rehearsalId === rehearsal.rehearsalId && value.synthetic === true
+        && ['armed', 'expired'].includes(value.state) && /^\d{4}-\d{2}-\d{2}$/.test(value.jobDate)
+        && [value.createdAt, value.cutoffAt, value.expiresAt].every(Number.isSafeInteger)
+        && value.createdAt >= 0 && value.cutoffAt >= value.createdAt + 120000
+        && value.cutoffAt < value.createdAt + 180000 && value.expiresAt === value.createdAt + 1800000;
+    }
     function validCapture(value) {
-      return value && ['captured', 'suppressed', 'failed'].includes(value.state)
+      return value && ['prepared', 'captured', 'suppressed', 'failed'].includes(value.state)
         && clean(value.messageId) && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
         && typeof value.subject === 'string' && typeof value.html === 'string'
         && typeof value.text === 'string' && Array.isArray(value.groups)
@@ -81,9 +118,15 @@
     function validResponse(value) {
       return validConfiguration(value) && (value.latest === null || validCapture(value.latest));
     }
+    function canReturnToNormal() {
+      return current && validRehearsal(data?.rehearsal) && (data.rehearsal.state === 'expired'
+        || (validCapture(data.latest) && ['captured', 'suppressed', 'failed'].includes(data.latest.state)
+          && data.latest.messageId === `m1-test-rehearsal-${rehearsal.rehearsalId}-${data.rehearsal.jobDate}`
+          && data.latest.date === data.rehearsal.jobDate));
+    }
     function timeControls() {
       const fieldset = el('fieldset');
-      fieldset.disabled = busy || !current || Boolean(pending);
+      fieldset.disabled = busy || !current || Boolean(pending) || Boolean(rehearsal) || storageBlocked;
       fieldset.append(el('legend', 'Daily message time'));
       const label = el('label', 'Time in ' + data.configuration.timezone);
       label.htmlFor = 'attendanceDigestTime';
@@ -119,9 +162,22 @@
         root.append(timeControls());
       }
       const controls = el('div', '', 'form-actions');
-      controls.append(button('Capture preview', 'capture', busy || !current || Boolean(pending) || storageBlocked),
-        button(pending ? 'Check original capture' : 'Refresh status', 'refresh', busy));
+      controls.append(button('Capture preview', 'capture', busy || !current || Boolean(pending) || Boolean(rehearsal) || storageBlocked),
+        button(rehearsal ? 'Refresh rehearsal status' : pending ? 'Check original capture' : 'Refresh status', 'refresh', busy));
       root.append(controls);
+      root.append(el('h3', 'Controlled synthetic rehearsal'));
+      root.append(el('p', 'Uses isolated fixtures only. No real records are changed and no email is sent. This does not approve or change the real daily cutoff.', 'muted'));
+      root.append(button('Run controlled synthetic rehearsal', 'rehearsal', busy || !current || Boolean(pending) || Boolean(rehearsal) || storageBlocked));
+      if (rehearsal) {
+        root.append(el('p', 'Rehearsal ID: ' + rehearsal.rehearsalId, 'muted'));
+        if (!validRehearsal(data?.rehearsal)) root.append(button('Retry original rehearsal', 'rehearsal-retry', busy || storageBlocked || Boolean(pending)));
+        root.append(button('Return to normal capture', 'rehearsal-return', busy || !canReturnToNormal()));
+        const lease = data?.rehearsal;
+        if (validRehearsal(lease)) {
+          const at = value => new Date(value).toLocaleString('en-US', { timeZone: 'America/New_York' });
+          root.append(el('p', `Synthetic cutoff: ${at(lease.cutoffAt)} Eastern. Expires: ${at(lease.expiresAt)} Eastern. Status: ${lease.state}.`));
+        }
+      }
       const status = el('p', note || (busy ? 'Checking capture status…' : pending
         ? 'The original capture is not yet confirmed. Check its status before another capture.'
         : current ? 'Ready to capture a preview. Sending remains off.' : 'Capture status unavailable.'), 'message');
@@ -131,9 +187,10 @@
       status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); root.append(status);
       const capture = data?.latest;
       if (!capture) return;
-      root.append(el('h3', `${pending ? 'Previous preview' : 'Latest preview'} · ${capture.date}`));
+      root.append(el('h3', `${rehearsal ? 'Synthetic rehearsal preview' : pending ? 'Previous preview' : 'Latest preview'} · ${capture.date}`));
       root.append(el('p', capture.subject));
       if (!current) root.append(el('p', 'This is the last loaded preview. Current records could not be checked.', 'manager-warning'));
+      if (capture.state === 'prepared') root.append(el('p', 'This preview is prepared; capture has not been confirmed.', 'manager-warning'));
       if (capture.state === 'failed' || capture.readFailures.length) {
         root.append(el('p', 'Some records could not be checked. This preview does not confirm that everything is resolved.', 'manager-warning'));
         const failures = el('ul');
@@ -199,7 +256,19 @@
     function accept(value, own) {
       if (!live(own)) return false;
       if (!validResponse(value)) throw new Error('Invalid capture status');
+      if (rehearsal && (!validRehearsal(value.rehearsal) || (value.latest
+        && (value.latest.messageId !== `m1-test-rehearsal-${rehearsal.rehearsalId}-${value.rehearsal.jobDate}`
+          || value.latest.date !== value.rehearsal.jobDate)))) throw new Error('Original rehearsal not confirmed');
       data = value; current = true;
+      if (rehearsal) {
+        note = value.rehearsal.state === 'expired'
+          ? 'The synthetic rehearsal has expired. Any displayed preview remains isolated from real records. No email was sent.'
+          : value.latest?.state === 'captured' ? 'Synthetic rehearsal preview captured. No real records changed and no email was sent.'
+            : 'Synthetic rehearsal armed. Refresh its status after the temporary trigger runs. No email will be sent.';
+        // Any pending ordinary capture belongs to its original scope. Reading
+        // a synthetic rehearsal can neither confirm nor clear that journal.
+        return true;
+      }
       if (!pending) return true;
       const result = value.request;
       if (!result || result.requestId !== pending.requestId
@@ -226,12 +295,14 @@
         clear(); onUnauthorized?.(); return;
       }
       note = pending ? 'The original capture is not confirmed. Check its status before another capture. No new capture was started.'
+        : rehearsal ? 'The original synthetic rehearsal is not confirmed. Refresh its status; no new rehearsal was started.'
         : 'Capture status unavailable. Records have not been confirmed.';
     }
     async function read(own, deadline, poll) {
       for (let count = 0; count < (poll ? 12 : 1) && live(own) && Date.now() < deadline; count++) {
         try {
-          const value = await send(API + (pending ? `?requestId=${encodeURIComponent(pending.requestId)}` : ''), undefined, deadline);
+          const query = [pending && !rehearsal ? `requestId=${encodeURIComponent(pending.requestId)}` : '', rehearsal ? `rehearsalId=${encodeURIComponent(rehearsal.rehearsalId)}` : ''].filter(Boolean).join('&');
+          const value = await send(API + (query ? '?' + query : ''), undefined, deadline);
           if (!live(own)) return;
           if (accept(value, own)) return;
           note = 'Capturing the original preview… No email will be sent.'; render();
@@ -247,10 +318,10 @@
     function run(capture) {
       if (!active || !authenticated()) { clear(); return Promise.resolve(false); }
       if (flight) return flight;
-      if (capture && (!current || pending || storageBlocked)) return Promise.resolve(false);
+      if (capture && (!current || pending || rehearsal || storageBlocked)) return Promise.resolve(false);
       const own = generation, deadline = Date.now() + 60000;
       busy = true; timeConfirmed = false; draftTime = '';
-      note = storageBlocked ? 'The previous capture could not be verified on this browser. New captures are paused.' : '';
+      note = storageBlocked ? 'The previous capture or rehearsal could not be verified on this browser. New captures are paused.' : '';
       render();
       const operation = (async () => {
         if (capture) {
@@ -274,7 +345,7 @@
             if (!live(own)) return false;
           }
         }
-        await read(own, deadline, Boolean(pending));
+        await read(own, deadline, Boolean(pending && !rehearsal));
         return current;
       })();
       flight = operation.finally(() => {
@@ -286,7 +357,7 @@
     function configure() {
       if (!active || !authenticated()) { clear(); return Promise.resolve(false); }
       if (flight) return flight;
-      if (!current || pending || !timeConfirmed || !validTime(draftTime)) return Promise.resolve(false);
+      if (!current || pending || rehearsal || storageBlocked || !timeConfirmed || !validTime(draftTime)) return Promise.resolve(false);
       const own = generation, requestedTime = draftTime;
       busy = true; timeConfirmed = false; note = 'Saving the confirmed time…'; render();
       const operation = (async () => {
@@ -310,13 +381,86 @@
       });
       return flight;
     }
+    function armRehearsal(retryOriginal = false) {
+      if (!active || !authenticated()) { clear(); return Promise.resolve(false); }
+      if (flight) return flight;
+      if (pending || storageBlocked || (retryOriginal ? !rehearsal || validRehearsal(data?.rehearsal) : !current || rehearsal)) return Promise.resolve(false);
+      const own = generation;
+      if (!retryOriginal) {
+        try {
+          const rehearsalId = global.crypto?.randomUUID?.();
+          if (!UUID.test(rehearsalId)) throw new Error('Rehearsal identity unavailable');
+          rememberRehearsal({ rehearsalId, startedAt: Date.now() });
+        } catch {
+          storageBlocked = true; note = 'The rehearsal could not preserve its request. No rehearsal was started.'; render();
+          return Promise.resolve(false);
+        }
+      }
+      data = data ? { ...data, latest: null } : null; busy = true; timeConfirmed = false; draftTime = '';
+      note = retryOriginal ? 'Checking the original rehearsal before retrying…' : 'Arming the isolated synthetic rehearsal…'; render();
+      const operation = (async () => {
+        try {
+          const statusUrl = `${API}?rehearsalId=${encodeURIComponent(rehearsal.rehearsalId)}`;
+          if (retryOriginal) {
+            try {
+              const existing = await send(statusUrl, undefined, Date.now() + 12000);
+              if (!live(own)) return false;
+              return accept(existing, own);
+            } catch (error) {
+              if (!live(own)) return false;
+              // Only a precise missing-lease response permits this explicitly
+              // requested retry. Network/auth/foreign replies never re-arm.
+              if (error?.status !== 404 || (error?.data?.code || error?.code) !== 'DIGEST_REHEARSAL_MISSING') throw error;
+            }
+          }
+          const value = await send(API, { action: 'armRehearsal', rehearsalId: rehearsal.rehearsalId }, Date.now() + 12000);
+          if (!live(own)) return false;
+          if (value?.ok !== true || value.target !== 'test' || value.sendingEnabled !== false || !validRehearsal(value.rehearsal)) throw new Error('Rehearsal not confirmed');
+          if (!data) {
+            const checked = await send(statusUrl, undefined, Date.now() + 12000);
+            if (!live(own)) return false;
+            return accept(checked, own);
+          }
+          data = { ...data, rehearsal: value.rehearsal }; current = true;
+          note = 'Synthetic rehearsal armed. Refresh its status after the temporary trigger runs. No real records changed and no email will be sent.';
+          return true;
+        } catch (error) { failure(error, own); return false; }
+      })();
+      flight = operation.finally(() => {
+        if (generation !== own) return;
+        busy = false; flight = null; render();
+      });
+      return flight;
+    }
+    function returnToNormal() {
+      if (!active || !authenticated()) { clear(); return Promise.resolve(false); }
+      if (flight || !canReturnToNormal()) return Promise.resolve(false);
+      try {
+        if (global.location?.href) {
+          const url = new global.URL(global.location.href);
+          if (url.searchParams.has('digestRehearsal')) {
+            url.searchParams.delete('digestRehearsal');
+            global.history.replaceState(global.history.state, '', url.href);
+          }
+        }
+        // Only the resolved active rehearsal pointer is removed. The central
+        // history and the independent ordinary-capture journal stay intact.
+        global.sessionStorage.removeItem(REHEARSAL_KEY);
+        if (global.sessionStorage.getItem(REHEARSAL_KEY) !== null) throw new Error('Rehearsal pointer unavailable');
+      } catch {
+        note = 'Normal capture could not be reopened. The original rehearsal remains available; try again.';
+        render(); return Promise.resolve(false);
+      }
+      rehearsal = null; data = null; current = false; timeConfirmed = false; draftTime = '';
+      return run(false);
+    }
     function download(format) {
       if (!active || !authenticated()) { clear(); return; }
       if (!current || busy || !data?.latest?.[format]) return;
       const blob = new global.Blob([data.latest[format]], { type: format === 'html' ? 'text/html;charset=utf-8' : 'text/plain;charset=utf-8' });
       const url = global.URL.createObjectURL(blob); downloads.add(url);
       const anchor = el('a'); anchor.href = url;
-      anchor.download = `attendance-digest-test-${data.latest.date}.${format === 'html' ? 'html' : 'txt'}`;
+      anchor.download = `attendance-digest-${rehearsal ? 'synthetic-rehearsal' : 'test'}-${data.latest.date}.${format === 'html' ? 'html' : 'txt'}`;
       root.append(anchor); anchor.click(); anchor.remove();
       const id = global.setTimeout(() => {
         timers.delete(id); global.URL.revokeObjectURL(url); downloads.delete(url);
@@ -337,13 +481,16 @@
       if (action === 'capture') void run(true);
       else if (action === 'refresh') void run(false);
       else if (action === 'configure') void configure();
+      else if (action === 'rehearsal') void armRehearsal();
+      else if (action === 'rehearsal-retry') void armRehearsal(true);
+      else if (action === 'rehearsal-return') void returnToNormal();
       else if (action === 'html' || action === 'text') download(action);
     });
     root.hidden = true;
     return Object.freeze({
       open() {
         if (!authenticated()) { clear(); return Promise.resolve(false); }
-        if (!active) { active = true; storageBlocked = false; restore(); }
+        if (!active) { active = true; storageBlocked = false; restore(); restoreRehearsal(); }
         return run(false);
       },
       clear

@@ -2,13 +2,14 @@ import { jsonResponse, runtimeConfig } from './_lib/m1-common.mjs';
 import { attendanceDigestScope } from './m1-attendance-digest.mjs';
 import { DIGEST_SIGNATURE_HEADER, authenticateDigestJob, processDigestJob } from './_lib/m1-attendance-digest-outbox.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
+import { processDigestRehearsal } from './_lib/m1-attendance-digest-rehearsal.mjs';
 
 export const config = { path: '/api/m1-attendance-digest-job', rateLimit: { windowLimit: 20, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 const responseCodes = new Set(['DIGEST_AUTHENTICATION_FAILED', 'DIGEST_RUNTIME_UNAVAILABLE', 'DIGEST_INVALID_JSON', 'DIGEST_INVALID_ENVELOPE',
   'DIGEST_BINDING_MISMATCH', 'DIGEST_REQUEST_EXPIRED', 'DIGEST_GYM_MISMATCH', 'DIGEST_MANUAL_REQUEST_MISSING', 'DIGEST_RESULT_CONFLICT',
   'DIGEST_STORAGE_INCOMPLETE', 'DIGEST_STORAGE_UNCONFIRMED', 'DIGEST_CONFIGURATION_UNAVAILABLE', 'DIGEST_REQUEST_MISSING',
   'DIGEST_OUTBOX_UNCONFIRMED', 'DIGEST_OUTBOX_INCOMPLETE', 'DIGEST_CAPTURE_CONFLICT', 'DIGEST_CAPTURE_UNCONFIRMED',
-  'DIGEST_CAPTURE_STATUS_UNCONFIRMED', 'DIGEST_JOB_UNAVAILABLE']);
+  'DIGEST_CAPTURE_STATUS_UNCONFIRMED', 'DIGEST_JOB_UNAVAILABLE', 'DIGEST_REHEARSAL_EXPIRED', 'DIGEST_REHEARSAL_MISSING', 'DIGEST_REHEARSAL_INVALID', 'DIGEST_REHEARSAL_UNAVAILABLE']);
 export async function handleAttendanceDigestJob(request, dependencies = {}) {
   const url = new URL(request.url), clock = dependencies.clock || Date.now, started = clock();
   let requestId = null, stage = 'job.scope';
@@ -40,7 +41,7 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
     stage = 'job.capture';
     // Await complete central capture before acknowledging the scheduler. No
     // unowned dispatch, browser timer, real mail or Google response dependency.
-    const result = await processDigestJob(job, scope, dependencies);
+    const result = await (job.binding.mode === 'rehearsal' ? processDigestRehearsal : processDigestJob)(job, scope, dependencies);
     report(200, 'DIGEST_JOB_ACCEPTED');
     return jsonResponse(200, { ok: true, accepted: true, requestId: job.binding.requestId, state: result.state, messageId: result.messageId || null });
   } catch (error) {

@@ -14,6 +14,7 @@ function visibleStatus(h) {
 }
 const ID = '00000000-0000-4000-8000-000000000001';
 const KEY = 'm1-attendance-digest-test-rev-pending-v1';
+const REHEARSAL_KEY = 'm1-attendance-digest-test-rev-rehearsal-v1';
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 const preview = (state = 'captured', overrides = {}) => ({ messageId: 'digest-one', date: '2026-09-25', state,
   subject: 'Attendance needs attention', html: '<html><script>unsafe()</script><body>Test</body></html>',
@@ -26,8 +27,9 @@ const pendingStatus = () => ({ requestId: ID, state: 'pending', expiresAt: 16000
 const capturedStatus = () => ({ requestId: ID, state: 'captured', expiresAt: 160000, messageId: 'digest-one' });
 
 function harness(options = {}) {
-  const calls = [], nodes = [], clicked = [], blobs = [], revoked = [], timers = new Map();
-  let now = 100000, timerId = 0, unauthorized = 0, admin = 'Andrew';
+  const calls = [], nodes = [], clicked = [], blobs = [], revoked = [], timers = new Map(), historyChanges = [];
+  const location = options.href ? { href: options.href } : undefined;
+  let now = 100000, timerId = 0, unauthorized = 0, uuidCalls = 0, admin = 'Andrew';
   class Element {
     constructor(tag) { this.tag = tag; this.children = []; this.events = {}; this.dataset = {}; this.style = {}; this.attributes = {}; this.ownText = ''; }
     set innerHTML(_) { throw new Error('Response HTML must never enter the DOM'); }
@@ -46,11 +48,13 @@ function harness(options = {}) {
   const root = new Element('section'); root.ownerDocument = document;
   const storage = options.storage || new Map();
   const context = vm.createContext({ document, Date: class extends Date { static now() { return now; } },
-    crypto: { randomUUID: () => ID },
+    crypto: { randomUUID: () => { uuidCalls++; return ID; } },
     sessionStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => { if (options.brokenStorage) throw new Error('blocked'); storage.set(key, value); }, removeItem: key => storage.delete(key) },
     setTimeout: (fn, ms) => { const id = ++timerId; timers.set(id, { fn, at: now + ms }); return id; },
     clearTimeout: id => timers.delete(id), Blob: class { constructor(parts, options) { blobs.push({ parts, options }); } },
-    URL: { createObjectURL: () => 'blob:preview', revokeObjectURL: url => revoked.push(url) }
+    URL: Object.assign(class extends URL {}, { createObjectURL: () => 'blob:preview', revokeObjectURL: url => revoked.push(url) }),
+    location,
+    history: { state: { retained: true }, replaceState: (state, title, href) => { historyChanges.push({ state, title, href }); location.href = href; } }
   });
   vm.runInContext(source, context);
   const ui = context.GIBM1AttendanceDigest.create({ root, enabled: true, target: 'test', site: 'Rev',
@@ -59,7 +63,7 @@ function harness(options = {}) {
   const all = () => { const found = []; const visit = node => { found.push(node); node.children.forEach(visit); }; visit(root); return found; };
   const control = action => all().find(node => node.dataset.digestAction === action);
   return { ui, calls, root, nodes, storage, clicked, blobs, revoked, timers, control, element: id => all().find(node => node.id === id),
-    unauthorized: () => unauthorized, logout: () => { admin = ''; },
+    unauthorized: () => unauthorized, uuidCalls: () => uuidCalls, location, historyChanges, logout: () => { admin = ''; },
     click: action => { const target = control(action); if (target) root.events.click({ target }); },
     tick: async ms => {
       const end = now + ms;
@@ -205,7 +209,7 @@ test('unavailable journal prevents capture dispatch and corrupt pending data can
   assert.equal(h.control('capture').disabled, true);
   const bad = harness({ storage: new Map([[KEY, '{broken']]) }); await open(bad);
   bad.click('capture'); assert.equal(bad.calls.length, 1);
-  assert.match(bad.root.textContent, /previous capture could not be verified/);
+  assert.match(bad.root.textContent, /previous capture or rehearsal could not be verified/);
 });
 
 function chooseTime(h, time, confirmed = true) {
@@ -282,4 +286,198 @@ test('confirmation is never restored from saved cutoff state or sent while a cap
   h.calls[1].reject(new Error('lost')); await flush(); h.calls[2].reject(new Error('offline')); await flush();
   h.control('configure').disabled = false; h.click('configure');
   assert.equal(h.calls.length, 3, 'the operation guard also rejects configuration while the original capture is unresolved');
+});
+
+const lease = (overrides = {}) => ({ rehearsalId: ID, createdAt: 100000, cutoffAt: 240000, expiresAt: 1900000,
+  jobDate: '2026-09-25', state: 'armed', synthetic: true, ...overrides });
+const armed = (overrides = {}) => ({ ok: true, target: 'test', sendingEnabled: false, rehearsal: lease(), ...overrides });
+const syntheticPreview = (overrides = {}) => preview('captured', { messageId: `m1-test-rehearsal-${ID}-2026-09-25`, subject: 'SYNTHETIC REHEARSAL · TEST attendance attention', ...overrides });
+const rehearsalResponse = (latest = null, overrides = {}) => response(latest, null, { rehearsal: lease(), ...overrides });
+
+test('explicit rehearsal arm preserves the original UUID before its only POST and never changes the real cutoff', async () => {
+  const h = harness(); await open(h, response(preview()));
+  assert.match(h.root.textContent, /isolated fixtures only/);
+  h.click('rehearsal'); h.click('rehearsal'); h.click('capture');
+  assert.deepEqual(JSON.parse(h.storage.get(REHEARSAL_KEY)), { rehearsalId: ID, startedAt: 100000 });
+  assert.equal(h.calls.length, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[1].args[1])), { action: 'armRehearsal', rehearsalId: ID });
+  assert.equal(h.calls[1].args[2].method, 'POST');
+  assert.doesNotMatch(h.root.textContent, /Attendance needs attention/, 'ordinary preview is removed when the rehearsal scope starts');
+  h.calls[1].resolve(armed()); await flush();
+  assert.match(visibleStatus(h).textContent, /Synthetic rehearsal armed/);
+  assert.match(h.root.textContent, /Synthetic cutoff:.*Expires:.*Status: armed/);
+  assert.match(h.root.textContent, /22:00 America\/New_York \(not confirmed\)/);
+  assert.equal(h.control('capture').disabled, true); assert.equal(h.control('configure').disabled, true);
+  assert.equal(h.control('rehearsal').disabled, true); assert.equal(h.calls.length, 2);
+  h.click('refresh');
+  assert.equal(h.calls[2].args[0], `/api/m1-attendance-digest?rehearsalId=${ID}`);
+  assert.equal(h.calls[2].args[1], undefined);
+  h.calls[2].resolve(rehearsalResponse(syntheticPreview())); await flush();
+  assert.match(h.root.textContent, /Synthetic rehearsal preview captured/);
+  h.click('html'); assert.match(h.clicked[0].download, /synthetic-rehearsal/);
+  assert.equal(h.calls.filter(call => call.args[1]).length, 1);
+});
+
+test('uncertain rehearsal arm survives reload and only reads the original identity', async () => {
+  const first = harness(); await open(first); first.click('rehearsal');
+  first.calls[1].reject(new Error('reply lost')); await flush();
+  assert.match(visibleStatus(first).textContent, /original synthetic rehearsal is not confirmed/);
+  assert.equal(first.calls.length, 2); first.ui.clear();
+  const h = harness({ storage: first.storage });
+  const opening = h.ui.open();
+  assert.equal(h.calls[0].args[0], `/api/m1-attendance-digest?rehearsalId=${ID}`);
+  assert.equal(h.calls[0].args[1], undefined);
+  h.calls[0].resolve(rehearsalResponse(syntheticPreview())); await opening;
+  h.click('rehearsal'); assert.equal(h.calls.length, 1);
+  assert.equal(JSON.parse(h.storage.get(REHEARSAL_KEY)).rehearsalId, ID);
+});
+
+test('direct rehearsal link is authenticated and GET-only, showing the matching synthetic preview', async () => {
+  const href = `https://deploy-preview-89--gib-live.netlify.app/m1/admin/?digestRehearsal=${ID}#attendanceDigest`;
+  const loggedOut = harness({ href }); loggedOut.logout(); await loggedOut.ui.open();
+  assert.equal(loggedOut.calls.length, 0); assert.equal(loggedOut.root.hidden, true);
+  const h = harness({ href }); await open(h, rehearsalResponse(syntheticPreview()));
+  assert.equal(h.calls[0].args[0], `/api/m1-attendance-digest?rehearsalId=${ID}`);
+  assert.equal(h.calls[0].args[1], undefined); assert.equal(h.calls[0].args[2].method, 'GET');
+  assert.equal(h.control('rehearsal').disabled, true);
+  assert.match(h.root.textContent, /Synthetic rehearsal preview/);
+  assert.equal(h.nodes.filter(node => node.tag === 'iframe' && h.root.contains(node)).length, 1);
+  assert.equal(JSON.parse(h.storage.get(REHEARSAL_KEY)).rehearsalId, ID);
+});
+
+test('wrong-environment, unrelated or non-synthetic rehearsal results cannot become a confirmed preview', async () => {
+  for (const value of [rehearsalResponse(syntheticPreview(), { target: 'production' }),
+    rehearsalResponse(syntheticPreview(), { sendingEnabled: true }),
+    rehearsalResponse(syntheticPreview(), { rehearsal: lease({ rehearsalId: 'foreign' }) }),
+    rehearsalResponse(syntheticPreview(), { rehearsal: lease({ synthetic: false }) }),
+    rehearsalResponse(preview()), rehearsalResponse(syntheticPreview({ date: '2026-09-24' }))]) {
+    const h = harness({ storage: new Map([[REHEARSAL_KEY, JSON.stringify({ rehearsalId: ID, startedAt: 100000 })]]) });
+    await open(h, value);
+    assert.match(visibleStatus(h).textContent, /original synthetic rehearsal is not confirmed/);
+    assert.equal(h.control('capture').disabled, true); assert.equal(h.control('rehearsal').disabled, true);
+    assert.equal(h.nodes.filter(node => node.tag === 'iframe' && h.root.contains(node)).length, 0);
+    assert.equal(h.storage.has(REHEARSAL_KEY), true); assert.equal(h.calls.length, 1);
+  }
+});
+
+test('expiry, prepared state and failed reads never imply a completed rehearsal or re-arm one', async () => {
+  const h = harness({ storage: new Map([[REHEARSAL_KEY, JSON.stringify({ rehearsalId: ID, startedAt: 100000 })]]) });
+  await open(h, rehearsalResponse(syntheticPreview({ state: 'prepared' })));
+  assert.match(h.root.textContent, /capture has not been confirmed/);
+  assert.doesNotMatch(visibleStatus(h).textContent, /preview captured/);
+  h.click('refresh'); h.calls[1].resolve(rehearsalResponse(null, { rehearsal: lease({ state: 'expired' }) })); await flush();
+  assert.match(visibleStatus(h).textContent, /synthetic rehearsal has expired/);
+  assert.equal(h.control('rehearsal').disabled, true);
+  h.click('refresh'); h.calls[2].reject(new Error('offline')); await flush();
+  assert.match(visibleStatus(h).textContent, /not confirmed/);
+  assert.equal(h.calls.filter(call => call.args[1]).length, 0);
+});
+
+test('invalid links and unavailable rehearsal storage cannot arm or automatically replace an identity', async () => {
+  for (const query of ['digestRehearsal=bad', `digestRehearsal=${ID}&digestRehearsal=${ID}`]) {
+    const h = harness({ href: `https://deploy-preview-89--gib-live.netlify.app/m1/admin/?${query}` });
+    await open(h); h.click('rehearsal'); h.click('capture');
+    assert.equal(h.calls.length, 1); assert.equal(h.control('rehearsal').disabled, true);
+  }
+  const broken = harness({ brokenStorage: true }); await open(broken); broken.click('rehearsal'); await flush();
+  assert.equal(broken.calls.length, 1); assert.match(visibleStatus(broken).textContent, /No rehearsal was started/);
+});
+
+const missingRehearsal = () => Object.assign(new Error('Missing'), { status: 404, data: { code: 'DIGEST_REHEARSAL_MISSING' } });
+
+test('return to normal requires matching final proof, removes only the local rehearsal pointer and clears the direct link', async () => {
+  for (const [state, artifact] of [['expired', null], ['armed', syntheticPreview()],
+    ['armed', syntheticPreview({ state: 'suppressed' })], ['armed', syntheticPreview({ state: 'failed' })]]) {
+    const h = harness({ href: `https://deploy-preview-89--gib-live.netlify.app/m1/admin/?keep=1&digestRehearsal=${ID}#attendanceDigest` });
+    await open(h, rehearsalResponse(artifact, { rehearsal: lease({ state }) }));
+    assert.equal(h.control('rehearsal-return').disabled, false);
+    h.click('rehearsal-return');
+    assert.equal(h.storage.has(REHEARSAL_KEY), false);
+    assert.equal(h.calls[1].args[0], '/api/m1-attendance-digest'); assert.equal(h.calls[1].args[1], undefined);
+    assert.equal(h.historyChanges.length, 1); assert.deepEqual(h.historyChanges[0].state, { retained: true });
+    assert.equal(h.location.href, 'https://deploy-preview-89--gib-live.netlify.app/m1/admin/?keep=1#attendanceDigest');
+    assert.equal(h.nodes.some(node => node.tag === 'iframe' && h.root.contains(node)), false, 'the old synthetic preview is removed before reading ordinary state');
+    h.calls[1].resolve(response()); await flush();
+    assert.equal(h.control('capture').disabled, false);
+    chooseTime(h, '23:00'); assert.equal(h.control('configure').disabled, false);
+    assert.equal(h.calls.filter(call => call.args[1]).length, 0, 'returning never writes central data or history');
+    h.ui.clear(); const reopened = h.ui.open();
+    assert.equal(h.calls[2].args[0], '/api/m1-attendance-digest');
+    h.calls[2].resolve(response()); await reopened;
+    assert.equal(h.control('capture').disabled, false);
+    assert.equal(h.control('rehearsal-return'), undefined, 'reopening cannot reactivate the exited rehearsal');
+  }
+});
+
+test('viewing and exiting a completed rehearsal preserves the independent original normal-capture journal', async () => {
+  const ordinary = JSON.stringify({ requestId: ID, startedAt: 90000 });
+  const h = harness({ storage: new Map([[KEY, ordinary], [REHEARSAL_KEY, JSON.stringify({ rehearsalId: ID, startedAt: 100000 })]]),
+    href: `https://deploy-preview-89--gib-live.netlify.app/m1/admin/?digestRehearsal=${ID}#attendanceDigest` });
+  await open(h, rehearsalResponse(syntheticPreview()));
+  assert.equal(h.calls[0].args[0], `/api/m1-attendance-digest?rehearsalId=${ID}`, 'ordinary identity never enters the synthetic scope');
+  assert.equal(h.storage.get(KEY), ordinary);
+  h.click('rehearsal-return');
+  assert.equal(h.storage.get(KEY), ordinary);
+  assert.equal(h.calls[1].args[0], `/api/m1-attendance-digest?requestId=${ID}`);
+  h.calls[1].reject(new Error('ordinary read offline')); await flush();
+  assert.equal(h.storage.get(KEY), ordinary); assert.equal(h.control('capture').disabled, true);
+  assert.equal(h.storage.has(REHEARSAL_KEY), false);
+  assert.equal(h.calls.filter(call => call.args[1]).length, 0);
+});
+
+test('unknown, still-armed and stale rehearsal state cannot release the active pointer', async () => {
+  const h = harness({ storage: new Map([[REHEARSAL_KEY, JSON.stringify({ rehearsalId: ID, startedAt: 100000 })]]) });
+  await open(h, rehearsalResponse());
+  assert.equal(h.control('rehearsal-return').disabled, true);
+  h.click('rehearsal-return'); assert.equal(h.calls.length, 1);
+  h.click('refresh'); h.calls[1].resolve(rehearsalResponse(null, { rehearsal: lease({ state: 'expired' }) })); await flush();
+  assert.equal(h.control('rehearsal-return').disabled, false);
+  h.click('refresh'); h.calls[2].reject(new Error('read lost')); await flush();
+  assert.equal(h.control('rehearsal-return').disabled, true);
+  h.control('rehearsal-return').disabled = false; h.click('rehearsal-return');
+  assert.equal(h.calls.length, 3); assert.equal(h.storage.has(REHEARSAL_KEY), true);
+});
+
+test('explicit retry checks first and retries only the original arm identity after a precise missing response', async () => {
+  const h = harness(); await open(h); h.click('rehearsal');
+  const saved = h.storage.get(REHEARSAL_KEY), originalBody = JSON.stringify(h.calls[1].args[1]);
+  h.calls[1].reject(new Error('arm was not delivered')); await flush();
+  assert.equal(h.control('rehearsal-retry').disabled, false);
+  h.click('rehearsal-retry'); h.click('rehearsal-retry');
+  assert.equal(h.calls.length, 3); assert.equal(h.calls[2].args[0], `/api/m1-attendance-digest?rehearsalId=${ID}`);
+  assert.equal(h.calls[2].args[1], undefined);
+  h.calls[2].reject(missingRehearsal()); await flush();
+  assert.equal(h.calls.length, 4); assert.equal(JSON.stringify(h.calls[3].args[1]), originalBody);
+  assert.equal(h.storage.get(REHEARSAL_KEY), saved); assert.equal(h.uuidCalls(), 1);
+  h.calls[3].resolve(armed()); await flush();
+  assert.match(visibleStatus(h).textContent, /Synthetic rehearsal armed/);
+  assert.equal(h.control('rehearsal-retry'), undefined);
+});
+
+test('same-ID arm retry also recovers after reload when no configuration was loaded', async () => {
+  const saved = JSON.stringify({ rehearsalId: ID, startedAt: 90000 });
+  const h = harness({ storage: new Map([[REHEARSAL_KEY, saved]]) });
+  const opening = h.ui.open(); h.calls[0].reject(missingRehearsal()); await opening;
+  h.click('rehearsal-retry'); h.calls[1].reject(missingRehearsal()); await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[2].args[1])), { action: 'armRehearsal', rehearsalId: ID });
+  assert.equal(h.uuidCalls(), 0); assert.equal(h.storage.get(REHEARSAL_KEY), saved);
+  h.calls[2].resolve(armed()); await flush();
+  assert.equal(h.calls[3].args[0], `/api/m1-attendance-digest?rehearsalId=${ID}`);
+  h.calls[3].resolve(rehearsalResponse()); await flush();
+  assert.match(visibleStatus(h).textContent, /Synthetic rehearsal armed/);
+  assert.match(h.root.textContent, /22:00 America\/New_York \(not confirmed\)/);
+});
+
+test('retry finds an already-persisted arm without another POST and never writes after an ambiguous status read', async () => {
+  for (const outcome of [rehearsalResponse(), new Error('offline'),
+    Object.assign(new Error('wrong 404'), { status: 404, data: { code: 'OTHER_MISSING' } }),
+    rehearsalResponse(null, { target: 'production' })]) {
+    const h = harness({ storage: new Map([[REHEARSAL_KEY, JSON.stringify({ rehearsalId: ID, startedAt: 90000 })]]) });
+    const opening = h.ui.open(); h.calls[0].reject(new Error('lost read')); await opening;
+    h.click('rehearsal-retry');
+    if (outcome instanceof Error) h.calls[1].reject(outcome); else h.calls[1].resolve(outcome);
+    await flush();
+    assert.equal(h.calls.length, 2); assert.equal(h.calls.filter(call => call.args[1]).length, 0);
+    assert.equal(h.uuidCalls(), 0); assert.equal(h.storage.has(REHEARSAL_KEY), true);
+  }
 });

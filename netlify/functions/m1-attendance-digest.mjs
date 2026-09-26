@@ -3,6 +3,7 @@ import { managerReviewScope } from './_lib/m1-manager-scope.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
 import { DIGEST_ORIGIN } from './_lib/m1-attendance-digest.mjs';
 import { defaultDigestStore, digestState, saveDigestConfiguration, startManualDigest } from './_lib/m1-attendance-digest-outbox.mjs';
+import { armDigestRehearsal, digestRehearsalState } from './_lib/m1-attendance-digest-rehearsal.mjs';
 
 export const config = { path: '/api/m1-attendance-digest', rateLimit: { windowLimit: 40, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 export function attendanceDigestScope(request, dependencies = {}) {
@@ -13,7 +14,7 @@ export function attendanceDigestScope(request, dependencies = {}) {
 export async function handleAttendanceDigest(request, dependencies = {}) {
   const url = new URL(request.url);
   if (url.pathname !== config.path || url.hash || !['GET', 'POST'].includes(request.method)
-    || [...url.searchParams.keys()].some(key => key !== 'requestId') || url.searchParams.getAll('requestId').length > 1
+    || [...url.searchParams.keys()].some(key => !['requestId', 'rehearsalId'].includes(key)) || url.searchParams.getAll('requestId').length > 1 || url.searchParams.getAll('rehearsalId').length > 1
     || (url.search && request.method !== 'GET')) return jsonResponse(404, { ok: false, message: 'Digest capture unavailable.' });
   const scope = attendanceDigestScope(request, dependencies);
   if (!scope) return jsonResponse(403, { ok: false, message: 'Revolution TEST capture required.' });
@@ -27,11 +28,17 @@ export async function handleAttendanceDigest(request, dependencies = {}) {
     if (request.method === 'GET') {
       const id = url.searchParams.get('requestId');
       if (id !== null && !validId(id)) return jsonResponse(400, { ok: false, message: 'Use the original capture request.' });
+      const rehearsalId = url.searchParams.get('rehearsalId');
+      if (rehearsalId !== null) return jsonResponse(200, await digestRehearsalState(rehearsalId, id, scope, dependencies));
       return jsonResponse(200, await digestState(scope, id, dependencies));
     }
     const parsed = await readJson(request, 4096);
     if (parsed.response) return parsed.response;
     const input = parsed.value;
+    if (input.action === 'armRehearsal' && Object.keys(input).sort().join('|') === 'action|rehearsalId') {
+      const rehearsal = await armDigestRehearsal(input.rehearsalId, auth.session.adminName, scope, dependencies);
+      return jsonResponse(200, { ok: true, target: 'test', sendingEnabled: false, rehearsal });
+    }
     if (input.action === 'capture' && Object.keys(input).sort().join('|') === 'action|requestId' && validId(input.requestId)) {
       const result = await startManualDigest(input.requestId, auth.session.adminName, runtime, scope, dependencies);
       return jsonResponse(result.state === 'pending' ? 202 : 200, { ok: true, requestId: input.requestId, state: result.state,

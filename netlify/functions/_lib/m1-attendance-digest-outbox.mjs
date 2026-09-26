@@ -47,8 +47,9 @@ export function makeDigestBinding(requestId, mode, now) {
   return { schema: DIGEST_JOB_SCHEMA, target: 'test', requestId, mode, jobDate: localNow(new Date(now)).date, createdAt: now, expiresAt: now + 60000 };
 }
 export function validateDigestBinding(binding, now) {
-  if (!exact(binding, bindingKeys) || binding.schema !== DIGEST_JOB_SCHEMA || binding.target !== 'test' || !validId(binding.requestId)
-    || !['manual', 'scheduled'].includes(binding.mode) || !Number.isSafeInteger(binding.createdAt) || binding.createdAt > now
+  const rehearsal = binding?.mode === 'rehearsal';
+  if (!exact(binding, rehearsal ? [...bindingKeys, 'rehearsalId'] : bindingKeys) || binding.schema !== DIGEST_JOB_SCHEMA || binding.target !== 'test' || !validId(binding.requestId)
+    || !['manual', 'scheduled', 'rehearsal'].includes(binding.mode) || (rehearsal && !validId(binding.rehearsalId)) || !Number.isSafeInteger(binding.createdAt) || binding.createdAt > now
     || binding.expiresAt !== binding.createdAt + 60000 || !digestDate(binding.jobDate)
     || binding.jobDate !== localNow(new Date(binding.createdAt)).date) digestFail(409, 'DIGEST_BINDING_MISMATCH');
   if (now >= binding.expiresAt) digestFail(410, 'DIGEST_REQUEST_EXPIRED');
@@ -59,10 +60,10 @@ export function authenticateDigestJob(raw, header, runtime, now) {
   if (!/^[0-9a-f]{64}$/.test(header || '') || !constantTimeSecretEqual(header, digestSignature(raw, runtime.adminActionToken))) digestFail(403, 'DIGEST_AUTHENTICATION_FAILED');
   let body;
   try { body = JSON.parse(raw); } catch { digestFail(400, 'DIGEST_INVALID_JSON'); }
-  if (!exact(body, [...bindingKeys, 'gyms'])) digestFail(400, 'DIGEST_INVALID_ENVELOPE');
+  if (!exact(body, [...bindingKeys, 'gyms', ...(body?.mode === 'rehearsal' ? ['rehearsalId'] : [])])) digestFail(400, 'DIGEST_INVALID_ENVELOPE');
   const { gyms, ...binding } = body;
   validateDigestBinding(binding, now);
-  if (!Array.isArray(gyms) || gyms.length !== 1 || gyms[0]?.gym !== 'rev') digestFail(409, 'DIGEST_GYM_MISMATCH');
+  if (!Array.isArray(gyms) || (binding.mode === 'rehearsal' ? gyms.length !== 0 : gyms.length !== 1 || gyms[0]?.gym !== 'rev')) digestFail(409, 'DIGEST_GYM_MISMATCH');
   return { binding, gyms };
 }
 
@@ -134,6 +135,7 @@ export async function deliverDigestOutbox(store, record, requestId, dependencies
 export async function processDigestJob({ binding, gyms }, scope, dependencies = {}) {
   const now = clock(dependencies), store = dependencies.digestStore || await defaultDigestStore();
   validateDigestBinding(binding, now);
+  if (binding.mode === 'rehearsal') digestFail(409, 'DIGEST_BINDING_MISMATCH'); // Only the isolated rehearsal adapter may translate this mode.
   const configuration = await loadDigestConfiguration(store, scope, dependencies);
   if (!Array.isArray(gyms) || gyms.length !== configuration.gyms.length || gyms.some(g => !configuration.gyms.some(c => c.id === g.gym))) digestFail(409, 'DIGEST_GYM_MISMATCH');
   let request = await readDigestEntry(store, reqKey(binding.requestId));
@@ -168,7 +170,7 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
   const digest = buildAttendanceDigest({ jobDate: binding.jobDate, snapshots: gyms, schedules, configuration, now });
   validateDigestBinding(binding, clock(dependencies));
   const rendered = renderAttendanceDigest(digest);
-  const messageId = binding.mode === 'scheduled' ? 'm1-test-daily-' + binding.jobDate : 'm1-test-manual-' + binding.requestId;
+  const messageId = binding.mode === 'scheduled' ? (dependencies.dailyMessagePrefix || 'm1-test-daily-') + binding.jobDate : 'm1-test-manual-' + binding.requestId;
   const prepared = { schema: DIGEST_SCHEMA, messageId, date: binding.jobDate, mode: binding.mode, state: digest.shouldCapture ? 'prepared' : 'suppressed',
     requestId: binding.requestId, createdAt: new Date(now).toISOString(), capturedAt: null, sendingEnabled: false,
     ...rendered, groups: digest.groups, readFailures: digest.readFailures, itemCount: digest.itemCount, contentHash: digestHash(rendered), lastFailure: null };
