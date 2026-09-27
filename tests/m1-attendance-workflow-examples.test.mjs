@@ -317,3 +317,89 @@ test('a daily runner interruption resumes its original action and checkpoints wi
     assert.deepEqual(store.entries.get('examples/' + ID + '/original'), savedOriginal);
   }
 });
+
+test('a rejected concurrent worker waits for its delayed peer and retains only sanitized failure evidence', async () => {
+  const { store, deps } = fixture(), get = store.getWithMetadata.bind(store);
+  const prefix = 'examples/' + ID + '/scenarios/daily-calendar-dst/';
+  let release, entered, rejected, reads = 0, finished = false;
+  const blocked = new Promise(resolve => { release = resolve; });
+  const didEnter = new Promise(resolve => { entered = resolve; });
+  const didReject = new Promise(resolve => { rejected = resolve; });
+  const originalError = Object.assign(new Error('Unstored synthetic private transport detail'), { code: 'WORKFLOW_STORAGE_UNCONFIRMED', status: 503 });
+  store.getWithMetadata = async (path, options) => {
+    if (path === prefix + 'workflow/processor' && store.entries.has(prefix + 'steps/before-cutoff') && reads < 2) {
+      reads++;
+      if (reads === 1) { entered(); await blocked; }
+      else { rejected(); throw originalError; }
+    }
+    return get(path, options);
+  };
+  const running = runAttendanceWorkflowDailyExamples(ID, deps).then(value => { finished = true; return { value }; }, error => { finished = true; return { error }; });
+  await Promise.all([didEnter, didReject]);
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(finished, false, 'the background run must await the delayed processor after its peer rejects');
+  } finally { release(); }
+  const outcome = await running;
+  assert.equal(outcome.error, originalError, 'the original error is propagated without replacement or swallowing');
+  assert.equal(store.entries.get(prefix + 'workflow/processor').data.expiresAt, 0, 'the delayed winner finishes and releases normally');
+  assert.equal(store.entries.get(prefix + 'simulation/m1-test-scheduled-rev-2026-09-25').data.calls, 1);
+  assert.equal(store.entries.has(prefix + 'steps/cutoff'), false, 'a failed peer cannot be hidden behind a successful step');
+  const receipts = [...store.entries].filter(([path]) => path.startsWith(prefix + 'failures/')).map(([, entry]) => entry.data);
+  assert.equal(receipts.length, 1); assert.equal(receipts[0].stage, 'concurrent-process'); assert.equal(receipts[0].worker, 1);
+  assert.equal(receipts[0].category, 'WORKFLOW_STORAGE_UNCONFIRMED'); assert.equal(receipts[0].httpStatus, 503);
+  assert.doesNotMatch(JSON.stringify(receipts), /private transport detail|authorization|passphrase/i);
+  assert.equal(await readAttendanceWorkflowExamples(ID, deps), null);
+});
+
+test('the original partial calendar run resumes after its retained virtual lease without rewriting earlier evidence or advancing repeatedly', async () => {
+  const { store, deps } = fixture(), set = store.set.bind(store);
+  const prefix = 'examples/' + ID + '/scenarios/daily-calendar-dst/', cutoff = Date.parse('2026-09-25T22:00:00-04:00');
+  const interrupted = Object.assign(new Error('Simulated terminated worker'), { code: 'WORKFLOW_STORAGE_UNCONFIRMED' });
+  let stopped = false;
+  store.set = async (path, raw, options) => {
+    const value = JSON.parse(raw);
+    if (path === prefix + 'workflow/health' && value.checkedAt === cutoff) {
+      await set(path, raw, options); stopped = true; throw interrupted;
+    }
+    if (stopped && path === prefix + 'workflow/processor' && value.expiresAt === 0) throw interrupted;
+    return set(path, raw, options);
+  };
+  await assert.rejects(() => runAttendanceWorkflowDailyExamples(ID, deps), error => error === interrupted);
+  store.set = set;
+  const original = structuredClone(store.entries.get('examples/' + ID + '/original'));
+  const oldHealth = structuredClone(store.entries.get(prefix + 'workflow/health').data);
+  const oldProcessor = structuredClone(store.entries.get(prefix + 'workflow/processor').data);
+  const earlier = structuredClone([...store.entries].filter(([path]) => path.startsWith(prefix + 'steps/') || path.startsWith(prefix + 'failures/')));
+  assert.equal(oldHealth.checkedAt, cutoff); assert.equal(oldProcessor.expiresAt, cutoff + 600000);
+  assert.equal(store.entries.has(prefix + 'steps/cutoff'), false);
+  const second = new Store(); second.entries = structuredClone(store.entries); second.serial = store.serial;
+  const result = await runAttendanceWorkflowDailyExamples(ID, deps);
+  assert.deepEqual(result.scenarios.filter(scenario => !scenario.passed).map(scenario => [scenario.key, scenario.summary]), []);
+  const recovery = store.entries.get(prefix + 'fixture/concurrent-recovery').data;
+  assert.deepEqual(recovery.originalHealth, oldHealth); assert.deepEqual(recovery.originalProcessor, oldProcessor);
+  assert.equal(recovery.effectiveAt, oldProcessor.expiresAt + 1);
+  assert.notEqual(recovery.recoveryRequestId, oldHealth.requestId);
+  assert.equal(Date.parse(store.entries.get(prefix + 'steps/cutoff').data.digest.generatedAt), recovery.effectiveAt);
+  assert.equal(Date.parse(store.entries.get(prefix + 'steps/repeat').data.digest.generatedAt), recovery.effectiveAt + 60000);
+  assert.equal(store.entries.get(prefix + 'workflow/messages/m1-test-scheduled-rev-2026-09-25').data.firstAttemptAt, recovery.effectiveAt);
+  assert.equal(store.entries.get(prefix + 'simulation/m1-test-scheduled-rev-2026-09-25').data.calls, 1);
+  for (const [path, value] of earlier) assert.deepEqual(store.entries.get(path), value, 'earlier checkpoints and failure evidence are preserved');
+  assert.deepEqual(store.entries.get('examples/' + ID + '/original'), original);
+  const secondSet = second.set.bind(second); let stoppedAgain = false;
+  second.set = async (path, raw, options) => {
+    const value = JSON.parse(raw);
+    if (path === prefix + 'workflow/health' && value.checkedAt > cutoff) {
+      await secondSet(path, raw, options); stoppedAgain = true; throw interrupted;
+    }
+    if (stoppedAgain && path === prefix + 'workflow/processor' && value.expiresAt === 0) throw interrupted;
+    return secondSet(path, raw, options);
+  };
+  const secondDeps = { examplesStore: second, clock: deps.clock };
+  await assert.rejects(() => runAttendanceWorkflowDailyExamples(ID, secondDeps), error => error === interrupted);
+  second.set = secondSet;
+  const retainedRecovery = structuredClone(second.entries.get(prefix + 'fixture/concurrent-recovery'));
+  await assert.rejects(() => runAttendanceWorkflowDailyExamples(ID, secondDeps), error => error.code === 'WORKFLOW_EXAMPLES_RECOVERY_REQUIRES_REVIEW');
+  assert.deepEqual(second.entries.get(prefix + 'fixture/concurrent-recovery'), retainedRecovery, 'a second failure cannot extend the virtual clock repeatedly');
+  assert.equal(second.entries.has(prefix + 'simulation/m1-test-scheduled-rev-2026-09-25'), false);
+});

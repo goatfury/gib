@@ -55,6 +55,69 @@ function isolated(store, prefix) {
       }
     } };
 }
+const failureCategories = new Set(['WORKFLOW_STORAGE_INCOMPLETE', 'WORKFLOW_STORAGE_UNCONFIRMED', 'WORKFLOW_HISTORY_UNAVAILABLE',
+  'WORKFLOW_HISTORY_TRANSITION_PENDING', 'WORKFLOW_HISTORY_MIGRATION_PENDING', 'WORKFLOW_MESSAGE_UNAVAILABLE', 'WORKFLOW_HEALTH_UNAVAILABLE',
+  'WORKFLOW_HEALTH_UNCONFIRMED', 'WORKFLOW_CHECK_CONFLICT', 'WORKFLOW_FRESH_CHECK_REQUIRED', 'WORKFLOW_PROCESSOR_SUPERSEDED',
+  'WORKFLOW_OPPORTUNITY_CONFLICT', 'WORKFLOW_OPPORTUNITY_UNCONFIRMED', 'WORKFLOW_OPPORTUNITY_CONFIGURATION_INVALID',
+  'WORKFLOW_PRIOR_DELIVERY_UNCONFIRMED', 'WORKFLOW_RECIPIENT_PROOF_UNAVAILABLE', 'WORKFLOW_EVIDENCE_UNAVAILABLE',
+  'WORKFLOW_EXAMPLES_STORAGE_UNAVAILABLE', 'WORKFLOW_EXAMPLES_STORAGE_UNCONFIRMED', 'WORKFLOW_EXAMPLES_NAMESPACE_INVALID',
+  'WORKFLOW_EXAMPLES_RECOVERY_INVALID', 'WORKFLOW_EXAMPLES_RECOVERY_REQUIRES_REVIEW',
+  'WORKFLOW_EXAMPLES_PROVIDER_BODY_CHANGED', 'WORKFLOW_EXAMPLES_SIMULATION_CONFLICT', 'WORKFLOW_EXAMPLES_SIMULATION_UNCONFIRMED',
+  'SYNTHETIC_OPPORTUNITY_WRITE_FAILURE', 'SYNTHETIC_OLD_LEDGER_UNAVAILABLE']);
+const failureNames = new Map([['BlobsInternalError', 'BLOBS_STORAGE_ERROR'], ['MissingBlobsEnvironmentError', 'BLOBS_CONFIGURATION_ERROR'],
+  ['BlobsConsistencyError', 'BLOBS_CONSISTENCY_ERROR'], ['TimeoutError', 'OPERATION_TIMEOUT']]);
+async function retainFailure(store, runId, scenario, step, stage, requestId, error, worker = null) {
+  const category = [error?.code, error?.message].find(value => failureCategories.has(value))
+    || failureNames.get(error?.name)
+    || (error instanceof TypeError ? 'TYPE_ERROR' : error instanceof RangeError ? 'RANGE_ERROR' : 'UNCLASSIFIED_ERROR');
+  const status = error?.status ?? error?.statusCode;
+  const receipt = { schema: 'm1-workflow-example-failure/v1', runId, scenario, step, stage, requestId, worker, category,
+    httpStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null, observedAt: new Date().toISOString() };
+  // Diagnostics never replace the original exception, including when the
+  // underlying storage failure also prevents retaining this receipt.
+  try { Object.defineProperty(error, 'exampleFailure', { value: receipt, configurable: true }); } catch {}
+  try { await create(store, 'failures/' + randomUUID(), receipt); } catch {}
+}
+async function calendarRecovery(store, runId, scenario, step, requestedAt) {
+  const requestId = idFor([runId, scenario, step]);
+  if (scenario !== 'daily-calendar-dst' || !['cutoff', 'repeat'].includes(step)) return { at: requestedAt, requestId };
+  const cutoff = Date.parse('2026-09-25T22:00:00-04:00'), originalRequestId = idFor([runId, scenario, 'cutoff']);
+  const path = 'fixture/concurrent-recovery';
+  let saved = await read(store, path);
+  if (!saved && step === 'cutoff') {
+    const health = await read(store, 'workflow/health');
+    if (health?.data.requestId === originalRequestId && health.data.checkedAt === cutoff) {
+      const processor = await read(store, 'workflow/processor');
+      if (processor?.data.expiresAt > cutoff) {
+        const value = { schema: 'm1-workflow-example-clock-recovery/v1', runId, scenario, originalRequestId, originalAt: cutoff,
+          originalHealth: health.data, originalHealthHash: digestHash(health.data), originalProcessor: processor.data,
+          effectiveAt: processor.data.expiresAt + 1 };
+        value.recoveryRequestId = idFor([runId, scenario, 'cutoff', 'recovery', processor.data.owner, processor.data.expiresAt]);
+        if (!validCalendarRecovery(value, runId, scenario, cutoff, originalRequestId)) fail('WORKFLOW_EXAMPLES_RECOVERY_INVALID');
+        // Preserve the failed assessment before a fresh bound read can replace
+        // the mutable health head. The original run and daily IDs stay fixed.
+        saved = await create(store, path, value);
+      }
+    }
+  }
+  if (!saved) return { at: requestedAt, requestId };
+  const value = saved.data;
+  if (!validCalendarRecovery(value, runId, scenario, cutoff, originalRequestId)) fail('WORKFLOW_EXAMPLES_RECOVERY_INVALID');
+  const at = requestedAt + value.effectiveAt - cutoff;
+  if (requestedAt < cutoff || latestEligibleOpportunity(input().configuration, at).date !== '2026-09-25') fail('WORKFLOW_EXAMPLES_RECOVERY_INVALID');
+  const processor = await read(store, 'workflow/processor');
+  if (processor?.data.expiresAt > at) fail('WORKFLOW_EXAMPLES_RECOVERY_REQUIRES_REVIEW');
+  return { at, requestId: idFor([runId, scenario, step, 'recovery', value.originalProcessor.owner, value.originalProcessor.expiresAt]) };
+}
+function validCalendarRecovery(value, runId, scenario, cutoff, originalRequestId) {
+  return value?.schema === 'm1-workflow-example-clock-recovery/v1' && value.runId === runId && value.scenario === scenario
+    && value.originalAt === cutoff && value.originalRequestId === originalRequestId
+    && value.originalHealth?.requestId === originalRequestId && value.originalHealth.checkedAt === cutoff
+    && value.originalHealthHash === digestHash(value.originalHealth) && UUID.test(value.originalProcessor?.owner || '')
+    && Number.isSafeInteger(value.originalProcessor.expiresAt) && value.originalProcessor.expiresAt > cutoff
+    && value.originalProcessor.expiresAt <= cutoff + 10 * MINUTE && value.effectiveAt === value.originalProcessor.expiresAt + 1
+    && value.recoveryRequestId === idFor([runId, scenario, 'cutoff', 'recovery', value.originalProcessor.owner, value.originalProcessor.expiresAt]);
+}
 function validOriginal(value, runId) {
   return value?.schema === SCHEMA && value.runId === runId && value.synthetic === true
     && Number.isSafeInteger(value.createdAt) && value.createdAt >= 0
@@ -192,22 +255,44 @@ function harness(store, runId, scenario) {
   const dependencies = () => ({ scope: SCOPE, workflowStore: scoped, clock: () => stamp, env: SAFE_ENV,
     simulatedProvider: { identity: 'fixed-synthetic-provider', send: provider }, fetch: async () => { throw new Error('Example network forbidden'); } });
   async function tick(stage, mode = 'issue', elapsed = 0, options = {}) {
-    stamp = START + elapsed;
-    const checkpoint = await read(scoped, 'steps/' + stage);
-    if (checkpoint) return checkpoint.data;
-    const data = input(mode, stamp, options.both);
-    if (options.unconfigured) data.configuration.routing.rev.reviewer.address = null;
-    const binding = makeDigestBinding(idFor([runId, scenario, stage]), 'scheduled', options.createdAt ?? stamp);
-    const request = { ...data, binding, ...(options.due ? { due: options.due,
-      dueByGym: Object.fromEntries(data.configuration.gyms.map(gym => [gym.id, options.due])),
-      opportunityDueByGym: Object.fromEntries(data.configuration.gyms.map(gym => [gym.id, options.due])) } : {}) };
-    if (options.concurrent) await Promise.all([processAttendanceWorkflow(request, dependencies()), processAttendanceWorkflow(request, dependencies())]);
-    else await processAttendanceWorkflow(request, dependencies());
-    const messages = await workflowMessages(SCOPE, dependencies());
-    const providerStates = await Promise.all(messages.messages.map(async entry => ({ messageId: entry.messageId,
-      receipt: (await read(scoped, 'simulation/' + entry.messageId))?.data || null })));
-    const result = { messages, health: await workflowHealth(SCOPE, dependencies()), digest: data.digest, providerStates };
-    return (await create(scoped, 'steps/' + stage, result)).data;
+    let boundary = 'checkpoint-read', requestId = idFor([runId, scenario, stage]), retained = false;
+    try {
+      const checkpoint = await read(scoped, 'steps/' + stage);
+      if (checkpoint) return checkpoint.data;
+      boundary = 'clock-recovery';
+      const recovery = await calendarRecovery(scoped, runId, scenario, stage, START + elapsed);
+      stamp = recovery.at; requestId = recovery.requestId;
+      boundary = 'input-build';
+      const data = input(mode, stamp, options.both);
+      if (options.unconfigured) data.configuration.routing.rev.reviewer.address = null;
+      const binding = makeDigestBinding(requestId, 'scheduled', options.createdAt ?? stamp);
+      const request = { ...data, binding, ...(options.due ? { due: options.due,
+        dueByGym: Object.fromEntries(data.configuration.gyms.map(gym => [gym.id, options.due])),
+        opportunityDueByGym: Object.fromEntries(data.configuration.gyms.map(gym => [gym.id, options.due])) } : {}) };
+      boundary = options.concurrent ? 'concurrent-process' : 'process';
+      if (options.concurrent) {
+        // A rejected peer must not let this supported background invocation
+        // finish while its other processor still owns unfinished storage work.
+        const outcomes = await Promise.allSettled([processAttendanceWorkflow(request, dependencies()), processAttendanceWorkflow(request, dependencies())]);
+        for (let worker = 0; worker < outcomes.length; worker++) if (outcomes[worker].status === 'rejected') {
+          await retainFailure(scoped, runId, scenario, stage, boundary, requestId, outcomes[worker].reason, worker); retained = true;
+        }
+        const rejected = outcomes.find(outcome => outcome.status === 'rejected');
+        if (rejected) throw rejected.reason;
+      } else await processAttendanceWorkflow(request, dependencies());
+      boundary = 'messages-read';
+      const messages = await workflowMessages(SCOPE, dependencies());
+      boundary = 'provider-readback';
+      const providerStates = await Promise.all(messages.messages.map(async entry => ({ messageId: entry.messageId,
+        receipt: (await read(scoped, 'simulation/' + entry.messageId))?.data || null })));
+      boundary = 'health-read';
+      const result = { messages, health: await workflowHealth(SCOPE, dependencies()), digest: data.digest, providerStates };
+      boundary = 'checkpoint-save';
+      return (await create(scoped, 'steps/' + stage, result)).data;
+    } catch (error) {
+      if (!retained) await retainFailure(scoped, runId, scenario, stage, boundary, requestId, error);
+      throw error;
+    }
   }
   async function simulation(id) { return (await read(scoped, 'simulation/' + id))?.data || null; }
   async function health(elapsed) { stamp = START + elapsed; return workflowHealth(SCOPE, dependencies()); }
