@@ -25,6 +25,7 @@ const gyms = () => [{ gym: 'rev', attendance: { ok: true, ledger: { ok: true, ta
 function harness() {
   const store = memory(), tasks = [], calls = [], scheduleCalls = []; let stamp = now;
   const deps = { enabled: true, target: 'test', env, digestStore: store, clock: () => stamp,
+    backgroundFetch: async () => new Response(null, { status: 202 }),
     context: { site: { id: 'f748e737-11e3-4fab-8e8c-bf185eab29ff', name: 'gib-live' }, deploy: { context: 'deploy-preview', published: false }, waitUntil: p => tasks.push(p) },
     loadSchedules: async input => { scheduleCalls.push(input); return { gym: input.gym, timezone: 'America/New_York', days: input.dates.map(day => ({ date: day, status: 'complete', observedAt: day + 'T12:00:00.000Z', sourceVersion: 'confirmed-date-snapshot',
       occurrences: day === date ? [{ label: '6:00 PM TEST BJJ', startAt: date + 'T22:00:00.000Z', endAt: date + 'T23:00:00.000Z', cancelled: false }] : [] })) }; },

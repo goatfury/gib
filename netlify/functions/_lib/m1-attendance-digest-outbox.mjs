@@ -163,12 +163,15 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
         closingTime: configuration.dailyLocalTime, cutoffConfirmed: configuration.cutoffConfirmed, reviewSnapshots });
     } catch { return { gym: gym.id, timezone: configuration.timezone, days: [] }; }
   }));
-  if (binding.mode === 'scheduled') {
-    const due = digestDue(binding.jobDate, now, configuration, schedules);
-    if (due !== 'due') return completeRequest(store, binding.requestId, { state: due });
-  }
   const digest = buildAttendanceDigest({ jobDate: binding.jobDate, snapshots: gyms, schedules, configuration, now });
   validateDigestBinding(binding, clock(dependencies));
+  if (binding.mode === 'scheduled') {
+    const due = digestDue(binding.jobDate, now, configuration, schedules);
+    // The workflow consumes this fresh authenticated check, never an earlier
+    // immutable daily capture. Its one bounded attempt stays fully awaited.
+    if (dependencies.onDigestCheck) await dependencies.onDigestCheck({ digest, configuration, binding, due });
+    if (due !== 'due') return completeRequest(store, binding.requestId, { state: due });
+  }
   const rendered = renderAttendanceDigest(digest);
   const messageId = binding.mode === 'scheduled' ? (dependencies.dailyMessagePrefix || 'm1-test-daily-') + binding.jobDate : 'm1-test-manual-' + binding.requestId;
   const prepared = { schema: DIGEST_SCHEMA, messageId, date: binding.jobDate, mode: binding.mode, state: digest.shouldCapture ? 'prepared' : 'suppressed',

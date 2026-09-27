@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildAttendanceDigest, defaultDigestConfiguration, renderAttendanceDigest, digestDue, DIGEST_ORIGIN } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
+import { buildAttendanceDigest, defaultDigestConfiguration, renderAttendanceDigest, splitAttendanceDigest, digestDue, DIGEST_ORIGIN } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
+import { buildTestDigestEmail } from '../netlify/functions/_lib/m1-attendance-digest-email-proposal.mjs';
 import { datesThrough } from '../netlify/functions/_lib/m1-manager-review.mjs';
 
 const now = Date.parse('2026-09-25T02:30:00Z'), today = '2026-09-24';
-const configuration = () => defaultDigestConfiguration({ target: 'test', profile: { installationId: 'rev', gymName: 'Revolution BJJ' } }, { GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true' });
+const configuration = (env = {}) => defaultDigestConfiguration({ target: 'test', profile: { installationId: 'rev', gymName: 'Revolution BJJ' } }, { GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true', ...env });
 const ledger = (gym = 'rev', to = today) => ({ ok: true, target: 'test', schema: 'm1-manager-review/v1', complete: true, gym, from: '2026-09-07', to,
   days: datesThrough(to).map(date => ({ date, attendanceHash: 'a'.repeat(64), records: [], warnings: [], review: null })) });
 const snapshots = () => [{ gym: 'rev', attendance: { ok: true, ledger: ledger() }, staff: { ok: true, complete: true, items: [] } }];
@@ -106,12 +107,125 @@ test('pending staff proposals appear with original item identity; resolved items
 
 test('isolated multi-gym fixtures stay grouped and never let one gym sign-in satisfy another', () => {
   const config = configuration(); config.gyms.push({ id: 'richmond', name: 'Richmond BJJ', timezone: 'America/New_York', adminUrl: 'https://gib-richmond-test.netlify.app/m1/admin/' });
+  config.syntheticRehearsal = true;
   const gyms = snapshots(); gyms.push({ gym: 'richmond', attendance: { ok: true, ledger: ledger('richmond') }, staff: { ok: true, complete: true, items: [] } });
   gyms[0].attendance.ledger.days.at(-1).records.push(instructor());
   const dates = [schedules(), schedules('richmond')]; dates.forEach(schedule => schedule.days.at(-1).occurrences.push(occurrence()));
   const value = buildAttendanceDigest({ jobDate: today, snapshots: gyms, schedules: dates, configuration: config, now });
   assert.equal(value.groups[0].items.length, 0); assert.equal(value.groups[1].items.length, 1); assert.match(value.groups[1].items[0].url, /^https:\/\/gib-richmond-test/);
   assert.throws(() => buildAttendanceDigest({ jobDate: today, snapshots: gyms, schedules: dates, configuration: configuration(), now }), /configured gyms/);
+});
+
+const routeEnv = { GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL: 'stu@example.test', GIB_M1_ATTENDANCE_DIGEST_TREY_EMAIL: 'trey@example.test',
+  GIB_M1_ATTENDANCE_DIGEST_ANDREW_EMAIL: 'andrew@example.test' };
+function routed(change = () => {}, env = routeEnv) {
+  const config = configuration(env); config.syntheticRehearsal = true;
+  config.gyms.push({ id: 'richmond', name: 'Richmond BJJ', timezone: 'America/New_York', adminUrl: 'https://gib-richmond-test.netlify.app/m1/admin/' });
+  const input = { jobDate: today, configuration: config, now, schedules: [schedules(), schedules('richmond')], snapshots: [
+    ...snapshots(), { gym: 'richmond', attendance: { ok: true, ledger: ledger('richmond') }, staff: { ok: true, complete: true, items: [] } }
+  ] };
+  change(input);
+  const digest = buildAttendanceDigest(input);
+  return { config, digest, messages: splitAttendanceDigest(digest, config) };
+}
+const issueForBoth = input => {
+  for (const [index, name] of ['Revolution-only synthetic staff', 'Richmond-only synthetic staff'].entries()) {
+    input.snapshots[index].staff.items.push({ id: 'original-' + index, kind: 'time-correction', staffName: name, date: today,
+      status: 'pending', summary: 'Finish proposal still awaits review.' });
+  }
+};
+
+test('routing defaults Revolution to Stu and Richmond to Trey; Andrew is never copied just because his address exists', () => {
+  const { config, messages } = routed(issueForBoth);
+  assert.deepEqual(config.recipients.map(person => person.key), ['stu']);
+  assert.deepEqual(config.routing.rev.reviewer, { key: 'stu', name: 'Stu', address: 'stu@example.test' });
+  assert.deepEqual(config.routing.richmond.reviewer, { key: 'trey', name: 'Trey', address: 'trey@example.test' });
+  assert.deepEqual(messages.map(value => [value.gym, value.routeStatus, value.to, value.cc]), [
+    ['rev', 'ready', ['stu@example.test'], []], ['richmond', 'ready', ['trey@example.test'], []]
+  ]);
+  for (const message of messages) assert.doesNotMatch(message.rendered.text, /andrew@example.test|Cc:/);
+});
+
+test('each gym message excludes the other gym data and links, and names its own reviewer and gym', () => {
+  const { digest, messages } = routed(issueForBoth), before = JSON.stringify(digest);
+  const [rev, richmond] = messages;
+  assert.match(rev.rendered.subject, /Revolution BJJ/); assert.doesNotMatch(rev.rendered.subject, /Richmond BJJ/);
+  assert.match(rev.rendered.text, /To: Stu <stu@example.test>/); assert.match(rev.rendered.text, /Revolution-only synthetic staff/);
+  assert.doesNotMatch(rev.rendered.text + rev.rendered.html, /trey@example.test|Richmond-only|gib-richmond-test/);
+  assert.match(richmond.rendered.text, /To: Trey <trey@example.test>/); assert.match(richmond.rendered.text, /Richmond-only synthetic staff/);
+  assert.doesNotMatch(richmond.rendered.text + richmond.rendered.html, /stu@example.test|Revolution-only|deploy-preview-89/);
+  assert.match(rev.rendered.html, /https:\/\/deploy-preview-89--gib-live.netlify.app\/m1\/admin\/#staff-time/);
+  assert.match(richmond.rendered.html, /https:\/\/gib-richmond-test.netlify.app\/m1\/admin\/#staff-time/);
+  assert.equal(JSON.stringify(digest), before);
+  rev.digest.groups[0].items[0].summary = 'Changed returned copy'; assert.equal(JSON.stringify(digest), before);
+});
+
+test('Andrew copy is explicit, copied separately, and deduplicated if it equals the gym reviewer mailbox', () => {
+  const { messages } = routed(issueForBoth, { ...routeEnv, GIB_M1_ATTENDANCE_DIGEST_COPY_ANDREW: 'true' });
+  for (const message of messages) {
+    assert.deepEqual(message.cc, ['andrew@example.test']); assert.match(message.rendered.text, /Cc: Andrew <andrew@example.test>/);
+    assert.match(message.rendered.html, /<strong>Cc:<\/strong> Andrew &lt;andrew@example.test&gt;/);
+    assert.equal(message.to.length, 1);
+  }
+  const copiedReviewer = routed(issueForBoth, { ...routeEnv, GIB_M1_ATTENDANCE_DIGEST_COPY_ANDREW: 'true', GIB_M1_ATTENDANCE_DIGEST_ANDREW_EMAIL: 'STU@example.test' });
+  assert.deepEqual(copiedReviewer.messages[0].cc, []);
+  assert.deepEqual(copiedReviewer.messages[1].cc, ['STU@example.test']);
+});
+
+test('clean complete gyms generate no message, while unavailable checks generate only the affected gym message', () => {
+  const clean = routed();
+  for (const message of clean.messages) { assert.equal(message.routeStatus, 'suppressed'); assert.equal(message.code, 'NO_OUTSTANDING_ITEMS'); assert.equal(message.rendered, null); }
+  for (const index of [0, 1]) {
+    const { messages } = routed(input => { input.snapshots[index].attendance = { ok: false }; });
+    assert.equal(messages[1 - index].routeStatus, 'suppressed'); assert.equal(messages[1 - index].rendered, null);
+    const failed = messages[index]; assert.equal(failed.routeStatus, 'ready'); assert.equal(failed.digest.itemCount, 0);
+    assert.equal(failed.digest.readFailures.length, 1); assert.match(failed.rendered.subject, /check incomplete/);
+    assert.match(failed.rendered.text, /Instructor attendance could not be checked/);
+    assert.doesNotMatch(failed.rendered.text, /No outstanding items were found/);
+    assert.equal(failed.digest.readFailures[0].gym, failed.gym);
+  }
+});
+
+test('missing reviewer address is blocked instead of falling back to Andrew or the other gym', () => {
+  const { messages } = routed(issueForBoth, { GIB_M1_ATTENDANCE_DIGEST_ANDREW_EMAIL: 'andrew@example.test', GIB_M1_ATTENDANCE_DIGEST_TREY_EMAIL: 'trey@example.test' });
+  assert.equal(messages[0].routeStatus, 'blocked'); assert.equal(messages[0].code, 'REVIEWER_UNCONFIGURED'); assert.deepEqual(messages[0].to, []);
+  assert.match(messages[0].rendered.text, /Stu \(address not configured\)/); assert.doesNotMatch(messages[0].rendered.text, /andrew@example.test|trey@example.test/);
+  assert.equal(messages[1].routeStatus, 'ready');
+});
+
+test('routing validation rejects altered reviewers, arbitrary CC, unsafe addresses, cross-gym links and non-synthetic Richmond', () => {
+  for (const env of [{ GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL: 'Stu <stu@example.test>' },
+    { GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL: false }, { GIB_M1_ATTENDANCE_DIGEST_TREY_EMAIL: 0 },
+    { GIB_M1_ATTENDANCE_DIGEST_TREY_EMAIL: 'trey@example.test\r\nBcc:x@example.test' },
+    { GIB_M1_ATTENDANCE_DIGEST_COPY_ANDREW: true }, { GIB_M1_ATTENDANCE_DIGEST_COPY_ANDREW: 'yes' },
+    { GIB_M1_ATTENDANCE_DIGEST_COPY_ANDREW: 'true' }]) assert.throws(() => configuration(env));
+  for (const mutate of [
+    c => { c.routing.rev.reviewer.key = 'trey'; }, c => { c.routing.richmond.reviewer.name = 'Stu'; },
+    c => { c.routing.rev.cc.push({ key: 'trey', name: 'Trey', address: 'trey@example.test' }); },
+    c => { c.routing.richmond.extra = true; }, c => { delete c.routing.rev; },
+    c => { c.gyms[0].name = 'Revolution\r\nInjected subject'; },
+    c => { c.syntheticRehearsal = false; }, c => { c.target = 'production'; }, c => { c.sendingEnabled = true; }
+  ]) { const { config, digest } = routed(issueForBoth); mutate(config); assert.throws(() => splitAttendanceDigest(digest, config)); }
+  for (const mutate of [
+    d => { d.groups[0].items[0].url = 'https://gib-richmond-test.netlify.app/m1/admin/#staff-time'; },
+    d => { d.groups[0].items[0].url = 'https://gib-live.netlify.app/m1/admin/#staff-time'; },
+    d => { d.groups[1].gym = 'rev'; }, d => { d.groups[1].name = 'Revolution BJJ'; },
+    d => { d.groups[0].items[0].extra = 'foreign data'; }, d => { d.itemCount = 0; }, d => { d.shouldCapture = false; }
+  ]) { const { config, digest } = routed(issueForBoth); mutate(digest); assert.throws(() => splitAttendanceDigest(digest, config)); }
+  const failed = routed(input => { input.snapshots[0].staff = { ok: false }; });
+  failed.digest.readFailures[0].url = 'https://gib-richmond-test.netlify.app/m1/admin/#staff-time';
+  assert.throws(() => splitAttendanceDigest(failed.digest, failed.config));
+});
+
+test('legacy capture configuration remains buildable and readable but cannot infer a new delivery route', () => {
+  const config = configuration(); delete config.routing;
+  config.recipients = [{ key: 'andrew', name: 'Andrew', address: null }, { key: 'stu', name: 'Stu', address: null }];
+  const digest = buildAttendanceDigest({ jobDate: today, snapshots: snapshots(), schedules: [schedules()], configuration: config, now });
+  const saved = structuredClone(renderAttendanceDigest(digest));
+  assert.match(saved.text, /To: Andrew \(address not configured\), Stu \(address not configured\)/);
+  assert.deepEqual(renderAttendanceDigest(structuredClone(digest)), saved);
+  assert.throws(() => splitAttendanceDigest(digest, config), /Explicit per-gym routing/);
+  assert.equal(buildTestDigestEmail('revbjjops@gmail.com').hash, 'e6d9cb9ef42a36302b7a5f1a70d9c6a6d82ec3840b29a27d17af3a85d1499115', 'completed single TEST email stays byte-for-byte unchanged');
 });
 
 test('rendered HTML and plain text preserve safe direct authenticated links and explicitly identify unsent capture', () => {

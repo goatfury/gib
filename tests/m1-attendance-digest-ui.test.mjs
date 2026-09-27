@@ -120,6 +120,25 @@ test('open only reads configuration, shows unconfigured addresses, and isolates 
   h.ui.clear(); assert.equal(h.root.textContent, ''); assert.equal(h.revoked.includes('blob:preview'), true);
 });
 
+test('new per-gym routing displays each proposed reviewer and keeps Andrew copying explicitly off by default', async () => {
+  const value = response(); value.configuration.routing = { rev: { reviewer: { key: 'stu', name: 'Stu', address: null }, cc: [] },
+    richmond: { reviewer: { key: 'trey', name: 'Trey', address: null }, cc: [] } };
+  value.configuration.recipients = [value.configuration.routing.rev.reviewer];
+  const h = harness(); await open(h, value);
+  assert.match(h.root.textContent, /Revolution: Stu — address not configured\. Andrew copy: off/);
+  assert.match(h.root.textContent, /Richmond \(setup only\): Trey — address not configured\. Andrew copy: off/);
+  assert.match(h.root.textContent, /grants no access and enables no delivery/); assert.equal(h.calls.length, 1);
+  assert.doesNotMatch(h.root.textContent, /Recipients: Andrew/);
+  value.configuration.routing.rev.cc = [{ key: 'andrew', name: 'Andrew', address: 'andrew@example.invalid' }];
+  const copied = harness(); await open(copied, value); assert.match(copied.root.textContent, /Andrew copy: andrew@example.invalid/);
+});
+
+test('malformed new routing never becomes confirmed configuration while legacy captures remain compatible', async () => {
+  const value = response(); value.configuration.routing = { rev: { reviewer: { key: 'stu', name: 'Stu', address: null }, cc: [] } };
+  const h = harness(); await open(h, value); assert.match(h.root.textContent, /Capture status unavailable/);
+  assert.doesNotMatch(h.root.textContent, /Daily cutoff:/); assert.equal(h.control('capture').disabled, true);
+});
+
 test('capture journals its exact ID before the one POST and polls only that original request', async () => {
   const h = harness(); await open(h);
   h.click('capture'); h.click('capture'); h.click('refresh');

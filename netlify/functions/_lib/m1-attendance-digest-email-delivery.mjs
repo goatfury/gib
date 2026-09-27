@@ -15,13 +15,17 @@ const stamp = value => Number.isSafeInteger(value) && value >= 0;
 const clock = deps => (deps.now || deps.clock || Date.now)();
 const env = (deps, name) => deps.env ? deps.env[name] : globalThis.Netlify?.env?.get(name);
 // Retained only server-side: a provider key may select another account with a separate dedupe namespace.
-const credentialFingerprint = deps => digestHash('m1-digest-test-email-resend-credential/v1\n' + env(deps, 'GIB_M1_DIGEST_TEST_RESEND_API_KEY'));
+const credentialFingerprint = (deps, policy) => policy ? policy.credentialFingerprint(deps) : digestHash('m1-digest-test-email-resend-credential/v1\n' + env(deps, 'GIB_M1_DIGEST_TEST_RESEND_API_KEY'));
 const scopeIsValid = deps => deps.scope?.target === 'test' && deps.scope.profile?.installationId === 'rev';
 const messageKey = id => 'messages/' + id;
 const receiptKey = (id, attemptId) => 'attempts/' + id + '/' + attemptId;
 const canonical = message => ({ messageId: message?.messageId, from: message?.from, to: message?.to,
   subject: message?.subject, html: message?.html, text: message?.text, synthetic: message?.synthetic, target: message?.target });
 export const hashTestDigestEmail = message => digestHash(canonical(message));
+const selectedCanonical = (message, policy) => policy ? policy.canonical(message) : canonical(message);
+const selectedValid = (message, policy) => policy ? policy.validMessage(message) : validMessage(message);
+const selectedHash = (message, policy) => digestHash(selectedCanonical(message, policy));
+const selectedBase = (policy, ...args) => ({ ...base(...args), ...(policy ? { messageId: args[0]?.messageId || null } : {}) });
 
 function validMessage(message) {
   return exact(message, ['messageId', 'hash', 'from', 'to', 'subject', 'html', 'text', 'synthetic', 'target'])
@@ -57,7 +61,8 @@ export function testDigestEmailReadiness(message, deps = {}) {
   if (!checks.providerCredentialConfigured) codes.push('TEST_PROVIDER_NOT_CONFIGURED');
   return { ...checks, codes };
 }
-function gate(message, deps) {
+function gate(message, deps, policy) {
+  if (policy) { const result = policy.gate(message, deps); return result ? selectedBase(policy, message, result.state, result.code) : null; }
   const checks = testDigestEmailReadiness(message, deps);
   if (!checks.scopeValid) return base(message, 'blocked', 'TEST_REVOLUTION_REQUIRED');
   if (!checks.sendingEnabled) return base(message, 'disabled', 'TEST_SENDING_DISABLED');
@@ -76,10 +81,10 @@ async function readEntry(store, key) {
   if (found && (!found.data || typeof found.etag !== 'string' || !found.etag)) throw new Error('STORAGE_INCOMPLETE');
   return found;
 }
-function validLedger(ledger, message) {
-  if (!exact(ledger, ['schema', 'message', 'createdAt', 'attempts']) || ledger.schema !== SCHEMA || !validMessage(ledger.message)
+function validLedger(ledger, message, policy) {
+  if (!exact(ledger, ['schema', 'message', 'createdAt', 'attempts']) || ledger.schema !== SCHEMA || !selectedValid(ledger.message, policy)
     || !stamp(ledger.createdAt) || !Array.isArray(ledger.attempts) || !ledger.attempts.length || ledger.attempts.length > MAX_ATTEMPTS
-    || ledger.message.hash !== message.hash || hashTestDigestEmail(ledger.message) !== hashTestDigestEmail(message)) return false;
+    || ledger.message.hash !== message.hash || selectedHash(ledger.message, policy) !== selectedHash(message, policy)) return false;
   const ids = new Set();
   return ledger.attempts.every((attempt, index) => {
     const valid = exact(attempt, ['attemptId', 'startedAt', 'leaseUntil', 'credentialFingerprint']) && UUID.test(attempt.attemptId)
@@ -104,11 +109,14 @@ function validReceipt(receipt, message, attempt) {
         && receipt.httpStatus >= 400 && receipt.httpStatus <= 499 && ![408, 409].includes(receipt.httpStatus)
         : !['PROVIDER_ACCEPTED', 'PROVIDER_REJECTED'].includes(receipt.category)));
 }
-async function retainedState(store, message, now) {
+async function retainedState(store, message, now, policy) {
+  let lastAttemptAt = null;
+  const base = (...args) => ({ ...selectedBase(policy, ...args), ...(policy ? { lastAttemptAt } : {}) });
   const entry = await readEntry(store, messageKey(message.messageId));
   if (!entry) return { entry: null, result: base(message, 'not-started', 'NO_RETAINED_DELIVERY') };
-  if (!validLedger(entry.data, message)) return { entry, result: base(message, 'blocked', 'RETAINED_MESSAGE_MISMATCH') };
+  if (!validLedger(entry.data, message, policy)) return { entry, result: base(message, 'blocked', 'RETAINED_MESSAGE_MISMATCH') };
   const ledger = entry.data, attemptCount = ledger.attempts.length, retryBefore = ledger.createdAt + RETRY_MS;
+  lastAttemptAt = ledger.attempts.at(-1).startedAt;
   const found = await Promise.all(ledger.attempts.map(attempt => readEntry(store, receiptKey(message.messageId, attempt.attemptId))));
   if (found.some((receipt, index) => receipt && !validReceipt(receipt.data, message, ledger.attempts[index])))
     return { entry, result: base(message, 'blocked', 'RETAINED_RECEIPT_INVALID', { attemptCount, retryBefore }) };
@@ -127,24 +135,28 @@ async function retainedState(store, message, now) {
 }
 
 // Readback remains available after the send switch is turned off. It never dispatches or modifies storage.
-export async function readTestDigestEmailDelivery(message, deps = {}) {
+async function readDelivery(message, deps = {}, policy) {
+  const base = (...args) => selectedBase(policy, ...args);
   if (!scopeIsValid(deps)) return base(message, 'blocked', 'TEST_REVOLUTION_REQUIRED');
-  if (!validMessage(message)) return base(message, 'blocked', 'INVALID_TEST_MESSAGE');
+  if (!selectedValid(message, policy)) return base(message, 'blocked', 'INVALID_TEST_MESSAGE');
   const now = clock(deps);
   if (!stamp(now)) return base(message, 'blocked', 'CLOCK_UNAVAILABLE');
-  try { return (await retainedState(await storeFor(deps), message, now)).result; }
+  try { return (await retainedState(await storeFor(deps), message, now, policy)).result; }
   catch { return base(message, 'unknown', 'DELIVERY_STORAGE_UNAVAILABLE'); }
 }
 
-async function providerAttempt(message, attempt, deps) {
+export async function requestDigestEmailProvider(message, deps, signal) {
+  return (deps.fetch || globalThis.fetch)(PROVIDER_URL, { method: 'POST', redirect: 'error',
+    headers: { Authorization: 'Bearer ' + env(deps, 'GIB_M1_DIGEST_TEST_RESEND_API_KEY'), 'Content-Type': 'application/json', 'Idempotency-Key': message.messageId },
+    body: JSON.stringify({ from: message.from, to: message.to, ...(message.cc?.length ? { cc: message.cc } : {}), subject: message.subject, html: message.html, text: message.text }), signal });
+}
+async function providerAttempt(message, attempt, deps, policy) {
   const controller = new AbortController(); let timeout, timedOut = false;
   const result = { state: 'unknown', category: 'PROVIDER_NETWORK_FAILURE', httpStatus: null, providerId: null };
   try {
     const response = await Promise.race([
       (async () => {
-        const received = await (deps.fetch || globalThis.fetch)(PROVIDER_URL, { method: 'POST', redirect: 'error',
-          headers: { Authorization: 'Bearer ' + env(deps, 'GIB_M1_DIGEST_TEST_RESEND_API_KEY'), 'Content-Type': 'application/json', 'Idempotency-Key': message.messageId },
-          body: JSON.stringify({ from: message.from, to: message.to, subject: message.subject, html: message.html, text: message.text }), signal: controller.signal });
+        const received = await (policy ? policy.request(message, deps, controller.signal) : requestDigestEmailProvider(message, deps, controller.signal));
         const status = received?.status;
         if (!Number.isInteger(status) || status < 100 || status > 599) return { ...result, category: 'PROVIDER_RESPONSE_INVALID' };
         if (status >= 400 && status <= 499 && ![408, 409].includes(status)) return { state: 'rejected', category: 'PROVIDER_REJECTED', httpStatus: status, providerId: null };
@@ -168,19 +180,20 @@ async function providerAttempt(message, attempt, deps) {
 
 // One awaited provider request per invocation, with no automatic retries. Resend retains its key for 24h;
 // an uncertain attempt may retry only the exact original payload within our shorter 23h window.
-export async function deliverTestDigestEmail(message, deps = {}) {
-  const unavailable = gate(message, deps);
+async function deliver(message, deps = {}, policy) {
+  const base = (...args) => selectedBase(policy, ...args);
+  const unavailable = gate(message, deps, policy);
   if (unavailable) return unavailable;
   // Snapshot caller input before any await; the durable body and every retry must remain identical.
-  const immutable = { ...canonical(message), to: [...message.to], hash: message.hash };
+  const immutable = { ...selectedCanonical(message, policy), to: [...message.to], ...(policy ? { cc: [...message.cc] } : {}), hash: message.hash };
   const now = clock(deps);
   if (!stamp(now)) return base(immutable, 'blocked', 'CLOCK_UNAVAILABLE');
   let store, attempt, ledger;
   try {
     store = await storeFor(deps);
-    const retained = await retainedState(store, immutable, now);
+    const retained = await retainedState(store, immutable, now, policy);
     if (!['not-started', 'unknown', 'rejected'].includes(retained.result.state) || retained.entry && !retained.result.retryAllowed) return retained.result;
-    const fingerprint = credentialFingerprint(deps);
+    const fingerprint = credentialFingerprint(deps, policy);
     if (retained.entry?.data.attempts.some((previous, index) => previous.credentialFingerprint !== fingerprint
       && (!retained.result.receipts[index] || retained.result.receipts[index].state === 'unknown')))
       return base(immutable, 'unknown', 'PROVIDER_CREDENTIAL_RECONCILIATION_REQUIRED', { attemptCount: retained.entry.data.attempts.length });
@@ -189,25 +202,32 @@ export async function deliverTestDigestEmail(message, deps = {}) {
     attempt = { attemptId, startedAt: now, leaseUntil: now + LEASE_MS, credentialFingerprint: fingerprint };
     ledger = retained.entry ? { ...retained.entry.data, attempts: [...retained.entry.data.attempts, attempt] }
       : { schema: SCHEMA, message: immutable, createdAt: now, attempts: [attempt] };
-    if (!validLedger(ledger, immutable)) return base(immutable, 'blocked', 'ATTEMPT_CLAIM_INVALID');
+    if (!validLedger(ledger, immutable, policy)) return base(immutable, 'blocked', 'ATTEMPT_CLAIM_INVALID');
     const written = await store.set(messageKey(immutable.messageId), JSON.stringify(ledger), retained.entry ? { onlyIfMatch: retained.entry.etag } : { onlyIfNew: true });
-    if (written?.modified !== true) return (await retainedState(store, immutable, clock(deps))).result;
+    if (written?.modified !== true) return (await retainedState(store, immutable, clock(deps), policy)).result;
     const saved = await readEntry(store, messageKey(immutable.messageId));
     if (!saved || digestHash(saved.data) !== digestHash(ledger)) return base(immutable, 'unknown', 'PENDING_STORAGE_UNCONFIRMED');
   } catch { return base(immutable, 'unknown', 'PENDING_STORAGE_UNCONFIRMED'); }
   const dispatchTime = clock(deps);
   if (!stamp(dispatchTime) || dispatchTime < now || dispatchTime >= ledger.createdAt + RETRY_MS)
     return base(immutable, 'unknown', 'MANUAL_RECONCILIATION_REQUIRED', { attemptCount: ledger.attempts.length });
-  const changedGate = gate(immutable, deps) || credentialFingerprint(deps) !== attempt.credentialFingerprint;
+  const changedGate = gate(immutable, deps, policy) || credentialFingerprint(deps, policy) !== attempt.credentialFingerprint;
   const receipt = changedGate ? { schema: RECEIPT_SCHEMA, messageId: immutable.messageId, hash: immutable.hash,
     attemptId: attempt.attemptId, startedAt: attempt.startedAt, finishedAt: dispatchTime, state: 'unknown', category: 'DISPATCH_DISABLED', httpStatus: null, providerId: null }
-    : await providerAttempt(immutable, attempt, deps);
+    : await providerAttempt(immutable, attempt, deps, policy);
   try {
     const key = receiptKey(immutable.messageId, attempt.attemptId);
     const saved = await store.set(key, JSON.stringify(receipt), { onlyIfNew: true });
     const confirmed = await readEntry(store, key);
     if (![true, false].includes(saved?.modified) || !confirmed || digestHash(confirmed.data) !== digestHash(receipt))
       return base(immutable, 'unknown', 'RESULT_STORAGE_UNCONFIRMED', { attemptCount: ledger.attempts.length });
-    return (await retainedState(store, immutable, clock(deps))).result;
+    return (await retainedState(store, immutable, clock(deps), policy)).result;
   } catch { return base(immutable, 'unknown', 'RESULT_STORAGE_UNCONFIRMED', { attemptCount: ledger.attempts.length }); }
 }
+
+// The original one-email policy, ledger schema, store and public behavior stay fixed.
+export const readTestDigestEmailDelivery = (message, deps = {}) => readDelivery(message, deps);
+export const deliverTestDigestEmail = (message, deps = {}) => deliver(message, deps);
+// Server-owned policy only: never accept a policy or provider adapter from request JSON.
+export const readPolicyDigestEmailDelivery = (message, deps, policy) => readDelivery(message, deps, policy);
+export const deliverPolicyDigestEmail = (message, deps, policy) => deliver(message, deps, policy);

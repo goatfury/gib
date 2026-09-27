@@ -12,34 +12,62 @@ const labelKey = label => String(label).normalize('NFKC').replace(/[’‘]/g, "
 const safeText = (value, max = 240) => typeof value === 'string' && value.trim() && value.length <= max && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value);
 const iso = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
+  && Object.keys(value).sort().join('|') === [...keys].sort().join('|');
+const mailbox = value => typeof value === 'string' && value.length <= 254 && value.split('@')[0].length <= 64
+  && /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/.test(value);
+const reviewerFor = { rev: ['stu', 'Stu'], richmond: ['trey', 'Trey'] };
+const validPerson = (person, key, name) => exact(person, ['key', 'name', 'address']) && person.key === key && person.name === name
+  && (person.address === null || mailbox(person.address));
 
 export function defaultDigestConfiguration(scope, env = {}) {
   if (scope?.target !== 'test' || scope.profile?.installationId !== 'rev') throw new Error('Revolution TEST digest required.');
   const address = key => {
     const value = env[key];
-    if (!value) return null;
-    if (typeof value !== 'string' || value.length > 254 || !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(value)) throw new Error('Digest recipient configuration is invalid.');
+    if (value === undefined || value === null || value === '') return null;
+    if (!mailbox(value)) throw new Error('Digest recipient configuration is invalid.');
     return value;
   };
   const dailyLocalTime = env.GIB_M1_ATTENDANCE_DIGEST_LOCAL_TIME || '22:00';
   if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(dailyLocalTime)) throw new Error('Digest time configuration is invalid.');
+  const copy = env.GIB_M1_ATTENDANCE_DIGEST_COPY_ANDREW;
+  if (![undefined, '', 'true', 'false'].includes(copy)) throw new Error('Digest copy configuration is invalid.');
+  const andrew = { key: 'andrew', name: 'Andrew', address: address('GIB_M1_ATTENDANCE_DIGEST_ANDREW_EMAIL') };
+  if (copy === 'true' && !andrew.address) throw new Error('Andrew copy address is not configured.');
+  const routing = Object.fromEntries(Object.entries(reviewerFor).map(([gym, [key, name]]) => {
+    const reviewer = { key, name, address: address('GIB_M1_ATTENDANCE_DIGEST_' + key.toUpperCase() + '_EMAIL') };
+    return [gym, { reviewer, cc: copy === 'true' && reviewer.address?.toLowerCase() !== andrew.address.toLowerCase() ? [andrew] : [] }];
+  }));
   return { schema: DIGEST_SCHEMA, target: 'test', sendingEnabled: false, dailyLocalTime,
     ...(scope.syntheticRehearsal === true ? { syntheticRehearsal: true } : {}),
     cutoffConfirmed: env.GIB_M1_DIGEST_CUTOFF_CONFIRMED === 'true', timezone: DIGEST_TIMEZONE,
-    recipients: [{ key: 'andrew', name: 'Andrew', address: address('GIB_M1_ATTENDANCE_DIGEST_ANDREW_EMAIL') },
-      { key: 'stu', name: 'Stu', address: address('GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL') }],
+    recipients: [routing.rev.reviewer, ...routing.rev.cc], routing,
     gyms: [{ id: 'rev', name: scope.profile.gymName, timezone: DIGEST_TIMEZONE, adminUrl: DIGEST_ORIGIN + '/m1/admin/' }] };
 }
 
 function validateConfiguration(config) {
-  if (config?.target !== 'test' || config.sendingEnabled !== false || config.timezone !== DIGEST_TIMEZONE
+  if (config?.schema !== DIGEST_SCHEMA || config.target !== 'test' || config.sendingEnabled !== false || config.timezone !== DIGEST_TIMEZONE
     || typeof config.cutoffConfirmed !== 'boolean' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(config.dailyLocalTime)
     || !Array.isArray(config.gyms) || !config.gyms.length || config.gyms.length > 2 || new Set(config.gyms.map(g => g.id)).size !== config.gyms.length
-    || config.gyms.some(g => !['rev', 'richmond'].includes(g.id) || !safeText(g.name, 100) || g.timezone !== DIGEST_TIMEZONE
+    || config.gyms.some(g => !['rev', 'richmond'].includes(g.id) || !safeText(g.name, 100) || /[\r\n]/.test(g.name) || g.timezone !== DIGEST_TIMEZONE
       || g.adminUrl !== (g.id === 'rev' ? DIGEST_ORIGIN : 'https://gib-richmond-test.netlify.app') + '/m1/admin/')
-    || !Array.isArray(config.recipients) || config.recipients.length !== 2 || config.recipients.map(r => r.key).join('|') !== 'andrew|stu') {
+    || !Array.isArray(config.recipients)) {
     throw new Error('Digest scope is incomplete.');
   }
+  if (!Object.hasOwn(config, 'routing')) {
+    // Legacy immutable captures retain their original addressing and rendering.
+    if (config.recipients.length !== 2 || !validPerson(config.recipients[0], 'andrew', 'Andrew')
+      || !validPerson(config.recipients[1], 'stu', 'Stu')) throw new Error('Digest legacy scope is incomplete.');
+    return;
+  }
+  if (!exact(config.routing, ['rev', 'richmond']) || Object.entries(reviewerFor).some(([gym, [key, name]]) => {
+    const route = config.routing[gym];
+    return !exact(route, ['reviewer', 'cc']) || !validPerson(route.reviewer, key, name)
+      || !Array.isArray(route.cc) || route.cc.length > 1 || route.cc.some(person => !validPerson(person, 'andrew', 'Andrew') || !person.address
+        || person.address.toLowerCase() === route.reviewer.address?.toLowerCase());
+  }) || config.recipients.length !== 1 + config.routing.rev.cc.length
+    || JSON.stringify(config.recipients) !== JSON.stringify([config.routing.rev.reviewer, ...config.routing.rev.cc])
+    || (config.gyms.some(gym => gym.id === 'richmond') && config.syntheticRehearsal !== true)) throw new Error('Digest routing is incomplete.');
 }
 
 function link(gym, date, staff = false) {
@@ -143,12 +171,16 @@ export function buildAttendanceDigest({ jobDate, snapshots, schedules, configura
 
 export function renderAttendanceDigest(digest) {
   const synthetic = digest.syntheticRehearsal === true;
-  const subject = `${synthetic ? 'SYNTHETIC REHEARSAL · ' : ''}TEST attendance attention · ${digest.date}${digest.readFailures.length ? ' · check incomplete' : ''}`;
+  const routed = ['rev', 'richmond'].includes(digest.routedGym) && digest.groups.length === 1 && digest.groups[0].gym === digest.routedGym;
+  const subject = `${synthetic ? 'SYNTHETIC REHEARSAL · ' : ''}TEST attendance attention · ${routed ? digest.groups[0].name + ' · ' : ''}${digest.date}${digest.readFailures.length ? ' · check incomplete' : ''}`;
   const introduction = synthetic ? 'Controlled synthetic rehearsal. These are isolated fixtures, not real attendance or instructions to correct records. No real closing time has been confirmed.'
+    : routed ? 'The designated gym reviewer can resolve these items in M1 using existing authorized access. These links contain only this gym’s review items.'
     : 'Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.';
   const to = digest.recipients.map(r => `${r.name}${r.address ? ' <' + r.address + '>' : ' (address not configured)'}`).join(', ');
+  const cc = routed && digest.cc?.length ? digest.cc.map(r => `${r.name} <${r.address}>`).join(', ') : '';
   const lines = ['TEST CAPTURE — actual email sending is disabled.', 'To: ' + to, 'Subject: ' + subject, '',
     introduction];
+  if (cc) lines.splice(2, 0, 'Cc: ' + cc);
   let html = '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + escape(subject) + '</title><body style="margin:0;background:#f3f5f7;color:#17212c;font:16px/1.55 Arial,sans-serif"><main style="max-width:680px;margin:24px auto;padding:28px;background:white;border:1px solid #dce2e8;border-radius:12px"><p style="font-size:13px;font-weight:bold;color:#795714">TEST CAPTURE · sending disabled</p><h1 style="font-size:25px;line-height:1.2">Attendance that needs attention</h1><p>' + escape(digest.date) + ' · Eastern time</p><p><strong>To:</strong> ' + escape(to) + '</p><p>Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.</p>';
   for (const group of digest.groups) {
     const failures = digest.readFailures.filter(f => f.gym === group.gym);
@@ -156,7 +188,7 @@ export function renderAttendanceDigest(digest) {
     lines.push('', group.name); html += '<h2 style="font-size:20px;margin-top:28px">' + escape(group.name) + '</h2>';
     if (group.items.length) {
       html += '<ul style="padding-left:22px">';
-      for (const item of group.items) { lines.push(`${item.date} — ${item.summary}`, ...(synthetic ? [] : [item.url])); html += '<li style="margin:12px 0"><strong>' + escape(item.date) + '</strong> — ' + escape(item.summary) + (synthetic ? '' : '<br><a href="' + escape(item.url) + '">Open authenticated correction screen</a>') + '</li>'; }
+      for (const item of group.items) { lines.push(`${item.date} — ${item.summary}`, ...(synthetic && !routed ? [] : [item.url])); html += '<li style="margin:12px 0"><strong>' + escape(item.date) + '</strong> — ' + escape(item.summary) + (synthetic && !routed ? '' : '<br><a href="' + escape(item.url) + '">Open authenticated correction screen</a>') + '</li>'; }
       html += '</ul>';
     }
     if (failures.length) {
@@ -168,8 +200,58 @@ export function renderAttendanceDigest(digest) {
   if (!digest.shouldCapture) { lines.push('', 'No outstanding items were found in the complete checks. No daily email is needed.'); html += '<p>No outstanding items were found in the complete checks. No daily email is needed.</p>'; }
   lines.push('', 'Late uploads and corrections are checked again in the next digest. A day being unreviewed alone is not an email trigger.', 'This is a capture preview; real delivery has not been tested.');
   html += '<hr style="border:0;border-top:1px solid #dce2e8;margin:28px 0"><p style="font-size:13px;color:#546171">Late uploads and corrections are checked again in the next digest. A day being unreviewed alone is not an email trigger.</p><p style="font-size:13px;color:#546171">This is a capture preview; real delivery has not been tested.</p></main></body></html>';
-  if (synthetic) html = html.replace('Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.', escape(introduction));
+  if (synthetic || routed) html = html.replace('Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.', escape(introduction));
+  if (cc) html = html.replace('<p><strong>To:</strong> ' + escape(to) + '</p>', '<p><strong>To:</strong> ' + escape(to) + '</p><p><strong>Cc:</strong> ' + escape(cc) + '</p>');
   return { subject, html, text: lines.join('\n') };
+}
+
+// Separate route decisions for every configured gym. Missing addresses block
+// delivery; a clean, complete gym produces no message even if another gym failed.
+// Legacy captures may still render, but cannot infer new routing from old lists.
+export function splitAttendanceDigest(digest, configuration) {
+  validateConfiguration(configuration);
+  if (!configuration.routing) throw new Error('Explicit per-gym routing is required.');
+  if (digest?.schema !== DIGEST_SCHEMA || digest.target !== 'test' || digest.sendingEnabled !== false
+    || !digestDate(digest.date) || !iso(digest.generatedAt)
+    || (digest.syntheticRehearsal === true) !== (configuration.syntheticRehearsal === true)
+    || !Array.isArray(digest.groups) || digest.groups.length !== configuration.gyms.length
+    || new Set(digest.groups.map(group => group?.gym)).size !== digest.groups.length
+    || !Array.isArray(digest.readFailures)) throw new Error('Digest grouping is incomplete.');
+  const kinds = new Set(['missing-instructor', 'attendance-conflict', 'class-question', 'forgotten-clock-out', 'time-correction', 'staff-conflict']);
+  const staffKinds = new Set(['forgotten-clock-out', 'time-correction', 'staff-conflict']);
+  const ids = new Set();
+  for (const group of digest.groups) {
+    const gym = configuration.gyms.find(value => value.id === group?.gym);
+    if (!gym || !exact(group, ['gym', 'name', 'items']) || group.name !== gym.name || !Array.isArray(group.items)
+      || group.items.length > 5000) throw new Error('Digest gym data is incomplete.');
+    for (const item of group.items) {
+      if (!exact(item, ['id', 'kind', 'date', 'summary', 'url']) || !/^[0-9a-f]{24}$/.test(item.id) || ids.has(item.id)
+        || !kinds.has(item.kind) || !digestDate(item.date) || item.date > digest.date || !safeText(item.summary, 1000)
+        || item.url !== link(gym, item.date, staffKinds.has(item.kind))) throw new Error('Digest item crosses its gym boundary.');
+      ids.add(item.id);
+    }
+  }
+  for (const failure of digest.readFailures) {
+    const gym = configuration.gyms.find(value => value.id === failure?.gym);
+    if (!gym || !exact(failure, ['gym', 'component', 'code', 'message', 'url', ...(Object.hasOwn(failure, 'dates') ? ['dates'] : [])])
+      || !['attendance', 'schedule', 'staff'].includes(failure.component) || !/^[A-Z0-9_]{1,80}$/.test(failure.code)
+      || !safeText(failure.message, 1000) || failure.url !== link(gym, digest.date, failure.component === 'staff')
+      || (Object.hasOwn(failure, 'dates') && (!Array.isArray(failure.dates) || !failure.dates.length
+        || failure.dates.some(date => !digestDate(date) || date > digest.date)))) throw new Error('Digest failed-read coverage is incomplete.');
+  }
+  if (digest.itemCount !== ids.size || digest.shouldCapture !== Boolean(ids.size || digest.readFailures.length)) throw new Error('Digest result count is incomplete.');
+  return configuration.gyms.map(gym => {
+    const route = configuration.routing[gym.id], group = digest.groups.find(value => value.gym === gym.id);
+    const own = { schema: DIGEST_SCHEMA, target: 'test', date: digest.date, generatedAt: digest.generatedAt, sendingEnabled: false,
+      ...(digest.syntheticRehearsal === true ? { syntheticRehearsal: true } : {}), routedGym: gym.id,
+      recipients: structuredClone([route.reviewer]), cc: structuredClone(route.cc), groups: structuredClone([group]),
+      readFailures: structuredClone(digest.readFailures.filter(value => value.gym === gym.id)), itemCount: group.items.length };
+    own.shouldCapture = Boolean(own.itemCount || own.readFailures.length);
+    const routeStatus = !own.shouldCapture ? 'suppressed' : !route.reviewer.address ? 'blocked' : 'ready';
+    return { gym: gym.id, routeStatus, code: routeStatus === 'suppressed' ? 'NO_OUTSTANDING_ITEMS' : routeStatus === 'blocked' ? 'REVIEWER_UNCONFIGURED' : null,
+      to: route.reviewer.address ? [route.reviewer.address] : [], cc: route.cc.map(person => person.address), digest: own,
+      rendered: own.shouldCapture ? renderAttendanceDigest(own) : null };
+  });
 }
 
 export function digestDue(jobDate, now, configuration, schedules) {

@@ -3,6 +3,7 @@ import { attendanceDigestScope } from './m1-attendance-digest.mjs';
 import { DIGEST_SIGNATURE_HEADER, authenticateDigestJob, processDigestJob } from './_lib/m1-attendance-digest-outbox.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
 import { processDigestRehearsal } from './_lib/m1-attendance-digest-rehearsal.mjs';
+import { enqueueAttendanceWorkflow } from './_lib/m1-attendance-digest-workflow.mjs';
 
 export const config = { path: '/api/m1-attendance-digest-job', rateLimit: { windowLimit: 20, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 const responseCodes = new Set(['DIGEST_AUTHENTICATION_FAILED', 'DIGEST_RUNTIME_UNAVAILABLE', 'DIGEST_INVALID_JSON', 'DIGEST_INVALID_ENVELOPE',
@@ -41,7 +42,12 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
     stage = 'job.capture';
     // Await complete central capture before acknowledging the scheduler. No
     // unowned dispatch, browser timer, real mail or Google response dependency.
-    const result = await (job.binding.mode === 'rehearsal' ? processDigestRehearsal : processDigestJob)(job, scope, dependencies);
+    const workflowDependencies = job.binding.mode === 'scheduled' ? { ...dependencies, onDigestCheck: async check => {
+      stage = 'job.workflow';
+      await enqueueAttendanceWorkflow(check, runtime, { ...dependencies, scope });
+      stage = 'job.capture';
+    } } : dependencies;
+    const result = await (job.binding.mode === 'rehearsal' ? processDigestRehearsal : processDigestJob)(job, scope, workflowDependencies);
     report(200, 'DIGEST_JOB_ACCEPTED');
     return jsonResponse(200, { ok: true, accepted: true, requestId: job.binding.requestId, state: result.state, messageId: result.messageId || null });
   } catch (error) {

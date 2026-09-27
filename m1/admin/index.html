@@ -769,6 +769,7 @@
         </div>
       </header>
 
+      <section id="attendanceWorkflow" class="panel section" aria-label="Automatic attendance workflow TEST examples" hidden></section>
       <section id="attendanceDigest" class="panel section" aria-label="Attendance reminder preview" hidden></section>
       <section id="attendanceEmail" class="panel section" aria-label="Proposed TEST email" hidden></section>
       <nav id="managerModes" class="mode-switch" role="tablist" aria-label="Admin mode">
@@ -1095,6 +1096,8 @@
   <script src="./staff-recovery.js"></script>
   <script src="./attendance-digest.js"></script>
   <script src="./attendance-email.js"></script>
+  <script src="../attendance-warning.js"></script>
+  <script src="./attendance-workflow.js"></script>
   <script src="./read-callback-proof.js"></script>
   <script>
     (() => {
@@ -1275,6 +1278,7 @@
       let managerDayReview = null;
       let staffRecoveryReview = null;
       let attendanceDigest = null;
+      let attendanceWorkflow = null;
       let attendanceEmail = null;
       let currentDate = '';
       let currentRecords = [];
@@ -3727,7 +3731,7 @@
           : 0;
         let response;
         let data = null;
-        const readDigest = options.method === 'GET' && /^\/api\/m1-attendance-digest(?:-email)?(?:\?|$)/.test(url);
+        const readDigest = options.method === 'GET' && /^\/api\/m1-attendance-(?:digest(?:-email)?|workflow)(?:\?|$)/.test(url);
         try {
           response = await fetch(url, {
             method: readDigest ? 'GET' : 'POST',
@@ -3792,6 +3796,7 @@
         if (managerDayReview) managerDayReview.clear();
         if (typeof staffRecoveryReview !== 'undefined' && staffRecoveryReview) staffRecoveryReview.clear();
         if (typeof attendanceDigest !== 'undefined' && attendanceDigest) attendanceDigest.clear();
+        if (typeof attendanceWorkflow !== 'undefined' && attendanceWorkflow) attendanceWorkflow.clear();
         if (typeof attendanceEmail !== 'undefined' && attendanceEmail) attendanceEmail.clear();
         if (typeof closeRemovalForLogout === 'function') closeRemovalForLogout();
         reviewLoaded = false;
@@ -3911,6 +3916,7 @@
         applyManagerMode();
         if (typeof staffRecoveryReview !== 'undefined' && staffRecoveryReview) void staffRecoveryReview.open();
         if (typeof attendanceDigest !== 'undefined' && attendanceDigest) void attendanceDigest.open();
+        if (typeof attendanceWorkflow !== 'undefined' && attendanceWorkflow) void attendanceWorkflow.open();
         if (attendanceEmail && location.hash === '#attendanceEmail') {
           void attendanceEmail.open().then(loaded => {
             if (loaded && location.hash === '#attendanceEmail') window.requestAnimationFrame(() => $('#attendanceEmail').scrollIntoView({ block: 'start' }));
@@ -7223,6 +7229,11 @@
       attendanceEmail = globalThis.GIBM1AttendanceEmail?.create({
         root: $('#attendanceEmail'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
         enabled: RECOVERY_PILOT_ENABLED && RECOVERY_PILOT_TARGET === 'test', getAdmin: () => currentAdminName,
+        onUnauthorized: () => setLoggedOut('Admin login required.')
+      });
+      attendanceWorkflow = globalThis.GIBM1AttendanceWorkflow?.create({
+        root: $('#attendanceWorkflow'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
+        enabled: RECOVERY_PILOT_ENABLED, getAdmin: () => currentAdminName, getSession: () => adminRequestToken,
         onUnauthorized: () => setLoggedOut('Admin login required.')
       });
       managerDayReview = globalThis.GIBM1ManagerReview?.create({

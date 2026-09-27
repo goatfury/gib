@@ -20,6 +20,8 @@ export const PUBLIC_FILES = Object.freeze([
   'm1/admin/staff-recovery.js',
   'm1/admin/attendance-digest.js',
   'm1/admin/attendance-email.js',
+  'm1/admin/attendance-workflow.js',
+  'm1/attendance-warning.js',
   'm1/admin/read-callback-proof.js',
   'm1/admin/manager-review.css',
   'm1/manager-review-config.generated.js',

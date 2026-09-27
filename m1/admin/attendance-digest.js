@@ -113,7 +113,17 @@
         && typeof value.configuration.timezone === 'string'
         && Array.isArray(value.configuration.recipients)
         && value.configuration.recipients.every(person => person && typeof person.name === 'string'
-          && (person.address === null || typeof person.address === 'string'));
+          && (person.address === null || typeof person.address === 'string'))
+        && (!Object.hasOwn(value.configuration, 'routing') || validRouting(value.configuration.routing));
+    }
+    function validRouting(routing) {
+      const person = (value, key, name) => value && Object.keys(value).sort().join('|') === 'address|key|name' && value.key === key && value.name === name
+        && (value.address === null || typeof value.address === 'string' && value.address.length <= 254 && /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(value.address));
+      return routing && Object.keys(routing).sort().join('|') === 'rev|richmond' && [['rev', 'stu', 'Stu'], ['richmond', 'trey', 'Trey']].every(([gym, key, name]) => {
+        const route = routing[gym];
+        return route && Object.keys(route).sort().join('|') === 'cc|reviewer' && person(route.reviewer, key, name)
+          && Array.isArray(route.cc) && route.cc.length <= 1 && route.cc.every(value => person(value, 'andrew', 'Andrew') && value.address !== null);
+      });
     }
     function validResponse(value) {
       return validConfiguration(value) && (value.latest === null || validCapture(value.latest));
@@ -158,7 +168,13 @@
       if (data) {
         const config = data.configuration;
         root.append(el('p', `Daily cutoff: ${config.dailyLocalTime} ${config.timezone}${config.cutoffConfirmed ? '' : ' (not confirmed)'}.`, 'muted'));
-        root.append(el('p', 'Recipients: ' + (config.recipients.map(person => `${person.name}: ${clean(person.address) || 'address not configured'}`).join('; ') || 'not configured') + '.', 'muted'));
+        if (config.routing) {
+          for (const [gym, name] of [['rev', 'Revolution'], ['richmond', 'Richmond']]) {
+            const route = config.routing[gym], setupOnly = !config.gyms?.some(value => value.id === gym);
+            root.append(el('p', `${name}${setupOnly ? ' (setup only)' : ''}: ${route.reviewer.name} — ${clean(route.reviewer.address) || 'address not configured'}. Andrew copy: ${route.cc.length ? route.cc.map(person => person.address).join(', ') : 'off'}.`, 'muted'));
+          }
+          root.append(el('p', 'Richmond’s proposed reviewer still needs existing Admin access; this preview grants no access and enables no delivery.', 'muted'));
+        } else root.append(el('p', 'Recipients: ' + (config.recipients.map(person => `${person.name}: ${clean(person.address) || 'address not configured'}`).join('; ') || 'not configured') + '.', 'muted'));
         root.append(timeControls());
       }
       const controls = el('div', '', 'form-actions');

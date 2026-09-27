@@ -953,6 +953,7 @@ body.admin-mode .container { max-width: 1120px; }
 <script src="./manager-review-config.generated.js?v=2026-09-25-recovery-a"></script>
 <script src="./manager-read-client.js?v=2026-09-26-manager-ticket-a"></script>
 <script src="./manager-review-badge.js?v=2026-09-22-manager-pilot-a"></script>
+<script src="./attendance-warning.js?v=2026-09-27-workflow-a"></script>
 </head>
 <body>
 <div class="container">
@@ -984,6 +985,7 @@ body.admin-mode .container { max-width: 1120px; }
       <a id="managerWorkspaceLink" class="btn admin-link-button" href="/m1/admin/">Admin</a>
       <details class="device-tools-menu"><summary>Device tools</summary><button id="btnAdmin" class="btn" type="button">Open device maintenance</button></details>
     </nav>
+    <p id="attendanceWarning" role="status" aria-live="polite" style="margin:10px 0 0;color:var(--warn);font-size:14px;line-height:1.4;overflow-wrap:anywhere" hidden></p>
   </header>
 
   <section id="promotionsPanel" class="m1-promotions" aria-label="Belt and Stripe Log" hidden></section>
