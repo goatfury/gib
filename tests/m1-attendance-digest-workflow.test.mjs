@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildAttendanceDigest, defaultDigestConfiguration, datesThrough, digestHash } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
 import { makeDigestBinding } from '../netlify/functions/_lib/m1-attendance-digest-outbox.mjs';
-import { processAttendanceWorkflow, workflowMessages, workflowHealth, recordWorkflowDeliveryEvidence } from '../netlify/functions/_lib/m1-attendance-digest-workflow.mjs';
+import { processAttendanceWorkflow, workflowMessages, workflowHealth, recordWorkflowDeliveryEvidence, latestEligibleOpportunity } from '../netlify/functions/_lib/m1-attendance-digest-workflow.mjs';
 
 const NOW = Date.parse('2026-09-25T02:30:00Z'), DATE = '2026-09-24', providerId = '00000000-0000-4000-8000-000000000001';
 const scope = { target: 'test', syntheticRehearsal: true, profile: { installationId: 'rev', gymName: 'Revolution synthetic TEST' } };
@@ -126,22 +126,25 @@ test('positive To-only evidence cannot confirm optional copied-recipient deliver
   assert.ok((await h.health()).codes.includes('DELIVERY_UNCONFIRMED'));
 });
 
-test('new days cannot bypass unknown original acceptance or its expired retry window, even after route or credential changes', async () => {
+test('a new eligible opportunity retires older uncertainty without changing its original identity, body or retry window', async () => {
   const h = harness(); h.deps.simulatedProvider.send = async message => { h.calls.push(structuredClone(message)); throw new Error('synthetic lost reply'); };
   await h.run();
   const original = structuredClone(h.entries.get('workflow/delivery/messages/m1-test-scheduled-rev-' + DATE).data);
   h.at(NOW + 24 * 60 * 60000); await h.run();
   let draft = (await h.messages()).find(value => value.date === '2026-09-25');
-  assert.equal(draft.firstAttemptAt, null); assert.equal(draft.code, 'PRIOR_ACCEPTANCE_UNCONFIRMED');
-  assert.equal(h.calls.length, 1); assert.ok(draft.message.text.includes('SYNTHETIC class'));
-  assert.equal(h.entries.has('workflow/delivery/messages/' + draft.messageId), false);
+  assert.equal(draft.firstAttemptAt, NOW + 24 * 60 * 60000);
+  assert.equal(h.calls.length, 2); assert.ok(draft.message.text.includes('SYNTHETIC class'));
+  assert.equal(h.entries.has('workflow/delivery/messages/' + draft.messageId), true);
   h.at(NOW + 48 * 60 * 60000); h.deps.simulatedProvider.identity = 'changed-provider';
   const changed = h.input(); changed.configuration.routing.rev.reviewer.address = 'repaired@example.invalid';
   await processAttendanceWorkflow(changed, h.deps);
   draft = (await h.messages()).find(value => value.date === '2026-09-26');
-  assert.equal(draft.code, 'PRIOR_ACCEPTANCE_UNCONFIRMED'); assert.equal(h.calls.length, 1);
+  assert.equal(h.calls.length, 3); assert.equal(draft.assessmentDate, '2026-09-26');
   assert.deepEqual(h.entries.get('workflow/delivery/messages/m1-test-scheduled-rev-' + DATE).data, original);
   assert.ok((await h.health()).codes.includes('DELIVERY_UNCONFIRMED'));
+  assert.equal((await h.health()).historicalUnconfirmedCount, 2);
+  const old = (await h.messages()).find(value => value.date === DATE);
+  assert.equal(old.automaticRetriesRetired, true); assert.equal(old.nextAttemptAt, null);
 });
 
 test('an active original provider claim across midnight defers a new day without creating another identity', async () => {
@@ -150,9 +153,9 @@ test('an active original provider claim across midnight defers a new day without
   h.store.set = async (key, ...args) => { if (key.startsWith('workflow/delivery/attempts/')) throw new Error('synthetic receipt storage failure'); return set(key, ...args); };
   await h.run(); assert.equal(h.calls.length, 1);
   h.at(start + 31000); await h.run();
-  const draft = (await h.messages()).find(value => value.date === '2026-09-25');
-  assert.equal(draft.code, 'PRIOR_ACCEPTANCE_UNCONFIRMED'); assert.equal(draft.firstAttemptAt, null);
-  assert.equal(h.calls.length, 1); assert.equal(h.entries.has('workflow/delivery/messages/' + draft.messageId), false);
+  assert.equal((await h.messages()).length, 1);
+  assert.equal(h.entries.get('workflow/opportunities/rev').data.opportunityDate, DATE);
+  assert.equal(h.calls.length, 1); assert.equal(h.entries.has('workflow/delivery/messages/m1-test-scheduled-rev-2026-09-25'), false);
 });
 
 test('known acceptance allows later daily reminders while delivery itself remains unconfirmed', async () => {
@@ -190,19 +193,20 @@ test('a definite rejection can resume only across an existing sender, recipient 
   }
 });
 
-test('prior-read failure or stale accepted workflow summaries cannot authorize a new identity; the guard remains gym-specific', async () => {
+test('authoritative uncertainty can take over despite stale workflow summaries, but unreadable history still blocks only its gym', async () => {
   const h = harness(); h.deps.simulatedProvider.send = async message => { h.calls.push(structuredClone(message)); if (message.messageId.includes('-rev-')) throw new Error('synthetic lost reply'); return new Response(JSON.stringify({ id: providerId }), { status: 200 }); };
   await h.run('issue', true);
   const old = h.entries.get('workflow/messages/m1-test-scheduled-rev-' + DATE);
   old.data.delivery = { state: 'accepted', providerId }; old.data.state = 'delivered';
   h.at(NOW + 24 * 60 * 60000); await h.run('issue', true);
-  assert.equal(h.calls.filter(message => message.messageId.includes('-rev-')).length, 1);
+  assert.equal(h.calls.filter(message => message.messageId.includes('-rev-')).length, 2);
   assert.equal(h.calls.filter(message => message.messageId.includes('-richmond-')).length, 2);
   const read = h.store.getWithMetadata;
   h.store.getWithMetadata = async key => { if (key === 'workflow/delivery/messages/m1-test-scheduled-rev-' + DATE) throw new Error('synthetic unavailable'); return read(key); };
   h.at(NOW + 48 * 60 * 60000); await h.run();
-  assert.equal(h.calls.filter(message => message.messageId.includes('-rev-')).length, 1);
+  assert.equal(h.calls.filter(message => message.messageId.includes('-rev-')).length, 2);
   assert.equal((await h.messages()).find(value => value.date === '2026-09-26').code, 'PRIOR_ACCEPTANCE_UNCONFIRMED');
+  assert.ok((await h.health()).codes.includes('CHECK_INCOMPLETE'));
 });
 
 test('explicit signed Permanent bounce holds the same recipient across dates and provider/sender changes without reclassifying legacy failures', async () => {
@@ -255,4 +259,111 @@ test('an archived expired claim with no authoritative provider attempt safely re
     if (mode === 'issue') assert.notEqual(h.calls[0].messageId, originalId, 'only a fresh necessary daily draft starts');
     assert.deepEqual(h.entries.get('workflow/index').data.ids, ids);
   }
+});
+
+test('a clean takeover is durable, closes its opportunity, and separates historical uncertainty from current status', async () => {
+  const h = harness(); h.at(Date.parse('2026-09-26T01:50:00Z'));
+  h.deps.simulatedProvider.send = async message => { h.calls.push(message); throw new Error('synthetic lost reply'); };
+  await h.run(); const original = structuredClone((await h.messages())[0]);
+  h.at(Date.parse('2026-09-26T02:05:00Z')); await h.run('clean');
+  const health = await h.health(); assert.equal(health.state, 'clear'); assert.equal(health.unconfirmedCount, 0);
+  assert.equal(health.historicalUnconfirmedCount, 1); assert.equal(health.opportunityDate, '2026-09-25');
+  h.at(Date.parse('2026-09-26T02:21:00Z')); await h.run('issue');
+  assert.equal(h.calls.length, 1); assert.equal(h.entries.get('workflow/opportunities/rev').data.decision, 'clean');
+  const old = (await h.messages()).find(value => value.date === DATE);
+  assert.equal(old.automaticRetriesRetired, true); assert.equal(old.nextAttemptAt, null);
+  assert.deepEqual(old.message, original.message); assert.equal(old.retryBefore, original.retryBefore);
+});
+
+test('latest opportunity uses local cutoff across DST, independent gym times, and skips missed dates', async () => {
+  const h = harness(), config = h.input().configuration;
+  for (const [iso, date] of [['2026-03-08T06:30:00Z', '2026-03-07'], ['2026-03-09T01:59:00Z', '2026-03-07'],
+    ['2026-03-09T02:00:00Z', '2026-03-08'], ['2026-11-01T05:30:00Z', '2026-10-31'], ['2026-11-01T06:30:00Z', '2026-10-31'],
+    ['2026-11-02T03:00:00Z', '2026-11-01']]) assert.equal(latestEligibleOpportunity(config, Date.parse(iso), 'rev').date, date);
+  h.at(Date.parse('2026-09-26T01:00:00Z')); const input = h.input('issue', true);
+  input.configuration.gyms[0].dailyLocalTime = '20:00'; input.configuration.gyms[1].dailyLocalTime = '23:00';
+  input.due = 'not-due'; input.dueByGym = { rev: 'due', richmond: 'not-due' }; input.opportunityDueByGym = { rev: 'due', richmond: 'due' };
+  await processAttendanceWorkflow(input, h.deps);
+  assert.deepEqual(h.calls.map(value => value.messageId), ['m1-test-scheduled-rev-2026-09-25', 'm1-test-scheduled-richmond-2026-09-24']);
+  const missed = harness(); missed.at(NOW + 6 * 86400000); await missed.run();
+  assert.equal(missed.calls.length, 1); assert.equal((await missed.messages()).length, 1); assert.equal(missed.calls[0].messageId, 'm1-test-scheduled-rev-2026-09-30');
+  assert.match(missed.calls[0].text, /Fresh assessment: 2026-10-01T02:30:00.000Z \(2026-09-30/);
+});
+
+test('actual upcoming guard holds takeover and an interrupted head can resume without a second identity', async () => {
+  const h = harness(); await h.run(); h.at(NOW + 86400000);
+  let input = h.input(); input.due = 'not-due'; input.opportunityDueByGym = { rev: 'not-due' };
+  await processAttendanceWorkflow(input, h.deps); assert.equal(h.calls.length, 1);
+  assert.equal(h.entries.get('workflow/opportunities/rev').data.opportunityDate, DATE);
+  const set = h.store.set; let fail = true;
+  h.store.set = async (key, raw, options) => { const result = await set(key, raw, options); if (fail && key === 'workflow/opportunities/rev') { fail = false; throw new Error('interrupted persisted takeover'); } return result; };
+  await assert.rejects(() => h.run('clean'), /interrupted/);
+  assert.ok((await h.health()).codes.includes('CHECK_INCOMPLETE'));
+  await h.run('clean'); await h.run(); assert.equal(h.calls.length, 1);
+  assert.equal(h.entries.get('workflow/opportunities/rev').data.decision, 'clean');
+});
+
+test('mixed unknown and known permanent rejection retains the unchanged broken-route hold', async () => {
+  const h = harness(); h.deps.simulatedProvider.send = async message => { h.calls.push(message); if (h.calls.length === 1) throw new Error('lost reply'); return new Response('{}', { status: 403 }); };
+  await h.run(); h.at(NOW + 16 * 60000); await h.run(); assert.equal(h.calls.length, 2);
+  h.at(NOW + 86400000); await h.run(); assert.equal(h.calls.length, 2);
+  assert.equal((await h.messages()).find(value => value.date === '2026-09-25').code, 'PRIOR_PERMANENT_REJECTION_UNCHANGED');
+  assert.ok((await h.health()).codes.includes('DELIVERY_FAILED'));
+});
+
+test('retired temporary failures remain historical while active permanent failures remain operating warnings', async () => {
+  for (const status of [429, 403]) {
+    const h = harness(); h.deps.simulatedProvider.send = async message => { h.calls.push(message); return new Response('{}', { status }); };
+    await h.run(); h.at(NOW + 86400000); await h.run('clean');
+    const health = await h.health(); assert.equal(health.historicalFailedCount, 1);
+    assert.equal(health.failedCount, status === 403 ? 1 : 0);
+    assert.equal(health.codes.includes('DELIVERY_FAILED'), status === 403);
+  }
+});
+
+test('an archived unknown late Permanent event holds its exact recipient without guessing a current message identity', async () => {
+  const h = harness(); h.deps.simulatedProvider.send = async message => { h.calls.push(message); throw new Error('lost reply'); };
+  await h.run(); const original = structuredClone((await h.messages())[0]);
+  for (let day = 1; day <= 10; day++) { h.at(NOW + day * 86400000); await h.run('clean'); }
+  const result = await recordWorkflowDeliveryEvidence(evidence(original.message, { eventId: 'late_unbound_permanent', type: 'email.bounced', permanentFailure: true }), { ...h.deps, deliveryEvidenceVerified: true });
+  assert.deepEqual(result, { ok: true, matched: false, state: 'pending' });
+  const retained = h.entries.get('workflow/messages/' + original.messageId).data;
+  assert.equal(retained.state, 'unconfirmed'); assert.equal(retained.delivery.state, 'unknown');
+  h.at(NOW + 11 * 86400000); await h.run(); assert.equal(h.calls.length, 1);
+  const current = (await h.messages()).find(value => value.date === '2026-10-05');
+  assert.equal(current.code, 'PRIOR_PERMANENT_RECIPIENT_PROOF_UNRESOLVED'); assert.equal(current.firstAttemptAt, null);
+  assert.ok((await h.health()).codes.includes('DELIVERY_FAILED'));
+});
+
+test('a fully drained unbound Permanent callback invalidates first-send clearance before a new claim', async () => {
+  const h = harness(); h.deps.simulatedProvider.send = async message => { h.calls.push(message); throw new Error('lost reply'); };
+  await h.run(); const original = (await h.messages())[0].message, set = h.store.set;
+  let injected = false;
+  h.store.set = async (key, raw, options) => {
+    const value = JSON.parse(raw);
+    if (!injected && key.startsWith('workflow/history/intents/') && value.source?.value.firstAttemptAt && value.messageId === 'm1-test-scheduled-rev-2026-09-25') {
+      injected = true;
+      await recordWorkflowDeliveryEvidence(evidence(original, { eventId: 'between_guard_claim', type: 'email.bounced', permanentFailure: true }), { ...h.deps, deliveryEvidenceVerified: true });
+    }
+    return set(key, raw, options);
+  };
+  h.at(NOW + 86400000); await h.run(); assert.equal(injected, true); assert.equal(h.calls.length, 1);
+  assert.equal((await h.messages()).find(value => value.date === '2026-09-25').firstAttemptAt, null);
+  assert.ok((await h.health()).codes.includes('DELIVERY_FAILED'));
+});
+
+test('exact later accepted delivery resolves a provisional recipient hold in read-only health, retaining both events', async () => {
+  const h = harness();
+  h.deps.simulatedProvider.send = async message => {
+    h.calls.push(message);
+    await recordWorkflowDeliveryEvidence(evidence(message, { eventId: 'early_permanent', type: 'email.bounced', permanentFailure: true }), { ...h.deps, deliveryEvidenceVerified: true });
+    return new Response(JSON.stringify({ id: providerId }), { status: 200 });
+  };
+  await h.run(); assert.ok((await h.health()).codes.includes('DELIVERY_FAILED'));
+  h.at(NOW + 1000); const message = (await h.messages())[0].message;
+  await recordWorkflowDeliveryEvidence(evidence(message, { eventId: 'later_exact_delivery', occurredAt: new Date(NOW + 1000).toISOString() }), { ...h.deps, deliveryEvidenceVerified: true });
+  assert.equal((await h.health()).codes.includes('DELIVERY_FAILED'), false);
+  assert.equal(h.entries.has('workflow/provider-evidence/' + providerId + '/early_permanent'), true);
+  assert.equal(h.entries.has('workflow/provider-evidence/' + providerId + '/later_exact_delivery'), true);
+  assert.equal(h.calls.length, 1);
 });

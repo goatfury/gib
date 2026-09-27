@@ -4,7 +4,7 @@
   const ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
   const ADMIN_URLS = Object.freeze({ rev: ORIGIN + '/m1/admin/', richmond: 'https://gib-richmond-test.netlify.app/m1/admin/' });
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  const runAction = value => value === 'runExamples' || value === 'runHistory';
+  const runAction = value => value === 'runExamples' || value === 'runHistory' || value === 'runDaily';
   const CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'";
   const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).sort().join('|') === [...fields].sort().join('|');
@@ -59,11 +59,15 @@
       root.append(el('p', 'Live setup is unverified: Stu and Trey’s email addresses are not configured; Trey still needs existing Admin access. The actual closing cutoff has not been confirmed.', 'manager-note'));
       root.append(el('p', 'An unreviewed day does not prove a missing sign-in. Every instructor, including a second instructor, must remain covered. Staff Clock finish corrections remain separate.', 'manager-note'));
       const health = data?.current?.health;
+      const hasHistory = ['historicalUnconfirmedCount', 'historicalFailedCount', 'opportunityDate'].some(key => Object.hasOwn(health || {}, key));
+      const validHistory = !hasHistory || [health.historicalUnconfirmedCount, health.historicalFailedCount].every(count => Number.isSafeInteger(count) && count >= 0)
+        && (health.opportunityDate === null || typeof health.opportunityDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(health.opportunityDate)
+          && Number.isFinite(Date.parse(health.opportunityDate)) && new Date(health.opportunityDate).toISOString().slice(0, 10) === health.opportunityDate);
       const validHealth = health?.ok === true && health.target === 'test' && Array.isArray(health.codes) && health.codes.length <= 5
         && ['check-overdue', 'check-incomplete', 'delivery-failed', 'delivery-unconfirmed', 'not-configured', 'attention', 'clear'].includes(health.state)
         && health.codes.every(code => global.GIBM1AttendanceWarning?.label(code))
         && [health.pendingCount, health.failedCount, health.unconfirmedCount].every(count => Number.isSafeInteger(count) && count >= 0)
-        && (health.checkedAt === null || typeof health.checkedAt === 'string' && Number.isFinite(Date.parse(health.checkedAt)));
+        && validHistory && (health.checkedAt === null || typeof health.checkedAt === 'string' && Number.isFinite(Date.parse(health.checkedAt)));
       root.append(el('p', !current || !validHealth ? 'Current attendance check status unavailable.'
         : health.codes.length ? 'Current status: ' + health.codes.map(code => global.GIBM1AttendanceWarning.label(code)).join(' ')
           : health.state === 'attention' ? 'Attendance still needs review in the existing correction tools.'
@@ -71,9 +75,21 @@
               && Date.now() - Date.parse(health.checkedAt) <= 1800000 && Date.parse(health.expiresAt) > Date.now()
               && health.pendingCount === 0 && health.failedCount === 0 && health.unconfirmedCount === 0
               ? 'Current attendance check completed.' : 'Current attendance check status unavailable.', 'manager-note'));
+      if (hasHistory) {
+        if (!current || !validHealth) root.append(el('p', 'Past reminder history is currently unavailable.', 'manager-warning'));
+        else {
+          if (health.opportunityDate) root.append(el('p', 'Current reminder date: ' + health.opportunityDate + '.', 'manager-note'));
+          if (health.historicalUnconfirmedCount > 0) root.append(el('p', 'Past reminder history: ' + health.historicalUnconfirmedCount
+            + (health.historicalUnconfirmedCount === 1 ? ' earlier reminder still has' : ' earlier reminders still have')
+            + ' an unknown send result. This uncertainty is retained; a newer check does not mean those emails were delivered.', 'manager-warning'));
+          if (health.historicalFailedCount > 0) root.append(el('p', 'Past reminder history: ' + health.historicalFailedCount
+            + (health.historicalFailedCount === 1 ? ' earlier reminder has' : ' earlier reminders have')
+            + ' a recorded email failure. This failure history is retained.', 'manager-warning'));
+        }
+      }
       const controls = el('div', '', 'manager-controls');
       for (const [action, label] of [['refresh', pending ? 'Check original example run' : 'Refresh workflow examples'], ['run', 'Run synthetic workflow examples'],
-        ['history', 'Run synthetic history checks'], ...(pending ? [['retry', 'Retry original example run']] : [])]) {
+        ['history', 'Run synthetic history checks'], ['daily', 'Run synthetic daily reminder checks'], ...(pending ? [['retry', 'Retry original example run']] : [])]) {
         const button = el('button', label, 'btn'); button.type = 'button'; button.dataset.workflowAction = action;
         button.disabled = Boolean(flight) || action !== 'refresh' && (storageBlocked || (action === 'retry' ? pending?.adminName !== owner : Boolean(pending))); controls.append(button);
       }
@@ -153,7 +169,7 @@
     }
     root.addEventListener('click', event => { const action = event.target.closest('[data-workflow-action]')?.dataset.workflowAction;
       if (action === 'refresh') void run(); if (action === 'run') void run('runExamples');
-      if (action === 'history') void run('runHistory'); if (action === 'retry') void run('retry'); });
+      if (action === 'history') void run('runHistory'); if (action === 'daily') void run('runDaily'); if (action === 'retry') void run('retry'); });
     function clear() { active = false; generation++; global.clearTimeout(pollTimer); owner = ''; session = null; flight = null; data = null; current = false; root.hidden = true; root.replaceChildren(); }
     return Object.freeze({ open() {
       if (active && owner === getAdmin() && session === getSession()) return run();

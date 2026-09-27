@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { handleAttendanceDigest } from '../netlify/functions/m1-attendance-digest.mjs';
+import { handleAttendanceDigest, attendanceDigestScope } from '../netlify/functions/m1-attendance-digest.mjs';
 import { handleAttendanceDigestJob } from '../netlify/functions/m1-attendance-digest-job.mjs';
 import { DIGEST_ORIGIN } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
-import { digestSignature, makeDigestBinding, DIGEST_SIGNATURE_HEADER, captureDigestMessage } from '../netlify/functions/_lib/m1-attendance-digest-outbox.mjs';
+import { digestSignature, makeDigestBinding, DIGEST_SIGNATURE_HEADER, captureDigestMessage, processDigestJob } from '../netlify/functions/_lib/m1-attendance-digest-outbox.mjs';
 import { datesThrough } from '../netlify/functions/_lib/m1-manager-review.mjs';
 import { ADMIN_COOKIE, ADMIN_REQUEST_HEADER, createAdminSession, runtimeConfig } from '../netlify/functions/_lib/m1-common.mjs';
 
@@ -130,6 +130,47 @@ test('before-due and unconfirmed cutoff ticks observe schedules without capturin
     assert.equal(response.status, 200); assert.equal((await response.json()).state, confirmed ? 'not-due' : 'awaiting-configuration');
     assert.equal(h.scheduleCalls.length, 1); assert.equal(h.scheduleCalls[0].cutoffConfirmed, confirmed);
     assert.equal([...h.store.entries.keys()].filter(key => key.startsWith('outbox/')).length, 0);
+  }
+});
+
+test('scheduled workflow receives per-gym due evidence and retains the known upcoming-class guard', async () => {
+  for (const upcoming of [false, true]) {
+    const h = harness(), loader = h.deps.loadSchedules, checks = [];
+    h.deps.loadSchedules = async input => {
+      const schedule = await loader(input);
+      if (upcoming) schedule.days.find(day => day.date === date).occurrences[0].endAt = '2026-09-25T03:00:00.000Z';
+      return schedule;
+    };
+    h.deps.onDigestCheck = async check => checks.push(check);
+    const { gyms: snapshots, ...binding } = body();
+    await processDigestJob({ binding, gyms: snapshots }, attendanceDigestScope(job(body()), h.deps), h.deps);
+    assert.equal(checks.length, 1);
+    assert.deepEqual(checks[0].dueByGym, { rev: upcoming ? 'not-due' : 'due' });
+    assert.deepEqual(checks[0].opportunityDueByGym, { rev: upcoming ? 'not-due' : 'due' });
+    assert.equal(checks[0].binding.jobDate, date);
+    assert.equal(h.scheduleCalls[0].closingTime, '22:00');
+    assert.equal(h.scheduleCalls[0].cutoffConfirmed, true);
+    assert.equal(h.calls.length, 0, 'forwarding an assessment is not an email send');
+  }
+});
+
+test('prior-date catch-up keeps an overnight class unfinished until its known finish', async () => {
+  const stamp = Date.parse('2026-09-25T04:30:00Z'), currentDate = '2026-09-25';
+  for (const upcoming of [false, true]) {
+    const h = harness(), checks = [];
+    h.advance(stamp - now);
+    h.deps.onDigestCheck = async check => checks.push(check);
+    h.deps.loadSchedules = async input => ({ gym: input.gym, timezone: 'America/New_York',
+      days: input.dates.map(day => ({ date: day, status: 'complete', observedAt: '2026-09-24T12:00:00.000Z',
+        sourceVersion: 'synthetic-overnight', occurrences: day === date ? [{ label: '11:30 PM TEST overnight class',
+          startAt: '2026-09-25T03:30:00.000Z', endAt: upcoming ? '2026-09-25T05:00:00.000Z' : '2026-09-25T04:00:00.000Z', cancelled: false }] : [] })) });
+    const snapshots = gyms(), ledger = snapshots[0].attendance.ledger;
+    ledger.to = currentDate; ledger.days.push({ date: currentDate, attendanceHash: 'a'.repeat(64), records: [], warnings: [], review: null });
+    await processDigestJob({ binding: makeDigestBinding(id, 'scheduled', stamp), gyms: snapshots }, attendanceDigestScope(job(body()), h.deps), h.deps);
+    assert.equal(checks.length, 1); assert.equal(checks[0].binding.jobDate, currentDate);
+    assert.deepEqual(checks[0].dueByGym, { rev: 'not-due' });
+    assert.deepEqual(checks[0].opportunityDueByGym, { rev: upcoming ? 'not-due' : 'due' });
+    assert.equal(checks[0].digest.itemCount, upcoming ? 0 : 1, 'an unfinished overnight class is never called missing');
   }
 });
 

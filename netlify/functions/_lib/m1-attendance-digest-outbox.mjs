@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 import { constantTimeSecretEqual } from './m1-common.mjs';
 import { validId } from './m1-test-read-callback.mjs';
 import { localNow } from './m1-manager-review.mjs';
-import { DIGEST_SCHEMA, DIGEST_STORE, digestHash, digestDate, datesThrough, defaultDigestConfiguration, buildAttendanceDigest, renderAttendanceDigest, digestDue } from './m1-attendance-digest.mjs';
+import { DIGEST_SCHEMA, DIGEST_STORE, digestHash, digestDate, datesThrough, defaultDigestConfiguration, buildAttendanceDigest, renderAttendanceDigest, digestDue, latestEligibleOpportunity } from './m1-attendance-digest.mjs';
 
 export const DIGEST_JOB_SCHEMA = 'm1-attendance-digest-job/v1';
 export const DIGEST_SIGNATURE_HEADER = 'X-GIB-M1-Digest-Signature';
@@ -160,16 +160,28 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
         }
       } catch {} // Unavailable attendance cannot invent historical schedule evidence.
       return await loader({ gym: gym.id, dates: datesThrough(binding.jobDate), now, store,
-        closingTime: configuration.dailyLocalTime, cutoffConfirmed: configuration.cutoffConfirmed, reviewSnapshots });
+        closingTime: gym.dailyLocalTime ?? configuration.dailyLocalTime,
+        cutoffConfirmed: gym.cutoffConfirmed ?? configuration.cutoffConfirmed, reviewSnapshots });
     } catch { return { gym: gym.id, timezone: configuration.timezone, days: [] }; }
   }));
   const digest = buildAttendanceDigest({ jobDate: binding.jobDate, snapshots: gyms, schedules, configuration, now });
   validateDigestBinding(binding, clock(dependencies));
   if (binding.mode === 'scheduled') {
     const due = digestDue(binding.jobDate, now, configuration, schedules);
+    const dueByGym = {}, opportunityDueByGym = {};
+    for (const gym of configuration.gyms) {
+      const perGym = { ...configuration,
+        dailyLocalTime: gym.dailyLocalTime ?? configuration.dailyLocalTime,
+        cutoffConfirmed: gym.cutoffConfirmed ?? configuration.cutoffConfirmed,
+      }, ownSchedules = schedules.filter(schedule => schedule.gym === gym.id);
+      dueByGym[gym.id] = digestDue(binding.jobDate, now, perGym, ownSchedules);
+      const opportunity = latestEligibleOpportunity(configuration, now, gym.id);
+      opportunityDueByGym[gym.id] = opportunity
+        ? digestDue(opportunity.date, now, perGym, ownSchedules) : 'awaiting-configuration';
+    }
     // The workflow consumes this fresh authenticated check, never an earlier
     // immutable daily capture. Its one bounded attempt stays fully awaited.
-    if (dependencies.onDigestCheck) await dependencies.onDigestCheck({ digest, configuration, binding, due });
+    if (dependencies.onDigestCheck) await dependencies.onDigestCheck({ digest, configuration, binding, due, dueByGym, opportunityDueByGym });
     if (due !== 'due') return completeRequest(store, binding.requestId, { state: due });
   }
   const rendered = renderAttendanceDigest(digest);

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { digestHash } from './m1-attendance-digest.mjs';
+import { digestHash, digestDate } from './m1-attendance-digest.mjs';
 
 const PREFIX = 'workflow/history/', ROOT = PREFIX + 'root', SCHEMA = 'm1-workflow-history/v2';
 const ID = /^m1-test-scheduled-(rev|richmond)-(\d{4}-\d{2}-\d{2})$/;
@@ -95,7 +95,7 @@ async function makePlan(store, base, intent, project) {
 
 // One published intent fences all aggregate/index changes. Original blobs are
 // retained; a failed invocation is completed from this exact intent on recovery.
-export async function recoverHistory(store, project) {
+export async function recoverHistory(store, project, clock = Date.now) {
   const root = await historyRoot(store, { initialize: true, incomplete: true });
   if (!root.data.pending) return root;
   const intent = (await read(store, PREFIX + 'intents/' + root.data.pending))?.data;
@@ -105,7 +105,11 @@ export async function recoverHistory(store, project) {
     if (!await read(store, resultKey)) {
       const key = 'workflow/messages/' + intent.messageId, current = await read(store, key);
       const wakeBlocked = intent.source.requiresNoWake && await historyWakePending(store);
-      const modified = !wakeBlocked && (current?.etag || null) === intent.source.etag ? (await put(store, key, intent.source.value, current)).modified : false;
+      let leaseBlocked = false;
+      if (intent.source.processorLease) {
+        try { await requireHistoryProcessor(store, intent.source.processorLease, clock); } catch { leaseBlocked = true; }
+      }
+      const modified = !wakeBlocked && !leaseBlocked && (current?.etag || null) === intent.source.etag ? (await put(store, key, intent.source.value, current)).modified : false;
       await put(store, resultKey, { modified }, null);
     }
   }
@@ -135,17 +139,17 @@ export async function recoverHistory(store, project) {
   }
   return historyRoot(store, { incomplete: true });
 }
-export async function changeHistoryMessage(store, messageId, source, project, migrationCursor) {
+export async function changeHistoryMessage(store, messageId, source, project, migrationCursor, clock = Date.now) {
   if (!ID.test(messageId)) fail();
   for (let attempt = 0; attempt < 3; attempt++) {
-    const root = await recoverHistory(store, project);
+    const root = await recoverHistory(store, project, clock);
     if (!root.data.migration.complete && migrationCursor === undefined) throw new Error('WORKFLOW_HISTORY_MIGRATION_PENDING');
     if (source?.requiresNoWake && (source.guardEpoch !== root.data.epoch || await historyWakePending(store))) return { ...(await read(store, 'workflow/messages/' + messageId)), modified: false };
     const intent = { id: randomUUID(), baseEpoch: root.data.epoch, messageId, source, ...(migrationCursor === undefined ? {} : { migrationCursor }) };
     await put(store, PREFIX + 'intents/' + intent.id, intent, null);
     const claimed = await put(store, ROOT, { ...root.data, pending: intent.id }, root);
     if (!claimed.modified) continue;
-    await recoverHistory(store, project);
+    await recoverHistory(store, project, clock);
     const actual = await read(store, 'workflow/messages/' + messageId);
     const outcome = source ? await read(store, PREFIX + 'source-results/' + intent.id) : null;
     return { ...actual, modified: Boolean(outcome?.data.modified && digestHash(actual.data) === digestHash(source.value)) };
@@ -224,7 +228,7 @@ export async function historyPage(store, cursor) {
 }
 
 export async function queueHistoryWake(store, messageId, event) {
-  if (!ID.test(messageId)) fail();
+  if (messageId !== null && !ID.test(messageId)) fail();
   for (let attempt = 0; attempt < 3; attempt++) {
     const before = await read(store, PREFIX + 'wake'), id = randomUUID();
     await put(store, PREFIX + 'wakes/' + id, { id, messageId, event, next: before?.data.id || null }, null);
@@ -233,13 +237,58 @@ export async function queueHistoryWake(store, messageId, event) {
   fail();
 }
 export async function historyWakePending(store) { return Boolean((await read(store, PREFIX + 'wake'))?.data.id); }
+export async function advanceHistoryGeneration(store) {
+  for (let count = 0; count < 3; count++) {
+    const root = await historyRoot(store);
+    if ((await put(store, ROOT, { ...root.data, epoch: root.data.epoch + 1 }, root)).modified) return;
+  }
+  throw new Error('WORKFLOW_HISTORY_TRANSITION_PENDING');
+}
 export async function drainHistoryWakes(store, apply, limit = 8) {
   for (let count = 0; count < limit; count++) {
     const head = await read(store, PREFIX + 'wake'); if (!head?.data.id) return true;
     const node = (await read(store, PREFIX + 'wakes/' + head.data.id))?.data;
-    if (!node || node.id !== head.data.id || !ID.test(node.messageId)) fail();
+    if (!node || node.id !== head.data.id || node.messageId !== null && !ID.test(node.messageId)) fail();
     await apply(node);
     await put(store, PREFIX + 'wake', { id: node.next }, head);
   }
   return !await historyWakePending(store);
+}
+
+const opportunityKey = gym => 'workflow/opportunities/' + gym;
+export async function readHistoryOpportunity(store, gym) {
+  if (!['rev', 'richmond'].includes(gym)) fail();
+  const entry = await read(store, opportunityKey(gym));
+  if (entry && (entry.data.schema !== 'm1-workflow-opportunity/v1' || entry.data.gym !== gym
+    || !digestDate(entry.data.opportunityDate) || !digestDate(entry.data.assessmentDate) || entry.data.opportunityDate > entry.data.assessmentDate
+    || entry.data.messageId !== 'm1-test-scheduled-' + gym + '-' + entry.data.opportunityDate
+    || !['open', 'clean', 'message'].includes(entry.data.decision) || !Number.isSafeInteger(entry.data.assessedAt)
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(entry.data.requestId) || !/^[a-f0-9]{64}$/.test(entry.data.digestHash))) fail();
+  return entry;
+}
+export async function requireHistoryProcessor(store, lease, clock) {
+  const retained = await read(store, 'workflow/processor');
+  if (!lease || retained?.data.owner !== lease.owner || retained.data.expiresAt !== lease.expiresAt || clock() >= lease.expiresAt) throw new Error('WORKFLOW_PROCESSOR_SUPERSEDED');
+}
+export async function claimHistoryOpportunity(store, value, lease, clock) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = await readHistoryOpportunity(store, value.gym);
+    if (before && (before.data.opportunityDate > value.opportunityDate || before.data.opportunityDate === value.opportunityDate
+      && (before.data.decision !== 'open' || before.data.assessedAt > value.assessedAt))) return before;
+    if (before?.data.requestId === value.requestId && before.data.opportunityDate === value.opportunityDate) {
+      if (before.data.digestHash !== value.digestHash) throw new Error('WORKFLOW_OPPORTUNITY_CONFLICT');
+      return before;
+    }
+    await requireHistoryProcessor(store, lease, clock);
+    const result = await put(store, opportunityKey(value.gym), { ...value, schema: 'm1-workflow-opportunity/v1', decision: 'open' }, before);
+    if (result.modified) return result;
+  }
+  throw new Error('WORKFLOW_OPPORTUNITY_UNCONFIRMED');
+}
+export async function finishHistoryOpportunity(store, expected, decision, lease, clock) {
+  if (!['clean', 'message'].includes(decision)) fail();
+  const current = await readHistoryOpportunity(store, expected.data.gym);
+  if (!current || current.etag !== expected.etag || current.data.decision !== 'open') return current;
+  await requireHistoryProcessor(store, lease, clock);
+  return put(store, opportunityKey(expected.data.gym), { ...current.data, decision }, current);
 }

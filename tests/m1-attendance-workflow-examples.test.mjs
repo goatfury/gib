@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { prepareAttendanceWorkflowExamples, prepareAttendanceWorkflowHistoryExamples, readAttendanceWorkflowExamples,
-  runAttendanceWorkflowExamples, runAttendanceWorkflowHistoryExamples } from '../netlify/functions/_lib/m1-attendance-workflow-examples.mjs';
+  runAttendanceWorkflowExamples, runAttendanceWorkflowHistoryExamples, prepareAttendanceWorkflowDailyExamples,
+  runAttendanceWorkflowDailyExamples } from '../netlify/functions/_lib/m1-attendance-workflow-examples.mjs';
+import { digestHash } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
 
 const ID = '123e4567-e89b-42d3-a456-426614174001';
 const OTHER = '123e4567-e89b-42d3-a456-426614174002';
@@ -75,14 +77,15 @@ test('fresh incomplete results deliver a warning and a pre-engine claim failure 
   const pending = store.entries.get(root + 'temporary-recovery-claim/steps/claim').data.messages.messages[0];
   const healed = store.entries.get(root + 'temporary-recovery-claim/steps/healed').data.messages.messages[0];
   assert.equal(pending.attemptCount, 0); assert.equal(pending.delivery.state, 'not-started');
-  assert.equal(healed.messageId, pending.messageId); assert.deepEqual(healed.message, pending.message);
+  assert.equal(healed.messageId, pending.messageId); assert.deepEqual(healed.message.to, pending.message.to);
+  assert.match(healed.message.text, /Fresh assessment: 2026-09-25T02:32:00\.000Z/);
   assert.equal(healed.attemptCount, 1); assert.equal(healed.delivery.state, 'accepted');
   const provider = store.entries.get(root + 'temporary-recovery-claim/simulation/' + pending.messageId).data;
   assert.equal(provider.calls, 1); assert.equal(provider.accepted, true);
   assert.ok(result.scenarios.find(s => s.key === 'temporary-recovery').passed);
 });
 
-test('permanent rejection and expired unknown acceptance retain old receipts and prevent a next-day replacement attempt', async () => {
+test('retained receipts survive the updated daily policy while permanent rejection still holds new attempts', async () => {
   const { store, deps } = fixture();
   const result = await runAttendanceWorkflowExamples(ID, deps);
   for (const name of ['permanent-failure', 'expired-uncertain']) {
@@ -95,12 +98,18 @@ test('permanent rejection and expired unknown acceptance retain old receipts and
     assert.equal(Date.parse(next.digest.generatedAt) - Date.parse(store.entries.get(root + 'steps/first').data.digest.generatedAt), 86400000);
     assert.deepEqual(original.message, prior.message); assert.deepEqual(original.delivery.receipts, prior.delivery.receipts);
     assert.equal(original.attemptCount, 1); assert.equal(original.delivery.state, name === 'permanent-failure' ? 'rejected' : 'unknown');
-    assert.equal(draft.date, '2026-09-25'); assert.equal(draft.attemptCount, 0); assert.equal(draft.firstAttemptAt, null); assert.equal(draft.delivery, null);
-    assert.equal(draft.state, 'prepared');
-    assert.equal(draft.code, name === 'permanent-failure' ? 'PRIOR_PERMANENT_REJECTION_UNCHANGED' : 'PRIOR_ACCEPTANCE_UNCONFIRMED');
     const providerEntries = [...store.entries].filter(([key]) => key.startsWith(root + 'simulation/'));
-    assert.equal(providerEntries.length, 1); assert.equal(providerEntries[0][1].data.calls, 1);
-    assert.equal(store.entries.has(root + 'simulation/' + draft.messageId), false);
+    assert.equal(draft.date, '2026-09-25');
+    if (name === 'permanent-failure') {
+      assert.equal(draft.attemptCount, 0); assert.equal(draft.firstAttemptAt, null); assert.equal(draft.delivery, null);
+      assert.equal(draft.state, 'prepared'); assert.equal(draft.code, 'PRIOR_PERMANENT_REJECTION_UNCHANGED');
+      assert.equal(providerEntries.length, 1); assert.equal(store.entries.has(root + 'simulation/' + draft.messageId), false);
+    } else {
+      assert.equal(draft.attemptCount, 1); assert.equal(draft.delivery.state, 'unknown'); assert.equal(providerEntries.length, 2);
+      assert.equal(original.automaticRetriesRetired, true); assert.equal(original.nextAttemptAt, null);
+      assert.ok(result.scenarios.find(scenario => scenario.key === name).warnings.some(warning => warning.code === 'HISTORICAL_POLICY_SUPERSEDED'));
+    }
+    assert.ok(providerEntries.every(([, entry]) => entry.data.calls === 1));
     assert.ok(result.scenarios.find(scenario => scenario.key === name).passed);
   }
 });
@@ -165,7 +174,7 @@ test('history actions bind their original ID before dispatch without changing le
   assert.deepEqual([...store.entries], entriesBefore, 'type mismatch does not rewrite old originals, leases, results, or receipts');
 });
 
-test('focused saved history proves capacity, old barriers, late-event association and interrupted upgrade using zero network', async () => {
+test('focused saved history proves capacity, current daily barriers, late-event association and interrupted upgrade using zero network', async () => {
   const { store, deps } = fixture();
   await prepareAttendanceWorkflowHistoryExamples(ID, deps);
   const originalFetch = globalThis.fetch; let network = 0, result;
@@ -180,13 +189,14 @@ test('focused saved history proves capacity, old barriers, late-event associatio
   const messages = [...store.entries].filter(([key]) => key.startsWith(root + 'workflow/messages/')).map(([, entry]) => entry.data);
   assert.equal(messages.length, 263); assert.equal(new Set(messages.map(message => message.messageId)).size, 263);
   const simulator = [...store.entries].filter(([key]) => key.startsWith(root + 'simulation/')).map(([, entry]) => entry.data);
-  assert.equal(simulator.length, 3); assert.equal(simulator.reduce((count, receipt) => count + receipt.calls, 0), 3);
+  assert.equal(simulator.length, 4); assert.equal(simulator.reduce((count, receipt) => count + receipt.calls, 0), 4);
   const accepted = seed.originals.find(message => message.delivery.state === 'accepted');
   assert.equal(messages.find(message => message.messageId === accepted.messageId).state, 'delivered');
   for (const other of seed.originals.filter(message => message.messageId !== accepted.messageId)) assert.notEqual(messages.find(message => message.messageId === other.messageId).state, 'delivered');
   for (const gym of ['rev', 'richmond']) {
     const draft = messages.find(message => message.messageId === 'm1-test-scheduled-' + gym + '-2027-02-06');
-    assert.equal(draft.attemptCount, 0); assert.equal(draft.firstAttemptAt, null);
+    assert.equal(draft.attemptCount, gym === 'rev' ? 1 : 0);
+    if (gym === 'richmond') assert.equal(draft.firstAttemptAt, null);
   }
   assert.equal(store.entries.get(root + 'fixture/interrupted').data.code, 'SYNTHETIC_HISTORY_WRITE_INTERRUPTED');
   assert.equal(store.entries.get(root + 'fixture/migrated').data.complete, true);
@@ -218,4 +228,92 @@ test('focused history resumes the same original after runner interruption and le
   assert.deepEqual(await readAttendanceWorkflowExamples(null, historyDeps), result);
   assert.deepEqual(await readAttendanceWorkflowExamples(OTHER, deps), previous);
   assert.deepEqual([...store.entries].filter(([key]) => key.startsWith(previousPrefix)), previousEntries);
+});
+
+test('daily policy scenarios use fresh assessments, retained originals and the real coordinator without any network or caller credentials', async () => {
+  const { store, deps } = fixture();
+  await prepareAttendanceWorkflowDailyExamples(ID, deps);
+  let calls = 0, envReads = 0;
+  deps.fetch = () => { calls++; throw new Error('No caller network'); };
+  Object.defineProperty(deps, 'env', { get() { envReads++; throw new Error('No caller credentials'); } });
+  const fetch = globalThis.fetch;
+  globalThis.fetch = () => { calls++; throw new Error('No real network'); };
+  let result;
+  deps.requirePrepared = true;
+  try { result = await runAttendanceWorkflowDailyExamples(ID, deps); }
+  finally { globalThis.fetch = fetch; }
+  assert.equal(calls, 0); assert.equal(envReads, 0);
+  assert.equal(result.scenarios.length, 7);
+  assert.deepEqual(result.scenarios.filter(item => !item.passed).map(item => [item.key, item.summary]), []);
+  const root = 'examples/' + ID + '/scenarios/';
+  const unknown = store.entries.get(root + 'daily-fresh-unknown/steps/original').data.messages.messages[0];
+  const retained = store.entries.get(root + 'daily-fresh-unknown/workflow/messages/' + unknown.messageId).data;
+  assert.deepEqual(retained.message, unknown.message); assert.deepEqual(retained.delivery.receipts, unknown.delivery.receipts);
+  assert.equal(retained.retryBefore, unknown.retryBefore); assert.equal(retained.automaticRetriesRetired, true); assert.equal(retained.nextAttemptAt, null);
+  assert.equal(store.entries.get(root + 'daily-clean-unknown/workflow/opportunities/rev').data.decision, 'clean');
+  assert.deepEqual(store.entries.get(root + 'daily-overlap-recovery/fixture/overlap-complete').data, { providerCalls: 0, decision: 'clean' });
+  assert.equal(store.entries.get(root + 'daily-takeover-unknown/fixture/interrupted').data.code, 'SYNTHETIC_OPPORTUNITY_WRITE_FAILURE');
+  assert.equal(store.entries.get(root + 'daily-storage-unknown/fixture/storage-held').data.code, 'SYNTHETIC_OLD_LEDGER_UNAVAILABLE');
+  const oldBounce = store.entries.get(root + 'daily-late-unknown/fixture/unbound-bounce-checked').data;
+  assert.equal(oldBounce.matched, false); assert.equal(oldBounce.originalState, 'unknown'); assert.equal(oldBounce.providerCalls, 1);
+  assert.equal(oldBounce.code, 'PRIOR_PERMANENT_RECIPIENT_PROOF_UNRESOLVED');
+  const historicalHealth = store.entries.get(root + 'daily-holds-transient/steps/clean').data.health;
+  assert.equal(historicalHealth.failedCount, 0); assert.equal(historicalHealth.historicalFailedCount, 1);
+  const catchup = store.entries.get(root + 'daily-missed-days/workflow/messages/m1-test-scheduled-rev-2026-09-28').data;
+  assert.equal(catchup.assessmentDate, '2026-09-29'); assert.equal(catchup.attemptCount, 1);
+  assert.equal([...store.entries.keys()].filter(key => key.startsWith(root + 'daily-missed-days/workflow/messages/')).length, 2);
+  assert.ok(result.scenarios.flatMap(item => item.messages).every(message => message.to.every(address => address.endsWith('@example.invalid'))));
+  assert.ok(store.writes.every(key => key === 'latestRun' || key.startsWith('examples/' + ID + '/')));
+  const saved = structuredClone([...store.entries]);
+  assert.deepEqual(await readAttendanceWorkflowExamples(null, deps), result);
+  assert.deepEqual(await runAttendanceWorkflowDailyExamples(ID, deps), result);
+  assert.deepEqual([...store.entries], saved, 'saved daily evidence reload does not repeat a scenario');
+});
+
+test('daily originals bind kind/version before dispatch and preserve prior saved policy evidence without rerunning it', async () => {
+  const { store, deps } = fixture();
+  await assert.rejects(() => runAttendanceWorkflowDailyExamples(ID, { ...deps, requirePrepared: true }), error => error.code === 'WORKFLOW_EXAMPLES_ORIGINAL_REQUIRED');
+  assert.equal(store.entries.size, 0);
+  const legacyKeys = ['routing', 'clean', 'incomplete', 'upcoming-canceled', 'duplicate-concurrent', 'temporary-recovery',
+    'uncertain-reload', 'permanent-failure', 'resolved-before-attempt', 'immutable-after-attempt', 'expired-uncertain', 'health-ordering'];
+  const historyKeys = ['history-over-256', 'history-old-barriers', 'history-late-event', 'history-interrupted-upgrade'];
+  for (const [runId, version, keys] of [[OTHER, 1, legacyKeys], ['123e4567-e89b-42d3-a456-426614174003', 2, historyKeys]]) {
+    const original = { schema: 'm1-attendance-workflow-examples/v1', runId, synthetic: true, fixtureVersion: version, createdAt: NOW - 1,
+      ...(version === 2 ? { kind: 'history' } : {}) };
+    const result = { runId, complete: true, synthetic: true, scenarios: keys.map(key => ({ key, title: key, passed: true,
+      summary: 'Previously saved policy evidence; no execution requested.', warnings: [], messages: [], checks: ['Historical saved result.'] })) };
+    await store.set('examples/' + runId + '/original', JSON.stringify(original));
+    await store.set('examples/' + runId + '/result', JSON.stringify({ schema: original.schema, hash: digestHash(result), result }));
+    assert.deepEqual(await readAttendanceWorkflowExamples(runId, deps), result);
+    await assert.rejects(() => prepareAttendanceWorkflowDailyExamples(runId, deps), error => error.code === 'WORKFLOW_EXAMPLES_KIND_MISMATCH');
+  }
+  const legacy = structuredClone([...store.entries]);
+  await prepareAttendanceWorkflowDailyExamples(ID, deps);
+  assert.equal(store.entries.get('examples/' + ID + '/original').data.fixtureVersion, 3);
+  assert.equal(store.entries.get('examples/' + ID + '/original').data.kind, 'daily');
+  for (const call of [prepareAttendanceWorkflowExamples, prepareAttendanceWorkflowHistoryExamples, runAttendanceWorkflowExamples, runAttendanceWorkflowHistoryExamples]) {
+    await assert.rejects(() => call(ID, deps), error => error.code === 'WORKFLOW_EXAMPLES_KIND_MISMATCH');
+  }
+  assert.equal(await readAttendanceWorkflowExamples(ID, deps), null);
+  assert.deepEqual([...store.entries].filter(([key]) => !key.startsWith('examples/' + ID + '/') && key !== 'latestRun'), legacy);
+  assert.equal(simulations(store).length, 0);
+});
+
+test('a daily runner interruption resumes its original action and checkpoints without duplicate simulated calls', async () => {
+  for (const interruptedAfter of ['daily-calendar-dst', 'daily-late-evidence']) {
+    const { store, deps } = fixture();
+    await prepareAttendanceWorkflowDailyExamples(ID, deps);
+    const set = store.set.bind(store); let stop = true;
+    store.set = async (path, raw, options) => {
+      if (stop && path.endsWith('/completed/' + interruptedAfter)) { stop = false; throw new Error('Daily runner interrupted'); }
+      return set(path, raw, options);
+    };
+    await assert.rejects(() => runAttendanceWorkflowDailyExamples(ID, deps), /Daily runner interrupted/);
+    const originals = simulations(store), savedOriginal = structuredClone(store.entries.get('examples/' + ID + '/original'));
+    assert.equal(await readAttendanceWorkflowExamples(ID, deps), null);
+    const result = await runAttendanceWorkflowDailyExamples(ID, deps);
+    assert.deepEqual(result.scenarios.filter(item => !item.passed).map(item => [item.key, item.summary]), []);
+    for (const [path, value] of originals) assert.deepEqual(store.entries.get(path).data, value);
+    assert.deepEqual(store.entries.get('examples/' + ID + '/original'), savedOriginal);
+  }
 });

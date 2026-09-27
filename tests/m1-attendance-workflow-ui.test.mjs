@@ -93,6 +93,50 @@ test('current health stays separate from synthetic passes and unknown or stale h
   assert.match(attention.root.textContent, /Attendance still needs review/);
 });
 
+test('historical unknown send results remain visible separately when a newer current check is healthy', async () => {
+  const health = { ok: true, target: 'test', state: 'clear', codes: [], checkedAt: new Date(100000).toISOString(), expiresAt: new Date(1900000).toISOString(),
+    pendingCount: 0, failedCount: 0, unconfirmedCount: 0, historicalUnconfirmedCount: 2, historicalFailedCount: 0, opportunityDate: '2026-09-27' };
+  const h = harness(); await h.open(response(null, { current: { health } }));
+  assert.match(h.root.textContent, /Current attendance check completed/); assert.match(h.root.textContent, /Current reminder date: 2026-09-27/);
+  assert.match(h.root.textContent, /Past reminder history: 2 earlier reminders still have an unknown send result/);
+  assert.match(h.root.textContent, /a newer check does not mean those emails were delivered/);
+  assert.doesNotMatch(h.root.textContent, /Current status:.*unconfirmed/);
+  const refresh = h.ui.refresh(); await flush(); h.calls[1].reject(new Error('Offline')); await refresh;
+  assert.match(h.root.textContent, /Current attendance check status unavailable/); assert.match(h.root.textContent, /Past reminder history is currently unavailable/);
+  assert.doesNotMatch(h.root.textContent, /Current attendance check completed/);
+});
+
+test('historical uncertainty never hides active delivery or configuration failures, and malformed history cannot show current success', async () => {
+  const health = { ok: true, target: 'test', state: 'clear', codes: [], checkedAt: new Date(100000).toISOString(), expiresAt: new Date(1900000).toISOString(),
+    pendingCount: 0, failedCount: 0, unconfirmedCount: 0, historicalUnconfirmedCount: 1, historicalFailedCount: 0, opportunityDate: '2026-09-27' };
+  for (const change of [{ state: 'delivery-failed', codes: ['DELIVERY_FAILED'], failedCount: 1 },
+    { state: 'delivery-unconfirmed', codes: ['DELIVERY_UNCONFIRMED'], unconfirmedCount: 1 },
+    { state: 'not-configured', codes: ['CONFIGURATION_REQUIRED'] }, { state: 'check-incomplete', codes: ['CHECK_INCOMPLETE'] }]) {
+    const h = harness(); await h.open(response(null, { current: { health: { ...health, ...change } } }));
+    assert.match(h.root.textContent, /Current status:/); assert.match(h.root.textContent, /Past reminder history: 1 earlier reminder still has an unknown send result/);
+    assert.doesNotMatch(h.root.textContent, /Current attendance check completed/);
+  }
+  for (const change of [{ historicalUnconfirmedCount: -1 }, { historicalUnconfirmedCount: '1' }, { historicalUnconfirmedCount: undefined },
+    { historicalFailedCount: -1 }, { historicalFailedCount: '1' }, { historicalFailedCount: undefined },
+    { opportunityDate: '2026-02-31' }, { opportunityDate: undefined }]) {
+    const h = harness(); await h.open(response(null, { current: { health: { ...health, ...change } } }));
+    assert.match(h.root.textContent, /Current attendance check status unavailable/); assert.match(h.root.textContent, /Past reminder history is currently unavailable/);
+    assert.doesNotMatch(h.root.textContent, /Current attendance check completed/);
+  }
+});
+
+test('older email failures are retained as history without becoming current failures after a clean check', async () => {
+  const health = { ok: true, target: 'test', state: 'clear', codes: [], checkedAt: new Date(100000).toISOString(), expiresAt: new Date(1900000).toISOString(),
+    pendingCount: 0, failedCount: 0, unconfirmedCount: 0, historicalUnconfirmedCount: 0, historicalFailedCount: 2, opportunityDate: '2026-09-27' };
+  const h = harness(); await h.open(response(null, { current: { health } }));
+  assert.match(h.root.textContent, /Current attendance check completed/);
+  assert.match(h.root.textContent, /Past reminder history: 2 earlier reminders have a recorded email failure/);
+  assert.match(h.root.textContent, /This failure history is retained/); assert.doesNotMatch(h.root.textContent, /Current status:/);
+  const active = harness(); await active.open(response(null, { current: { health: { ...health, state: 'delivery-failed', codes: ['DELIVERY_FAILED'], failedCount: 1 } } }));
+  assert.match(active.root.textContent, /Current status:/); assert.match(active.root.textContent, /2 earlier reminders have a recorded email failure/);
+  assert.doesNotMatch(active.root.textContent, /Current attendance check completed/);
+});
+
 test('a failed or incomplete read never presents fresh success or enables stale correction links', async () => {
   const h = harness(); await h.open(response(fixture())); const read = h.ui.refresh(); await flush(); h.calls[1].reject(new Error('Offline')); await read;
   assert.match(h.root.textContent, /status unavailable/); assert.match(h.root.textContent, /Previously loaded examples/);
@@ -170,11 +214,47 @@ test('lost history reply reloads the original run and retries its original actio
 
 test('legacy pending journals retry the original workflow suite without migration or replacing it with history checks', async () => {
   const raw = JSON.stringify({ requestId: ID, adminName: 'Andrew Smith' }), storage = new Map([[KEY, raw]]), h = harness({ storage });
-  await h.open(); assert.equal(storage.get(KEY), raw); h.click('history'); h.click('run'); await flush(); assert.equal(h.calls.length, 1);
+  await h.open(); assert.equal(storage.get(KEY), raw); h.click('history'); h.click('daily'); h.click('run'); await flush(); assert.equal(h.calls.length, 1);
   h.click('retry'); await flush(); assert.equal(h.calls[1].args[1].action, 'runExamples'); assert.equal(h.calls[1].args[1].requestId, ID);
   assert.equal(h.calls[1].journalAtDispatch, raw);
   h.calls[1].resolve(response(null, { request: { runId: ID, action: 'runExamples', state: 'pending' } })); await flush();
   assert.equal(storage.get(KEY), raw); assert.match(h.root.textContent, /still waiting for confirmation/);
+});
+
+test('daily reminder checks retain the original action and ID through lost confirmation, reload and explicit retry', async () => {
+  const storage = new Map(), first = harness({ storage }); await first.open();
+  assert.equal(first.find('daily').textContent, 'Run synthetic daily reminder checks');
+  first.click('daily'); first.click('daily'); first.click('history'); first.click('run'); await flush();
+  assert.equal(first.calls.length, 2);
+  assert.deepEqual(JSON.parse(first.calls[1].journalAtDispatch), { requestId: ID, adminName: 'Andrew Smith', action: 'runDaily' });
+  assert.deepEqual(JSON.parse(JSON.stringify(first.calls[1].args[1])), { action: 'runDaily', requestId: ID });
+  first.calls[1].reject(new Error('Lost response')); await flush(); first.ui.clear();
+  const reopened = harness({ storage }); await reopened.open(response(null, { request: { runId: ID, action: 'runDaily', state: 'pending' } }));
+  assert.equal(reopened.calls[0].args[0], '/api/m1-attendance-workflow?runId=' + ID);
+  for (const action of ['run', 'history', 'daily']) { assert.equal(reopened.find(action).disabled, true); reopened.click(action); }
+  await flush(); assert.equal(reopened.calls.length, 1);
+  reopened.click('retry'); reopened.click('retry'); await flush(); assert.equal(reopened.calls.length, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(reopened.calls[1].args[1])), { action: 'runDaily', requestId: ID });
+  const result = fixture(); result.scenarios[0].key = 'daily-next-day'; result.scenarios[0].title = 'Next eligible day';
+  reopened.calls[1].resolve(response(result)); await flush(); assert.equal(storage.size, 0);
+  assert.match(reopened.root.textContent, /Next eligible day/); assert.equal(reopened.find('daily').disabled, false);
+  reopened.ui.clear(); const latest = harness({ storage }); await latest.open(response(result));
+  assert.equal(latest.calls[0].args[2].method, 'GET'); assert.match(latest.root.textContent, /Next eligible day/);
+  assert.equal(latest.calls.length, 1);
+});
+
+test('daily requests retain reviewer and session protections and cannot replace pending historical runs', async () => {
+  for (const action of ['runHistory', 'runDaily']) {
+    const raw = JSON.stringify({ requestId: ID, adminName: 'Stuart Turner', action }), h = harness({ storage: new Map([[KEY, raw]]) });
+    await h.open(); for (const control of ['run', 'history', 'daily', 'retry']) { assert.equal(h.find(control).disabled, true); h.click(control); }
+    await flush(); assert.equal(h.calls.length, 1); assert.equal(h.storage.get(KEY), raw);
+  }
+  const changed = harness(); await changed.open(); changed.setSession('session-two'); changed.click('daily'); await flush();
+  assert.equal(changed.calls.length, 1); assert.equal(changed.storage.size, 0);
+  const pending = harness({ storage: new Map([[KEY, JSON.stringify({ requestId: ID, adminName: 'Andrew Smith', action: 'runHistory' })]]) });
+  await pending.open(); pending.click('daily'); await flush(); assert.equal(pending.calls.length, 1);
+  pending.click('retry'); await flush(); assert.equal(pending.calls[1].args[1].action, 'runHistory');
+  pending.calls[1].resolve(response(fixture())); await flush();
 });
 
 test('pending action mismatches and invalid retained actions never clear the original run or dispatch a replacement', async () => {

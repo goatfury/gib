@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { buildAttendanceDigest, defaultDigestConfiguration, digestDue, digestHash, datesThrough } from './m1-attendance-digest.mjs';
 import { makeDigestBinding } from './m1-attendance-digest-outbox.mjs';
-import { processAttendanceWorkflow, workflowHealth, workflowMessages, migrateWorkflowHistory, recordWorkflowDeliveryEvidence } from './m1-attendance-digest-workflow.mjs';
+import { processAttendanceWorkflow, workflowHealth, workflowMessages, migrateWorkflowHistory, recordWorkflowDeliveryEvidence, latestEligibleOpportunity } from './m1-attendance-digest-workflow.mjs';
 
 const SCHEMA = 'm1-attendance-workflow-examples/v1';
 const STORE = 'gib-m1-attendance-workflow-examples-v1';
@@ -16,7 +16,9 @@ const MINUTE = 60000, LEASE_MS = 5 * MINUTE;
 const scenarioKeys = ['routing', 'clean', 'incomplete', 'upcoming-canceled', 'duplicate-concurrent', 'temporary-recovery',
   'uncertain-reload', 'permanent-failure', 'resolved-before-attempt', 'immutable-after-attempt', 'expired-uncertain', 'health-ordering'];
 const historyScenarioKeys = ['history-over-256', 'history-old-barriers', 'history-late-event', 'history-interrupted-upgrade'];
-const keysFor = kind => kind === 'history' ? historyScenarioKeys : scenarioKeys;
+const dailyScenarioKeys = ['daily-fresh-unknown', 'daily-clean-incomplete', 'daily-calendar-dst', 'daily-overlap-recovery',
+  'daily-missed-days', 'daily-late-evidence', 'daily-holds'];
+const keysFor = kind => kind === 'daily' ? dailyScenarioKeys : kind === 'history' ? historyScenarioKeys : scenarioKeys;
 const clock = deps => (deps.clock || Date.now)();
 const fail = (code, status = 503, runId) => { throw Object.assign(new Error(code), { code, status, ...(runId ? { runId } : {}) }); };
 const assert = (value, message) => { if (!value) throw Object.assign(new Error(message), { exampleCheck: true }); };
@@ -57,10 +59,11 @@ function validOriginal(value, runId) {
   return value?.schema === SCHEMA && value.runId === runId && value.synthetic === true
     && Number.isSafeInteger(value.createdAt) && value.createdAt >= 0
     && ((value.fixtureVersion === 1 && Object.keys(value).length === 5 && !Object.hasOwn(value, 'kind'))
-      || (value.fixtureVersion === 2 && value.kind === 'history' && Object.keys(value).length === 6));
+      || (value.fixtureVersion === 2 && value.kind === 'history' && Object.keys(value).length === 6)
+      || (value.fixtureVersion === 3 && value.kind === 'daily' && Object.keys(value).length === 6));
 }
 const originalFor = (runId, now, kind) => ({ schema: SCHEMA, runId, synthetic: true,
-  fixtureVersion: kind === 'history' ? 2 : 1, ...(kind === 'history' ? { kind } : {}), createdAt: now });
+  fixtureVersion: kind === 'daily' ? 3 : kind === 'history' ? 2 : 1, ...(kind !== 'workflow' ? { kind } : {}), createdAt: now });
 function validateOriginalKind(value, runId, kind) {
   if (!validOriginal(value, runId)) fail('WORKFLOW_EXAMPLES_ORIGINAL_INVALID');
   if ((value.kind || 'workflow') !== kind) fail('WORKFLOW_EXAMPLES_KIND_MISMATCH', 409, runId);
@@ -98,6 +101,7 @@ export async function readAttendanceWorkflowExamples(runId = null, deps = {}) {
 
 export const prepareAttendanceWorkflowExamples = (runId, deps = {}) => prepareExamples(runId, deps, 'workflow');
 export const prepareAttendanceWorkflowHistoryExamples = (runId, deps = {}) => prepareExamples(runId, deps, 'history');
+export const prepareAttendanceWorkflowDailyExamples = (runId, deps = {}) => prepareExamples(runId, deps, 'daily');
 async function prepareExamples(runId, deps, kind) {
   if (!UUID.test(runId || '')) fail('WORKFLOW_EXAMPLES_ID_INVALID', 400);
   const store = await storeFor(deps), now = clock(deps);
@@ -131,13 +135,24 @@ function input(mode = 'issue', stamp = START, both = false) {
     recordId: 'synthetic-' + snapshot.gym, date: DATE, classLabel: '6:00 PM SYNTHETIC ' + snapshot.gym + ' class', instructor: 'SYNTHETIC recorded instructor', duration: 1, reviewRequired: false
   }));
   if (mode === 'incomplete') snapshots.forEach(snapshot => { snapshot.attendance = { ok: false, code: 'SYNTHETIC_UNAVAILABLE' }; snapshot.staff = { ok: false, code: 'SYNTHETIC_UNAVAILABLE' }; });
+  if (mode === 'new-issue') schedules.forEach(schedule => schedule.days.find(day => day.date === jobDate).occurrences.push({
+    label: '12:00 PM SYNTHETIC new ' + schedule.gym + ' class', startAt: jobDate + 'T16:00:00.000Z', endAt: jobDate + 'T17:00:00.000Z', cancelled: false
+  }));
   if (mode === 'upcoming-canceled') schedules.forEach(schedule => {
     const occurrences = schedule.days.find(day => day.date === DATE).occurrences;
     occurrences[0].cancelled = true; occurrences[0].endAt = null;
     occurrences.push({ label: '11:00 PM SYNTHETIC upcoming class', startAt: '2026-09-25T03:00:00.000Z', endAt: '2026-09-25T03:45:00.000Z', cancelled: false });
   });
   const digest = buildAttendanceDigest({ jobDate, snapshots, schedules, configuration, now: stamp });
-  return { digest, configuration, due: digestDue(jobDate, stamp, configuration, schedules) };
+  const dueByGym = {}, opportunityDueByGym = {};
+  for (const gym of configuration.gyms) {
+    const perGym = { ...configuration, dailyLocalTime: gym.dailyLocalTime ?? configuration.dailyLocalTime,
+      cutoffConfirmed: gym.cutoffConfirmed ?? configuration.cutoffConfirmed };
+    const ownSchedules = schedules.filter(schedule => schedule.gym === gym.id), opportunity = latestEligibleOpportunity(configuration, stamp, gym.id);
+    dueByGym[gym.id] = digestDue(jobDate, stamp, perGym, ownSchedules);
+    opportunityDueByGym[gym.id] = opportunity ? digestDue(opportunity.date, stamp, perGym, ownSchedules) : 'awaiting-configuration';
+  }
+  return { digest, configuration, due: digestDue(jobDate, stamp, configuration, schedules), dueByGym, opportunityDueByGym };
 }
 
 function harness(store, runId, scenario) {
@@ -156,10 +171,13 @@ function harness(store, runId, scenario) {
       if (attempt === 3) fail('WORKFLOW_EXAMPLES_SIMULATION_CONFLICT');
     }
     const behavior = scenario === 'history-templates' ? message.messageId.includes('-richmond-') ? 'permanent' : message.messageId.endsWith(DATE) ? 'accepted' : 'uncertain'
-      : scenario === 'permanent-failure' ? 'permanent'
+      : scenario === 'permanent-failure' || scenario === 'daily-holds-permanent' ? 'permanent'
+      : scenario === 'daily-holds-transient' ? 'transient-rejection'
+      : scenario.startsWith('daily-') && scenario.includes('unknown') && message.messageId.endsWith(DATE) ? 'uncertain'
       : ['uncertain-reload', 'expired-uncertain'].includes(scenario) ? 'uncertain'
         : ['temporary-recovery', 'immutable-after-attempt'].includes(scenario) ? 'temporary' : 'accepted';
     if (behavior === 'permanent') return new Response('{}', { status: 403 });
+    if (behavior === 'transient-rejection') return new Response('{}', { status: 429 });
     if (behavior === 'temporary' && record.calls === 1) return new Response('{}', { status: 503 });
     const previous = await read(scoped, path);
     if (!previous.data.accepted) {
@@ -178,8 +196,11 @@ function harness(store, runId, scenario) {
     const checkpoint = await read(scoped, 'steps/' + stage);
     if (checkpoint) return checkpoint.data;
     const data = input(mode, stamp, options.both);
+    if (options.unconfigured) data.configuration.routing.rev.reviewer.address = null;
     const binding = makeDigestBinding(idFor([runId, scenario, stage]), 'scheduled', options.createdAt ?? stamp);
-    const request = { ...data, binding, ...(options.due ? { due: options.due } : {}) };
+    const request = { ...data, binding, ...(options.due ? { due: options.due,
+      dueByGym: Object.fromEntries(data.configuration.gyms.map(gym => [gym.id, options.due])),
+      opportunityDueByGym: Object.fromEntries(data.configuration.gyms.map(gym => [gym.id, options.due])) } : {}) };
     if (options.concurrent) await Promise.all([processAttendanceWorkflow(request, dependencies()), processAttendanceWorkflow(request, dependencies())]);
     else await processAttendanceWorkflow(request, dependencies());
     const messages = await workflowMessages(SCOPE, dependencies());
@@ -195,6 +216,7 @@ function harness(store, runId, scenario) {
 
 const entries = result => result.messages.messages;
 const firstMessage = result => entries(result)[0];
+const stepProviderCalls = result => result.providerStates.reduce((total, item) => total + (item.receipt?.calls || 0), 0);
 function publicMessages(result) {
   return entries(result).filter(entry => entry.message).map(entry => ({ gym: entry.gym, name: entry.gym === 'rev' ? 'Stu — synthetic address' : 'Trey — synthetic address',
     to: entry.message.to, cc: entry.message.cc || [], subject: entry.message.subject, html: entry.message.html, text: entry.message.text,
@@ -328,17 +350,19 @@ async function historyScenario(store, runId, name) {
     checks = ['256 preserved legacy references migrated.', 'Five new daily records saved through the real workflow.', '261 unique permanent IDs read across bounded pages.', 'All retained bodies and original audit receipts unchanged.'];
   } else if (name === 'history-old-barriers') {
     const result = await h.tick('barriers', 'issue', historyTime(HISTORY_DAY) - START, { both: true });
-    for (const [gym, code] of [['rev', 'PRIOR_ACCEPTANCE_UNCONFIRMED'], ['richmond', 'PRIOR_PERMANENT_REJECTION_UNCHANGED']]) {
+    for (const [gym, code] of [['rev', null], ['richmond', 'PRIOR_PERMANENT_REJECTION_UNCHANGED']]) {
       const draft = (await read(h.scoped, 'workflow/messages/m1-test-scheduled-' + gym + '-' + HISTORY_DAY))?.data;
-      assert(draft?.attemptCount === 0 && !draft.firstAttemptAt && draft.code === code, 'An old unresolved original still blocks a new daily identity.');
-      assert(await h.simulation(draft.messageId) === null, 'The blocked new daily draft makes no provider call.');
+      if (code) {
+        assert(draft?.attemptCount === 0 && !draft.firstAttemptAt && draft.code === code, 'An old permanent rejection still blocks a new daily identity.');
+        assert(await h.simulation(draft.messageId) === null, 'The blocked new daily draft makes no provider call.');
+      } else assert(draft?.attemptCount === 1 && (await h.simulation(draft.messageId))?.calls === 1, 'A genuinely new opportunity proceeds while old unknown history remains retained.');
     }
     for (const original of seed.originals) assert((await h.simulation(original.messageId))?.calls === 1, 'No original attempt is silently replayed while adding history.');
-    assert(await historyProviderCalls(h) === 3, 'All stored simulated provider identities total exactly the three original calls.');
+    assert(await historyProviderCalls(h) === 4, 'Three original calls plus one eligible new daily call are retained.');
     await historyOriginalsIntact(h, seed); messages = publicMessages(result).filter(message => message.text.includes('SYNTHETIC'));
-    title = 'Old unknown and rejected sends remain barriers'; summary = 'The original Revolution uncertainty and Richmond rejection still block new sends beyond the recent-history page.';
-    warnings = [warning('PRIOR_DELIVERY_UNRESOLVED', 'Unknown acceptance and an unchanged permanent rejection remain unresolved; the synthetic new drafts were not sent.')];
-    checks = ['Old unknown-acceptance barrier retained.', 'Old permanent-rejection barrier retained.', 'Both new gym drafts remain unattempted.', 'Three original simulated provider calls total, with no new calls.'];
+    title = 'Retained history respects the updated daily policy'; summary = 'The old unknown remains unresolved, while a fresh eligible Revolution reminder proceeds. Richmond’s permanent rejection still holds its new draft.';
+    warnings = [warning('HISTORICAL_POLICY_SUPERSEDED', 'Earlier saved runs tested a permanent hold for unknown acceptance. The approved daily policy now retires old retries at the next eligible assessment; earlier saved evidence remains unchanged.')];
+    checks = ['Old unknown receipts retained without another old attempt.', 'Old permanent-rejection barrier retained.', 'New Revolution daily attempt permitted.', 'Four total simulated calls, including all three originals.'];
   } else if (name === 'history-late-event') {
     const original = seed.originals.find(item => item.gym === 'rev' && item.delivery?.state === 'accepted');
     const event = { eventId: 'synthetic-history-late-' + runId, providerId: original.delivery.providerId, type: 'email.delivered',
@@ -351,7 +375,7 @@ async function historyScenario(store, runId, name) {
       assert(retained.state !== 'delivered', 'The late event does not resolve another original.');
     }
     await historyOriginalsIntact(h, seed);
-    assert(await historyProviderCalls(h) === 3, 'The late synthetic event makes no provider request.');
+    assert(await historyProviderCalls(h) === 4, 'The late synthetic event makes no provider request.');
     title = 'A late event still reaches its original message'; summary = 'A verified synthetic delivery event matched only the original accepted message, despite more than 256 later history records.';
     warnings = [warning('SIMULATED_EVENT_ONLY', 'This is an isolated synthetic verified event, not evidence of real inbox delivery.')];
     checks = ['Original permanent provider/message association found.', 'Only the intended original received the event.', 'Original body, acceptance receipt and other failures preserved.'];
@@ -426,9 +450,10 @@ async function scenario(store, runId, name) {
       assert(pending.attemptCount === 0 && pending.delivery?.state === 'not-started'
         && interrupted.providerStates.find(item => item.messageId === pending.messageId)?.receipt === null, 'A failed engine claim makes no provider request.');
       const healed = await claim.tick('healed', 'issue', 2 * MINUTE), retained = firstMessage(healed);
-      assert(retained.messageId === pending.messageId && digestHash(retained.message) === digestHash(pending.message)
+      assert(retained.messageId === pending.messageId && JSON.stringify(retained.message.to) === JSON.stringify(pending.message.to)
+        && retained.message.text.includes('Fresh assessment: ' + new Date(START + 2 * MINUTE).toISOString())
         && retained.attemptCount === 1 && retained.delivery?.state === 'accepted'
-        && (await claim.simulation(retained.messageId))?.calls === 1, 'Expired unattempted claim recovers the original message once.');
+        && (await claim.simulation(retained.messageId))?.calls === 1, 'Expired unattempted claim recovers the same daily identity once using a fresh assessment.');
       await claim.tick('repeat', 'issue', 3 * MINUTE);
       assert((await claim.simulation(retained.messageId)).calls === 1, 'Recovered first attempt is not repeated.');
       checks.push('A pre-engine storage failure makes zero provider calls.', 'The expired saved claim recovers the same message exactly once.');
@@ -455,7 +480,7 @@ async function scenario(store, runId, name) {
     assert(result.digest.itemCount === 0 && entries(result).every(entry => entry.attemptCount === 0), 'Resolved items never reach the provider.');
     checks = ['Fresh complete read sees the resolution.', 'No provider attempt.']; summary = 'Items fixed before the first eligible send no longer trigger an email.';
   } else if (name === 'expired-uncertain') {
-    title = 'Unknown acceptance cannot restart as a new daily email'; const before = await h.tick('first');
+    title = 'New daily policy preserves old uncertainty without blocking fresh work'; const before = await h.tick('first');
     result = await h.tick('next-day', 'issue', 24 * 60 * MINUTE);
     const prior = firstMessage(before), original = entries(result).find(entry => entry.messageId === prior.messageId);
     const draft = entries(result).find(entry => entry.messageId !== prior.messageId);
@@ -463,13 +488,13 @@ async function scenario(store, runId, name) {
       && original.code === 'MANUAL_RECONCILIATION_REQUIRED'
       && digestHash(original.message) === digestHash(prior.message)
       && digestHash(original.delivery.receipts) === digestHash(prior.delivery.receipts), 'Original unknown acceptance, exact message and audit receipts remain unchanged.');
-    assert(draft?.date === '2026-09-25' && draft.attemptCount === 0 && !draft.firstAttemptAt
-      && !draft.delivery && draft.state === 'prepared' && draft.code === 'PRIOR_ACCEPTANCE_UNCONFIRMED', 'An unresolved unknown acceptance blocks the next due day draft before any attempt.');
-    assert(result.providerStates.reduce((total, item) => total + (item.receipt?.calls || 0), 0) === 1
-      && result.providerStates.find(item => item.messageId === draft.messageId)?.receipt === null, 'An expired unknown acceptance cannot acquire a new provider identity on the next day.');
-    warnings = [warning('MANUAL_RECONCILIATION_REQUIRED', 'Whether the original email was accepted is unknown. Its safe retry window expired, so the next day’s draft stays unattempted pending reconciliation.')];
-    checks = ['Unknown acceptance distinguished from confirmed acceptance without delivery evidence.', 'Original identity and receipts preserved past 23 hours.', 'Same unresolved issue checked at the next due day, 24 hours later.', 'One total provider call across both dates.', 'Next-day draft retained without an attempt.'];
-    summary = 'Unknown provider acceptance remains a manual question; a new day does not create a replacement send.';
+    assert(draft?.date === '2026-09-25' && draft.attemptCount === 1 && draft.firstAttemptAt && draft.delivery?.state === 'unknown', 'The next eligible assessment uses a new daily identity without rewriting old uncertainty.');
+    assert(result.providerStates.reduce((total, item) => total + (item.receipt?.calls || 0), 0) === 2
+      && (await h.simulation(original.messageId))?.calls === 1, 'The old identity is not retried; one genuinely new daily assessment is attempted.');
+    warnings = [warning('MANUAL_RECONCILIATION_REQUIRED', 'Whether the original email was accepted remains unknown; the fresh daily assessment does not claim to resolve it.'),
+      warning('HISTORICAL_POLICY_SUPERSEDED', 'The earlier permanent hold for unknown acceptance was superseded by the approved daily policy. Previously saved results remain unchanged.')];
+    checks = ['Unknown acceptance remains an honest unresolved state.', 'Original identity and receipts preserved past 23 hours.', 'One new eligible daily assessment, with current unresolved work.', 'Old retry retired; two total calls across two identities.'];
+    summary = 'The fresh daily assessment proceeds while preserving the old uncertain attempt and its original retry window.';
   } else {
     title = 'Overlapping checks and overdue status remain honest'; await h.tick('newer', 'incomplete', 30000);
     // The older request returns later, still inside its original 60-second
@@ -486,8 +511,265 @@ async function scenario(store, runId, name) {
   return { key: name, title, passed: true, summary, warnings, messages: publicMessages(result), checks };
 }
 
+const dailyTime = (date, time = '22:30', offset = '-04:00') => Date.parse(date + 'T' + time + ':00' + offset);
+const dailyEntry = (result, date) => entries(result).find(entry => entry.messageId === 'm1-test-scheduled-rev-' + date);
+async function dailyOriginalIntact(h, original) {
+  const saved = (await read(h.scoped, 'workflow/messages/' + original.messageId))?.data;
+  assert(saved && digestHash(saved.message) === digestHash(original.message)
+    && digestHash(saved.delivery?.receipts) === digestHash(original.delivery?.receipts)
+    && saved.retryBefore === original.retryBefore, 'The original body, receipts and 23-hour window remain unchanged.');
+  return saved;
+}
+async function dailyOverlap(store, runId) {
+  const h = harness(store, runId, 'daily-overlap-recovery');
+  if (!(await read(h.scoped, 'fixture/overlap-complete'))) {
+    let stamp = dailyTime('2026-09-25', '21:55');
+    const dependencies = () => ({ ...h.dependencies(), clock: () => stamp });
+    const request = (stage, mode) => ({ ...input(mode, stamp), binding: makeDigestBinding(idFor([runId, 'daily-overlap', stage]), 'scheduled', stamp) });
+    const get = h.scoped.getWithMetadata;
+    let release, reached, paused = false;
+    const gate = new Promise(resolve => { release = resolve; });
+    const waiting = new Promise(resolve => { reached = resolve; });
+    const earlierPause = await read(h.scoped, 'fixture/paused');
+    if (!earlierPause) {
+      h.scoped.getWithMetadata = async (path, options) => {
+        const value = await get(path, options);
+        if (!paused && path === 'workflow/delivery/messages/m1-test-scheduled-rev-2026-09-24' && value?.data.attempts?.length === 1) {
+          paused = true;
+          await create(h.scoped, 'fixture/paused', { stage: 'ENGINE_LEDGER_READBACK', messageId: value.data.message.messageId });
+          reached(true); await gate;
+        }
+        return value;
+      };
+      const old = processAttendanceWorkflow(request('original', 'issue'), dependencies()).then(value => ({ value }), error => ({ error: error.message }));
+      try {
+        assert(await Promise.race([waiting, old.then(() => false)]), 'The original request reaches the engine readback pause before any provider call.');
+        stamp = dailyTime('2026-09-25', '22:00');
+        const pending = await processAttendanceWorkflow(request('overlapping', 'clean'), dependencies());
+        assert(pending.pending === true && await historyProviderCalls(h) === 0, 'A fresh overlapping request waits while the original coordinator lease is active.');
+        await create(h.scoped, 'fixture/overlap-held', { pending: true, providerCalls: 0 });
+        stamp = dailyTime('2026-09-25', '22:06');
+        await processAttendanceWorkflow(request('takeover', 'clean'), dependencies());
+      } finally { release(); h.scoped.getWithMetadata = get; }
+      const outcome = await old;
+      assert(!outcome.error || outcome.error === 'WORKFLOW_PROCESSOR_SUPERSEDED', 'The superseded original ends safely.');
+    } else {
+      // A terminated example invocation leaves the original engine claim and
+      // its pause receipt. Resume the same clean takeover after lease expiry.
+      stamp = dailyTime('2026-09-25', '22:06');
+      await processAttendanceWorkflow(request('takeover', 'clean'), dependencies());
+    }
+    assert((await read(h.scoped, 'fixture/overlap-held'))?.data.pending === true, 'The active-lease overlap was recorded before takeover.');
+    assert((await read(h.scoped, 'workflow/opportunities/rev'))?.data.decision === 'clean' && await historyProviderCalls(h) === 0,
+      'The durable newer clean decision and final engine gate prevent an old send.');
+    await create(h.scoped, 'fixture/overlap-complete', { providerCalls: 0, decision: 'clean' });
+  }
+  const interrupted = harness(store, runId, 'daily-takeover-unknown');
+  const original = firstMessage(await interrupted.tick('original'));
+  if (!(await read(interrupted.scoped, 'fixture/interruption-observed'))) {
+    const set = interrupted.scoped.set;
+    interrupted.scoped.set = async (path, raw, options) => {
+      if (path === 'workflow/opportunities/rev' && JSON.parse(raw).opportunityDate === '2026-09-25'
+        && !(await read(interrupted.scoped, 'fixture/interrupted'))) {
+        await create(interrupted.scoped, 'fixture/interrupted', { code: 'SYNTHETIC_OPPORTUNITY_WRITE_FAILURE' });
+        throw new Error('SYNTHETIC_OPPORTUNITY_WRITE_FAILURE');
+      }
+      return set(path, raw, options);
+    };
+    let failed = false;
+    try { await interrupted.tick('interrupted', 'new-issue', dailyTime('2026-09-25') - START); }
+    catch { failed = true; }
+    finally { interrupted.scoped.set = set; }
+    assert(failed && (await read(interrupted.scoped, 'fixture/interrupted')), 'The actual opportunity write was interrupted.');
+    assert(await historyProviderCalls(interrupted) === 1, 'Unconfirmed takeover persistence makes no new provider call.');
+    await create(interrupted.scoped, 'fixture/interruption-observed', { providerCalls: 1 });
+  }
+  const result = await interrupted.tick('recovered', 'new-issue', dailyTime('2026-09-25', '22:32') - START);
+  await interrupted.tick('repeat', 'new-issue', dailyTime('2026-09-25', '22:33') - START);
+  assert(dailyEntry(result, '2026-09-25')?.attemptCount === 1 && await historyProviderCalls(interrupted) === 2,
+    'The interrupted takeover recovers exactly one new daily attempt.');
+  await dailyOriginalIntact(interrupted, original);
+  return result;
+}
+async function dailyHolds(store, runId) {
+  const permanent = harness(store, runId, 'daily-holds-permanent');
+  await permanent.tick('original');
+  const rejected = await permanent.tick('next', 'new-issue', dailyTime('2026-09-25') - START);
+  assert(dailyEntry(rejected, '2026-09-25')?.code === 'PRIOR_PERMANENT_REJECTION_UNCHANGED'
+    && await historyProviderCalls(permanent) === 1, 'New eligibility preserves a permanent unchanged-route rejection.');
+  const transient = harness(store, runId, 'daily-holds-transient');
+  await transient.tick('original', 'issue', dailyTime('2026-09-25', '21:50') - START);
+  const clean = await transient.tick('clean', 'clean', dailyTime('2026-09-25') - START);
+  assert(clean.health.failedCount === 0 && clean.health.historicalFailedCount === 1 && !clean.health.codes.includes('DELIVERY_FAILED')
+    && await historyProviderCalls(transient) === 1, 'A superseded generic failure remains historical without making a fresh clean check appear currently failed.');
+  const configuration = harness(store, runId, 'daily-holds-configuration');
+  const unconfigured = await configuration.tick('missing-reviewer', 'issue', 0, { unconfigured: true });
+  assert(firstMessage(unconfigured)?.state === 'not-configured' && await historyProviderCalls(configuration) === 0, 'Missing reviewer configuration prevents a first attempt.');
+  const storage = harness(store, runId, 'daily-storage-unknown'), original = firstMessage(await storage.tick('original'));
+  if (!(await read(storage.scoped, 'fixture/storage-held'))) {
+    const get = storage.scoped.getWithMetadata;
+    let observed = false;
+    storage.scoped.getWithMetadata = async (path, options) => {
+      if (path === 'workflow/delivery/messages/' + original.messageId) { observed = true; throw new Error('SYNTHETIC_OLD_LEDGER_UNAVAILABLE'); }
+      return get(path, options);
+    };
+    try { await storage.tick('unavailable', 'new-issue', dailyTime('2026-09-25') - START); }
+    catch { /* The normal read path may reject rather than return a held draft. */ }
+    finally { storage.scoped.getWithMetadata = get; }
+    assert(observed && await historyProviderCalls(storage) === 1, 'Unavailable old delivery storage blocks all new provider calls.');
+    const draft = (await read(storage.scoped, 'workflow/messages/m1-test-scheduled-rev-2026-09-25'))?.data;
+    assert(!draft?.firstAttemptAt && !draft?.attemptCount, 'A failed old ledger read cannot become a new attempt.');
+    await create(storage.scoped, 'fixture/storage-held', { code: 'SYNTHETIC_OLD_LEDGER_UNAVAILABLE', providerCalls: 1 });
+  }
+  const result = await storage.tick('recovered', 'new-issue', dailyTime('2026-09-25', '22:32') - START);
+  assert(dailyEntry(result, '2026-09-25')?.attemptCount === 1 && await historyProviderCalls(storage) === 2, 'Confirmed storage recovery permits one new daily attempt.');
+  await dailyOriginalIntact(storage, original);
+  return result;
+}
+async function dailyUnknownBounce(store, runId) {
+  const h = harness(store, runId, 'daily-late-unknown');
+  if (await read(h.scoped, 'fixture/unbound-bounce-checked')) return;
+  const original = firstMessage(await h.tick('original'));
+  assert(original.delivery?.state === 'unknown', 'The old message has no confirmed provider acceptance.');
+  for (let index = 1; index <= 9; index++) {
+    const date = new Date(Date.parse(DATE + 'T12:00:00Z') + index * 86400000).toISOString().slice(0, 10);
+    await h.tick('clean-' + index, 'clean', dailyTime(date) - START);
+  }
+  const recent = await workflowMessages(SCOPE, h.dependencies());
+  assert(!recent.messages.some(message => message.messageId === original.messageId)
+    && recent.messages.every(message => !message.firstAttemptAt && message.state === 'suppressed'),
+    'The unknown original is outside the recent page and no current message is pending.');
+  h.at(dailyTime('2026-10-03', '23:00'));
+  const event = { eventId: 'daily-old-unbound-bounce-' + runId, providerId: (await h.simulation(original.messageId)).providerId,
+    type: 'email.bounced', permanentFailure: true, occurredAt: new Date(dailyTime('2026-10-03', '23:00')).toISOString(),
+    from: original.message.from, to: original.message.to };
+  const acknowledgment = await recordWorkflowDeliveryEvidence(event, { ...h.dependencies(), deliveryEvidenceVerified: true });
+  assert(acknowledgment.matched === false, 'A verified unbound bounce is not attributed to a message through its recipient alone.');
+  const retained = await dailyOriginalIntact(h, original);
+  assert(retained.delivery.state === 'unknown' && retained.state !== 'delivered', 'The old unknown is never relabeled as delivered.');
+  const next = await h.tick('after-unbound-bounce', 'issue', dailyTime('2026-10-04') - START), draft = dailyEntry(next, '2026-10-04');
+  assert(draft?.code === 'PRIOR_PERMANENT_RECIPIENT_PROOF_UNRESOLVED' && draft.attemptCount === 0 && !draft.firstAttemptAt
+    && await historyProviderCalls(h) === 1, 'A verified permanent recipient failure holds a later new send even without a current pending original.');
+  await create(h.scoped, 'fixture/unbound-bounce-checked', { originalMessageId: original.messageId, matched: false,
+    originalState: 'unknown', nextMessageId: draft.messageId, providerCalls: 1, code: draft.code });
+}
+async function dailyScenario(store, runId, name) {
+  let result, title, summary, checks, warnings = [];
+  const h = harness(store, runId, name);
+  if (name === 'daily-fresh-unknown') {
+    const before = await h.tick('original', 'issue', dailyTime('2026-09-25', '21:50') - START), original = firstMessage(before);
+    assert(original.delivery?.state === 'unknown', 'The original provider acceptance is genuinely unknown.');
+    result = await h.tick('next', 'new-issue', dailyTime('2026-09-25') - START);
+    const fresh = dailyEntry(result, '2026-09-25');
+    assert(fresh?.attemptCount === 1 && fresh.delivery?.state === 'accepted' && result.digest.itemCount === 2,
+      'The next eligible fresh assessment includes the old question and new class and makes one new attempt.');
+    assert(fresh.message.text.includes('SYNTHETIC rev class') && fresh.message.text.includes('SYNTHETIC new rev class'), 'Both old and new unresolved questions are included.');
+    const retained = await dailyOriginalIntact(h, original);
+    assert(original.retryBefore > dailyTime('2026-09-25') && retained.nextAttemptAt === null && (await h.simulation(original.messageId)).calls === 1,
+      'The previous unknown retry is retired even while its original 23-hour window remains open.');
+    assert(await historyProviderCalls(h) === 2, 'Exactly two distinct daily provider calls are stored.');
+    title = 'Fresh daily questions can follow an old unknown send'; summary = 'The next eligible daily assessment includes current unresolved work, while the old uncertain message and its receipts remain preserved.';
+    warnings = [warning('OLD_ACCEPTANCE_UNKNOWN', 'The original provider acceptance remains unknown; the new synthetic message does not resolve it.'), warning('SIMULATED_ACCEPTANCE_ONLY', 'Simulated acceptance is not real inbox delivery.')];
+    checks = ['Old and new unresolved questions included in fresh records.', 'One stable ID per eligible daily assessment.', 'Old retry retired without changing its original receipt or 23-hour window.', 'Two total simulated calls.'];
+  } else if (name === 'daily-clean-incomplete') {
+    for (const mode of ['clean', 'incomplete']) {
+      const branch = harness(store, runId, 'daily-' + mode + '-unknown');
+      const before = await branch.tick('original', 'issue', dailyTime('2026-09-25', '21:50') - START), original = firstMessage(before);
+      const next = await branch.tick('next', mode, dailyTime('2026-09-25') - START), fresh = dailyEntry(next, '2026-09-25');
+      const retained = await dailyOriginalIntact(branch, original);
+      assert(original.retryBefore > dailyTime('2026-09-25') && retained.nextAttemptAt === null && (await branch.simulation(original.messageId)).calls === 1,
+        'Clean and incomplete eligible assessments both retire a still-retryable old attempt.');
+      if (mode === 'clean') {
+        const decision = (await read(branch.scoped, 'workflow/opportunities/rev'))?.data;
+        assert(decision?.decision === 'clean' && fresh?.attemptCount === 0, 'A clean opportunity is durably closed without email.');
+        await branch.tick('later-issue', 'new-issue', dailyTime('2026-09-25', '23:00') - START);
+        assert(await historyProviderCalls(branch) === 1 && (await read(branch.scoped, 'workflow/opportunities/rev'))?.data.decision === 'clean', 'Later same-opportunity changes cannot reopen a clean decision.');
+      } else {
+        assert(fresh?.attemptCount === 1 && fresh.message.text.includes('could not be checked')
+          && !fresh.message.text.includes('No outstanding items were found'), 'Incomplete checks send an explicit warning without a false all-clear.');
+        assert(await historyProviderCalls(branch) === 2, 'One old and one new incomplete-warning call are retained.');
+      }
+      result = next;
+    }
+    title = 'Clean and incomplete checks both supersede old retries'; summary = 'A clean result closes that daily decision; an unavailable read produces a clear warning. Neither revives yesterday’s uncertain send.';
+    warnings = [warning('CHECK_INCOMPLETE', 'An unavailable check remains a warning, never an all-clear.')];
+    checks = ['Durable clean decision survives a later same-day issue.', 'Incomplete check sends explicit could-not-check message.', 'Both paths retire old retries.', 'Original receipts remain unchanged.'];
+  } else if (name === 'daily-calendar-dst') {
+    const configuration = input().configuration;
+    const cases = [['2026-09-25T00:01:00-04:00', '2026-09-24'], ['2026-09-25T21:59:00-04:00', '2026-09-24'],
+      ['2026-09-25T22:00:00-04:00', '2026-09-25'], ['2026-11-01T01:30:00-04:00', '2026-10-31'],
+      ['2026-11-01T01:30:00-05:00', '2026-10-31'], ['2026-11-01T22:00:00-05:00', '2026-11-01'],
+      ['2027-03-14T03:01:00-04:00', '2027-03-13']];
+    for (const [stamp, expected] of cases) assert(latestEligibleOpportunity(configuration, Date.parse(stamp)).date === expected, 'Local cutoff and daylight-saving transitions select the correct single opportunity.');
+    await h.tick('original');
+    await h.tick('midnight', 'issue', dailyTime('2026-09-25', '00:01') - START);
+    const beforeCutoff = await h.tick('before-cutoff', 'issue', dailyTime('2026-09-25', '21:59') - START);
+    assert(stepProviderCalls(beforeCutoff) === 1, 'Midnight and repeated pre-cutoff ticks do not create a new message.');
+    result = await h.tick('cutoff', 'new-issue', dailyTime('2026-09-25', '22:00') - START, { concurrent: true });
+    await h.tick('repeat', 'new-issue', dailyTime('2026-09-25', '22:01') - START);
+    assert(await historyProviderCalls(h) === 2 && entries(result).length === 2, 'Concurrent and repeated cutoff ticks keep one new daily message.');
+    const dst = harness(store, runId, 'daily-dst');
+    await dst.tick('first-hour', 'issue', Date.parse(cases[3][0]) - START);
+    const repeated = await dst.tick('repeated-hour', 'issue', Date.parse(cases[4][0]) - START);
+    assert(firstMessage(repeated)?.date === '2026-10-31' && await historyProviderCalls(dst) === 1, 'Repeated DST hour uses the same durable daily identity.');
+    title = 'Local cutoff, repeats and daylight saving keep one daily identity'; summary = 'Crossing midnight does not authorize a new message. The configured local cutoff does, including daylight-saving transitions.';
+    checks = ['Seven cutoff/DST boundary selections.', 'No new send at midnight or before cutoff.', 'Concurrent cutoff requests create one identity.', 'Repeated fall-back hour makes one call.'];
+  } else if (name === 'daily-overlap-recovery') {
+    result = await dailyOverlap(store, runId);
+    title = 'A newer assessment fences an interrupted old dispatch'; summary = 'A request paused before delivery remains blocked by the active coordinator; after its lease expires, a clean daily decision prevents the old request from sending.';
+    checks = ['Paused after original engine ledger readback.', 'Overlapping request held while the coordinator remained active.', 'Expired coordinator recovered under the same original IDs.', 'Final delivery gate prevented the old provider call.', 'Interrupted opportunity persistence recovered.'];
+  } else if (name === 'daily-missed-days') {
+    await h.tick('original');
+    result = await h.tick('after-downtime', 'new-issue', dailyTime('2026-09-29', '08:00') - START);
+    const fresh = dailyEntry(result, '2026-09-28');
+    assert(entries(result).length === 2 && fresh?.assessmentDate === '2026-09-29' && fresh.attemptCount === 1,
+      'Downtime catches only yesterday’s latest eligible opportunity with today’s fresh records.');
+    assert(result.digest.itemCount === 1 && fresh.message.text.includes('SYNTHETIC rev class'), 'The fresh morning read retains the old unresolved question and excludes a future class.');
+    await h.tick('repeat-catchup', 'new-issue', dailyTime('2026-09-29', '08:01') - START);
+    assert(await historyProviderCalls(h) === 2, 'Repeated catch-up does not send a missed-day backlog.');
+    title = 'Downtime catches the latest opportunity only'; summary = 'One fresh morning assessment catches yesterday’s eligible reminder. Missed dates do not generate a backlog of emails.';
+    checks = ['Latest eligible date separated from current assessment date.', 'Old unresolved question retained.', 'Future class excluded.', 'Two messages total across the downtime gap.'];
+  } else if (name === 'daily-late-evidence') {
+    const before = await h.tick('original'), original = firstMessage(before);
+    result = await h.tick('next', 'new-issue', dailyTime('2026-09-25') - START);
+    const newer = dailyEntry(result, '2026-09-25');
+    const event = { eventId: 'daily-delivered-' + runId, providerId: original.delivery.providerId, type: 'email.delivered',
+      occurredAt: new Date(dailyTime('2026-09-25', '23:00')).toISOString(), from: original.message.from, to: original.message.to };
+    h.at(Date.parse(event.occurredAt));
+    if (!(await read(h.scoped, 'fixture/late-evidence-checked'))) {
+      assert((await recordWorkflowDeliveryEvidence(event, { ...h.dependencies(), deliveryEvidenceVerified: true })).matched, 'Late evidence matches its original provider identity.');
+      assert((await read(h.scoped, 'workflow/messages/' + original.messageId)).data.state === 'delivered'
+        && digestHash((await read(h.scoped, 'workflow/messages/' + newer.messageId)).data) === digestHash(newer), 'Old delivery evidence does not update the newer message.');
+      const unknownEvent = { ...event, eventId: 'daily-unbound-' + runId, providerId: idFor(['unbound-provider', runId]) };
+      assert((await recordWorkflowDeliveryEvidence(unknownEvent, { ...h.dependencies(), deliveryEvidenceVerified: true })).matched === false, 'A shared recipient cannot bind an unknown provider identity.');
+      await create(h.scoped, 'fixture/late-evidence-checked', { originalMessageId: original.messageId, state: 'delivered', newerHash: digestHash(newer), unboundMatched: false });
+    }
+    await h.tick('after-late-success', 'issue', dailyTime('2026-09-25', '23:01') - START);
+    assert(await historyProviderCalls(h) === 2, 'A late success does not schedule another attempt.');
+    const bounce = { ...event, eventId: 'daily-bounce-' + runId, type: 'email.bounced', permanentFailure: true,
+      occurredAt: new Date(dailyTime('2026-09-25', '23:02')).toISOString() };
+    h.at(Date.parse(bounce.occurredAt));
+    await recordWorkflowDeliveryEvidence(bounce, { ...h.dependencies(), deliveryEvidenceVerified: true });
+    result = await h.tick('after-bounce', 'issue', dailyTime('2026-09-26') - START);
+    assert(dailyEntry(result, '2026-09-26')?.code === 'PRIOR_PERMANENT_RECIPIENT_BOUNCE' && await historyProviderCalls(h) === 2, 'A retained permanent recipient bounce still blocks later daily attempts.');
+    await dailyUnknownBounce(store, runId);
+    title = 'Late events update their original message only'; summary = 'A late success changes only its matching original. A permanent recipient bounce continues to block sending to that address.';
+    warnings = [warning('SIMULATED_EVENT_ONLY', 'These verified synthetic events do not prove real inbox delivery.')];
+    checks = ['Exact original provider/message association.', 'Newer identity and receipts remain untouched.', 'Unbound event not attributed to another message.', 'No retry after late success.',
+      'Permanent bounce continues to hold later sends.', 'Old unknown outside recent history remains unknown after an unbound permanent event.', 'That verified recipient failure still holds the next daily send, without a current pending message.'];
+  } else {
+    result = await dailyHolds(store, runId);
+    title = 'Configuration and storage failures remain holds'; summary = 'A new eligible day does not bypass a permanent rejection, missing reviewer configuration or unavailable original delivery storage.';
+    warnings = [warning('SYNTHETIC_FAILURES', 'Failures were injected only into isolated example storage and the simulated provider.')];
+    checks = ['Permanent rejection holds the unchanged route.', 'A superseded generic failure remains historical, not a current failure after a clean check.',
+      'Missing reviewer makes no attempt.', 'Unavailable old delivery storage is distinct from retained unknown acceptance.', 'Storage recovery permits the same new daily ID once.'];
+  }
+  return { key: name, title, passed: true, summary, warnings, messages: publicMessages(result), checks };
+}
+
 export const runAttendanceWorkflowExamples = (runId, deps = {}) => runExamples(runId, deps, 'workflow');
 export const runAttendanceWorkflowHistoryExamples = (runId, deps = {}) => runExamples(runId, deps, 'history');
+export const runAttendanceWorkflowDailyExamples = (runId, deps = {}) => runExamples(runId, deps, 'daily');
 async function runExamples(runId, deps, kind) {
   if (!UUID.test(runId || '')) fail('WORKFLOW_EXAMPLES_ID_INVALID', 400);
   const store = await storeFor(deps), started = clock(deps);
@@ -513,7 +795,7 @@ async function runExamples(runId, deps, kind) {
       const path = key(runId) + 'completed/' + name, saved = await read(store, path);
       let result = saved?.data;
       if (!result) {
-        try { result = await (kind === 'history' ? historyScenario : scenario)(store, runId, name); }
+        try { result = await (kind === 'daily' ? dailyScenario : kind === 'history' ? historyScenario : scenario)(store, runId, name); }
         catch (error) {
           if (!error.exampleCheck) throw error;
           result = { key: name, title: name, passed: false, summary: error.message, warnings: [warning('WORKFLOW_EXAMPLE_FAILED', error.message)], messages: [], checks: [] };

@@ -2,7 +2,7 @@ import { jsonResponse, readJson, requireAdmin, runtimeConfig } from './_lib/m1-c
 import { attendanceDigestScope } from './m1-attendance-digest.mjs';
 import { DIGEST_ORIGIN } from './_lib/m1-attendance-digest.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
-import { runAttendanceWorkflowExamples, runAttendanceWorkflowHistoryExamples } from './_lib/m1-attendance-workflow-examples.mjs';
+import { runAttendanceWorkflowExamples, runAttendanceWorkflowHistoryExamples, runAttendanceWorkflowDailyExamples } from './_lib/m1-attendance-workflow-examples.mjs';
 
 export const config = { path: '/api/m1-attendance-workflow-background' };
 export async function handleAttendanceWorkflowBackground(request, dependencies = {}) {
@@ -18,12 +18,13 @@ export async function handleAttendanceWorkflowBackground(request, dependencies =
   const parsed = await readJson(request, 4096);
   if (parsed.response) return parsed.response;
   const input = parsed.value;
-  if (!input || Object.keys(input).sort().join('|') !== 'action|requestId' || !['runExamples', 'runHistory'].includes(input.action) || !validId(input.requestId))
+  if (!input || Object.keys(input).sort().join('|') !== 'action|requestId' || !['runExamples', 'runHistory', 'runDaily'].includes(input.action) || !validId(input.requestId))
     return jsonResponse(400, { ok: false });
   try {
     // One awaited, bounded synthetic run; Netlify's -background lifecycle owns
     // execution after the caller receives 202. It never invokes a real provider.
-    const run = input.action === 'runHistory' ? dependencies.runHistory || runAttendanceWorkflowHistoryExamples
+    const run = input.action === 'runDaily' ? dependencies.runDaily || runAttendanceWorkflowDailyExamples
+      : input.action === 'runHistory' ? dependencies.runHistory || runAttendanceWorkflowHistoryExamples
       : dependencies.runExamples || runAttendanceWorkflowExamples;
     await run(input.requestId, { ...dependencies, scope, requirePrepared: true });
     return jsonResponse(200, { ok: true });

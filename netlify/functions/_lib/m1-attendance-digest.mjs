@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { datesThrough, localNow, validateRead } from './m1-manager-review.mjs';
+import { datesThrough, localNow, datePlus, validateRead } from './m1-manager-review.mjs';
 
 export const DIGEST_SCHEMA = 'm1-attendance-digest/v1';
 export const DIGEST_ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
@@ -8,6 +8,15 @@ export const DIGEST_STORE = 'gib-m1-attendance-digest-test-v1';
 export const digestHash = value => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 export const digestDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
   && Number.isFinite(Date.parse(value + 'T12:00:00Z')) && new Date(value + 'T12:00:00Z').toISOString().slice(0, 10) === value;
+export function latestEligibleOpportunity(configuration, assessedAt, gym) {
+  const selected = configuration.gyms?.find(value => value.id === gym);
+  const time = selected?.dailyLocalTime ?? configuration.dailyLocalTime, confirmed = selected?.cutoffConfirmed ?? configuration.cutoffConfirmed;
+  if (!Number.isSafeInteger(assessedAt) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time) || typeof confirmed !== 'boolean'
+    || configuration.timezone !== DIGEST_TIMEZONE || selected && selected.timezone !== configuration.timezone) throw new Error('WORKFLOW_OPPORTUNITY_CONFIGURATION_INVALID');
+  if (!confirmed) return null;
+  const local = localNow(new Date(assessedAt)), [hours, minutes] = time.split(':').map(Number), beforeCutoff = local.minutes < hours * 60 + minutes;
+  return { date: beforeCutoff ? datePlus(local.date, -1) : local.date, assessmentDate: local.date, localTime: time, beforeCutoff };
+}
 const labelKey = label => String(label).normalize('NFKC').replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase();
 const safeText = (value, max = 240) => typeof value === 'string' && value.trim() && value.length <= max && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value);
 const iso = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
@@ -50,6 +59,8 @@ function validateConfiguration(config) {
     || typeof config.cutoffConfirmed !== 'boolean' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(config.dailyLocalTime)
     || !Array.isArray(config.gyms) || !config.gyms.length || config.gyms.length > 2 || new Set(config.gyms.map(g => g.id)).size !== config.gyms.length
     || config.gyms.some(g => !['rev', 'richmond'].includes(g.id) || !safeText(g.name, 100) || /[\r\n]/.test(g.name) || g.timezone !== DIGEST_TIMEZONE
+      || Object.hasOwn(g, 'dailyLocalTime') && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(g.dailyLocalTime)
+      || Object.hasOwn(g, 'cutoffConfirmed') && typeof g.cutoffConfirmed !== 'boolean'
       || g.adminUrl !== (g.id === 'rev' ? DIGEST_ORIGIN : 'https://gib-richmond-test.netlify.app') + '/m1/admin/')
     || !Array.isArray(config.recipients)) {
     throw new Error('Digest scope is incomplete.');
