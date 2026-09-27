@@ -233,3 +233,26 @@ test('explicit signed Permanent bounce holds the same recipient across dates and
     assert.deepEqual(legacy.entries.get('workflow/provider-evidence/' + providerId + '/' + event.eventId).data, event);
   }
 });
+
+test('an archived expired claim with no authoritative provider attempt safely recovers outside the recent-message window', async () => {
+  for (const mode of ['issue', 'clean']) {
+    const h = harness(), originalId = 'm1-test-scheduled-rev-' + DATE, ids = [];
+    const original = { schema: 'm1-digest-workflow/v1', messageId: originalId, gym: 'rev', date: DATE, checkAt: NOW,
+      firstAttemptAt: NOW, claimUntil: NOW + 60000, state: 'unconfirmed', code: 'ATTEMPT_CLAIMED', message: null,
+      attemptCount: 0, nextAttemptAt: null, retryBefore: null, delivery: null };
+    const setup = harness(); await setup.run(); original.message = (await setup.messages())[0].message;
+    for (let index = 0; index < 14; index++) {
+      const date = new Date(Date.parse(DATE + 'T12:00:00Z') + index * 86400000).toISOString().slice(0, 10), messageId = 'm1-test-scheduled-rev-' + date;
+      const record = index === 0 ? original : { ...original, messageId, date, firstAttemptAt: null, claimUntil: null, state: 'suppressed', code: 'NO_OUTSTANDING_ITEMS', message: null };
+      await h.store.set('workflow/messages/' + messageId, JSON.stringify(record), { onlyIfNew: true }); ids.push(messageId);
+    }
+    await h.store.set('workflow/index', JSON.stringify({ ids }), { onlyIfNew: true });
+    h.at(NOW + 15 * 86400000); await h.run(mode);
+    const retained = h.entries.get('workflow/messages/' + originalId).data;
+    assert.equal(retained.messageId, originalId); assert.equal(retained.firstAttemptAt, null);
+    assert.equal(h.entries.has('workflow/delivery/messages/' + originalId), false);
+    assert.equal(h.calls.length, mode === 'issue' ? 1 : 0);
+    if (mode === 'issue') assert.notEqual(h.calls[0].messageId, originalId, 'only a fresh necessary daily draft starts');
+    assert.deepEqual(h.entries.get('workflow/index').data.ids, ids);
+  }
+});

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { prepareAttendanceWorkflowExamples, readAttendanceWorkflowExamples, runAttendanceWorkflowExamples } from '../netlify/functions/_lib/m1-attendance-workflow-examples.mjs';
+import { prepareAttendanceWorkflowExamples, prepareAttendanceWorkflowHistoryExamples, readAttendanceWorkflowExamples,
+  runAttendanceWorkflowExamples, runAttendanceWorkflowHistoryExamples } from '../netlify/functions/_lib/m1-attendance-workflow-examples.mjs';
 
 const ID = '123e4567-e89b-42d3-a456-426614174001';
 const OTHER = '123e4567-e89b-42d3-a456-426614174002';
@@ -142,4 +143,79 @@ test('failed original persistence or corrupted saved content never claims comple
   await assert.rejects(() => readAttendanceWorkflowExamples(ID, complete.deps), error => error.code === 'WORKFLOW_EXAMPLES_SAVED_RESULT_INVALID');
   await assert.rejects(() => runAttendanceWorkflowExamples(ID, complete.deps), error => error.code === 'WORKFLOW_EXAMPLES_SAVED_RESULT_INVALID');
   await assert.rejects(() => prepareAttendanceWorkflowExamples('../other', complete.deps), error => error.status === 400);
+});
+
+test('history actions bind their original ID before dispatch without changing legacy workflow runs or inventing unprepared jobs', async () => {
+  const { store, deps } = fixture();
+  await assert.rejects(() => runAttendanceWorkflowHistoryExamples(ID, { ...deps, requirePrepared: true }), error => error.status === 404 && error.code === 'WORKFLOW_EXAMPLES_ORIGINAL_REQUIRED');
+  assert.equal(store.entries.size, 0);
+  await prepareAttendanceWorkflowHistoryExamples(ID, deps);
+  const original = structuredClone(store.entries.get('examples/' + ID + '/original'));
+  assert.equal(original.data.kind, 'history'); assert.equal(original.data.fixtureVersion, 2);
+  assert.equal(await readAttendanceWorkflowExamples(ID, deps), null);
+  for (const call of [prepareAttendanceWorkflowExamples, runAttendanceWorkflowExamples]) {
+    await assert.rejects(() => call(ID, deps), error => error.status === 409 && error.code === 'WORKFLOW_EXAMPLES_KIND_MISMATCH');
+  }
+  assert.deepEqual(store.entries.get('examples/' + ID + '/original'), original);
+  const old = await runAttendanceWorkflowExamples(OTHER, deps), entriesBefore = structuredClone([...store.entries]);
+  for (const call of [prepareAttendanceWorkflowHistoryExamples, runAttendanceWorkflowHistoryExamples]) {
+    await assert.rejects(() => call(OTHER, deps), error => error.status === 409 && error.code === 'WORKFLOW_EXAMPLES_KIND_MISMATCH');
+  }
+  assert.deepEqual(await readAttendanceWorkflowExamples(OTHER, deps), old);
+  assert.deepEqual([...store.entries], entriesBefore, 'type mismatch does not rewrite old originals, leases, results, or receipts');
+});
+
+test('focused saved history proves capacity, old barriers, late-event association and interrupted upgrade using zero network', async () => {
+  const { store, deps } = fixture();
+  await prepareAttendanceWorkflowHistoryExamples(ID, deps);
+  const originalFetch = globalThis.fetch; let network = 0, result;
+  globalThis.fetch = () => { network++; throw new Error('History examples cannot use a real network'); };
+  try { result = await runAttendanceWorkflowHistoryExamples(ID, { ...deps, requirePrepared: true }); }
+  finally { globalThis.fetch = originalFetch; }
+  assert.equal(network, 0); assert.equal(result.scenarios.length, 4);
+  assert.deepEqual(result.scenarios.filter(item => !item.passed).map(item => [item.key, item.summary]), []);
+  const root = 'examples/' + ID + '/scenarios/history-main/';
+  const seed = store.entries.get(root + 'fixture/seed').data;
+  assert.equal(seed.ids.length, 256); assert.deepEqual(store.entries.get(root + 'workflow/index').data.ids, seed.ids);
+  const messages = [...store.entries].filter(([key]) => key.startsWith(root + 'workflow/messages/')).map(([, entry]) => entry.data);
+  assert.equal(messages.length, 263); assert.equal(new Set(messages.map(message => message.messageId)).size, 263);
+  const simulator = [...store.entries].filter(([key]) => key.startsWith(root + 'simulation/')).map(([, entry]) => entry.data);
+  assert.equal(simulator.length, 3); assert.equal(simulator.reduce((count, receipt) => count + receipt.calls, 0), 3);
+  const accepted = seed.originals.find(message => message.delivery.state === 'accepted');
+  assert.equal(messages.find(message => message.messageId === accepted.messageId).state, 'delivered');
+  for (const other of seed.originals.filter(message => message.messageId !== accepted.messageId)) assert.notEqual(messages.find(message => message.messageId === other.messageId).state, 'delivered');
+  for (const gym of ['rev', 'richmond']) {
+    const draft = messages.find(message => message.messageId === 'm1-test-scheduled-' + gym + '-2027-02-06');
+    assert.equal(draft.attemptCount, 0); assert.equal(draft.firstAttemptAt, null);
+  }
+  assert.equal(store.entries.get(root + 'fixture/interrupted').data.code, 'SYNTHETIC_HISTORY_WRITE_INTERRUPTED');
+  assert.equal(store.entries.get(root + 'fixture/migrated').data.complete, true);
+  const saved = structuredClone([...store.entries]);
+  assert.deepEqual(await readAttendanceWorkflowExamples(null, deps), result);
+  assert.deepEqual(await runAttendanceWorkflowHistoryExamples(ID, deps), result);
+  assert.deepEqual([...store.entries], saved, 'saved history reload does not rerun or alter evidence');
+  assert.equal([...store.entries.keys()].some(key => key.startsWith('examples/' + ID + '/completed/routing')), false, 'the twelve workflow scenarios are not run by history');
+});
+
+test('focused history resumes the same original after runner interruption and leaves a prior saved twelve-scenario run unchanged', async () => {
+  const { store, deps } = fixture();
+  const previous = await runAttendanceWorkflowExamples(OTHER, deps), previousPrefix = 'examples/' + OTHER + '/';
+  const previousEntries = structuredClone([...store.entries].filter(([key]) => key.startsWith(previousPrefix)));
+  const historyDeps = { ...deps, clock: () => NOW + 1 };
+  await prepareAttendanceWorkflowHistoryExamples(ID, historyDeps);
+  const set = store.set.bind(store); let stop = true;
+  store.set = async (key, raw, options) => {
+    if (stop && key.endsWith('/completed/history-old-barriers')) { stop = false; throw new Error('Synthetic history runner interruption'); }
+    return set(key, raw, options);
+  };
+  await assert.rejects(() => runAttendanceWorkflowHistoryExamples(ID, historyDeps), /Synthetic history runner interruption/);
+  assert.equal(await readAttendanceWorkflowExamples(ID, historyDeps), null);
+  const receipts = simulations(store), original = structuredClone(store.entries.get('examples/' + ID + '/original'));
+  const result = await runAttendanceWorkflowHistoryExamples(ID, historyDeps);
+  assert.ok(result.scenarios.every(scenario => scenario.passed));
+  assert.deepEqual(simulations(store), receipts, 'resuming does not restart simulator attempts');
+  assert.deepEqual(store.entries.get('examples/' + ID + '/original'), original);
+  assert.deepEqual(await readAttendanceWorkflowExamples(null, historyDeps), result);
+  assert.deepEqual(await readAttendanceWorkflowExamples(OTHER, deps), previous);
+  assert.deepEqual([...store.entries].filter(([key]) => key.startsWith(previousPrefix)), previousEntries);
 });

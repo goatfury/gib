@@ -4,6 +4,7 @@
   const ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
   const ADMIN_URLS = Object.freeze({ rev: ORIGIN + '/m1/admin/', richmond: 'https://gib-richmond-test.netlify.app/m1/admin/' });
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const runAction = value => value === 'runExamples' || value === 'runHistory';
   const CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'";
   const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).sort().join('|') === [...fields].sort().join('|');
@@ -14,7 +15,8 @@
     const run = value?.latestRun;
     const optional = ['request', 'current', 'setup'].filter(key => Object.hasOwn(value || {}, key));
     return exact(value, ['ok', 'target', 'sendingEnabled', 'recurringEnabled', 'latestRun', ...optional]) && value.ok === true && value.target === 'test'
-      && (!Object.hasOwn(value, 'request') || exact(value.request, ['runId', 'state']) && UUID.test(value.request.runId) && value.request.state === 'pending' && run === null)
+      && (!Object.hasOwn(value, 'request') || exact(value.request, ['runId', 'state', ...(Object.hasOwn(value.request || {}, 'action') ? ['action'] : [])])
+        && (!Object.hasOwn(value.request, 'action') || runAction(value.request.action)) && UUID.test(value.request.runId) && value.request.state === 'pending' && run === null)
       && value.sendingEnabled === false && value.recurringEnabled === false && (run === null ||
         exact(run, ['runId', 'complete', 'synthetic', 'scenarios']) && UUID.test(run.runId) && run.complete === true && run.synthetic === true
         && Array.isArray(run.scenarios) && run.scenarios.length > 0 && run.scenarios.length <= 20
@@ -46,7 +48,8 @@
     function restore() {
       storageBlocked = false;
       try { const raw = global.sessionStorage.getItem(KEY); pending = raw ? JSON.parse(raw) : null;
-        if (pending && (!exact(pending, ['requestId', 'adminName']) || !UUID.test(pending.requestId) || !text(pending.adminName, 120))) throw new Error('Invalid retained run');
+        if (pending && (!exact(pending, ['requestId', 'adminName', ...(Object.hasOwn(pending, 'action') ? ['action'] : [])])
+          || Object.hasOwn(pending, 'action') && !runAction(pending.action) || !UUID.test(pending.requestId) || !text(pending.adminName, 120))) throw new Error('Invalid retained run');
       } catch { storageBlocked = true; }
     }
     function render() {
@@ -69,9 +72,10 @@
               && health.pendingCount === 0 && health.failedCount === 0 && health.unconfirmedCount === 0
               ? 'Current attendance check completed.' : 'Current attendance check status unavailable.', 'manager-note'));
       const controls = el('div', '', 'manager-controls');
-      for (const [action, label] of [['refresh', pending ? 'Check original example run' : 'Refresh workflow examples'], ['run', pending ? 'Retry original example run' : 'Run synthetic workflow examples']]) {
+      for (const [action, label] of [['refresh', pending ? 'Check original example run' : 'Refresh workflow examples'], ['run', 'Run synthetic workflow examples'],
+        ['history', 'Run synthetic history checks'], ...(pending ? [['retry', 'Retry original example run']] : [])]) {
         const button = el('button', label, 'btn'); button.type = 'button'; button.dataset.workflowAction = action;
-        button.disabled = Boolean(flight) || action === 'run' && (storageBlocked || pending && pending.adminName !== owner); controls.append(button);
+        button.disabled = Boolean(flight) || action !== 'refresh' && (storageBlocked || (action === 'retry' ? pending?.adminName !== owner : Boolean(pending))); controls.append(button);
       }
       root.append(controls);
       const status = el('p', storageBlocked ? 'The original example request could not be retained safely. New example runs are blocked; existing requests are preserved.'
@@ -104,26 +108,29 @@
         root.append(article);
       }
     }
-    async function run(send = false, polling = false) {
+    async function run(action = null, polling = false) {
       if (!live(generation)) return;
       if (flight) return flight;
       if (polling && Date.now() >= pollUntil) { note = 'The original example run is not yet confirmed. Use Check original example run to continue; its request ID is retained.'; render(); return; }
-      if (send && (storageBlocked || pending && pending.adminName !== owner)) return;
+      const send = action !== null;
+      if (send && storageBlocked) return;
+      if (send && (action === 'retry' ? !pending || pending.adminName !== owner : !runAction(action) || Boolean(pending))) return;
       if (send && !pending) {
-        try { const requestId = global.crypto.randomUUID(); if (!UUID.test(requestId)) throw new Error('Invalid identity'); retain({ requestId, adminName: owner }); }
+        try { const requestId = global.crypto.randomUUID(); if (!UUID.test(requestId)) throw new Error('Invalid identity'); retain({ requestId, adminName: owner, action }); }
         catch { storageBlocked = true; render(); return; }
       }
       global.clearTimeout(pollTimer);
       if (!polling) { pollUntil = Date.now() + 120000; pollCount = 0; }
-      const own = generation, original = pending?.requestId || null;
+      const own = generation, original = pending?.requestId || null, originalAction = pending?.action || 'runExamples';
       current = false; note = send ? 'Running isolated synthetic examples…' : 'Loading confirmed workflow examples…';
       const task = (async () => {
         try {
-          const result = await Promise.resolve().then(() => send ? request(API, { action: 'runExamples', requestId: original }, { timeoutMs: 25000 })
+          const result = await Promise.resolve().then(() => send ? request(API, { action: originalAction, requestId: original }, { timeoutMs: 25000 })
             : request(API + (original ? '?runId=' + encodeURIComponent(original) : ''), undefined, { method: 'GET', timeoutMs: 25000 }));
           if (!live(own)) return;
           if (!valid(result) || original && result.latestRun && result.latestRun.runId !== original
-            || result.request && result.request.runId !== original || send && !result.latestRun && !result.request) throw new Error('Unconfirmed workflow run');
+            || result.request && (result.request.runId !== original || result.request.action && result.request.action !== originalAction)
+            || send && !result.latestRun && !result.request) throw new Error('Unconfirmed workflow run');
           data = result; current = true;
           if (original && result.latestRun?.runId === original) { retain(null); note = 'The original synthetic run is confirmed centrally. No real email was sent.'; }
           else note = original ? 'The original synthetic run is still waiting for confirmation. Checking it automatically; its request ID is retained.'
@@ -136,7 +143,7 @@
           if (flight === task) flight = null;
           if (live(own)) {
             if (pending && !storageBlocked && pending.adminName === owner && Date.now() < pollUntil && !document.hidden) {
-              pollTimer = global.setTimeout(() => { if (live(own)) void run(false, true); }, pollCount++ === 0 ? 1000 : 3000);
+              pollTimer = global.setTimeout(() => { if (live(own)) void run(null, true); }, pollCount++ === 0 ? 1000 : 3000);
             } else if (pending && Date.now() >= pollUntil) note = 'The original example run is not yet confirmed. Use Check original example run to continue; its request ID is retained.';
             render();
           }
@@ -145,7 +152,8 @@
       flight = task; render(); return task;
     }
     root.addEventListener('click', event => { const action = event.target.closest('[data-workflow-action]')?.dataset.workflowAction;
-      if (action === 'refresh') void run(); if (action === 'run') void run(true); });
+      if (action === 'refresh') void run(); if (action === 'run') void run('runExamples');
+      if (action === 'history') void run('runHistory'); if (action === 'retry') void run('retry'); });
     function clear() { active = false; generation++; global.clearTimeout(pollTimer); owner = ''; session = null; flight = null; data = null; current = false; root.hidden = true; root.replaceChildren(); }
     return Object.freeze({ open() {
       if (active && owner === getAdmin() && session === getSession()) return run();

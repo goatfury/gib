@@ -107,7 +107,7 @@ test('a failed or incomplete read never presents fresh success or enables stale 
 test('a run is retained before POST, duplicate clicks share one request, and a lost reply recovers by original GET after reload', async () => {
   const storage = new Map(), first = harness({ storage }); await first.open(); first.click('run'); first.click('run'); await flush();
   assert.equal(first.calls.length, 2); assert.deepEqual(JSON.parse(JSON.stringify(first.calls[1].args[1])), { action: 'runExamples', requestId: ID });
-  assert.deepEqual(JSON.parse(first.calls[1].journalAtDispatch), { requestId: ID, adminName: 'Andrew Smith' });
+  assert.deepEqual(JSON.parse(first.calls[1].journalAtDispatch), { requestId: ID, adminName: 'Andrew Smith', action: 'runExamples' });
   first.calls[1].reject(new Error('Lost reply')); await flush(); assert.match(first.root.textContent, /request ID is retained/); first.ui.clear();
   const reopened = harness({ storage }); const opened = reopened.ui.open(); await flush();
   assert.equal(reopened.calls[0].args[0], '/api/m1-attendance-workflow?runId=' + ID); assert.equal(reopened.calls[0].args[2].method, 'GET');
@@ -131,13 +131,69 @@ test('unconfirmed and mismatched outcomes retain original requests; explicit ret
   const h = harness(); await h.open(); h.click('run'); await flush();
   h.calls[1].resolve(response(fixture('00000000-0000-4000-8000-000000000099'))); await flush();
   assert.equal(h.storage.size, 1); assert.match(h.root.textContent, /not confirmed/);
-  h.click('run'); await flush(); assert.deepEqual(h.calls[2].args[1], h.calls[1].args[1]);
+  h.click('retry'); await flush(); assert.deepEqual(h.calls[2].args[1], h.calls[1].args[1]);
   h.calls[2].resolve(response(fixture())); await flush(); assert.equal(h.storage.size, 0);
+});
+
+test('focused history checks retain their action before dispatch and prevent either new run from replacing a pending request', async () => {
+  const h = harness(); await h.open(); assert.equal(h.find('history').textContent, 'Run synthetic history checks');
+  h.click('history'); h.click('history'); h.click('run'); await flush();
+  assert.equal(h.calls.length, 2);
+  assert.deepEqual(JSON.parse(h.calls[1].journalAtDispatch), { requestId: ID, adminName: 'Andrew Smith', action: 'runHistory' });
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[1].args[1])), { action: 'runHistory', requestId: ID });
+  h.calls[1].resolve(response(null, { request: { runId: ID, action: 'runHistory', state: 'pending' } })); await flush();
+  assert.equal(h.find('run').disabled, true); assert.equal(h.find('history').disabled, true); assert.equal(h.find('retry').disabled, false);
+  h.click('run'); h.click('history'); await flush(); assert.equal(h.calls.length, 2);
+  h.click('retry'); h.click('retry'); await flush(); assert.equal(h.calls.length, 3);
+  assert.deepEqual(h.calls[2].args[1], h.calls[1].args[1]);
+  const result = fixture(); result.scenarios[0].key = 'retained-history'; result.scenarios[0].title = 'More than 256 retained history entries';
+  h.calls[2].resolve(response(result)); await flush();
+  assert.equal(h.storage.size, 0); assert.match(h.root.textContent, /More than 256 retained history entries/);
+  assert.equal(h.find('run').disabled, false); assert.equal(h.find('history').disabled, false);
+});
+
+test('lost history reply reloads the original run and retries its original action; saved history also reopens without a journal', async () => {
+  const storage = new Map(), first = harness({ storage }); await first.open(); first.click('history'); await flush();
+  first.calls[1].reject(new Error('Lost reply')); await flush(); first.ui.clear();
+  const reopened = harness({ storage }); await reopened.open();
+  assert.equal(reopened.calls[0].args[0], '/api/m1-attendance-workflow?runId=' + ID);
+  assert.equal(JSON.parse(storage.get(KEY)).action, 'runHistory');
+  reopened.click('retry'); await flush(); assert.equal(reopened.calls[1].args[1].action, 'runHistory');
+  assert.equal(reopened.calls[1].args[1].requestId, ID);
+  const result = fixture(); result.scenarios[0].key = 'retained-history'; result.scenarios[0].title = 'Retained history checks';
+  reopened.calls[1].resolve(response(result)); await flush(); reopened.ui.clear();
+  const latest = harness({ storage }); await latest.open(response(result));
+  assert.equal(latest.calls[0].args[0], '/api/m1-attendance-workflow');
+  assert.equal(latest.calls[0].args[2].method, 'GET'); assert.match(latest.root.textContent, /Retained history checks/);
+  assert.equal(storage.size, 0); assert.equal(latest.calls.length, 1);
+});
+
+test('legacy pending journals retry the original workflow suite without migration or replacing it with history checks', async () => {
+  const raw = JSON.stringify({ requestId: ID, adminName: 'Andrew Smith' }), storage = new Map([[KEY, raw]]), h = harness({ storage });
+  await h.open(); assert.equal(storage.get(KEY), raw); h.click('history'); h.click('run'); await flush(); assert.equal(h.calls.length, 1);
+  h.click('retry'); await flush(); assert.equal(h.calls[1].args[1].action, 'runExamples'); assert.equal(h.calls[1].args[1].requestId, ID);
+  assert.equal(h.calls[1].journalAtDispatch, raw);
+  h.calls[1].resolve(response(null, { request: { runId: ID, action: 'runExamples', state: 'pending' } })); await flush();
+  assert.equal(storage.get(KEY), raw); assert.match(h.root.textContent, /still waiting for confirmation/);
+});
+
+test('pending action mismatches and invalid retained actions never clear the original run or dispatch a replacement', async () => {
+  const h = harness(); await h.open(); h.click('history'); await flush();
+  h.calls[1].resolve(response(null, { request: { runId: ID, action: 'runExamples', state: 'pending' } })); await flush();
+  assert.match(h.root.textContent, /not confirmed/); assert.equal(JSON.parse(h.storage.get(KEY)).action, 'runHistory');
+  h.click('run'); h.click('history'); await flush(); assert.equal(h.calls.length, 2);
+  h.click('retry'); await flush(); assert.equal(h.calls[2].args[1].action, 'runHistory');
+  h.calls[2].resolve(response(fixture())); await flush(); assert.equal(h.storage.size, 0);
+  const invalid = JSON.stringify({ requestId: ID, adminName: 'Andrew Smith', action: 'sendEmail' });
+  const bad = harness({ storage: new Map([[KEY, invalid]]) }); await bad.open();
+  bad.click('run'); bad.click('history'); bad.click('retry'); await flush();
+  assert.equal(bad.calls.length, 1); assert.equal(bad.storage.get(KEY), invalid); assert.match(bad.root.textContent, /retained safely/);
 });
 
 test('another reviewer, expired session, logout and late requests cannot show stale completion', async () => {
   const storage = new Map([[KEY, JSON.stringify({ requestId: ID, adminName: 'Stuart Turner' })]]), h = harness({ storage });
-  await h.open(); assert.equal(h.find('run').disabled, true); h.click('run'); assert.equal(h.calls.length, 1); assert.equal(storage.size, 1);
+  await h.open(); assert.equal(h.find('run').disabled, true); assert.equal(h.find('history').disabled, true); assert.equal(h.find('retry').disabled, true);
+  h.click('run'); h.click('history'); h.click('retry'); assert.equal(h.calls.length, 1); assert.equal(storage.size, 1);
   for (const change of ['session', 'logout']) {
     const own = harness(); const first = own.ui.open(); await flush();
     if (change === 'session') own.setSession('session-two'); else own.ui.clear();

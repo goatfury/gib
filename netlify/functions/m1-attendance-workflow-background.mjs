@@ -2,7 +2,7 @@ import { jsonResponse, readJson, requireAdmin, runtimeConfig } from './_lib/m1-c
 import { attendanceDigestScope } from './m1-attendance-digest.mjs';
 import { DIGEST_ORIGIN } from './_lib/m1-attendance-digest.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
-import { runAttendanceWorkflowExamples } from './_lib/m1-attendance-workflow-examples.mjs';
+import { runAttendanceWorkflowExamples, runAttendanceWorkflowHistoryExamples } from './_lib/m1-attendance-workflow-examples.mjs';
 
 export const config = { path: '/api/m1-attendance-workflow-background' };
 export async function handleAttendanceWorkflowBackground(request, dependencies = {}) {
@@ -18,18 +18,21 @@ export async function handleAttendanceWorkflowBackground(request, dependencies =
   const parsed = await readJson(request, 4096);
   if (parsed.response) return parsed.response;
   const input = parsed.value;
-  if (!input || Object.keys(input).sort().join('|') !== 'action|requestId' || input.action !== 'runExamples' || !validId(input.requestId))
+  if (!input || Object.keys(input).sort().join('|') !== 'action|requestId' || !['runExamples', 'runHistory'].includes(input.action) || !validId(input.requestId))
     return jsonResponse(400, { ok: false });
   try {
     // One awaited, bounded synthetic run; Netlify's -background lifecycle owns
     // execution after the caller receives 202. It never invokes a real provider.
-    await (dependencies.runExamples || runAttendanceWorkflowExamples)(input.requestId, { ...dependencies, scope });
+    const run = input.action === 'runHistory' ? dependencies.runHistory || runAttendanceWorkflowHistoryExamples
+      : dependencies.runExamples || runAttendanceWorkflowExamples;
+    await run(input.requestId, { ...dependencies, scope, requirePrepared: true });
     return jsonResponse(200, { ok: true });
   } catch (error) {
     // Keep original durable run/checkpoints for retry; do not log data or auth.
-    const code = error?.code === 'WORKFLOW_EXAMPLES_IN_PROGRESS' ? error.code : 'WORKFLOW_EXAMPLES_UNAVAILABLE';
+    const code = ['WORKFLOW_EXAMPLES_IN_PROGRESS', 'WORKFLOW_EXAMPLES_KIND_MISMATCH', 'WORKFLOW_EXAMPLES_ORIGINAL_REQUIRED'].includes(error?.code)
+      ? error.code : 'WORKFLOW_EXAMPLES_UNAVAILABLE';
     try { (dependencies.traceLog || console.info)('M1_TEST_WORKFLOW_EXAMPLES', JSON.stringify({ requestId: input.requestId, code })); } catch {}
-    return jsonResponse(code === 'WORKFLOW_EXAMPLES_IN_PROGRESS' ? 409 : 503, { ok: false, code });
+    return jsonResponse(code === 'WORKFLOW_EXAMPLES_ORIGINAL_REQUIRED' ? 404 : code === 'WORKFLOW_EXAMPLES_UNAVAILABLE' ? 503 : 409, { ok: false, code });
   }
 }
 export default (request, context) => handleAttendanceWorkflowBackground(request, { context, env: process.env });

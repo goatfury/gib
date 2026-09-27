@@ -2,7 +2,7 @@ import { ADMIN_REQUEST_HEADER, jsonResponse, readJson, requireAdmin, runtimeConf
 import { attendanceDigestScope } from './m1-attendance-digest.mjs';
 import { DIGEST_ORIGIN } from './_lib/m1-attendance-digest.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
-import { readAttendanceWorkflowExamples, prepareAttendanceWorkflowExamples } from './_lib/m1-attendance-workflow-examples.mjs';
+import { readAttendanceWorkflowExamples, prepareAttendanceWorkflowExamples, prepareAttendanceWorkflowHistoryExamples } from './_lib/m1-attendance-workflow-examples.mjs';
 import { workflowHealth, workflowMessages } from './_lib/m1-attendance-digest-workflow.mjs';
 
 export const config = { path: '/api/m1-attendance-workflow', rateLimit: { windowLimit: 30, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
@@ -32,28 +32,30 @@ export async function handleAttendanceWorkflow(request, dependencies = {}) {
       const parsed = await readJson(request, 4096);
       if (parsed.response) return parsed.response;
       const input = parsed.value;
-      if (!input || Object.keys(input).sort().join('|') !== 'action|requestId' || input.action !== 'runExamples' || !validId(input.requestId))
+      if (!input || Object.keys(input).sort().join('|') !== 'action|requestId' || !['runExamples', 'runHistory'].includes(input.action) || !validId(input.requestId))
         return response(400, { ok: false, message: 'Choose the isolated TEST examples. Real sending is disabled.' });
       // This adapter owns its fixed synthetic data and simulated provider. Client
       // input cannot supply recipients, a provider URL, credentials or send flags.
-      await (dependencies.prepareExamples || prepareAttendanceWorkflowExamples)(input.requestId, deps);
+      const prepare = input.action === 'runHistory' ? dependencies.prepareHistory || prepareAttendanceWorkflowHistoryExamples
+        : dependencies.prepareExamples || prepareAttendanceWorkflowExamples;
+      await prepare(input.requestId, deps);
       latestRun = await (dependencies.readExamples || readAttendanceWorkflowExamples)(input.requestId, deps);
       if (!latestRun) {
         // The run is durably recorded before invoking the supported background
         // function. Its 202 is dispatch acknowledgment, never a passed result.
-        const dispatch = dependencies.dispatchExamples || (async runId => {
+        const dispatch = dependencies.dispatchExamples || (async (runId, action) => {
           const result = await fetch(DIGEST_ORIGIN + '/api/m1-attendance-workflow-background', {
             method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
             headers: { 'Content-Type': 'application/json', Origin: DIGEST_ORIGIN,
               Cookie: request.headers.get('Cookie') || '', [ADMIN_REQUEST_HEADER]: request.headers.get(ADMIN_REQUEST_HEADER) || '' },
-            body: JSON.stringify({ action: 'runExamples', requestId: runId })
+            body: JSON.stringify({ action, requestId: runId })
           });
           await result.body?.cancel();
           if (result.status !== 202) throw new Error('Dispatch unavailable');
         });
-        await dispatch(input.requestId);
+        await dispatch(input.requestId, input.action);
         return response(202, { ok: true, target: 'test', sendingEnabled: false, recurringEnabled: false,
-          latestRun: null, request: { runId: input.requestId, state: 'pending' } });
+          latestRun: null, request: { runId: input.requestId, action: input.action, state: 'pending' } });
       }
     }
     const health = await (dependencies.readHealth || workflowHealth)(scope, deps);
@@ -63,9 +65,10 @@ export async function handleAttendanceWorkflow(request, dependencies = {}) {
       setup: { revolutionReviewer: 'Stu', richmondReviewer: 'Trey', copyAndrewDefault: false,
         recipientAddressesVerified: false, richmondReviewerAccessVerified: false, senderVerified: false, cutoffConfirmed: false } });
   } catch (error) {
-    const code = error?.code === 'WORKFLOW_EXAMPLES_IN_PROGRESS' ? error.code : 'WORKFLOW_UNAVAILABLE';
-    return response(code === 'WORKFLOW_EXAMPLES_IN_PROGRESS' ? 409 : 503, { ok: false, code,
+    const code = ['WORKFLOW_EXAMPLES_IN_PROGRESS', 'WORKFLOW_EXAMPLES_KIND_MISMATCH'].includes(error?.code) ? error.code : 'WORKFLOW_UNAVAILABLE';
+    return response(code === 'WORKFLOW_UNAVAILABLE' ? 503 : 409, { ok: false, code,
       message: code === 'WORKFLOW_EXAMPLES_IN_PROGRESS' ? 'The original TEST run is still in progress. Check that same run again.'
+        : code === 'WORKFLOW_EXAMPLES_KIND_MISMATCH' ? 'This request belongs to a different TEST check. Keep its original action and request.'
         : 'Attendance workflow status unavailable. Keep the original request; this is not an all-clear.' });
   }
 }

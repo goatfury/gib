@@ -3,13 +3,14 @@ import { digestHash, splitAttendanceDigest, DIGEST_ORIGIN } from './m1-attendanc
 import { validId } from './m1-test-read-callback.mjs';
 import { validateDigestBinding } from './m1-attendance-digest-outbox.mjs';
 import { readPolicyDigestEmailDelivery, deliverPolicyDigestEmail, requestDigestEmailProvider } from './m1-attendance-digest-email-delivery.mjs';
+import { historyRoot, historyGroup, historyRoundRobin, historyPage, changeHistoryMessage, migrateHistory, supersedeHistoryDrafts, queueHistoryWake, historyWakePending, drainHistoryWakes } from './m1-attendance-workflow-history.mjs';
 
 const STORE = 'gib-m1-digest-test-workflow-v1', SCHEMA = 'm1-digest-workflow/v1';
 export const WORKFLOW_DISPATCH_SCHEMA = 'm1-attendance-delivery-background/v1';
 export const WORKFLOW_DISPATCH_HEADER = 'X-GIB-M1-Workflow-Signature';
 export const WORKFLOW_DISPATCH_PATH = '/api/m1-attendance-delivery-background';
 export const workflowDispatchSignature = (raw, secret) => createHmac('sha256', secret).update(WORKFLOW_DISPATCH_SCHEMA + '\n' + raw, 'utf8').digest('hex');
-const FRESH_MS = 30 * 60000, MAX_MESSAGES = 256, MAX_ATTEMPTS = 6;
+const FRESH_MS = 30 * 60000, MAX_ATTEMPTS = 6;
 const BACKOFF = [15, 30, 60, 120, 240].map(minutes => minutes * 60000);
 const clock = deps => (deps.clock || Date.now)();
 const env = (deps, name) => deps.env ? deps.env[name] : globalThis.Netlify?.env?.get(name);
@@ -43,16 +44,6 @@ async function write(store, path, value, before) {
   const after = await read(store, path);
   if (![true, false].includes(result?.modified) || !after || (result.modified && digestHash(after.data) !== digestHash(value))) throw new Error('WORKFLOW_STORAGE_UNCONFIRMED');
   return { ...after, modified: result.modified };
-}
-async function register(store, id) {
-  for (let count = 0; count < 3; count++) {
-    const before = await read(store, 'workflow/index'), ids = before?.data.ids || [];
-    if (!Array.isArray(ids) || ids.length > MAX_MESSAGES || ids.some(value => !/^m1-test-scheduled-(rev|richmond)-\d{4}-\d{2}-\d{2}$/.test(value))) throw new Error('WORKFLOW_INDEX_INVALID');
-    if (ids.includes(id)) return;
-    if (ids.length >= MAX_MESSAGES) throw new Error('WORKFLOW_HISTORY_CAPACITY');
-    if ((await write(store, 'workflow/index', { ids: [...ids, id] }, before)).modified) return;
-  }
-  throw new Error('WORKFLOW_INDEX_UNCONFIRMED');
 }
 function deliveryDeps(store, deps) {
   return { ...deps, deliveryStore: { getWithMetadata: (path, options) => store.getWithMetadata('workflow/delivery/' + path, options),
@@ -90,18 +81,54 @@ function retryDecision(delivery, now) {
   const nextAttemptAt = startedAt + BACKOFF[Math.min(Math.max(0, count - 1), BACKOFF.length - 1)];
   return { state: uncertain ? 'unconfirmed' : 'retrying', code: 'AUTOMATIC_RETRY_PENDING', nextAttemptAt: nextAttemptAt < delivery.retryBefore ? nextAttemptAt : null };
 }
-async function records(store) {
-  const index = await read(store, 'workflow/index');
-  if (!index) return [];
-  if (!Array.isArray(index.data.ids) || index.data.ids.length > MAX_MESSAGES) throw new Error('WORKFLOW_INDEX_INVALID');
-  return Promise.all(index.data.ids.map(async id => {
+async function records(store, ids) {
+  ids ||= (await historyPage(store)).ids;
+  return Promise.all(ids.map(async id => {
     const entry = await read(store, key(id));
     if (!entry || entry.data.schema !== SCHEMA || entry.data.messageId !== id || (entry.data.message && !validMessage(entry.data.message))) throw new Error('WORKFLOW_MESSAGE_UNAVAILABLE');
     return entry;
   }));
 }
-async function priorDeliveryBarrier(store, gym, message, options, policy) {
-  for (const previous of await records(store)) {
+const routeGroup = (gym, message, fingerprint) => 'reject/' + gym + '/' + digestHash([message.from, message.to, message.cc, fingerprint]);
+const recipientGroup = (gym, message) => 'bounce/' + gym + '/' + digestHash(message.to);
+function projector(store, deps) {
+  return async entry => {
+    const value = entry.data;
+    if (!value || value.schema !== SCHEMA || value.messageId !== 'm1-test-scheduled-' + value.gym + '-' + value.date
+      || !['rev', 'richmond'].includes(value.gym) || value.message && !validMessage(value.message)) throw new Error('WORKFLOW_MESSAGE_UNAVAILABLE');
+    const groups = [], options = deliveryDeps(store, deps), policy = { canonical, validMessage };
+    let state = value.state;
+    if (value.firstAttemptAt) {
+      const delivery = await readPolicyDigestEmailDelivery(value.message, options, policy), decision = await evidenceDecision(store, value.message, delivery, clock(deps));
+      state = decision.state;
+      if (Number.isSafeInteger(delivery.retryBefore) && clock(deps) < delivery.retryBefore && ['unknown', 'pending', 'rejected'].includes(delivery.state)) groups.push('retry/' + value.gym);
+      if (delivery.state === 'accepted') {
+        groups.push('provider/' + delivery.providerId);
+        if (decision.code === 'PERMANENT_RECIPIENT_BOUNCE') groups.push(recipientGroup(value.gym, value.message));
+      } else if (delivery.state === 'rejected') {
+        const ledger = await read(store, 'workflow/delivery/messages/' + value.messageId);
+        if (!ledger || ledger.data.attempts?.length !== delivery.attemptCount) throw new Error('WORKFLOW_PRIOR_DELIVERY_UNCONFIRMED');
+        delivery.receipts.forEach((receipt, index) => { if (receipt.state === 'rejected' && ![408, 409, 429].includes(receipt.httpStatus)) groups.push(routeGroup(value.gym, value.message, ledger.data.attempts[index].credentialFingerprint)); });
+      } else groups.push('unknown/' + value.gym);
+    } else if (!['suppressed', 'not-due'].includes(state)) groups.push('draft/' + value.gym);
+    return { messageId: value.messageId, gym: value.gym, date: value.date, sourceEtag: entry.etag, groups: [...new Set(groups)], unattempted: !value.firstAttemptAt, checkAt: value.checkAt,
+      counts: { failed: Number(['failed', 'retrying'].includes(state)), unconfirmed: Number(Boolean(value.firstAttemptAt) && state === 'unconfirmed'),
+        pending: Number(!value.firstAttemptAt && !['suppressed', 'not-due'].includes(state)), configuration: Number(state === 'not-configured') } };
+  };
+}
+async function writeMessage(store, value, before, deps, guardEpoch) {
+  return changeHistoryMessage(store, value.messageId, { etag: before?.etag || null, value,
+    requiresNoWake: Boolean(value.firstAttemptAt && !before?.data.firstAttemptAt), ...(guardEpoch === undefined ? {} : { guardEpoch }) }, projector(store, deps));
+}
+export async function migrateWorkflowHistory(scope, deps = {}) {
+  requireScope(scope); const store = await storeFor(deps);
+  return migrateHistory(store, projector(store, { ...deps, scope }));
+}
+async function priorDeliveryBarrier(store, gym, message, options, policy, guard = {}) {
+  const initial = await historyRoot(store);
+  if (await historyWakePending(store)) return 'PRIOR_DELIVERY_HISTORY_PENDING';
+  const sets = await Promise.all(['unknown/' + gym, routeGroup(gym, message, policy.credentialFingerprint()), recipientGroup(gym, message)].map(name => historyGroup(store, name)));
+  for (const previous of await records(store, [...new Set(sets.flatMap(value => value.ids))])) {
     if (previous.data.gym !== gym || previous.data.messageId === message.messageId || !previous.data.firstAttemptAt) continue;
     // Workflow summaries can lag a lost reply. Only the validated original
     // provider ledger may establish acceptance or a definite rejection.
@@ -110,6 +137,7 @@ async function priorDeliveryBarrier(store, gym, message, options, policy) {
       const receipt = await latestDeliveryEvidence(store, previous.data.message, delivery, clock(options));
       if (receipt?.type === 'email.bounced' && receipt.permanentFailure === true
         && JSON.stringify(previous.data.message.to) === JSON.stringify(message.to)) return 'PRIOR_PERMANENT_RECIPIENT_BOUNCE';
+      await changeHistoryMessage(store, previous.data.messageId, null, projector(store, options));
       continue;
     }
     if (delivery.state === 'rejected') {
@@ -129,7 +157,10 @@ async function priorDeliveryBarrier(store, gym, message, options, policy) {
     }
     return 'PRIOR_ACCEPTANCE_UNCONFIRMED';
   }
-  return null;
+  const final = await historyRoot(store);
+  if (initial.etag !== final.etag || await historyWakePending(store)) return 'PRIOR_DELIVERY_HISTORY_PENDING';
+  guard.epoch = final.data.epoch;
+  return sets.some(value => value.count > value.ids.length) ? 'PRIOR_DELIVERY_HISTORY_PENDING' : null;
 }
 async function healthEvidence(store, input, now) {
   const value = { requestId: input.binding.requestId, checkedAt: input.binding.createdAt, expiresAt: input.binding.createdAt + FRESH_MS,
@@ -156,22 +187,28 @@ async function processWorkflow(input, deps = {}) {
   if (input.binding.mode !== 'scheduled' || !['due', 'not-due', 'awaiting-configuration'].includes(input.due)
     || input.digest.date !== input.binding.jobDate || Date.parse(input.digest.generatedAt) < input.binding.createdAt || Date.parse(input.digest.generatedAt) > now) throw new Error('WORKFLOW_FRESH_CHECK_REQUIRED');
   const routes = splitAttendanceDigest(input.digest, input.configuration), store = await storeFor(deps);
+  if (!(await migrateWorkflowHistory(deps.scope, deps)).complete) throw new Error('WORKFLOW_HISTORY_MIGRATION_PENDING');
+  await drainWorkflowWakes(store, deps);
   const evidence = await healthEvidence(store, input, now), policy = policyFor(input.configuration, deps), options = deliveryDeps(store, deps);
   if (evidence.checkedAt > input.binding.createdAt || evidence.requestId !== input.binding.requestId) return workflowHealth(deps.scope, deps);
-  for (const previous of await records(store)) {
+  for (const route of routes) if (!route.digest.readFailures.length) await supersedeHistoryDrafts(store, route.gym, input.binding.createdAt);
+  const oldDrafts = await Promise.all(routes.flatMap(route => ['draft/' + route.gym, 'unknown/' + route.gym]).map(name => historyGroup(store, name)));
+  const dueOriginals = await Promise.all(routes.map(route => historyRoundRobin(store, 'retry/' + route.gym)));
+  const active = [...new Set([...(await historyPage(store)).ids, ...oldDrafts.flatMap(group => group.ids), ...dueOriginals.flatMap(group => group.ids)])];
+  for (const previous of await records(store, active)) {
     if (previous.data.firstAttemptAt && previous.data.claimUntil && clock(deps) >= previous.data.claimUntil) {
       const retained = await readPolicyDigestEmailDelivery(previous.data.message, options, policy);
       if (retained.state === 'not-started') {
         // A complete central read proves there is no provider claim. Only after
         // the fenced first-call lease expires may fresh data replace this draft.
-        await write(store, key(previous.data.messageId), { ...previous.data, firstAttemptAt: null, claimUntil: null,
-          state: 'prepared', code: 'NO_PROVIDER_ATTEMPT_CONFIRMED', delivery: retained }, previous);
+        await writeMessage(store, { ...previous.data, firstAttemptAt: null, claimUntil: null,
+          state: 'prepared', code: 'NO_PROVIDER_ATTEMPT_CONFIRMED', delivery: retained }, previous, deps);
         continue;
       }
     }
     if (!previous.data.firstAttemptAt && previous.data.date < input.binding.jobDate && previous.data.checkAt <= input.binding.createdAt
       && routes.some(route => route.gym === previous.data.gym && !route.digest.readFailures.length)) {
-      await write(store, key(previous.data.messageId), { ...previous.data, state: 'suppressed', code: 'SUPERSEDED_BY_FRESH_CHECK', checkAt: input.binding.createdAt }, previous);
+      await writeMessage(store, { ...previous.data, state: 'suppressed', code: 'SUPERSEDED_BY_FRESH_CHECK', checkAt: input.binding.createdAt }, previous, deps);
     }
   }
   let attempts = 0;
@@ -190,26 +227,27 @@ async function processWorkflow(input, deps = {}) {
     if (value.state === 'prepared' && gated) { value.state = 'not-configured'; value.code = gated.code; }
     const priorBarrier = value.state === 'prepared' ? await priorDeliveryBarrier(store, route.gym, message, options, policy) : null;
     if (priorBarrier) value.code = priorBarrier;
-    const saved = await write(store, key(messageId), value, before);
-    await register(store, messageId); // Publish the index only after its complete message exists.
+    const saved = await writeMessage(store, value, before, deps);
     if (!saved.modified || value.state !== 'prepared' || priorBarrier) continue;
     if (attempts >= MAX_ATTEMPTS) continue;
     // CAS freezes the fresh message before the shared engine claims its first
     // attempt. A later check cannot rewrite this body or its recipient list.
     const latest = await read(store, 'workflow/health');
-    if (latest?.data.requestId !== input.binding.requestId || clock(deps) >= input.binding.expiresAt) continue;
+    if (latest?.data.requestId !== input.binding.requestId || clock(deps) >= input.binding.expiresAt || await historyWakePending(store)) continue;
+    const guard = {}, confirmedBarrier = await priorDeliveryBarrier(store, route.gym, message, options, policy, guard);
+    if (confirmedBarrier) { await writeMessage(store, { ...saved.data, code: confirmedBarrier }, saved, deps); continue; }
     const claimUntil = clock(deps) + 60000;
-    const claimed = await write(store, key(messageId), { ...value, firstAttemptAt: clock(deps), claimUntil, state: 'unconfirmed', code: 'ATTEMPT_CLAIMED' }, saved);
+    const claimed = await writeMessage(store, { ...value, firstAttemptAt: clock(deps), claimUntil, state: 'unconfirmed', code: 'ATTEMPT_CLAIMED' }, saved, deps, guard.epoch);
     if (!claimed.modified) continue;
     const firstPolicy = { ...policy, gate: (...args) => clock(deps) >= claimUntil ? { state: 'disabled', code: 'FIRST_ATTEMPT_LEASE_EXPIRED' } : policy.gate(...args) };
     const delivery = await deliverPolicyDigestEmail(message, options, firstPolicy);
     attempts++;
-    await write(store, key(messageId), { ...claimed.data, delivery, attemptCount: delivery.attemptCount || 0, retryBefore: delivery.retryBefore || null,
-      ...retryDecision(delivery, clock(deps)) }, claimed);
+    await writeMessage(store, { ...claimed.data, delivery, attemptCount: delivery.attemptCount || 0, retryBefore: delivery.retryBefore || null,
+      ...retryDecision(delivery, clock(deps)) }, claimed, deps);
   }
   // The Google timer also recovers prior-day attempts. No newer digest can
   // mutate them or reset their original 23-hour identity window.
-  for (const entry of await records(store)) {
+  for (const entry of await records(store, [...new Set([...active, ...(await historyPage(store)).ids])])) {
     if (!entry.data.firstAttemptAt) continue;
     const delivery = await readPolicyDigestEmailDelivery(entry.data.message, options, policy);
     let decision = await evidenceDecision(store, entry.data.message, delivery, clock(deps));
@@ -217,23 +255,32 @@ async function processWorkflow(input, deps = {}) {
       const sent = await deliverPolicyDigestEmail(entry.data.message, options, policy);
       attempts++;
       decision = await evidenceDecision(store, entry.data.message, sent, clock(deps));
-      await write(store, key(entry.data.messageId), { ...entry.data, delivery: sent, attemptCount: sent.attemptCount || 0,
-        retryBefore: sent.retryBefore || null, ...decision }, entry);
+      await writeMessage(store, { ...entry.data, delivery: sent, attemptCount: sent.attemptCount || 0,
+        retryBefore: sent.retryBefore || null, ...decision }, entry, deps);
     } else {
-      await write(store, key(entry.data.messageId), { ...entry.data, delivery, attemptCount: delivery.attemptCount || 0,
-        retryBefore: delivery.retryBefore || null, ...decision }, entry);
+      await writeMessage(store, { ...entry.data, delivery, attemptCount: delivery.attemptCount || 0,
+        retryBefore: delivery.retryBefore || null, ...decision }, entry, deps);
     }
   }
+  await drainWorkflowWakes(store, deps);
   return workflowHealth(deps.scope, deps);
 }
 
 export async function processAttendanceWorkflow(input, deps = {}) {
   requireScope(deps.scope);
   const store = await storeFor(deps), now = clock(deps), previous = await read(store, 'workflow/processor');
-  if (previous?.data.expiresAt > now) return { ...(await workflowHealth(deps.scope, deps)), pending: true };
+  const pending = async () => {
+    try { return { ...(await workflowHealth(deps.scope, deps)), pending: true }; }
+    catch (error) {
+      if (!String(error?.message).startsWith('WORKFLOW_HISTORY_')) throw error;
+      return { ok: true, target: 'test', state: 'check-incomplete', codes: ['CHECK_INCOMPLETE'], checkedAt: null, expiresAt: null,
+        pendingCount: 0, failedCount: 0, unconfirmedCount: 0, pending: true };
+    }
+  };
+  if (previous?.data.expiresAt > now) return pending();
   const lease = { owner: randomUUID(), expiresAt: now + 10 * 60000 };
   const claimed = await write(store, 'workflow/processor', lease, previous);
-  if (!claimed.modified) return { ...(await workflowHealth(deps.scope, deps)), pending: true };
+  if (!claimed.modified) return pending();
   try { return await processWorkflow(input, { ...deps, processorLease: lease }); }
   finally {
     const current = await read(store, 'workflow/processor');
@@ -244,23 +291,26 @@ export async function processAttendanceWorkflow(input, deps = {}) {
 export async function workflowHealth(scope, deps = {}) {
   requireScope(scope);
   const store = await storeFor(deps), now = clock(deps), check = (await read(store, 'workflow/health'))?.data;
-  const items = (await records(store)).filter(entry => entry.data.gym === scope.profile.installationId), codes = [];
+  const history = await historyRoot(store, { incomplete: true }), codes = [];
+  if (history && (!history.data.migration.complete || history.data.pending) || await historyWakePending(store)) codes.push('CHECK_INCOMPLETE');
   if (check && (!Number.isSafeInteger(check.checkedAt) || check.expiresAt !== check.checkedAt + FRESH_MS || !Array.isArray(check.gyms))) throw new Error('WORKFLOW_HEALTH_UNAVAILABLE');
   const own = check?.gyms.find(gym => gym.gym === scope.profile.installationId);
-  const failedCount = items.filter(entry => ['failed', 'retrying'].includes(entry.data.state)).length;
-  const unconfirmedCount = items.filter(entry => entry.data.firstAttemptAt && entry.data.state === 'unconfirmed').length;
-  const pendingCount = items.filter(entry => !entry.data.firstAttemptAt && !['suppressed', 'not-due'].includes(entry.data.state)).length;
+  const counts = history?.data.counts[scope.profile.installationId];
+  const failedCount = counts?.failed || 0, unconfirmedCount = counts?.unconfirmed || 0, pendingCount = counts?.pending || 0;
   if (check?.configured && now >= check.expiresAt) codes.push('CHECK_OVERDUE');
   if (check && own?.complete !== true) codes.push('CHECK_INCOMPLETE');
   if (failedCount) codes.push('DELIVERY_FAILED');
   if (unconfirmedCount) codes.push('DELIVERY_UNCONFIRMED');
-  if (!check?.configured || items.some(entry => entry.data.state === 'not-configured')) codes.push('CONFIGURATION_REQUIRED');
+  if (!check?.configured || counts?.configuration) codes.push('CONFIGURATION_REQUIRED');
   const head = (await read(store, 'workflow/job-head'))?.data;
   if (head && (!Number.isSafeInteger(head.checkedAt) || !['queued', 'running', 'complete', 'needs-fresh-check', 'dispatch-unconfirmed'].includes(head.state))) throw new Error('WORKFLOW_HEALTH_UNAVAILABLE');
   if (head && (!check || head.checkedAt > check.checkedAt || head.jobId === check.requestId)) {
     if (head.state === 'needs-fresh-check') codes.push('CHECK_INCOMPLETE');
     else if (head.state !== 'complete') codes.push('DELIVERY_UNCONFIRMED');
   }
+  const after = await historyRoot(store, { incomplete: true });
+  if (after?.etag !== history?.etag) throw new Error('WORKFLOW_HISTORY_TRANSITION_PENDING');
+  if (await historyWakePending(store) && !codes.includes('CHECK_INCOMPLETE')) codes.push('CHECK_INCOMPLETE');
   const state = codes.includes('CHECK_OVERDUE') ? 'check-overdue' : codes.includes('CHECK_INCOMPLETE') ? 'check-incomplete'
     : codes.includes('DELIVERY_FAILED') ? 'delivery-failed' : codes.includes('DELIVERY_UNCONFIRMED') ? 'delivery-unconfirmed'
     : codes.includes('CONFIGURATION_REQUIRED') ? 'not-configured' : own?.itemCount ? 'attention' : 'clear';
@@ -325,6 +375,14 @@ export async function executeAttendanceWorkflowJob(jobId, scope, deps = {}) {
   if (!claimed.modified) return { complete: false, jobId, pending: true };
   await jobHead(store, claimed.data);
   try {
+    // The supported background invocation completes the finite legacy upgrade
+    // in bounded batches. If its read expires meanwhile, the next fresh tick
+    // resumes normal work; migration never authorizes dispatch of stale data.
+    const migrationDeadline = clock(deps) + 5 * 60000;
+    for (let batch = 0; batch < 16; batch++) {
+      if ((await migrateWorkflowHistory(scope, deps)).complete) break;
+      if (clock(deps) >= migrationDeadline) throw new Error('WORKFLOW_HISTORY_MIGRATION_PENDING');
+    }
     const result = await processAttendanceWorkflow(claimed.data.input, { ...deps, scope });
     const completed = await write(store, path, { ...claimed.data, state: result.pending ? 'queued' : 'complete', leaseUntil: null }, claimed);
     await jobHead(store, completed.data);
@@ -357,6 +415,33 @@ async function evidenceDecision(store, message, delivery, now) {
   return receipt?.type === 'email.delivered' ? message.cc.length ? { state: 'unconfirmed', code: 'CC_DELIVERY_UNCONFIRMED', nextAttemptAt: null }
     : { state: 'delivered', code: 'PROVIDER_DELIVERY_CONFIRMED', nextAttemptAt: null } : ordinary;
 }
+async function persistDeliveryEvidence(store, event) {
+  const prefix = 'workflow/provider-evidence/' + event.providerId + '/';
+  const prior = await read(store, prefix + event.eventId);
+  if (prior && digestHash(prior.data) !== digestHash(event)) throw new Error('WORKFLOW_EVIDENCE_CONFLICT');
+  if (!prior && digestHash((await write(store, prefix + event.eventId, event, null)).data) !== digestHash(event)) throw new Error('WORKFLOW_EVIDENCE_CONFLICT');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = await read(store, prefix + 'index'), ids = before?.data.ids || [];
+    if (!Array.isArray(ids) || ids.length > 20) throw new Error('WORKFLOW_EVIDENCE_UNAVAILABLE');
+    if (ids.includes(event.eventId)) return;
+    if (ids.length === 20) throw new Error('WORKFLOW_EVIDENCE_CAPACITY');
+    if ((await write(store, prefix + 'index', { ids: [...ids, event.eventId] }, before)).modified) return;
+  }
+  throw new Error('WORKFLOW_EVIDENCE_UNCONFIRMED');
+}
+async function drainWorkflowWakes(store, deps) {
+  return drainHistoryWakes(store, async node => {
+    // The published wake owns all event/index/source updates. No delayed writer
+    // can commit new evidence after its wake has already been removed.
+    await persistDeliveryEvidence(store, node.event);
+    const entry = (await records(store, [node.messageId]))[0];
+    const delivery = await readPolicyDigestEmailDelivery(entry.data.message, deliveryDeps(store, deps), { canonical, validMessage });
+    if (delivery.state === 'pending') { await changeHistoryMessage(store, node.messageId, null, projector(store, deps)); return; }
+    const decision = await evidenceDecision(store, entry.data.message, delivery, clock(deps));
+    await writeMessage(store, { ...entry.data, delivery, attemptCount: delivery.attemptCount || 0,
+      retryBefore: delivery.retryBefore || null, ...decision }, entry, deps);
+  });
+}
 
 // This entry is called only after the separate disabled-by-default webhook
 // endpoint verifies the provider signature over its original raw bytes.
@@ -370,8 +455,12 @@ export async function recordWorkflowDeliveryEvidence(event, deps = {}) {
     || new Date(event.occurredAt).toISOString() !== event.occurredAt || Date.parse(event.occurredAt) > clock(deps) + 300000
     || typeof event.from !== 'string' || event.from.length > 300 || /[\r\n]/.test(event.from)
     || !Array.isArray(event.to) || event.to.length !== 1 || !event.to.every(safeAddress)) throw new Error('WORKFLOW_EVIDENCE_INVALID');
-  const store = await storeFor(deps), prefix = 'workflow/provider-evidence/' + event.providerId + '/';
-  const originals = await records(store);
+  const store = await storeFor(deps);
+  if (!await read(store, 'workflow/history/root') && !await read(store, 'workflow/index')) return { ok: true, matched: false, state: 'ignored' };
+  if (!(await migrateWorkflowHistory(deps.scope, deps)).complete) throw new Error('WORKFLOW_HISTORY_MIGRATION_PENDING');
+  const provider = await historyGroup(store, 'provider/' + event.providerId, 16);
+  if (provider.count > provider.ids.length) throw new Error('WORKFLOW_PROVIDER_ID_AMBIGUOUS');
+  const originals = await records(store, [...new Set([...provider.ids, ...(await historyPage(store)).ids])]);
   let candidate;
   for (const entry of originals) {
     if (entry.data.gym !== deps.scope.profile.installationId || !entry.data.firstAttemptAt || entry.data.message.from !== event.from
@@ -393,29 +482,22 @@ export async function recordWorkflowDeliveryEvidence(event, deps = {}) {
       if (attempt === 2) throw new Error('WORKFLOW_EVIDENCE_UNCONFIRMED');
     }
   }
+  const prefix = 'workflow/provider-evidence/' + event.providerId + '/';
   const prior = await read(store, prefix + event.eventId);
   if (prior && digestHash(prior.data) !== digestHash(event)) throw new Error('WORKFLOW_EVIDENCE_CONFLICT');
-  if (!prior && digestHash((await write(store, prefix + event.eventId, event, null)).data) !== digestHash(event)) throw new Error('WORKFLOW_EVIDENCE_CONFLICT');
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const before = await read(store, prefix + 'index'), ids = before?.data.ids || [];
-    if (!Array.isArray(ids) || ids.length > 20) throw new Error('WORKFLOW_EVIDENCE_UNAVAILABLE');
-    if (ids.includes(event.eventId)) break;
-    if (ids.length === 20) throw new Error('WORKFLOW_EVIDENCE_CAPACITY');
-    if ((await write(store, prefix + 'index', { ids: [...ids, event.eventId] }, before)).modified) break;
-    if (attempt === 2) throw new Error('WORKFLOW_EVIDENCE_UNCONFIRMED');
-  }
-  let matched = false, state = 'pending';
-  for (const entry of await records(store)) {
-    if (entry.data.gym !== deps.scope.profile.installationId || entry.data.delivery?.state !== 'accepted' || entry.data.delivery.providerId !== event.providerId) continue;
-    const decision = await evidenceDecision(store, entry.data.message, entry.data.delivery, clock(deps));
-    if (decision.code === 'PROVIDER_ACCEPTANCE_ONLY') continue;
-    matched = true; state = decision.state;
-    await write(store, key(entry.data.messageId), { ...entry.data, ...decision }, entry);
-  }
-  return { ok: true, matched, state };
+  const intentKey = 'workflow/history/event-intents/' + digestHash([event.providerId, event.eventId]);
+  const intended = await write(store, intentKey, event, null);
+  if (digestHash(intended.data) !== digestHash(event)) throw new Error('WORKFLOW_EVIDENCE_CONFLICT');
+  await queueHistoryWake(store, candidate.data.messageId, event);
+  await drainWorkflowWakes(store, deps);
+  const actual = (await records(store, [candidate.data.messageId]))[0].data;
+  return actual.delivery?.state === 'accepted' && actual.delivery.providerId === event.providerId
+    ? { ok: true, matched: true, state: actual.state } : { ok: true, matched: false, state: 'pending' };
 }
 export async function workflowMessages(scope, deps = {}) {
   requireScope(scope);
   const store = await storeFor(deps);
-  return { ok: true, target: 'test', messages: (await records(store)).map(entry => structuredClone(entry.data)) };
+  const root = await historyRoot(store), page = await historyPage(store, deps.historyCursor), messages = (await records(store, page.ids)).map(entry => structuredClone(entry.data));
+  if ((await historyRoot(store))?.etag !== root?.etag || await historyWakePending(store)) throw new Error('WORKFLOW_HISTORY_TRANSITION_PENDING');
+  return { ok: true, target: 'test', messages, nextCursor: page.nextCursor, historyComplete: true };
 }
