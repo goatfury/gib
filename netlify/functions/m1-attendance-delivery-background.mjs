@@ -3,7 +3,7 @@ import { attendanceDigestScope } from './m1-attendance-digest.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
 import { executeAttendanceWorkflowJob, workflowDispatchSignature, WORKFLOW_DISPATCH_HEADER, WORKFLOW_DISPATCH_PATH } from './_lib/m1-attendance-digest-workflow.mjs';
 
-export const config = { path: WORKFLOW_DISPATCH_PATH };
+export const config = { path: '/api/m1-attendance-delivery-background' };
 export async function handleAttendanceDeliveryBackground(request, dependencies = {}) {
   const url = new URL(request.url);
   if (request.method !== 'POST' || url.pathname !== WORKFLOW_DISPATCH_PATH || url.search || url.hash) return jsonResponse(404, { ok: false });

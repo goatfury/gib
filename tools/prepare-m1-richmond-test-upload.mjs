@@ -9,6 +9,11 @@ import { pathToFileURL } from 'node:url';
 export const UPLOAD_CLIENT_VERSION = '26.0.1';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const sorted = values => [...values].sort();
+const backgroundRoutes = Object.freeze({
+  'm1-attendance-delivery-background': '/api/m1-attendance-delivery-background',
+  'm1-attendance-workflow-background': '/api/m1-attendance-workflow-background'
+});
+const expectedInvocation = name => Object.hasOwn(backgroundRoutes, name) ? 'background' : 'stream';
 
 export async function validateRichmondArtifact(directory, expectedSource) {
   const root = resolve(directory);
@@ -30,7 +35,10 @@ export async function validateRichmondArtifact(directory, expectedSource) {
     assert.match(fn.name, /^[a-z0-9-]+$/);
     assert.equal(fn.path, `functions/${fn.name}.zip`, 'Manifest must use portable, confined archive paths.');
     assert.equal(fn.runtimeVersion, 'nodejs22.x', `Unexpected runtime: ${fn.name}`);
-    assert.equal(fn.invocationMode, 'stream', `Unexpected invocation mode: ${fn.name}`);
+    assert.equal(fn.invocationMode, expectedInvocation(fn.name), `Unexpected invocation mode: ${fn.name}`);
+    if (Object.hasOwn(backgroundRoutes, fn.name)) assert.deepEqual(fn.routes,
+      [{ pattern: backgroundRoutes[fn.name], literal: backgroundRoutes[fn.name], methods: [] }],
+      `Background route is missing or changed: ${fn.name}`);
     assert.equal(fn.runtime, 'js');
     const archive = await readFile(resolve(root, fn.path));
     assert.equal(archive.subarray(0, 2).toString(), 'PK', `Invalid ZIP: ${fn.name}`);
@@ -51,7 +59,7 @@ export function validateClientFunctions(result, manifest, receipt) {
     const uploaded = result.fnShaMap[receipt.archiveHashes[fn.name]]?.find(item => item.normalizedPath === fn.name);
     assert.ok(uploaded, `Upload client omitted ${fn.name}.`);
     assert.equal(uploaded.runtime, 'nodejs22.x', `Upload client lost runtime: ${fn.name}`);
-    assert.equal(uploaded.invocationMode, 'stream', `Upload client lost streaming: ${fn.name}`);
+    assert.equal(uploaded.invocationMode, expectedInvocation(fn.name), `Upload client lost streaming/background mode: ${fn.name}`);
     const config = result.fnConfig[fn.name];
     assert.deepEqual(config?.routes, fn.routes, `Upload client lost routes: ${fn.name}`);
     assert.deepEqual(config?.excluded_routes, fn.excludedRoutes);
@@ -105,7 +113,7 @@ export async function prepareRichmondUpload({ directory, cliRoot, expectedSource
     source: receipt.source, tree: receipt.tree, installation: 'richmond', environment: 'test',
     uploadClient: client.version, root, manifestPath, preparedAt: new Date(staged.timestamp).toISOString(),
     expiresAt: new Date(staged.timestamp + 120_000).toISOString(), archiveHashes: result.functions,
-    functions: staged.functions.map(fn => ({ name: fn.name, routes: result.fnConfig[fn.name]?.routes || [], runtime: 'nodejs22.x', invocationMode: 'stream' }))
+    functions: staged.functions.map(fn => ({ name: fn.name, routes: result.fnConfig[fn.name]?.routes || [], runtime: 'nodejs22.x', invocationMode: fn.invocationMode }))
   };
   await writeFile(resolve(root, 'upload-preflight.json'), JSON.stringify(report, null, 2));
   return report;

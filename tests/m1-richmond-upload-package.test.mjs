@@ -72,6 +72,31 @@ test('unexpected extra archive and non-TEST profile fail closed', async t => {
   await assert.rejects(validateRichmondArtifact(f.root, source));
 });
 
+test('the two supported background workers retain their exact routes and invocation modes', async t => {
+  const f = await fixture(t);
+  for (const name of ['m1-attendance-delivery-background', 'm1-attendance-workflow-background']) {
+    const archive = Buffer.from('PKfixture:' + name);
+    await writeFile(join(f.root, `functions/${name}.zip`), archive);
+    const fn = { ...f.manifest.functions[0], name, path: `functions/${name}.zip`, invocationMode: 'background',
+      routes: [{ pattern: '/api/' + name, literal: '/api/' + name, methods: [] }] };
+    f.manifest.functions.push(fn); f.receipt.archiveHashes[name] = sha256(archive);
+    await f.persist(); await validateRichmondArtifact(f.root, source);
+    const routes = fn.routes; delete fn.routes; await f.persist();
+    await assert.rejects(validateRichmondArtifact(f.root, source), /Background route is missing/);
+    fn.routes = routes; fn.invocationMode = 'stream'; await f.persist();
+    await assert.rejects(validateRichmondArtifact(f.root, source), /Unexpected invocation/);
+    fn.invocationMode = 'background'; await f.persist();
+  }
+  const result = { functions: { ...f.receipt.archiveHashes }, fnShaMap: {}, fnConfig: {}, functionSchedules: [] };
+  for (const fn of f.manifest.functions) {
+    result.fnShaMap[f.receipt.archiveHashes[fn.name]] = [{ normalizedPath: fn.name, runtime: 'nodejs22.x', invocationMode: fn.invocationMode }];
+    result.fnConfig[fn.name] = { routes: fn.routes, build_data: fn.buildData, priority: fn.priority };
+  }
+  validateClientFunctions(result, f.manifest, f.receipt);
+  result.fnShaMap[f.receipt.archiveHashes['m1-attendance-delivery-background']][0].invocationMode = 'stream';
+  assert.throws(() => validateClientFunctions(result, f.manifest, f.receipt), /lost streaming\/background mode/);
+});
+
 test('client-produced metadata cannot silently lose routes, runtime, streaming or bytes', async t => {
   const f = await fixture(t), fn = f.manifest.functions[0], digest = f.receipt.archiveHashes[fn.name];
   const result = { functions: { ...f.receipt.archiveHashes }, fnShaMap: { [digest]: [{ normalizedPath: fn.name, runtime: 'nodejs22.x', invocationMode: 'stream' }] },
