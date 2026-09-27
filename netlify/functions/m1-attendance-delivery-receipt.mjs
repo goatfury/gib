@@ -51,7 +51,8 @@ function deliveryEvent(raw, eventId, now) {
     || typeof occurredAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(occurredAt)
     || !Number.isFinite(Date.parse(occurredAt)) || new Date(occurredAt).toISOString().slice(0, 19) !== occurredAt.slice(0, 19)
     || Date.parse(occurredAt) > now + TOLERANCE_SECONDS * 1000) fail(400, 'DELIVERY_RECEIPT_INVALID');
-  return { eventId, providerId: data.email_id, type: value.type, occurredAt: new Date(occurredAt).toISOString(), from: data.from, to: [...data.to] };
+  return { eventId, providerId: data.email_id, type: value.type, occurredAt: new Date(occurredAt).toISOString(), from: data.from, to: [...data.to],
+    ...(value.type === 'email.bounced' && data.bounce?.type === 'Permanent' ? { permanentFailure: true } : {}) };
 }
 
 export async function handleAttendanceDeliveryReceipt(request, dependencies = {}) {

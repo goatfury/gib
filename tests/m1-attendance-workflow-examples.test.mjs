@@ -81,6 +81,29 @@ test('fresh incomplete results deliver a warning and a pre-engine claim failure 
   assert.ok(result.scenarios.find(s => s.key === 'temporary-recovery').passed);
 });
 
+test('permanent rejection and expired unknown acceptance retain old receipts and prevent a next-day replacement attempt', async () => {
+  const { store, deps } = fixture();
+  const result = await runAttendanceWorkflowExamples(ID, deps);
+  for (const name of ['permanent-failure', 'expired-uncertain']) {
+    const root = 'examples/' + ID + '/scenarios/' + name + '/';
+    const prior = store.entries.get(root + 'steps/first').data.messages.messages[0];
+    const next = store.entries.get(root + 'steps/next-day').data;
+    const original = next.messages.messages.find(message => message.messageId === prior.messageId);
+    const draft = next.messages.messages.find(message => message.messageId !== prior.messageId);
+    assert.equal(next.digest.date, '2026-09-25'); assert.equal(next.digest.itemCount, 1, 'same unresolved class remains in the next due check');
+    assert.equal(Date.parse(next.digest.generatedAt) - Date.parse(store.entries.get(root + 'steps/first').data.digest.generatedAt), 86400000);
+    assert.deepEqual(original.message, prior.message); assert.deepEqual(original.delivery.receipts, prior.delivery.receipts);
+    assert.equal(original.attemptCount, 1); assert.equal(original.delivery.state, name === 'permanent-failure' ? 'rejected' : 'unknown');
+    assert.equal(draft.date, '2026-09-25'); assert.equal(draft.attemptCount, 0); assert.equal(draft.firstAttemptAt, null); assert.equal(draft.delivery, null);
+    assert.equal(draft.state, 'prepared');
+    assert.equal(draft.code, name === 'permanent-failure' ? 'PRIOR_PERMANENT_REJECTION_UNCHANGED' : 'PRIOR_ACCEPTANCE_UNCONFIRMED');
+    const providerEntries = [...store.entries].filter(([key]) => key.startsWith(root + 'simulation/'));
+    assert.equal(providerEntries.length, 1); assert.equal(providerEntries[0][1].data.calls, 1);
+    assert.equal(store.entries.has(root + 'simulation/' + draft.messageId), false);
+    assert.ok(result.scenarios.find(scenario => scenario.key === name).passed);
+  }
+});
+
 test('concurrent calls use one durable lease and an interrupted runner resumes its saved scenario checkpoints', async () => {
   const h = fixture();
   const results = await Promise.allSettled([runAttendanceWorkflowExamples(ID, h.deps), runAttendanceWorkflowExamples(ID, h.deps)]);

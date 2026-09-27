@@ -112,6 +112,40 @@ test('bounced and failed evidence is forwarded as explicit negative outcomes wit
   }
 });
 
+test('only an explicit signed Permanent bounce adds the minimal permanent failure classification', async () => {
+  // https://resend.com/changelog/webhook-event-visibility
+  const h = harness(), value = payload('email.bounced');
+  value.data.bounce = { type: 'Permanent', subType: 'Suppressed', message: 'private provider explanation' };
+  assert.equal((await h.call({ value })).status, 200);
+  assert.deepEqual(h.evidence, [{ eventId, providerId, type: 'email.bounced', occurredAt: '2026-09-27T14:59:59.126Z',
+    from: sender, to: [recipient], permanentFailure: true }]);
+  assert.doesNotMatch(JSON.stringify(h.evidence), /private|Suppressed|subType|message|"bounce"/);
+});
+
+test('generic failures, untyped or transient bounces and injected flags retain the exact legacy evidence shape', async () => {
+  const cases = [['email.failed', { type: 'Permanent' }], ['email.delivered', { type: 'Permanent' }],
+    ['email.bounced', undefined], ['email.bounced', null], ['email.bounced', {}],
+    ['email.bounced', { type: 'Transient' }], ['email.bounced', { type: 'permanent' }], ['email.bounced', { type: 'Permanent ' }]];
+  for (const [type, bounce] of cases) {
+    const h = harness(), value = payload(type);
+    value.data.bounce = bounce; value.permanentFailure = true; value.data.permanentFailure = true;
+    assert.equal((await h.call({ value })).status, 200);
+    assert.deepEqual(h.evidence, [{ eventId, providerId, type, occurredAt: '2026-09-27T14:59:59.126Z', from: sender, to: [recipient] }]);
+  }
+});
+
+test('forging a Permanent bounce after signing is rejected before recording any evidence', async () => {
+  const value = payload('email.bounced'); value.data.bounce = { type: 'Transient' };
+  const signature = sign(Buffer.from(JSON.stringify(value)));
+  value.data.bounce.type = 'Permanent';
+  for (const options of [{ value, signature }, { value, signature: '' }]) {
+    const h = harness(), response = await h.call(options);
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { ok: false, code: 'DELIVERY_RECEIPT_AUTHENTICATION_FAILED' });
+    assert.deepEqual(h.evidence, []);
+  }
+});
+
 test('malformed signed delivery identities, recipients and timestamps remain rejected without a false confirmation', async () => {
   for (const change of [value => { value.data.email_id = 'bad-id'; }, value => { value.data.from = 'sender\r\nInjected'; },
     value => { value.data.to = []; }, value => { value.data.to = [recipient, recipient]; }, value => { value.data.to = ['not an address']; },

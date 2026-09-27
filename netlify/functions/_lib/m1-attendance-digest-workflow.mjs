@@ -100,6 +100,37 @@ async function records(store) {
     return entry;
   }));
 }
+async function priorDeliveryBarrier(store, gym, message, options, policy) {
+  for (const previous of await records(store)) {
+    if (previous.data.gym !== gym || previous.data.messageId === message.messageId || !previous.data.firstAttemptAt) continue;
+    // Workflow summaries can lag a lost reply. Only the validated original
+    // provider ledger may establish acceptance or a definite rejection.
+    const delivery = await readPolicyDigestEmailDelivery(previous.data.message, options, policy);
+    if (delivery.state === 'accepted') {
+      const receipt = await latestDeliveryEvidence(store, previous.data.message, delivery, clock(options));
+      if (receipt?.type === 'email.bounced' && receipt.permanentFailure === true
+        && JSON.stringify(previous.data.message.to) === JSON.stringify(message.to)) return 'PRIOR_PERMANENT_RECIPIENT_BOUNCE';
+      continue;
+    }
+    if (delivery.state === 'rejected') {
+      const sameRoute = previous.data.message.from === message.from
+        && JSON.stringify(previous.data.message.to) === JSON.stringify(message.to)
+        && JSON.stringify(previous.data.message.cc) === JSON.stringify(message.cc);
+      if (!sameRoute) continue;
+      const permanent = delivery.receipts.map((receipt, index) => receipt.state === 'rejected' && ![408, 409, 429].includes(receipt.httpStatus) ? index : -1).filter(index => index >= 0);
+      if (!permanent.length) continue;
+      const retained = await read(store, 'workflow/delivery/messages/' + previous.data.messageId);
+      if (!retained || retained.data.attempts?.length !== delivery.attemptCount) throw new Error('WORKFLOW_PRIOR_DELIVERY_UNCONFIRMED');
+      // A new date/body or an OFF/ON toggle is not a repair. An existing
+      // verified sender/recipient or provider-credential change is the narrow
+      // repair boundary, and cannot release an unknown-acceptance original.
+      if (permanent.some(index => retained.data.attempts[index].credentialFingerprint === policy.credentialFingerprint())) return 'PRIOR_PERMANENT_REJECTION_UNCHANGED';
+      continue;
+    }
+    return 'PRIOR_ACCEPTANCE_UNCONFIRMED';
+  }
+  return null;
+}
 async function healthEvidence(store, input, now) {
   const value = { requestId: input.binding.requestId, checkedAt: input.binding.createdAt, expiresAt: input.binding.createdAt + FRESH_MS,
     digestHash: digestHash(input.digest), complete: input.digest.readFailures.length === 0, itemCount: input.digest.itemCount, due: input.due,
@@ -157,9 +188,11 @@ async function processWorkflow(input, deps = {}) {
       firstAttemptAt: null, state: route.routeStatus === 'suppressed' ? 'suppressed' : route.routeStatus === 'blocked' ? 'not-configured' : input.due !== 'due' ? 'not-due' : 'prepared',
       code: route.code, message, attemptCount: 0, nextAttemptAt: null, retryBefore: null, delivery: null };
     if (value.state === 'prepared' && gated) { value.state = 'not-configured'; value.code = gated.code; }
+    const priorBarrier = value.state === 'prepared' ? await priorDeliveryBarrier(store, route.gym, message, options, policy) : null;
+    if (priorBarrier) value.code = priorBarrier;
     const saved = await write(store, key(messageId), value, before);
     await register(store, messageId); // Publish the index only after its complete message exists.
-    if (!saved.modified || value.state !== 'prepared') continue;
+    if (!saved.modified || value.state !== 'prepared' || priorBarrier) continue;
     if (attempts >= MAX_ATTEMPTS) continue;
     // CAS freezes the fresh message before the shared engine claims its first
     // attempt. A later check cannot rewrite this body or its recipient list.
@@ -303,11 +336,10 @@ export async function executeAttendanceWorkflowJob(jobId, scope, deps = {}) {
   }
 }
 
-async function evidenceDecision(store, message, delivery, now) {
-  const ordinary = retryDecision(delivery, now);
-  if (delivery.state !== 'accepted' || !delivery.providerId) return ordinary;
+async function latestDeliveryEvidence(store, message, delivery, now) {
+  if (delivery.state !== 'accepted' || !delivery.providerId) return null;
   const index = await read(store, 'workflow/provider-evidence/' + delivery.providerId + '/index');
-  if (!index) return ordinary;
+  if (!index) return null;
   if (!Array.isArray(index.data.ids) || index.data.ids.length > 20) throw new Error('WORKFLOW_EVIDENCE_UNAVAILABLE');
   const matches = [];
   for (const id of index.data.ids) {
@@ -317,8 +349,12 @@ async function evidenceDecision(store, message, delivery, now) {
       && Date.parse(event.occurredAt) >= (delivery.receipts?.[0]?.startedAt || now) - 300000) matches.push(event);
   }
   matches.sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt) || Number(a.type === 'email.delivered') - Number(b.type === 'email.delivered'));
-  if (matches[0] && ['email.failed', 'email.bounced'].includes(matches[0].type)) return { state: 'failed', code: 'PROVIDER_DELIVERY_FAILED', nextAttemptAt: null };
-  return matches[0]?.type === 'email.delivered' ? message.cc.length ? { state: 'unconfirmed', code: 'CC_DELIVERY_UNCONFIRMED', nextAttemptAt: null }
+  return matches[0] || null;
+}
+async function evidenceDecision(store, message, delivery, now) {
+  const ordinary = retryDecision(delivery, now), receipt = await latestDeliveryEvidence(store, message, delivery, now);
+  if (receipt && ['email.failed', 'email.bounced'].includes(receipt.type)) return { state: 'failed', code: receipt.permanentFailure === true ? 'PERMANENT_RECIPIENT_BOUNCE' : 'PROVIDER_DELIVERY_FAILED', nextAttemptAt: null };
+  return receipt?.type === 'email.delivered' ? message.cc.length ? { state: 'unconfirmed', code: 'CC_DELIVERY_UNCONFIRMED', nextAttemptAt: null }
     : { state: 'delivered', code: 'PROVIDER_DELIVERY_CONFIRMED', nextAttemptAt: null } : ordinary;
 }
 
@@ -326,7 +362,9 @@ async function evidenceDecision(store, message, delivery, now) {
 // endpoint verifies the provider signature over its original raw bytes.
 export async function recordWorkflowDeliveryEvidence(event, deps = {}) {
   requireScope(deps.scope);
-  if (deps.deliveryEvidenceVerified !== true || !exact(event, ['eventId', 'providerId', 'type', 'occurredAt', 'from', 'to'])
+  const fields = ['eventId', 'providerId', 'type', 'occurredAt', 'from', 'to'];
+  const shapeValid = exact(event, fields) || (exact(event, [...fields, 'permanentFailure']) && event.permanentFailure === true && event.type === 'email.bounced');
+  if (deps.deliveryEvidenceVerified !== true || !shapeValid
     || !/^[A-Za-z0-9_-]{1,100}$/.test(event.eventId) || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(event.providerId)
     || !['email.delivered', 'email.bounced', 'email.failed'].includes(event.type) || !Number.isFinite(Date.parse(event.occurredAt))
     || new Date(event.occurredAt).toISOString() !== event.occurredAt || Date.parse(event.occurredAt) > clock(deps) + 300000

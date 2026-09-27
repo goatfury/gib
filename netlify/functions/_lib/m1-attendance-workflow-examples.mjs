@@ -256,21 +256,40 @@ async function scenario(store, runId, name) {
     warnings = [warning('SIMULATED_ACCEPTANCE_ONLY', 'A simulated provider acceptance is not evidence of real email delivery.')];
     summary = name === 'immutable-after-attempt' ? 'A later clean check cannot rewrite an already attempted email.' : 'Reopening uses the retained message and the same simulated provider identity.';
   } else if (name === 'permanent-failure') {
-    title = 'A permanent rejection stops automatic delivery'; await h.tick('first'); result = await h.tick('later', 'issue', 120 * MINUTE);
-    assert(firstMessage(result).attemptCount === 1 && (await h.simulation(firstMessage(result).messageId)).calls === 1, 'Permanent rejection causes no repeated provider calls.');
-    warnings = [warning('PERMANENT_DELIVERY_FAILURE', 'The simulated provider rejected the message permanently; it needs attention.')];
-    checks = ['Permanent rejection preserved.', 'No automatic repeated delivery.']; summary = 'A permanent failure stays visible and bounded.';
+    title = 'A permanent rejection also blocks a new daily send'; const before = await h.tick('first');
+    result = await h.tick('next-day', 'issue', 24 * 60 * MINUTE);
+    const prior = firstMessage(before), original = entries(result).find(entry => entry.messageId === prior.messageId);
+    const draft = entries(result).find(entry => entry.messageId !== prior.messageId);
+    assert(original?.attemptCount === 1 && original.delivery?.state === 'rejected'
+      && digestHash(original.message) === digestHash(prior.message)
+      && digestHash(original.delivery.receipts) === digestHash(prior.delivery.receipts), 'Original permanent rejection, exact message and audit receipts remain unchanged.');
+    assert(draft?.date === '2026-09-25' && draft.attemptCount === 0 && !draft.firstAttemptAt
+      && !draft.delivery && draft.state === 'prepared' && draft.code === 'PRIOR_PERMANENT_REJECTION_UNCHANGED', 'The next due day retains a blocked draft with no delivery attempt.');
+    assert(result.providerStates.reduce((total, item) => total + (item.receipt?.calls || 0), 0) === 1
+      && result.providerStates.find(item => item.messageId === draft.messageId)?.receipt === null, 'Permanent rejection cannot reset provider attempts under a new daily identity.');
+    warnings = [warning('PERMANENT_DELIVERY_FAILURE', 'The simulator permanently rejected the original email; the next day’s draft remains unattempted until the failure is addressed.')];
+    checks = ['Original permanent rejection and receipts preserved.', 'Same unresolved issue checked at the next due day, 24 hours later.', 'One total provider call across both dates.', 'Next-day draft retained without an attempt.'];
+    summary = 'A new date cannot restart delivery after a permanent failure.';
   } else if (name === 'resolved-before-attempt') {
     title = 'Resolved work is suppressed before any first attempt'; await h.tick('before', 'issue', 0, { due: 'not-due' }); result = await h.tick('resolved', 'clean', MINUTE);
     assert(result.digest.itemCount === 0 && entries(result).every(entry => entry.attemptCount === 0), 'Resolved items never reach the provider.');
     checks = ['Fresh complete read sees the resolution.', 'No provider attempt.']; summary = 'Items fixed before the first eligible send no longer trigger an email.';
   } else if (name === 'expired-uncertain') {
-    title = 'Expired uncertainty requires manual reconciliation'; const before = await h.tick('first'); result = await h.tick('expired', 'clean', 23 * 60 * MINUTE);
-    const original = entries(result).find(entry => entry.messageId === firstMessage(before).messageId);
-    assert(original?.attemptCount === 1 && (await h.simulation(original.messageId)).calls === 1, 'The expired original identity is never resent.');
-    assert(JSON.stringify(original).includes('MANUAL'), 'Expired uncertainty explicitly requires manual reconciliation.');
-    warnings = [warning('MANUAL_RECONCILIATION_REQUIRED', 'The original uncertain attempt is older than the safe retry window; no automatic resend occurs.')];
-    checks = ['Original identity retained past 23 hours.', 'No expired retry.', 'Manual uncertainty remains visible.']; summary = 'An old uncertain attempt is preserved for investigation rather than silently resent.';
+    title = 'Unknown acceptance cannot restart as a new daily email'; const before = await h.tick('first');
+    result = await h.tick('next-day', 'issue', 24 * 60 * MINUTE);
+    const prior = firstMessage(before), original = entries(result).find(entry => entry.messageId === prior.messageId);
+    const draft = entries(result).find(entry => entry.messageId !== prior.messageId);
+    assert(original?.attemptCount === 1 && original.delivery?.state === 'unknown'
+      && original.code === 'MANUAL_RECONCILIATION_REQUIRED'
+      && digestHash(original.message) === digestHash(prior.message)
+      && digestHash(original.delivery.receipts) === digestHash(prior.delivery.receipts), 'Original unknown acceptance, exact message and audit receipts remain unchanged.');
+    assert(draft?.date === '2026-09-25' && draft.attemptCount === 0 && !draft.firstAttemptAt
+      && !draft.delivery && draft.state === 'prepared' && draft.code === 'PRIOR_ACCEPTANCE_UNCONFIRMED', 'An unresolved unknown acceptance blocks the next due day draft before any attempt.');
+    assert(result.providerStates.reduce((total, item) => total + (item.receipt?.calls || 0), 0) === 1
+      && result.providerStates.find(item => item.messageId === draft.messageId)?.receipt === null, 'An expired unknown acceptance cannot acquire a new provider identity on the next day.');
+    warnings = [warning('MANUAL_RECONCILIATION_REQUIRED', 'Whether the original email was accepted is unknown. Its safe retry window expired, so the next day’s draft stays unattempted pending reconciliation.')];
+    checks = ['Unknown acceptance distinguished from confirmed acceptance without delivery evidence.', 'Original identity and receipts preserved past 23 hours.', 'Same unresolved issue checked at the next due day, 24 hours later.', 'One total provider call across both dates.', 'Next-day draft retained without an attempt.'];
+    summary = 'Unknown provider acceptance remains a manual question; a new day does not create a replacement send.';
   } else {
     title = 'Overlapping checks and overdue status remain honest'; await h.tick('newer', 'incomplete', 30000);
     // The older request returns later, still inside its original 60-second
