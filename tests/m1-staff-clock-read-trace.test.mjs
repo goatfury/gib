@@ -10,10 +10,10 @@ const TOKEN = 'a'.repeat(64);
 const NOW = new Date('2026-08-18T21:00:00Z');
 const REQUEST_TOKEN = 'A'.repeat(43);
 const ENV = {
-  GIB_TEST_WEBHOOK_URL: 'https://script.google.com/macros/s/PRIVATE_TEST_RECEIVER/exec',
+  GIB_TEST_WEBHOOK_URL: 'https://script.google.com/macros/s/SYNTHETIC_PRIVATE_TEST_RECEIVER/exec',
   GIB_TEST_WEBHOOK_TOKEN: 'private-synthetic-staff-transport-123456789',
   GIB_TEST_ADMIN_ACTION_TOKEN: 'private-synthetic-staff-admin-9876543210',
-  GIB_M1_PRODUCTION_WEBHOOK_URL: 'https://script.google.com/macros/s/PRIVATE_LIVE_RECEIVER/exec',
+  GIB_M1_PRODUCTION_WEBHOOK_URL: 'https://script.google.com/macros/s/SYNTHETIC_PRIVATE_LIVE_RECEIVER/exec',
   GIB_M1_PRODUCTION_WEBHOOK_TOKEN: 'private-synthetic-live-transport-9876543210',
   GIB_M1_ADMIN_ACTION_TOKEN: 'private-synthetic-live-admin-0123456789',
   GIB_M1_ADMIN_PASSPHRASE: 'Synthetic passphrase used only in isolated tests'
