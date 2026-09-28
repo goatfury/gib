@@ -18,7 +18,8 @@ const scenarioKeys = ['routing', 'clean', 'incomplete', 'upcoming-canceled', 'du
 const historyScenarioKeys = ['history-over-256', 'history-old-barriers', 'history-late-event', 'history-interrupted-upgrade'];
 const dailyScenarioKeys = ['daily-fresh-unknown', 'daily-clean-incomplete', 'daily-calendar-dst', 'daily-overlap-recovery',
   'daily-missed-days', 'daily-late-evidence', 'daily-holds'];
-const keysFor = kind => kind === 'daily' ? dailyScenarioKeys : kind === 'history' ? historyScenarioKeys : scenarioKeys;
+const mailappScenarioKeys = ['mailapp-original-recovery', 'mailapp-next-day', 'mailapp-clean-incomplete', 'mailapp-claims', 'mailapp-no-backlog'];
+const keysFor = kind => kind === 'mailapp' ? mailappScenarioKeys : kind === 'daily' ? dailyScenarioKeys : kind === 'history' ? historyScenarioKeys : scenarioKeys;
 const clock = deps => (deps.clock || Date.now)();
 const fail = (code, status = 503, runId) => { throw Object.assign(new Error(code), { code, status, ...(runId ? { runId } : {}) }); };
 const assert = (value, message) => { if (!value) throw Object.assign(new Error(message), { exampleCheck: true }); };
@@ -123,10 +124,11 @@ function validOriginal(value, runId) {
     && Number.isSafeInteger(value.createdAt) && value.createdAt >= 0
     && ((value.fixtureVersion === 1 && Object.keys(value).length === 5 && !Object.hasOwn(value, 'kind'))
       || (value.fixtureVersion === 2 && value.kind === 'history' && Object.keys(value).length === 6)
-      || (value.fixtureVersion === 3 && value.kind === 'daily' && Object.keys(value).length === 6));
+      || (value.fixtureVersion === 3 && value.kind === 'daily' && Object.keys(value).length === 6)
+      || (value.fixtureVersion === 4 && value.kind === 'mailapp' && Object.keys(value).length === 6));
 }
 const originalFor = (runId, now, kind) => ({ schema: SCHEMA, runId, synthetic: true,
-  fixtureVersion: kind === 'daily' ? 3 : kind === 'history' ? 2 : 1, ...(kind !== 'workflow' ? { kind } : {}), createdAt: now });
+  fixtureVersion: kind === 'mailapp' ? 4 : kind === 'daily' ? 3 : kind === 'history' ? 2 : 1, ...(kind !== 'workflow' ? { kind } : {}), createdAt: now });
 function validateOriginalKind(value, runId, kind) {
   if (!validOriginal(value, runId)) fail('WORKFLOW_EXAMPLES_ORIGINAL_INVALID');
   if ((value.kind || 'workflow') !== kind) fail('WORKFLOW_EXAMPLES_KIND_MISMATCH', 409, runId);
@@ -165,6 +167,7 @@ export async function readAttendanceWorkflowExamples(runId = null, deps = {}) {
 export const prepareAttendanceWorkflowExamples = (runId, deps = {}) => prepareExamples(runId, deps, 'workflow');
 export const prepareAttendanceWorkflowHistoryExamples = (runId, deps = {}) => prepareExamples(runId, deps, 'history');
 export const prepareAttendanceWorkflowDailyExamples = (runId, deps = {}) => prepareExamples(runId, deps, 'daily');
+export const prepareAttendanceWorkflowMailAppExamples = (runId, deps = {}) => prepareExamples(runId, deps, 'mailapp');
 async function prepareExamples(runId, deps, kind) {
   if (!UUID.test(runId || '')) fail('WORKFLOW_EXAMPLES_ID_INVALID', 400);
   const store = await storeFor(deps), now = clock(deps);
@@ -221,6 +224,49 @@ function input(mode = 'issue', stamp = START, both = false) {
 function harness(store, runId, scenario) {
   const scoped = isolated(store, key(runId) + 'scenarios/' + scenario + '/');
   let stamp = START;
+  const mailapp = scenario.startsWith('mailapp-');
+  // A durable stand-in for the Google TEST ledger, inside this existing
+  // example's namespace. Status reads never call MailApp or fabricate delivery.
+  const google = async (message, options) => {
+    assert(['attendanceMailStatus', 'attendanceMailSend'].includes(options?.action), 'Only the fixed Google status/send actions are simulated.');
+    assert(message.synthetic === true && message.target === 'test' && message.from === 'revbjjops@gmail.com'
+      && message.messageId.startsWith('m1-test-scheduled-rev-'), 'The MailApp example is Revolution TEST only.');
+    const path = 'simulation/' + message.messageId, previous = await read(scoped, path);
+    if (previous && previous.data.hash !== message.hash) fail('WORKFLOW_EXAMPLES_PROVIDER_BODY_CHANGED');
+    const response = (value, override) => {
+      const state = value?.state || 'not-attempted';
+      const code = override || (state === 'not-attempted' ? 'MAILAPP_READY' : state === 'submitted' ? 'MAILAPP_SUBMITTED' : 'MAILAPP_CALL_UNCERTAIN');
+      return { ok: ['MAILAPP_READY', 'MAILAPP_SUBMITTED'].includes(code), target: 'test', gym: 'rev', messageId: message.messageId, hash: message.hash,
+        state, code, attemptedAt: value?.attemptedAt || null, completedAt: value?.completedAt || null, retrySafe: state === 'not-attempted' };
+    };
+    if (options.action === 'attendanceMailStatus') {
+      if (scenario.includes('lost-reply') && previous?.data.state === 'submitted' && stamp === START)
+        throw new Error('Synthetic Google status unavailable until reload');
+      return response(previous?.data);
+    }
+    if (previous?.data.attemptedAt) {
+      const repeated = { ...previous.data, sendRequests: (previous.data.sendRequests || 1) + 1 };
+      if ((await scoped.set(path, JSON.stringify(repeated), { onlyIfMatch: previous.etag }))?.modified !== true) fail('WORKFLOW_EXAMPLES_SIMULATION_CONFLICT');
+      return response(repeated);
+    }
+    if (scenario === 'mailapp-quota-before-call' && !previous) {
+      const noCall = { hash: message.hash, calls: 0, sendRequests: 1, state: 'not-attempted', attemptedAt: null, completedAt: null };
+      const saved = await create(scoped, path, noCall);
+      return response(saved.data, 'MAILAPP_QUOTA_UNAVAILABLE');
+    }
+    const unknown = scenario.includes('unknown') && message.messageId.endsWith(DATE);
+    const attemptedAt = new Date(stamp).toISOString();
+    const claim = { hash: message.hash, calls: 1, sendRequests: (previous?.data.sendRequests || 0) + 1, state: 'unknown', attemptedAt, completedAt: null };
+    const written = await scoped.set(path, JSON.stringify(claim), previous ? { onlyIfMatch: previous.etag } : { onlyIfNew: true });
+    const retained = await read(scoped, path);
+    if (!retained || ![true, false].includes(written?.modified)) fail('WORKFLOW_EXAMPLES_SIMULATION_UNCONFIRMED');
+    if (!written.modified || unknown) return response(retained.data);
+    const completed = { ...retained.data, state: 'submitted', completedAt: attemptedAt };
+    const saved = await scoped.set(path, JSON.stringify(completed), { onlyIfMatch: retained.etag });
+    if (saved?.modified !== true || digestHash((await read(scoped, path))?.data) !== digestHash(completed)) fail('WORKFLOW_EXAMPLES_SIMULATION_UNCONFIRMED');
+    if (scenario.includes('lost-reply')) throw new Error('Synthetic Google reply unavailable after completion');
+    return response(completed);
+  };
   const provider = async message => {
     const id = message.messageId, hash = digestHash(message), path = 'simulation/' + id;
     let record;
@@ -253,7 +299,8 @@ function harness(store, runId, scenario) {
   // Caller env, fetch and provider dependencies are deliberately never forwarded.
   // Every dispatch is this fixed local simulation, even if a real send key exists.
   const dependencies = () => ({ scope: SCOPE, workflowStore: scoped, clock: () => stamp, env: SAFE_ENV,
-    simulatedProvider: { identity: 'fixed-synthetic-provider', send: provider }, fetch: async () => { throw new Error('Example network forbidden'); } });
+    simulatedProvider: { identity: 'fixed-synthetic-provider', ...(mailapp ? { kind: 'mailapp' } : {}), send: mailapp ? google : provider },
+    fetch: async () => { throw new Error('Example network forbidden'); } });
   async function tick(stage, mode = 'issue', elapsed = 0, options = {}) {
     let boundary = 'checkpoint-read', requestId = idFor([runId, scenario, stage]), retained = false;
     try {
@@ -852,9 +899,141 @@ async function dailyScenario(store, runId, name) {
   return { key: name, title, passed: true, summary, warnings, messages: publicMessages(result), checks };
 }
 
+async function mailappScenario(store, runId, name) {
+  let result, title, summary, checks;
+  const warnings = [warning('SIMULATED_GOOGLE_ONLY', 'Only an isolated Google simulation ran. A completed Google call is not confirmed inbox delivery.')];
+  if (name === 'mailapp-original-recovery') {
+    for (const behavior of ['unknown', 'lost-reply']) {
+      const scenarioName = 'mailapp-original-' + behavior, h = harness(store, runId, scenarioName);
+      const before = await h.tick('original'), original = firstMessage(before);
+      const claimPath = 'workflow/delivery/mailapp/messages/' + original.messageId;
+      const claim = (await read(h.scoped, claimPath))?.data;
+      assert(original.delivery?.state === 'unknown' && claim, 'An interrupted Google confirmation remains genuinely unknown.');
+      const resumed = harness(store, runId, scenarioName);
+      result = await resumed.tick('reload', 'issue', MINUTE);
+      const recovered = firstMessage(result), simulation = await resumed.simulation(original.messageId);
+      assert(recovered.messageId === original.messageId && digestHash(recovered.message) === digestHash(original.message)
+        && digestHash((await read(resumed.scoped, claimPath))?.data) === digestHash(claim), 'Reload preserves the original body, ID and durable attempt.');
+      assert(simulation.calls === 1 && simulation.sendRequests === 1 && recovered.delivery.retryAllowed === false, 'Recovery does not request Google sending again.');
+      assert(recovered.state === (behavior === 'lost-reply' ? 'submitted' : 'unconfirmed'), 'Read-only status recovers completed Google work and preserves genuine uncertainty.');
+      assert(recovered.delivery.deliveryConfirmed === false && !recovered.delivery.providerId, 'Neither outcome invents provider delivery evidence.');
+      await resumed.tick('repeat', 'issue', 2 * MINUTE);
+      assert((await resumed.simulation(original.messageId)).sendRequests === 1, 'Repeated same-day checks make no duplicate Send request.');
+    }
+    title = 'Reload checks the original Google result without resending';
+    summary = 'A lost completion reply recovers as submitted to Google. A genuinely unknown Google call stays visibly unconfirmed; neither is sent again.';
+    checks = ['Original message, attempt claim and timestamps preserved.', 'One simulated sending call for each original.', 'Reload uses status recovery only.', 'Submitted never means delivered.'];
+  } else if (name === 'mailapp-next-day') {
+    const h = harness(store, runId, 'mailapp-next-day-unknown');
+    const before = await h.tick('original', 'issue', dailyTime('2026-09-25', '21:50') - START), original = firstMessage(before);
+    const originalClaim = (await read(h.scoped, 'workflow/delivery/mailapp/messages/' + original.messageId))?.data;
+    result = await h.tick('next', 'new-issue', dailyTime('2026-09-25') - START);
+    const fresh = dailyEntry(result, '2026-09-25'), old = entries(result).find(entry => entry.messageId === original.messageId);
+    assert(fresh?.state === 'submitted' && fresh.attemptCount === 1 && fresh.message.text.includes('SYNTHETIC rev class')
+      && fresh.message.text.includes('SYNTHETIC new rev class'), 'A fresh due assessment includes both old and new unresolved questions.');
+    assert(old?.state === 'unconfirmed' && old.automaticRetriesRetired && (await h.simulation(original.messageId)).calls === 1,
+      'Yesterday’s uncertainty remains history without blocking or resending today’s distinct assessment.');
+    assert(digestHash((await read(h.scoped, 'workflow/delivery/mailapp/messages/' + original.messageId))?.data) === digestHash(originalClaim), 'The original Google claim is unchanged.');
+    assert(await historyProviderCalls(h) === 2 && fresh.delivery.deliveryConfirmed === false, 'Two daily identities produce two calls, neither claiming inbox delivery.');
+    title = 'A fresh due day can follow an earlier unknown Google result';
+    summary = 'The next due assessment covers current unresolved work once. The previous uncertain call and its history remain intact.';
+    checks = ['Fresh authoritative fixture contains old and new questions.', 'One send identity per eligible day.', 'Previous unknown attempt never resent.', 'Original claim remains unchanged.'];
+  } else if (name === 'mailapp-clean-incomplete') {
+    for (const mode of ['clean', 'incomplete']) {
+      const h = harness(store, runId, 'mailapp-' + mode + '-unknown');
+      const before = await h.tick('original'), original = firstMessage(before);
+      result = await h.tick('next', mode, dailyTime('2026-09-25') - START);
+      const fresh = dailyEntry(result, '2026-09-25');
+      if (mode === 'clean') assert(fresh?.attemptCount === 0 && await historyProviderCalls(h) === 1,
+        'A complete clean assessment makes no new email call.');
+      else assert(fresh?.state === 'submitted' && fresh.message.text.includes('could not be checked')
+        && !fresh.message.text.includes('No outstanding items were found') && result.health.codes.includes('CHECK_INCOMPLETE')
+        && result.health.state !== 'clear' && await historyProviderCalls(h) === 2,
+      'An incomplete check produces a clear warning without inventing missing people or an all-clear.');
+      assert((await h.simulation(original.messageId)).calls === 1, 'Neither fresh result resends the earlier unknown call.');
+    }
+    title = 'Clean checks suppress email; failed reads stay explicit';
+    summary = 'A clean due check sends nothing. An incomplete one submits a could-not-check warning, retaining earlier uncertainty separately.';
+    warnings.push(warning('CHECK_INCOMPLETE', 'An incomplete read is never an all-clear.'));
+    checks = ['No email for a complete clean check.', 'Incomplete records produce a could-not-check message.', 'Old unknown send remains preserved.', 'No real records or recipients used.'];
+  } else if (name === 'mailapp-claims') {
+    const h = harness(store, runId, 'mailapp-concurrent');
+    result = await h.tick('overlap', 'issue', 0, { concurrent: true });
+    assert(firstMessage(result)?.state === 'submitted' && await historyProviderCalls(h) === 1, 'Overlapping processors retain one sending claim and one Google call.');
+    const broken = harness(store, runId, 'mailapp-storage'), set = broken.scoped.set;
+    broken.scoped.set = async (path, raw, options) => {
+      const written = await set(path, raw, options);
+      if (path.startsWith('workflow/delivery/mailapp/messages/') && written.modified
+        && !(await read(broken.scoped, 'fixture/ambiguous-claim'))) {
+        await create(broken.scoped, 'fixture/ambiguous-claim', { originalClaim: JSON.parse(raw) });
+        throw new Error('Synthetic Google claim acknowledgment lost');
+      }
+      return written;
+    };
+    let interrupted;
+    try { interrupted = await broken.tick('claim'); } finally { broken.scoped.set = set; }
+    assert(await historyProviderCalls(broken) === 0 && firstMessage(interrupted)?.state !== 'submitted'
+      && interrupted.health.state !== 'clear', 'An ambiguous durable claim prevents Google sending and cannot show an all-clear.');
+    await broken.tick('recover', 'issue', MINUTE);
+    assert(await historyProviderCalls(broken) === 0, 'Recovering the claimed original only reads status; it cannot start a replacement send.');
+    const quota = harness(store, runId, 'mailapp-quota-before-call');
+    const denied = await quota.tick('quota'), noCall = firstMessage(denied);
+    const quotaClaimPath = 'workflow/delivery/mailapp/messages/' + noCall.messageId;
+    const firstClaim = (await read(quota.scoped, quotaClaimPath))?.data;
+    const firstSimulation = await quota.simulation(noCall.messageId);
+    assert(noCall.state === 'retrying' && noCall.code === 'PROVEN_NO_SEND_RECHECK_PENDING'
+      && noCall.delivery.state === 'rejected' && firstSimulation.calls === 0 && firstSimulation.sendRequests === 1,
+    'A definitive quota rejection before MailApp runs shows a safe pending recheck, with zero actual sending calls.');
+    const waiting = await quota.tick('before-recheck', 'issue', 14 * MINUTE);
+    assert(firstMessage(waiting).state === 'retrying' && (await quota.simulation(noCall.messageId)).sendRequests === 1,
+      'The original waits for its existing backoff instead of immediately repeating Send.');
+    const recovered = await quota.tick('recheck', 'issue', 15 * MINUTE), submitted = firstMessage(recovered);
+    const recoveredClaim = (await read(quota.scoped, quotaClaimPath))?.data, sent = await quota.simulation(noCall.messageId);
+    assert(submitted.state === 'submitted' && submitted.messageId === noCall.messageId && digestHash(submitted.message) === digestHash(noCall.message)
+      && submitted.attemptCount === 2 && sent.sendRequests === 2 && sent.calls === 1,
+    'After fresh READY, two Send requests produce exactly one actual MailApp call under the original message identity.');
+    assert(firstClaim.bindings.length === 1 && recoveredClaim.bindings.length === 2
+      && digestHash(firstClaim.bindings[0]) === digestHash(recoveredClaim.bindings[0])
+      && submitted.delivery.receipts.some(receipt => receipt.action === 'attendanceMailSend' && receipt.code === 'MAILAPP_QUOTA_UNAVAILABLE'),
+    'The original no-call binding and exact receipt survive the safely appended attempt.');
+    await quota.tick('recheck-repeat', 'issue', 16 * MINUTE);
+    assert((await quota.simulation(noCall.messageId)).sendRequests === 2, 'Confirmed submission cannot trigger a third Send request.');
+    const legacy = harness(store, runId, 'uncertain-reload'), before = await legacy.tick('original'), original = firstMessage(before);
+    assert(original.delivery?.state === 'unknown', 'The original legacy-provider outcome is uncertain.');
+    const legacyClaimPath = 'workflow/delivery/messages/' + original.messageId;
+    const legacyClaim = (await read(legacy.scoped, legacyClaimPath))?.data;
+    legacy.at(START + MINUTE); let googleCalls = 0;
+    const changed = { ...legacy.dependencies(), simulatedProvider: { kind: 'mailapp', identity: 'changed-synthetic-provider', send: async () => { googleCalls++; throw new Error('Provider switch must not resend this day'); } } };
+    const data = input('issue', START + MINUTE), binding = makeDigestBinding(idFor([runId, name, 'changed-provider']), 'scheduled', START + MINUTE);
+    await processAttendanceWorkflow({ ...data, binding }, changed);
+    assert(googleCalls === 0 && (await legacy.simulation(original.messageId)).calls === 1
+      && digestHash((await read(legacy.scoped, legacyClaimPath))?.data) === digestHash(legacyClaim), 'Changing providers does not resend or rewrite an attempted legacy day.');
+    title = 'Only a proven no-call result may retry safely';
+    summary = 'A confirmed quota rejection waits and recovers: two Send requests, one MailApp call. Unknown outcomes, uncertain storage and an attempted Resend day cannot become replacement sends.';
+    checks = ['Concurrent processors share one durable attempt.', 'Ambiguous claim creates zero Google sends.', 'Recovery keeps the uncertain original claim without replacement.',
+      'Proven no-call quota response waits 15 minutes and rechecks READY.', 'Two Send requests produce one actual simulated MailApp call.',
+      'Original no-call receipt and binding preserved.', 'Existing provider ledger survives a provider-policy change.'];
+  } else {
+    const h = harness(store, runId, 'mailapp-no-backlog');
+    await h.tick('original');
+    result = await h.tick('after-downtime', 'new-issue', dailyTime('2026-09-29', '08:00') - START);
+    const fresh = dailyEntry(result, '2026-09-28');
+    assert(entries(result).length === 2 && fresh?.assessmentDate === '2026-09-29' && fresh.state === 'submitted'
+      && fresh.message.text.includes('SYNTHETIC rev class'), 'The latest due opportunity uses fresh records and preserves unresolved older work.');
+    assert(!fresh.message.text.includes('SYNTHETIC new rev class'), 'Future classes are not described as missing.');
+    await h.tick('repeat', 'new-issue', dailyTime('2026-09-29', '08:01') - START);
+    assert(await historyProviderCalls(h) === 2, 'Downtime and repeat ticks never drain a missed-day backlog.');
+    title = 'Recovery after downtime sends only the latest fresh assessment';
+    summary = 'One current assessment covers the latest due opportunity. Missed dates do not create a queue of stale emails.';
+    checks = ['Latest eligible date and actual assessment date remain distinct.', 'Older unresolved work remains included.', 'Future classes excluded.', 'One original and one fresh simulated call only.'];
+  }
+  return { key: name, title, passed: true, summary, warnings, messages: publicMessages(result), checks };
+}
+
 export const runAttendanceWorkflowExamples = (runId, deps = {}) => runExamples(runId, deps, 'workflow');
 export const runAttendanceWorkflowHistoryExamples = (runId, deps = {}) => runExamples(runId, deps, 'history');
 export const runAttendanceWorkflowDailyExamples = (runId, deps = {}) => runExamples(runId, deps, 'daily');
+export const runAttendanceWorkflowMailAppExamples = (runId, deps = {}) => runExamples(runId, deps, 'mailapp');
 async function runExamples(runId, deps, kind) {
   if (!UUID.test(runId || '')) fail('WORKFLOW_EXAMPLES_ID_INVALID', 400);
   const store = await storeFor(deps), started = clock(deps);
@@ -880,7 +1059,7 @@ async function runExamples(runId, deps, kind) {
       const path = key(runId) + 'completed/' + name, saved = await read(store, path);
       let result = saved?.data;
       if (!result) {
-        try { result = await (kind === 'daily' ? dailyScenario : kind === 'history' ? historyScenario : scenario)(store, runId, name); }
+        try { result = await (kind === 'mailapp' ? mailappScenario : kind === 'daily' ? dailyScenario : kind === 'history' ? historyScenario : scenario)(store, runId, name); }
         catch (error) {
           if (!error.exampleCheck) throw error;
           result = { key: name, title: name, passed: false, summary: error.message, warnings: [warning('WORKFLOW_EXAMPLE_FAILED', error.message)], messages: [], checks: [] };

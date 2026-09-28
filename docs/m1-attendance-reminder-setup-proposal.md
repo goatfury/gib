@@ -1,5 +1,26 @@
 # Regular attendance reminders — setup proposal, not activation
 
+## Superseding approved sender policy — September 28, 2026
+
+Andrew approved **Google Apps Script MailApp, executing as revbjjops@gmail.com**, in the existing isolated Revolution TEST project. The Resend/Directnic sender plan below is historical; DNS access or domain verification is no longer a next step. Leave the inactive Resend domain, original completed single-email test and all original receipts intact. Do not send that test again or use Resend as a fallback.
+
+The existing Chrome business session and the TEST deployment's **Execute as Me (revbjjops@gmail.com)** setting were inspected. The active receiver remains v32 until the new authorization is completed and the isolated TEST version is published. Production and Richmond use separate projects; their manifests and deployments are unchanged.
+
+The added permissions are `script.send_mail` (MailApp sending and quota check) and `userinfo.email` (verify the effective execution address). Existing TEST Drive-read, Sheets and external-request permissions remain as before. MailApp cannot read the inbox. No new service, Google account, paid mailbox or separately administered Cloud project is needed. Run the editor-only `authorizeRevolutionTestMailApp` check to request consent and verify identity/quota **without sending**. Andrew must grant any new consent privately; do not click approval for him. Official contracts: https://developers.google.com/apps-script/reference/mail/mail-app and https://developers.google.com/apps-script/reference/base/session#getEffectiveUser().
+
+One durable application claim and one permanent Google gym/day claim precede any MailApp send. An uncertain call is never resubmitted, including after a crash, reload, expired worker lease or provider change. A day can therefore miss its reminder; Andrew expressly accepted this tradeoff. A later eligible day uses a fresh assessment and includes older unresolved questions. Clean checks remain durable no-email decisions. No backlog is sent. A read-only status check may recover Google's original result, but cannot reopen its send claim. Unreadable history blocks sending. A successful MailApp return means **Google's send call completed**, not delivered, and has no provider message ID. No delivery callback or inbox-monitoring workflow is required or invented.
+
+
+A definite no-call reply is different from uncertainty: only complete retained proof that every earlier send request stopped before MailApp can permit a recheck. The original request must have expired, a fresh Google status must confirm no claim, and each new dispatch is durably appended to the same immutable message. The existing six-attempt/23-hour limits apply. A missing reply, missing receipt, conflicting result, unavailable storage or any possible MailApp call cannot use this path.
+
+Actual sending and recurring scheduling remain **OFF**. The next authorization check sends no email. Before a separately approved controlled email, initialize the append-only `MailApp Attempts` tab using the TEST-only editor helper, approve the exact synthetic message/recipient and explicit TEST cutoff, and confirm both application and Google switches remain off until that test. Existing business address `revbjjops@gmail.com` is verified; no new real-email approval is implied by implementation approval.
+
+For eventual reminders, Revolution → Stu and Richmond → Trey remain the intended routing; Andrew copies are off. Stu's and Trey's exact recipient addresses remain unverified, Trey's Richmond-only correction access still needs separate approval, and each gym's actual closing cutoff remains unconfirmed. Ten p.m. Eastern is still only a proposal. This implementation activates neither Richmond nor recurring reminders. The unrelated Google record-loading failures and previously observed storage failure remain open reliability limits.
+
+---
+
+The following Resend proposal is retained as historical evidence, not current setup instructions.
+
 Prepared September 27, 2026. Use the existing business Resend account, `revbjjops@gmail.com`, with separate messages for each gym. Keep sending, delivery-event ingestion and recurring scheduling off until the remaining setup and its TEST verification are approved. This proposal changes no account, recipient, permission, deployment or record.
 
 ## Proposed choices and verified limits

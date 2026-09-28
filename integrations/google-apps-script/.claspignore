@@ -5,4 +5,5 @@
 !GibM1TestReadCallback.gs
 !GibM1StaffRecovery.gs
 !GibM1AttendanceDigest.gs
+!GibM1MailApp.gs
 !appsscript.json

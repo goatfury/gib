@@ -2,7 +2,7 @@ import { ADMIN_REQUEST_HEADER, jsonResponse, readJson, requireAdmin, runtimeConf
 import { attendanceDigestScope } from './m1-attendance-digest.mjs';
 import { DIGEST_ORIGIN } from './_lib/m1-attendance-digest.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
-import { readAttendanceWorkflowExamples, prepareAttendanceWorkflowExamples, prepareAttendanceWorkflowHistoryExamples, prepareAttendanceWorkflowDailyExamples } from './_lib/m1-attendance-workflow-examples.mjs';
+import { readAttendanceWorkflowExamples, prepareAttendanceWorkflowExamples, prepareAttendanceWorkflowHistoryExamples, prepareAttendanceWorkflowDailyExamples, prepareAttendanceWorkflowMailAppExamples } from './_lib/m1-attendance-workflow-examples.mjs';
 import { workflowHealth, workflowMessages } from './_lib/m1-attendance-digest-workflow.mjs';
 
 export const config = { path: '/api/m1-attendance-workflow', rateLimit: { windowLimit: 30, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
@@ -32,11 +32,12 @@ export async function handleAttendanceWorkflow(request, dependencies = {}) {
       const parsed = await readJson(request, 4096);
       if (parsed.response) return parsed.response;
       const input = parsed.value;
-      if (!input || Object.keys(input).sort().join('|') !== 'action|requestId' || !['runExamples', 'runHistory', 'runDaily'].includes(input.action) || !validId(input.requestId))
+      if (!input || Object.keys(input).sort().join('|') !== 'action|requestId' || !['runExamples', 'runHistory', 'runDaily', 'runMailApp'].includes(input.action) || !validId(input.requestId))
         return response(400, { ok: false, message: 'Choose the isolated TEST examples. Real sending is disabled.' });
       // This adapter owns its fixed synthetic data and simulated provider. Client
       // input cannot supply recipients, a provider URL, credentials or send flags.
-      const prepare = input.action === 'runDaily' ? dependencies.prepareDaily || prepareAttendanceWorkflowDailyExamples
+      const prepare = input.action === 'runMailApp' ? dependencies.prepareMailApp || prepareAttendanceWorkflowMailAppExamples
+        : input.action === 'runDaily' ? dependencies.prepareDaily || prepareAttendanceWorkflowDailyExamples
         : input.action === 'runHistory' ? dependencies.prepareHistory || prepareAttendanceWorkflowHistoryExamples
         : dependencies.prepareExamples || prepareAttendanceWorkflowExamples;
       await prepare(input.requestId, deps);

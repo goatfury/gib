@@ -157,6 +157,9 @@ function adReceiverV2_(e) {
     }
 
     var action = cleanText_(body.action);
+    if (action === 'attendanceMailSend' || action === 'attendanceMailStatus') {
+      return typeof gibM1MailAppAction_ === 'function' ? gibM1MailAppAction_(body) : rejectedAuthResult_();
+    }
     if (action === 'attendanceDigestCapture') {
       return typeof gibM1AttendanceDigestCapture_ === 'function' ? gibM1AttendanceDigestCapture_(body) : rejectedAuthResult_();
     }

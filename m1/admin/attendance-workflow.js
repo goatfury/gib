@@ -4,7 +4,7 @@
   const ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
   const ADMIN_URLS = Object.freeze({ rev: ORIGIN + '/m1/admin/', richmond: 'https://gib-richmond-test.netlify.app/m1/admin/' });
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  const runAction = value => value === 'runExamples' || value === 'runHistory' || value === 'runDaily';
+  const runAction = value => value === 'runExamples' || value === 'runHistory' || value === 'runDaily' || value === 'runMailApp';
   const CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'";
   const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).sort().join('|') === [...fields].sort().join('|');
@@ -56,6 +56,7 @@
       if (!live(generation)) return;
       root.hidden = false; root.setAttribute('aria-busy', String(Boolean(flight))); root.replaceChildren(el('h2', 'Automatic attendance workflow · TEST'));
       root.append(el('p', 'Synthetic examples run through the workflow with a simulated email provider. No emails are sent and recurring sending is off.', 'manager-warning'));
+      root.append(el('p', 'Google MailApp checks use simulated sending. A completed Google call means submitted to Google, not confirmed delivery to an inbox. Older Resend examples remain historical evidence for the previous provider policy.', 'manager-note'));
       root.append(el('p', 'Live setup is unverified: Stu and Trey’s email addresses are not configured; Trey still needs existing Admin access. The actual closing cutoff has not been confirmed.', 'manager-note'));
       root.append(el('p', 'An unreviewed day does not prove a missing sign-in. Every instructor, including a second instructor, must remain covered. Staff Clock finish corrections remain separate.', 'manager-note'));
       const health = data?.current?.health;
@@ -88,7 +89,7 @@
         }
       }
       const controls = el('div', '', 'manager-controls');
-      for (const [action, label] of [['refresh', pending ? 'Check original example run' : 'Refresh workflow examples'], ['run', 'Run synthetic workflow examples'],
+      for (const [action, label] of [['refresh', pending ? 'Check original example run' : 'Refresh workflow examples'], ['mailapp', 'Run synthetic Google MailApp checks'], ['run', 'Run synthetic workflow examples'],
         ['history', 'Run synthetic history checks'], ['daily', 'Run synthetic daily reminder checks'], ...(pending ? [['retry', 'Retry original example run']] : [])]) {
         const button = el('button', label, 'btn'); button.type = 'button'; button.dataset.workflowAction = action;
         button.disabled = Boolean(flight) || action !== 'refresh' && (storageBlocked || (action === 'retry' ? pending?.adminName !== owner : Boolean(pending))); controls.append(button);
@@ -101,8 +102,11 @@
       if (!data?.latestRun) return;
       if (!current) root.append(el('p', 'Previously loaded examples are shown below. Current workflow status is unavailable.', 'manager-warning'));
       root.append(el('p', 'Synthetic run: ' + data.latestRun.runId, 'manager-note'));
+      root.append(el('p', data.latestRun.scenarios.every(scenario => scenario.key.startsWith('mailapp-'))
+        ? 'This saved run checks the Google MailApp policy using isolated examples. It proves no real send or inbox delivery.'
+        : 'This saved run used the earlier simulated Resend policy. It does not verify Google MailApp behavior.', 'manager-note'));
       for (const scenario of data.latestRun.scenarios) {
-        const article = el('details', '', 'manager-class'); article.open = scenario.key === 'routing';
+        const article = el('details', '', 'manager-class'); article.open = scenario.key === 'routing' || scenario.key === 'mailapp-original-recovery';
         article.append(el('summary', (scenario.passed ? 'Passed · ' : 'Needs attention · ') + scenario.title));
         article.append(el('p', (scenario.passed ? 'Example passed: ' : 'Example needs attention: ') + scenario.summary, scenario.passed ? 'manager-success' : 'manager-warning'));
         for (const warning of scenario.warnings) article.append(el('p', global.GIBM1AttendanceWarning?.label(warning.code) || warning.message, 'manager-warning'));
@@ -169,6 +173,7 @@
     }
     root.addEventListener('click', event => { const action = event.target.closest('[data-workflow-action]')?.dataset.workflowAction;
       if (action === 'refresh') void run(); if (action === 'run') void run('runExamples');
+      if (action === 'mailapp') void run('runMailApp');
       if (action === 'history') void run('runHistory'); if (action === 'daily') void run('runDaily'); if (action === 'retry') void run('retry'); });
     function clear() { active = false; generation++; global.clearTimeout(pollTimer); owner = ''; session = null; flight = null; data = null; current = false; root.hidden = true; root.replaceChildren(); }
     return Object.freeze({ open() {

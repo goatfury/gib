@@ -3,7 +3,9 @@ import { digestHash, splitAttendanceDigest, DIGEST_ORIGIN, latestEligibleOpportu
 export { latestEligibleOpportunity } from './m1-attendance-digest.mjs';
 import { validId } from './m1-test-read-callback.mjs';
 import { validateDigestBinding } from './m1-attendance-digest-outbox.mjs';
-import { readPolicyDigestEmailDelivery, deliverPolicyDigestEmail, requestDigestEmailProvider } from './m1-attendance-digest-email-delivery.mjs';
+import { readPolicyDigestEmailDelivery, deliverPolicyDigestEmail } from './m1-attendance-digest-email-delivery.mjs';
+import { readMailAppDelivery, deliverMailApp } from './m1-mailapp-delivery.mjs';
+import { postGoogle, runtimeConfig } from './m1-common.mjs';
 import { historyRoot, historyGroup, historyRoundRobin, historyPage, changeHistoryMessage, migrateHistory, supersedeHistoryDrafts, queueHistoryWake, historyWakePending, drainHistoryWakes, advanceHistoryGeneration, readHistoryOpportunity, claimHistoryOpportunity, finishHistoryOpportunity, requireHistoryProcessor } from './m1-attendance-workflow-history.mjs';
 
 const STORE = 'gib-m1-digest-test-workflow-v1', SCHEMA = 'm1-digest-workflow/v1';
@@ -15,7 +17,10 @@ const FRESH_MS = 30 * 60000, MAX_ATTEMPTS = 6;
 const BACKOFF = [15, 30, 60, 120, 240].map(minutes => minutes * 60000);
 const clock = deps => (deps.clock || Date.now)();
 const env = (deps, name) => deps.env ? deps.env[name] : globalThis.Netlify?.env?.get(name);
-const retainedUncertainty = delivery => ['pending', 'unknown'].includes(delivery.state)
+const retainedUncertainty = delivery => delivery.provider === 'mailapp'
+  ? delivery.state === 'unknown' && Number.isSafeInteger(delivery.attemptCount) && delivery.attemptCount > 0
+    && delivery.attemptCount <= MAX_ATTEMPTS && delivery.retryAllowed === false && delivery.durableAttempt === true
+  : ['pending', 'unknown'].includes(delivery.state)
   && ['ATTEMPT_IN_PROGRESS', 'ACCEPTANCE_UNKNOWN', 'MANUAL_RECONCILIATION_REQUIRED'].includes(delivery.code)
   && Number.isSafeInteger(delivery.attemptCount) && delivery.attemptCount > 0 && Number.isSafeInteger(delivery.retryBefore)
   && Array.isArray(delivery.receipts) && delivery.receipts.length === delivery.attemptCount;
@@ -56,6 +61,26 @@ function deliveryDeps(store, deps) {
   return { ...deps, deliveryStore: { getWithMetadata: (path, options) => store.getWithMetadata('workflow/delivery/' + path, options),
     set: (path, value, options) => store.set('workflow/delivery/' + path, value, options) } };
 }
+// Legacy provider records remain authoritative for their original day. Choosing
+// Google can never reopen an attempted Resend day, or silently fall back to it.
+const googlePolicy = deps => !deps.simulatedProvider || deps.simulatedProvider.kind === 'mailapp';
+const senderFor = deps => googlePolicy(deps) ? 'revbjjops@gmail.com'
+  : env(deps, 'GIB_M1_ATTENDANCE_DIGEST_FROM') || 'GIB Revolution TEST <onboarding@resend.dev>';
+async function readDelivery(message, options, policy) {
+  try {
+    const google = await read(options.deliveryStore, 'mailapp/messages/' + message.messageId);
+    const legacy = await read(options.deliveryStore, 'messages/' + message.messageId);
+    if (google && legacy) return { state: 'blocked', code: 'WORKFLOW_PROVIDER_HISTORY_CONFLICT', retryAllowed: false };
+    if (google || !legacy && googlePolicy(options)) return readMailAppDelivery(message, options, policy);
+    const retained = await readPolicyDigestEmailDelivery(message, options, policy);
+    return googlePolicy(options) ? { ...retained, retryAllowed: false } : retained;
+  } catch { return { state: 'unknown', code: 'DELIVERY_STORAGE_UNAVAILABLE', retryAllowed: false }; }
+}
+async function deliverMessage(message, options, policy) {
+  if (googlePolicy(options)) return deliverMailApp(message, options, policy);
+  // This branch is reachable only by the isolated legacy evidence simulator.
+  return deliverPolicyDigestEmail(message, options, policy);
+}
 function policyFor(configuration, deps) {
   const simulator = deps.simulatedProvider;
   const gate = message => {
@@ -67,14 +92,37 @@ function policyFor(configuration, deps) {
     const approved = String(env(deps, 'GIB_M1_ATTENDANCE_DIGEST_VERIFIED_RECIPIENTS') || '').split(',').map(value => value.trim());
     if (!configuration.cutoffConfirmed || env(deps, 'GIB_M1_ATTENDANCE_DIGEST_VERIFIED_SENDER') !== message.from
       || ![...message.to, ...message.cc].every(address => approved.includes(address))) return { state: 'blocked', code: 'SCHEDULED_CONFIGURATION_UNVERIFIED' };
-    const credential = env(deps, 'GIB_M1_DIGEST_TEST_RESEND_API_KEY');
-    return typeof credential === 'string' && credential.length > 0 && credential.length <= 1024 && !/\s/.test(credential) ? null : { state: 'disabled', code: 'SCHEDULED_PROVIDER_UNAVAILABLE' };
+    if (message.from !== 'revbjjops@gmail.com' || !message.messageId.startsWith('m1-test-scheduled-rev-')) return { state: 'blocked', code: 'MAILAPP_TEST_SCOPE_REQUIRED' };
+    const runtime = deps.mailappRuntime || runtimeConfig(deps.env || process.env, { admin: true, requestUrl: DIGEST_ORIGIN + WORKFLOW_DISPATCH_PATH, installationId: 'rev' });
+    return runtime?.target === 'test' ? null : { state: 'disabled', code: 'SCHEDULED_PROVIDER_UNAVAILABLE' };
   };
   return { canonical, validMessage, gate,
-    credentialFingerprint: () => digestHash(simulator ? 'm1-digest-simulator/v1\n' + simulator.identity : 'm1-digest-test-email-resend-credential/v1\n' + env(deps, 'GIB_M1_DIGEST_TEST_RESEND_API_KEY')),
-    request: (message, options, signal) => simulator ? simulator.send(structuredClone(message), { signal }) : requestDigestEmailProvider(message, options, signal) };
+    beforeDispatch: async message => {
+      const store = await storeFor(deps);
+      await requireHistoryProcessor(store, deps.processorLease, () => clock(deps));
+      const head = await readHistoryOpportunity(store, message.messageId.startsWith('m1-test-scheduled-rev-') ? 'rev' : 'richmond');
+      if (head?.data.messageId !== message.messageId || await historyWakePending(store)) throw new Error('WORKFLOW_PROCESSOR_SUPERSEDED');
+    },
+    credentialFingerprint: () => digestHash(simulator ? 'm1-digest-simulator/v1\n' + simulator.identity : 'm1-mailapp-business/v1\nrevbjjops@gmail.com'),
+    request: async (message, options, signal) => {
+      if (simulator) return simulator.send(structuredClone(message), { ...options, signal });
+      const runtime = deps.mailappRuntime || runtimeConfig(deps.env || process.env, { admin: true, requestUrl: DIGEST_ORIGIN + WORKFLOW_DISPATCH_PATH, installationId: 'rev' });
+      if (runtime?.target !== 'test') throw new Error('MAILAPP_TEST_SCOPE_REQUIRED');
+      const response = await postGoogle(runtime, options.action, { gym: 'rev', binding: options.binding, message }, deps.fetch || fetch);
+      if (!response.readable) throw new Error('MAILAPP_RESPONSE_UNAVAILABLE');
+      return response.value;
+    } };
 }
 function retryDecision(delivery, now) {
+  if (delivery.provider === 'mailapp' && delivery.state === 'rejected' && delivery.durableAttempt === true
+    && delivery.attemptCount < MAX_ATTEMPTS && now < delivery.retryBefore) {
+    const nextAttemptAt = delivery.lastAttemptAt + BACKOFF[Math.min(delivery.attemptCount - 1, BACKOFF.length - 1)];
+    return { state: 'retrying', code: 'PROVEN_NO_SEND_RECHECK_PENDING', nextAttemptAt: nextAttemptAt < delivery.retryBefore ? nextAttemptAt : null };
+  }
+  if (delivery.provider === 'mailapp' && delivery.state !== 'not-started') return {
+    state: delivery.state === 'submitted' ? 'submitted' : delivery.state === 'unknown' ? 'unconfirmed' : 'failed',
+    code: delivery.code, nextAttemptAt: null
+  };
   if (delivery.state === 'not-started') return { state: 'unconfirmed', code: 'FIRST_ATTEMPT_CLAIM_PENDING', nextAttemptAt: null };
   if (delivery.state === 'accepted') return { state: 'unconfirmed', code: 'PROVIDER_ACCEPTANCE_ONLY', nextAttemptAt: null };
   if (delivery.state === 'pending') return { state: 'unconfirmed', code: 'ATTEMPT_IN_PROGRESS', nextAttemptAt: null };
@@ -107,12 +155,13 @@ function projector(store, deps) {
     const groups = [], options = deliveryDeps(store, deps), policy = { canonical, validMessage };
     let state = value.state;
     if (value.firstAttemptAt) {
-      const delivery = await readPolicyDigestEmailDelivery(value.message, options, policy), decision = await evidenceDecision(store, value.message, delivery, clock(deps));
+      const delivery = await readDelivery(value.message, options, policy), decision = await evidenceDecision(store, value.message, delivery, clock(deps));
       const opportunity = await readHistoryOpportunity(store, value.gym), old = retired(value, opportunity);
       state = decision.state;
       if (retainedUncertainty(delivery)) groups.push(uncertainRouteGroup(value.gym, value.message));
       if (delivery.state === 'blocked' || delivery.state === 'unknown' && !retainedUncertainty(delivery)) groups.push('unsafe/' + value.gym);
-      if (!old && Number.isSafeInteger(delivery.retryBefore) && clock(deps) < delivery.retryBefore && ['unknown', 'pending', 'rejected'].includes(delivery.state)) groups.push('retry/' + value.gym);
+      if ((delivery.provider !== 'mailapp' || delivery.state === 'rejected' && delivery.durableAttempt && delivery.attemptCount < MAX_ATTEMPTS)
+        && !old && Number.isSafeInteger(delivery.retryBefore) && clock(deps) < delivery.retryBefore && ['unknown', 'pending', 'rejected'].includes(delivery.state)) groups.push('retry/' + value.gym);
       if (delivery.state === 'accepted') {
         groups.push('provider/' + delivery.providerId);
         if (decision.code === 'PERMANENT_RECIPIENT_BOUNCE') groups.push(recipientGroup(value.gym, value.message));
@@ -123,7 +172,7 @@ function projector(store, deps) {
         if (!ledger || ledger.data.attempts?.length !== delivery.attemptCount) throw new Error('WORKFLOW_PRIOR_DELIVERY_UNCONFIRMED');
         permanent.forEach(index => groups.push(routeGroup(value.gym, value.message, ledger.data.attempts[index].credentialFingerprint)));
       }
-      if (!['accepted', 'rejected'].includes(delivery.state) && (!old || !retainedUncertainty(delivery))) groups.push('unknown/' + value.gym);
+      if (!['accepted', 'submitted', 'rejected'].includes(delivery.state) && (!old || !retainedUncertainty(delivery))) groups.push('unknown/' + value.gym);
     } else if (!['suppressed', 'not-due'].includes(state)) groups.push('draft/' + value.gym);
     return { messageId: value.messageId, gym: value.gym, date: value.date, sourceEtag: entry.etag, groups: [...new Set(groups)], unattempted: !value.firstAttemptAt, checkAt: value.checkAt,
       counts: { failed: Number(['failed', 'retrying'].includes(state)), unconfirmed: Number(Boolean(value.firstAttemptAt) && state === 'unconfirmed'),
@@ -149,7 +198,8 @@ async function priorDeliveryBarrier(store, gym, message, options, policy, guard 
     if (previous.data.gym !== gym || previous.data.messageId === message.messageId || !previous.data.firstAttemptAt) continue;
     // Workflow summaries can lag a lost reply. Only the validated original
     // provider ledger may establish acceptance or a definite rejection.
-    const delivery = await readPolicyDigestEmailDelivery(previous.data.message, options, policy);
+    const delivery = await readDelivery(previous.data.message, options, policy);
+    if (delivery.state === 'submitted') continue;
     if (delivery.state === 'accepted') {
       const receipt = await latestDeliveryEvidence(store, previous.data.message, delivery, clock(options));
       if (receipt?.type === 'email.bounced' && receipt.permanentFailure === true
@@ -185,7 +235,7 @@ async function healthEvidence(store, input, now, deps) {
     digestHash: digestHash(input.digest), complete: input.digest.readFailures.length === 0, itemCount: input.digest.itemCount, due: input.due,
     configured: input.configuration.cutoffConfirmed === true, observedAt: now,
     gyms: input.digest.groups.map(group => ({ gym: group.gym, itemCount: group.items.length, complete: !input.digest.readFailures.some(failure => failure.gym === group.gym),
-      deliveryRoute: { from: env(deps, 'GIB_M1_ATTENDANCE_DIGEST_FROM') || 'GIB Revolution TEST <onboarding@resend.dev>',
+      deliveryRoute: { from: senderFor(deps),
         to: input.configuration.routing[group.gym].reviewer.address ? [input.configuration.routing[group.gym].reviewer.address] : [],
         cc: input.configuration.routing[group.gym].cc.map(person => person.address), fingerprint: policy.credentialFingerprint() } })) };
   for (let count = 0; count < 3; count++) {
@@ -238,7 +288,7 @@ async function processWorkflow(input, deps = {}) {
   const active = [...new Set([...(await historyPage(store)).ids, ...oldDrafts.flatMap(group => group.ids), ...dueOriginals.flatMap(group => group.ids)])];
   for (const previous of await records(store, active)) {
     if (previous.data.firstAttemptAt && previous.data.claimUntil && clock(deps) >= previous.data.claimUntil) {
-      const retained = await readPolicyDigestEmailDelivery(previous.data.message, options, policy);
+      const retained = await readDelivery(previous.data.message, options, policy);
       if (retained.state === 'not-started') {
         // A complete central read proves there is no provider claim. Only after
         // the fenced first-call lease expires may fresh data replace this draft.
@@ -249,7 +299,7 @@ async function processWorkflow(input, deps = {}) {
     }
     const opportunityHead = opportunities.get(previous.data.gym)?.head;
     if (previous.data.firstAttemptAt && retired(previous.data, opportunityHead)) {
-      const delivery = await readPolicyDigestEmailDelivery(previous.data.message, options, policy);
+      const delivery = await readDelivery(previous.data.message, options, policy);
       await writeMessage(store, { ...previous.data, delivery, ...await evidenceDecision(store, previous.data.message, delivery, clock(deps)),
         ...retirement(previous.data, opportunityHead) }, previous, deps);
       continue;
@@ -266,8 +316,8 @@ async function processWorkflow(input, deps = {}) {
     let before = await read(store, key(messageId));
     if (head && (head.data.opportunityDate !== date || head.data.decision !== 'open' || head.data.requestId !== input.binding.requestId)) continue;
     if (before?.data.firstAttemptAt) {
-      const retained = await readPolicyDigestEmailDelivery(before.data.message, options, policy);
-      if (head && ['accepted', 'rejected', 'pending'].includes(retained.state) || head && retainedUncertainty(retained))
+      const retained = await readDelivery(before.data.message, options, policy);
+      if (head && ['accepted', 'submitted', 'rejected', 'pending'].includes(retained.state) || head && retainedUncertainty(retained))
         await finishHistoryOpportunity(store, head, 'message', deps.processorLease, () => clock(deps));
       continue;
     }
@@ -276,7 +326,7 @@ async function processWorkflow(input, deps = {}) {
     const assessment = 'Reminder opportunity: ' + date + '. Fresh assessment: ' + input.digest.generatedAt + ' (' + input.binding.jobDate + ', America/New_York).';
     const rendered = route.rendered && { subject: route.rendered.subject + ' · reminder ' + date,
       text: assessment + '\n\n' + route.rendered.text, html: route.rendered.html.replace('<h1 ', '<p>' + assessment + '</p><h1 ') };
-    const message = canPrepare ? { messageId, from: env(deps, 'GIB_M1_ATTENDANCE_DIGEST_FROM') || 'GIB Revolution TEST <onboarding@resend.dev>',
+    const message = canPrepare ? { messageId, from: senderFor(deps),
       to: route.to, cc: route.cc, ...rendered, synthetic: input.digest.syntheticRehearsal === true, target: 'test' } : null;
     if (message) message.hash = digestHash(canonical(message));
     const gated = message ? policy.gate(message, deps) : null;
@@ -299,13 +349,19 @@ async function processWorkflow(input, deps = {}) {
     const claimUntil = clock(deps) + 60000;
     const claimed = await writeMessage(store, { ...value, firstAttemptAt: clock(deps), claimUntil, state: 'unconfirmed', code: 'ATTEMPT_CLAIMED' }, saved, deps, guard.epoch);
     if (!claimed.modified) continue;
-    const firstPolicy = { ...policy, gate: (...args) => clock(deps) >= claimUntil ? { state: 'disabled', code: 'FIRST_ATTEMPT_LEASE_EXPIRED' } : policy.gate(...args) };
-    const delivery = await deliverPolicyDigestEmail(message, options, firstPolicy);
+    const firstPolicy = { ...policy, gate: (...args) => clock(deps) >= claimUntil ? { state: 'disabled', code: 'FIRST_ATTEMPT_LEASE_EXPIRED' } : policy.gate(...args),
+      beforeDispatch: async () => {
+        await requireHistoryProcessor(store, deps.processorLease, () => clock(deps));
+        const currentHead = await readHistoryOpportunity(store, route.gym), currentCheck = await read(store, 'workflow/health');
+        if (clock(deps) >= claimUntil || currentHead?.etag !== head?.etag || currentHead?.data.decision !== 'open'
+          || currentCheck?.data.requestId !== input.binding.requestId || await historyWakePending(store)) throw new Error('WORKFLOW_PROCESSOR_SUPERSEDED');
+      } };
+    const delivery = await deliverMessage(message, options, firstPolicy);
     attempts++;
     await writeMessage(store, { ...claimed.data, delivery, attemptCount: delivery.attemptCount || 0, retryBefore: delivery.retryBefore || null,
       ...retryDecision(delivery, clock(deps)) }, claimed, deps);
-    const confirmed = await readPolicyDigestEmailDelivery(message, options, policy);
-    if (head && (['accepted', 'rejected', 'pending'].includes(confirmed.state) || retainedUncertainty(confirmed)))
+    const confirmed = await readDelivery(message, options, policy);
+    if (head && (['accepted', 'submitted', 'rejected', 'pending'].includes(confirmed.state) || retainedUncertainty(confirmed)))
       await finishHistoryOpportunity(store, head, 'message', deps.processorLease, () => clock(deps));
   }
   // The Google timer also recovers prior-day attempts. No newer digest can
@@ -313,10 +369,17 @@ async function processWorkflow(input, deps = {}) {
   for (const entry of await records(store, [...new Set([...active, ...(await historyPage(store)).ids])])) {
     if (!entry.data.firstAttemptAt) continue;
     const head = await readHistoryOpportunity(store, entry.data.gym);
-    const delivery = await readPolicyDigestEmailDelivery(entry.data.message, options, policy);
+    let delivery = await readDelivery(entry.data.message, options, policy);
+    // At most one current-day status check per tick. An existing Google claim
+    // authorizes only this read; it can never authorize another send.
+    if (delivery.provider === 'mailapp' && retainedUncertainty(delivery) && !retired(entry.data, head)
+      && head?.data.opportunityDate === entry.data.date && attempts < MAX_ATTEMPTS) {
+      delivery = await deliverMailApp(entry.data.message, options, policy);
+      attempts++;
+    }
     let decision = await evidenceDecision(store, entry.data.message, delivery, clock(deps));
     if (!retired(entry.data, head) && head?.data.opportunityDate === entry.data.date && attempts < MAX_ATTEMPTS && decision.nextAttemptAt !== null && clock(deps) >= decision.nextAttemptAt && !policy.gate(entry.data.message, deps)) {
-      const sent = await deliverPolicyDigestEmail(entry.data.message, options, policy);
+      const sent = await deliverMessage(entry.data.message, options, policy);
       attempts++;
       decision = await evidenceDecision(store, entry.data.message, sent, clock(deps));
       await writeMessage(store, { ...entry.data, delivery: sent, attemptCount: sent.attemptCount || 0,
@@ -369,7 +432,7 @@ export async function workflowHealth(scope, deps = {}) {
     const current = await read(store, key(opportunity.data.messageId));
     if (opportunity.data.decision === 'open' || !current) codes.push('CHECK_INCOMPLETE');
     if (current?.data.firstAttemptAt) {
-      const delivery = await readPolicyDigestEmailDelivery(current.data.message, deliveryDeps(store, deps), { canonical, validMessage });
+      const delivery = await readDelivery(current.data.message, deliveryDeps(store, deps), { canonical, validMessage });
       const decision = await evidenceDecision(store, current.data.message, delivery, now);
       unconfirmedCount = Number(decision.state === 'unconfirmed');
       currentFailed = Number(['failed', 'retrying'].includes(decision.state));
@@ -550,7 +613,7 @@ async function provisionalRecipientBarrier(store, gym, to, deps, advance = true)
     let resolved = false;
     for (const original of await records(store, bound.ids)) {
       if (original.data.gym !== gym || original.data.message.from !== originalEvent.from || JSON.stringify(original.data.message.to) !== JSON.stringify(to)) continue;
-      const delivery = await readPolicyDigestEmailDelivery(original.data.message, deliveryDeps(store, deps), { canonical, validMessage });
+      const delivery = await readDelivery(original.data.message, deliveryDeps(store, deps), { canonical, validMessage });
       const latest = await latestDeliveryEvidence(store, original.data.message, delivery, clock(deps));
       if (delivery.state === 'accepted' && delivery.providerId === node.providerId && latest?.type === 'email.delivered'
         && Date.parse(latest.occurredAt) > Date.parse(originalEvent.occurredAt)) resolved = true;
@@ -573,7 +636,7 @@ async function drainWorkflowWakes(store, deps) {
       await advanceHistoryGeneration(store); return;
     }
     const entry = (await records(store, [node.messageId]))[0];
-    const delivery = await readPolicyDigestEmailDelivery(entry.data.message, deliveryDeps(store, deps), { canonical, validMessage });
+    const delivery = await readDelivery(entry.data.message, deliveryDeps(store, deps), { canonical, validMessage });
     if (delivery.state === 'pending') { await changeHistoryMessage(store, node.messageId, null, projector(store, deps)); return; }
     const decision = await evidenceDecision(store, entry.data.message, delivery, clock(deps));
     await writeMessage(store, { ...entry.data, delivery, attemptCount: delivery.attemptCount || 0,
@@ -605,9 +668,9 @@ export async function recordWorkflowDeliveryEvidence(event, deps = {}) {
   for (const entry of originals) {
     if (entry.data.gym !== deps.scope.profile.installationId || !entry.data.firstAttemptAt || entry.data.message.from !== event.from
       || JSON.stringify(entry.data.message.to) !== JSON.stringify(event.to)) continue;
-    const retained = await readPolicyDigestEmailDelivery(entry.data.message, deliveryDeps(store, deps), { canonical, validMessage });
+    const retained = await readDelivery(entry.data.message, deliveryDeps(store, deps), { canonical, validMessage });
     if (retained.state === 'accepted' && retained.providerId === event.providerId) { candidate = entry; break; }
-    if (retainedUncertainty(retained) && !provisionalAttempt) {
+    if (retained.provider !== 'mailapp' && retainedUncertainty(retained) && !provisionalAttempt) {
       const ledger = await read(store, 'workflow/delivery/messages/' + entry.data.messageId);
       const attempt = ledger?.data.attempts?.at(-1);
       if (!attempt || ledger.data.attempts.length !== retained.attemptCount) throw new Error('WORKFLOW_EVIDENCE_UNAVAILABLE');

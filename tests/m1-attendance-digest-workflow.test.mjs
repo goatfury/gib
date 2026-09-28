@@ -43,19 +43,28 @@ test('legacy one-email flags cannot authorize scheduled delivery and no first ch
   assert.equal([...h.entries.keys()].some(key => key.includes('/delivery/')), false);
 });
 
-test('new scheduled controls reach the same awaited provider adapter only after sender, recipients and cutoff are explicitly verified', async () => {
+test('scheduled controls reach only TEST MailApp after sender, recipients and cutoff are verified', async () => {
   const h = harness(); delete h.deps.simulatedProvider;
   const input = h.input(); input.digest.syntheticRehearsal = true;
-  const sender = 'GIB Revolution TEST <onboarding@resend.dev>';
+  const sender = 'revbjjops@gmail.com';
   h.deps.env = { GIB_M1_ATTENDANCE_DIGEST_SEND_ENABLED: 'true', GIB_M1_ATTENDANCE_DIGEST_VERIFIED_SENDER: sender,
     GIB_M1_ATTENDANCE_DIGEST_VERIFIED_RECIPIENTS: 'stu@example.invalid', GIB_M1_DIGEST_TEST_RESEND_API_KEY: 'synthetic-provider-key' };
-  let request;
-  h.deps.fetch = async (url, init) => { request = { url, init }; assert.ok([...h.entries.keys()].some(key => key.includes('/delivery/messages/'))); return new Response(JSON.stringify({ id: providerId }), { status: 200 }); };
+  h.deps.mailappRuntime = { target: 'test', preview: true, webhookUrl: 'https://script.google.com/macros/s/synthetic-test/exec', webhookToken: 'synthetic-receiver', adminActionToken: 'synthetic-admin' };
+  const requests = [];
+  h.deps.fetch = async (url, init) => {
+    const body = JSON.parse(init.body); requests.push({ url, init, body });
+    if (body.action === 'attendanceMailSend') assert.ok([...h.entries.keys()].some(key => key.includes('/delivery/mailapp/messages/')));
+    const sent = body.action === 'attendanceMailSend';
+    return new Response(JSON.stringify({ ok: true, target: 'test', gym: 'rev', messageId: body.message.messageId, hash: body.message.hash,
+      state: sent ? 'submitted' : 'not-attempted', code: sent ? 'MAILAPP_SUBMITTED' : 'MAILAPP_READY',
+      attemptedAt: sent ? new Date(NOW).toISOString() : null, completedAt: sent ? new Date(NOW).toISOString() : null, retrySafe: !sent }), { status: 200 });
+  };
   await processAttendanceWorkflow(input, h.deps);
-  assert.equal(request.url, 'https://api.resend.com/emails'); assert.equal(request.init.redirect, 'error');
-  assert.equal(request.init.headers['Idempotency-Key'], 'm1-test-scheduled-rev-' + DATE);
-  assert.deepEqual(JSON.parse(request.init.body).to, ['stu@example.invalid']);
-  assert.equal((await h.messages())[0].state, 'unconfirmed', 'provider acceptance is not inbox delivery');
+  assert.deepEqual(requests.map(request => request.body.action), ['attendanceMailStatus', 'attendanceMailSend']);
+  assert.ok(requests.every(request => request.url === h.deps.mailappRuntime.webhookUrl));
+  assert.deepEqual(requests[1].body.message.to, ['stu@example.invalid']);
+  assert.equal((await h.messages())[0].state, 'submitted', 'a completed Google call is not delivery evidence');
+  assert.equal((await h.messages())[0].delivery.deliveryConfirmed, false);
 });
 
 test('a fresh incomplete read creates an explicit could-not-check message and keeps the incomplete warning', async () => {

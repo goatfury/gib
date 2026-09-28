@@ -1,5 +1,20 @@
 # Attendance reminders and forgotten clock-outs — Revolution TEST
 
+## MailApp replacement — September 28, 2026
+
+The approved current sender is the existing business `revbjjops@gmail.com` through MailApp in the isolated Revolution TEST Apps Script project. This supersedes Resend automatic-retry and delivery-event requirements below for **new scheduled reminders**. Original Resend messages/receipts remain unchanged and readable; an already-attempted gym/day cannot be sent again by changing providers. No Resend fallback is permitted.
+
+The existing protected workflow page adds a focused MailApp simulation, using isolated persisted TEST examples and no real email. It exercises the normal daily decision and storage paths. Netlify confirms an immutable dispatch claim before calling Google; Google independently confirms a permanent gym/day claim before calling MailApp, outside its ScriptLock. A confirmed pre-send readiness failure can be checked again. After possible submission, only status reads are allowed, never another send. A completed MailApp call is shown as submitted, not delivered; unknown remains unknown. An older unknown does not block a genuinely new due assessment. Clean/incomplete checks, immutable original message identities, retired workers, history capacity and ordinary record protections remain in place.
+
+
+A definite no-call reply is different from uncertainty: only complete retained proof that every earlier send request stopped before MailApp can permit a recheck. The original request must have expired, a fresh Google status must confirm no claim, and each new dispatch is durably appended to the same immutable message. The existing six-attempt/23-hour limits apply. A missing reply, missing receipt, conflicting result, unavailable storage or any possible MailApp call cannot use this path.
+
+Both sending controls default off: application `GIB_M1_ATTENDANCE_DIGEST_SEND_ENABLED`, Google `GIB_M1_MAILAPP_TEST_SEND_ENABLED`. Google also requires exact approved `{to,cc}` recipient configuration and the effective business account. Scheduling remains off. The editor authorization helper only verifies identity/quota, and the separate ledger-initialization helper never sends. The TEST-only manifest adds sending and email-identity scopes; no Gmail/inbox access. Production and Richmond manifests are unchanged.
+
+Deployment order: complete focused simulation/tests and independent review; publish only the PR89 Revolution preview; save the reviewed Google candidate in the verified isolated project; surface the business-account consent check; after consent initialize/read back the empty dedicated ledger and publish the reviewed TEST receiver version with both switches still off. Never migrate TEST fixtures into live Sheets or modify existing attendance/Staff Clock tabs. Roll back by leaving sending off and using the prior code/deployment, retaining all MailApp claims and receipts. Never delete the attempt tab or reset its initialization marker to regain send permission. Re-enabling the historical Resend path for attempted dates is not rollback.
+
+Current result evidence and deployed revisions are recorded in the task checkpoint. This does not fix ContentService reply errors, missing callbacks, browser cutoffs or underlying storage failures. No-email is not an all-clear. Real email delivery, final recipients, closing cutoffs and a live rollout remain outside this pass.
+
 ## Automatic warning workflow — current work, September 27
 
 This section supersedes the earlier implementation-gap descriptions below; the historical capture and single-email evidence remain intact. The current review target is https://deploy-preview-89--gib-live.netlify.app/m1/admin/#attendanceWorkflow . It shows separate synthetic Revolution/Stu and Richmond/Trey messages, simulated failure warnings, and retained scenario results behind existing Admin access. Example addresses end in `example.invalid`; they are not verified recipients. Richmond is exercised only with isolated examples in the Revolution TEST deployment.
