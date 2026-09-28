@@ -3734,7 +3734,7 @@
           : 0;
         let response;
         let data = null;
-        const readDigest = options.method === 'GET' && /^\/api\/m1-attendance-(?:digest(?:-email)?|google-email|workflow)(?:\?|$)/.test(url);
+        const readDigest = options.method === 'GET' && /^\/api\/m1-attendance-(?:digest(?:-email)?|workflow|google-email)(?:\?|$)/.test(url);
         try {
           response = await fetch(url, {
             method: readDigest ? 'GET' : 'POST',
@@ -3933,10 +3933,12 @@
               window.requestAnimationFrame(() => $('#attendanceGoogleEmail').scrollIntoView({ block: 'start' }));
           });
         }
-        if (firstEntry && !googleEmailHandoff) {
-          window.requestAnimationFrame(() => {
-            window.requestAnimationFrame(() => window.scrollTo(0, 0));
-          });
+        if (firstEntry) {
+          if (!googleEmailHandoff) {
+            window.requestAnimationFrame(() => {
+              window.requestAnimationFrame(() => window.scrollTo(0, 0));
+            });
+          }
         }
       }
 

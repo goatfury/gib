@@ -169,5 +169,6 @@ test('actual Admin wiring preserves authenticated GET routing and directly surfa
   const allowed = vm.runInNewContext(readPattern); assert.equal(allowed.test('/api/m1-attendance-google-email'), true);
   assert.equal(allowed.test('/api/m1-attendance-google-email-unsafe'), false);
   assert.match(index, /attendanceGoogleEmail\.clear\(\)/); assert.match(index, /attendanceGoogleEmail = globalThis\.GIBM1AttendanceGoogleEmail\?\.create/);
-  assert.match(index, /firstEntry && !googleEmailHandoff/); assert.match(index, /getSession: \(\) => adminRequestToken/);
+  assert.match(index, /if \(firstEntry\) \{\s*if \(!googleEmailHandoff\) \{\s*window\.requestAnimationFrame/);
+  assert.match(index, /getSession: \(\) => adminRequestToken/);
 });

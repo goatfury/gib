@@ -87,6 +87,8 @@ for (const scenario of [
     assert.equal(context.M1_INSTALLATION_PROFILE.featureFlags.staffClock, scenario.staffClock);
     assert.equal(context.M1_PROMOTIONS_TEST_CONFIG.enabled, scenario.promotions);
     assert.deepEqual(await inventory(path.join(root, 'public')), [...PUBLIC_FILES].sort());
+    assert.deepEqual(await readFile(path.join(root, 'public/m1/admin/attendance-google-email.js')),
+      await readFile(path.join(ROOT, 'm1/admin/attendance-google-email.js')), 'Admin Google email module must be published unchanged');
     for (const file of ['_headers', '_redirects', 'index.html', 'guests/index.html', 'redneck-racing/style.css', 'm1/index.html', 'm1/connection.html', 'm1/connection-check.mjs', 'm1/shared-schedule.json', 'm1/richmond-schedule.json', 'm1/assets/revolution-bjj-logo.webp', 'm1/assets/richmond-bjj-logo.webp']) {
       assert.deepEqual(await readFile(path.join(root, 'public', file)), await readFile(path.join(ROOT, file)), file);
     }
