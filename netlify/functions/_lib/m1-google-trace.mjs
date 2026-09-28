@@ -8,11 +8,21 @@ const scope = new AsyncLocalStorage();
 const requests = new WeakMap();
 const hosts = new Set(['script.google.com', 'script.googleusercontent.com', 'accounts.google.com', 'www.google.com']);
 const actions = new Set(['dailyReview', 'managerReviewRead', 'managerReviewSave', 'managerReviewVoid']);
+const staffReadActions = new Set(['staffTimeReviewV2', 'staffTimeReviewPageV2', 'staffTimeHistoryPageV2', 'staffTimeShiftLookupV3', 'staffRecoveryReview']);
 const errors = new Set(['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_ABORTED']);
 export function safeAdditionTraceId(value) {
   return typeof value === 'string'
     && /^(?:m1-\d{4}-\d{2}-\d{2}-[0-9a-f]{24}|manager-add-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/.test(value)
     ? value : undefined;
+}
+export function safeStaffReadTraceId(value) {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
+    ? value : undefined;
+}
+export function scopedStaffReadTraceId(meta) {
+  return meta.target === 'test' && meta.gym === 'rev'
+    && meta.origin === 'https://deploy-preview-89--gib-live.netlify.app'
+    && staffReadActions.has(meta.action) ? safeStaffReadTraceId(meta.staffReadTraceId) : undefined;
 }
 function emit(context, event, values = {}) {
   try { console.info('M1_TEST_HOP', JSON.stringify({ trace: context.id, variant: context.variant, action: context.action, gym: context.gym, attempt: context.attempt, ...(context.requestId ? { requestId: context.requestId } : {}), event, at: new Date().toISOString(), ...values })); } catch { /* Diagnostics must never affect transport. */ }
@@ -40,9 +50,10 @@ for (const [name, event] of [['headers', 'headers'], ['trailers', 'complete'], [
 }
 export async function traceGoogle(meta, run) {
   const addition = meta.action === 'addMissedInstructor' && meta.gym === 'rev';
-  if (meta.target !== 'test' || meta.enabled !== true || (!actions.has(meta.action) && !addition)) return run();
+  const staffReadTraceId = scopedStaffReadTraceId(meta);
+  if (meta.target !== 'test' || (!staffReadTraceId && (meta.enabled !== true || (!actions.has(meta.action) && !addition)))) return run();
   const context = { id: randomBytes(8).toString('hex'), variant: ['pre-pr', 'native-https'].includes(meta.variant) ? meta.variant : 'current', action: meta.action, gym: meta.gym === 'richmond' ? 'richmond' : 'rev', attempt: Number.isInteger(meta.attempt) ? meta.attempt : 1, hops: 0,
-    ...(addition ? { requestId: safeAdditionTraceId(meta.requestId) } : {}) };
+    ...(staffReadTraceId ? { requestId: staffReadTraceId } : addition ? { requestId: safeAdditionTraceId(meta.requestId) } : {}) };
   return scope.run(context, async () => {
     const started = Date.now();
     emit(context, 'start', { node: process.versions.node, undici: process.versions.undici || 'unknown' });

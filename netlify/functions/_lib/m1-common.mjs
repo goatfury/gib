@@ -8,7 +8,7 @@ import {
   deploymentInstallationProfile,
   remoteBackendEnabled
 } from './m1-installation.mjs';
-import { traceGoogle, safeAdditionTraceId } from './m1-google-trace.mjs';
+import { traceGoogle, safeAdditionTraceId, scopedStaffReadTraceId } from './m1-google-trace.mjs';
 import { nativeHttpsControl } from './m1-google-native-control.mjs';
 
 export const ADMIN_NAMES = Object.freeze(['Andrew Smith', 'Stuart Turner']);
@@ -452,6 +452,8 @@ export function validNonFutureDate(value, now = new Date()) {
 // TEST diagnostics deliberately exclude URLs, bodies, identities and error messages.
 // Both review paths use this boundary so their upstream timings can be compared.
 export async function postGoogle(config, action, data, fetchImpl = fetch, nativeHttpsImpl = nativeHttpsControl) {
+  const staffReadTraceId = scopedStaffReadTraceId({ target: config.target, gym: config.installationId,
+    origin: config.staffReadTraceOrigin, action, staffReadTraceId: config.staffReadTraceId });
   // The paired deployed experiment supports this exact TEST read boundary only.
   // Keep writes, Richmond and production on their existing transport.
   const nativeRead = config.target === 'test' && config.installationId === 'rev'
@@ -461,12 +463,14 @@ export async function postGoogle(config, action, data, fetchImpl = fetch, native
     && ['dailyReview', 'managerReviewRead'].includes(action);
   const additionTrace = config.target === 'test' && config.installationId === 'rev'
     && config.testTrace === true && action === 'addMissedInstructor';
-  const requestId = additionTrace ? safeAdditionTraceId(data?.requestId) : undefined;
+  const requestId = staffReadTraceId || (additionTrace ? safeAdditionTraceId(data?.requestId) : undefined);
   let result;
   for (let attempt = 1; attempt <= (readRetry ? 2 : 1); attempt++) {
     const started = Date.now();
     let finalHost = 'unavailable', redirected = false;
-    result = await traceGoogle({ target: config.target, enabled: config.testTrace, action, gym: config.installationId, attempt, requestId, variant: nativeRead ? 'native-https' : 'current' }, () => postGoogleRequest(config, action, data, async (...args) => {
+    result = await traceGoogle({ target: config.target, enabled: config.testTrace, action, gym: config.installationId, attempt, requestId,
+      origin: config.staffReadTraceOrigin, staffReadTraceId, variant: nativeRead ? 'native-https' : 'current' }, () => postGoogleRequest(config, action,
+      staffReadTraceId ? { ...data, staffReadTraceId } : data, async (...args) => {
       const response = await transport(...args);
       try {
         const host = new URL(response.url).hostname;
@@ -475,7 +479,7 @@ export async function postGoogle(config, action, data, fetchImpl = fetch, native
       redirected = response.redirected === true;
       return response;
     }));
-    if (config.target === 'test' && (additionTrace || ['dailyReview', 'managerReviewRead', 'managerReviewSave', 'managerReviewVoid'].includes(action))) {
+    if (config.target === 'test' && (staffReadTraceId || additionTrace || ['dailyReview', 'managerReviewRead', 'managerReviewSave', 'managerReviewVoid'].includes(action))) {
       try { console.info('M1_TEST_GOOGLE', JSON.stringify({
         action, gym: config.installationId === 'richmond' ? 'richmond' : 'rev', attempt,
         ...(requestId ? { requestId } : {}),

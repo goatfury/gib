@@ -260,6 +260,7 @@ function adReceiverV2_(e) {
       message: 'Unsupported action.'
     });
   } catch (error) {
+    staffClockReadTrace_('google.result', 'failed', true);
     return jsonResult_({
       ok: false,
       result: 'failed',
@@ -5514,6 +5515,7 @@ function staffClockReadShiftLookup_(body) {
     }
     return lookup;
   } catch (error) {
+    staffClockReadTrace_('google.read', 'failed', true);
     staffClockInvalidateCachedView_(cache, manifest);
     return { ok: false, target: target, result: 'stale' };
   }
@@ -5909,6 +5911,7 @@ function staffClockReadHistoryPage_(body) {
   try {
     items = staffClockMaterializeHistoryItems_(state, descriptors);
   } catch (error) {
+    staffClockReadTrace_('google.read', 'failed', true);
     staffClockInvalidateCachedView_(cache, manifest);
     return { ok: false, target: target, result: 'stale' };
   }
@@ -5941,15 +5944,33 @@ function staffClockReadHistoryPage_(body) {
   return materializedPage;
 }
 
+// The optional hook exists only in the Revolution TEST entrypoint. A diagnostic
+// failure must not change lock ownership, Staff results, or any write path.
+function staffClockReadTrace_(stage, state, exception) {
+  try {
+    if (typeof gibM1StaffReadTraceEvent_ === 'function') gibM1StaffReadTraceEvent_(stage, state, exception);
+  } catch (_) {}
+}
 function staffClockWithLock_(busyMessage, callback) {
+  staffClockReadTrace_('google.lock', 'waiting');
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) {
+    staffClockReadTrace_('google.lock', 'unavailable');
     return jsonResult_({ ok: false, result: 'failed', message: busyMessage });
   }
+  staffClockReadTrace_('google.lock', 'acquired');
   try {
-    return callback();
+    staffClockReadTrace_('google.read', 'start');
+    var response = callback();
+    staffClockReadTrace_('google.read', 'response');
+    return response;
+  } catch (error) {
+    staffClockReadTrace_('google.read', 'failed', true);
+    throw error;
   } finally {
-    lock.releaseLock();
+    try { lock.releaseLock(); }
+    catch (error) { staffClockReadTrace_('google.lock', 'failed', true); throw error; }
+    staffClockReadTrace_('google.lock', 'released');
   }
 }
 
