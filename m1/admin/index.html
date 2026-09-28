@@ -3926,8 +3926,7 @@
             if (loaded && location.hash === '#attendanceEmail') window.requestAnimationFrame(() => $('#attendanceEmail').scrollIntoView({ block: 'start' }));
           });
         }
-        const googleEmailHandoff = attendanceGoogleEmail && location.hash === '#attendanceGoogleEmail'
-          && new URLSearchParams(location.search).get('emailTest') === 'google-v1';
+        const googleEmailHandoff = attendanceGoogleEmail && location.hash === '#attendanceGoogleEmail';
         if (googleEmailHandoff) {
           void attendanceGoogleEmail.open().then(() => {
             if (location.hash === '#attendanceGoogleEmail' && !$('#attendanceGoogleEmail').hidden)
