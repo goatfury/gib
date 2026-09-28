@@ -55,6 +55,9 @@ async function invoke(body, upstream, options = {}) {
     method: 'POST', headers, body: JSON.stringify(body)
   }), { env: ENV, installationId: options.installationId || 'rev', enabled: true, context: CONTEXT,
     now: +NOW, dateNow: NOW, clock: () => +NOW,
+    // These boundary diagnostics exercise the original transport in isolation;
+    // the real callback path has its own persisted-result and failure tests.
+    staffCallbackRead: (_request, runtime, _reviewer, action, data, deps) => postGoogle(runtime, action, data, deps.fetch),
     fetch: async (url, init) => {
       wires.push({ url, body: JSON.parse(init.body), redirect: init.redirect, signal: init.signal });
       // Exercise the same AsyncLocalStorage channel subscribers without network.
@@ -199,6 +202,7 @@ test('logging failures cannot invalidate a successful authenticated read', async
         Cookie: `${ADMIN_COOKIE}=${encodeURIComponent(session)}`, [ADMIN_REQUEST_HEADER]: REQUEST_TOKEN,
         'X-GIB-M1-Read-ID': ID }, body: '{"operation":"review"}'
     }), { env: ENV, installationId: 'rev', now: +NOW, dateNow: NOW,
+      staffCallbackRead: (_request, runtime, _reviewer, action, data, deps) => postGoogle(runtime, action, data, deps.fetch),
       fetch: async () => new Response(JSON.stringify(summary())) });
     assert.equal(response.status, 200);
     assert.equal((await response.json()).ok, true);

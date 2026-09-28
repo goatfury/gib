@@ -1,8 +1,11 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
-import { constantTimeSecretEqual, runtimeConfig } from './m1-common.mjs';
+import { ADMIN_NAMES, constantTimeSecretEqual, requireAdmin, runtimeConfig } from './m1-common.mjs';
 import { managerReviewScope } from './m1-manager-scope.mjs';
 import { REVIEW_START, localNow, validateRead } from './m1-manager-review.mjs';
 import { additionCheckHash, validateAdditionCheckCallback } from './m1-admin-add-check-proof.mjs';
+import { sanitizeStaffTimeReview, sanitizeStaffViewPageRequest, sanitizeStaffViewPage,
+  sanitizeStaffTimeHistoryPageRequest, sanitizeStaffTimeHistoryPage, sanitizeStaffShiftLookupRequest,
+  sanitizeStaffShiftLookup, sanitizeStaffRecoveryResponse } from './m1-staff-clock-contracts.mjs';
 
 // Fixed destinations are selected by trusted deployment scope, never request data.
 export const PROOF_ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
@@ -19,6 +22,9 @@ export const SIGNATURE_HEADER = 'X-GIB-M1-Read-Signature';
 export const READ_ID_HEADER = 'X-GIB-M1-Read-ID';
 export const READ_OPERATION_HEADER = 'X-GIB-M1-Read-Operation';
 export const READ_OBSERVATION_MS = 50_000;
+export const STAFF_READ_PATH = '/.netlify/functions/m1-admin-staff-time';
+export const STAFF_READ_BUDGET_MS = 25_000;
+const STAFF_READ_ACTIONS = new Set(['staffTimeReviewV2', 'staffTimeReviewPageV2', 'staffTimeHistoryPageV2', 'staffTimeShiftLookupV3', 'staffRecoveryReview']);
 export const validId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 export const hash = text => createHash('sha256').update(text, 'utf8').digest('hex');
 export const signature = (text, secret, target = 'test') => createHmac('sha256', secret).update(`${callbackSchema(target)}\n${text}`, 'utf8').digest('hex');
@@ -38,7 +44,7 @@ export function callbackRuntime(request, path, dependencies) {
   const scope = managerReviewScope(request, dependencies);
   if (!scope || scope.profile.installationId !== 'rev') return null;
   const origin = scope.target === 'production' ? LIVE_ORIGIN : PROOF_ORIGIN;
-  const paths = scope.target === 'production' ? ['/api/m1-manager-review', '/api/m1-admin-add-check', LIVE_CALLBACK_PATH] : ['/api/m1-manager-review', '/api/m1-admin-add-check', CALLBACK_PATH, PROOF_PATH];
+  const paths = scope.target === 'production' ? ['/api/m1-manager-review', '/api/m1-admin-add-check', LIVE_CALLBACK_PATH] : ['/api/m1-manager-review', '/api/m1-admin-add-check', CALLBACK_PATH, PROOF_PATH, STAFF_READ_PATH];
   if (url.origin !== origin || !paths.includes(path)) return null;
   const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: scope.profile.installationId, environment: scope.profile.environment });
   return runtime?.target === scope.target ? runtime : null;
@@ -74,16 +80,52 @@ export function makeBinding(id, now, action = 'managerReviewRead', target = 'tes
 }
 export function validateBinding(binding, now, target = 'test') {
   const addition = binding?.action === 'adminAdditionCheckRead';
-  if (!exactKeys(binding, ['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt', ...(addition ? ['originalHash', 'date'] : [])])
-    || !['test', 'production'].includes(target) || !validId(binding.requestId) || binding.schema !== callbackSchema(target) || binding.target !== target || binding.gym !== 'rev' || !['managerReviewRead', 'managerReviewBadgeRead', 'adminAdditionCheckRead'].includes(binding.action)
+  const staff = binding?.action === 'staffClockRead';
+  if (!exactKeys(binding, ['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt', ...(addition ? ['originalHash', 'date'] : staff ? ['originalHash', 'staffAction'] : [])])
+    || !['test', 'production'].includes(target) || !validId(binding.requestId) || binding.schema !== callbackSchema(target) || binding.target !== target || binding.gym !== 'rev' || !['managerReviewRead', 'managerReviewBadgeRead', 'adminAdditionCheckRead', 'staffClockRead'].includes(binding.action)
     || binding.from !== REVIEW_START || !Number.isSafeInteger(binding.createdAt) || binding.createdAt > now
     || binding.expiresAt !== binding.createdAt + PROOF_TTL_MS || binding.to !== localNow(new Date(binding.createdAt)).date
-    || (addition && (!/^[0-9a-f]{64}$/.test(binding.originalHash) || !/^\d{4}-\d{2}-\d{2}$/.test(binding.date) || binding.date > binding.to))) fail(409, 'Read request does not match the proof.');
+    || (addition && (!/^[0-9a-f]{64}$/.test(binding.originalHash) || !/^\d{4}-\d{2}-\d{2}$/.test(binding.date) || binding.date > binding.to))
+    || (staff && (target !== 'test' || !/^[0-9a-f]{64}$/.test(binding.originalHash) || !STAFF_READ_ACTIONS.has(binding.staffAction)))) fail(409, 'Read request does not match the proof.');
   if (now >= binding.expiresAt || localNow(new Date(now)).date !== binding.to) fail(410, 'Read proof expired. Run a fresh read.');
   return binding;
 }
 export function bindingText(binding) {
-  return JSON.stringify(['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt', ...(binding.action === 'adminAdditionCheckRead' ? ['originalHash', 'date'] : [])].map(field => binding[field]));
+  return JSON.stringify(['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt', ...(binding.action === 'adminAdditionCheckRead' ? ['originalHash', 'date'] : binding.action === 'staffClockRead' ? ['originalHash', 'staffAction'] : [])].map(field => binding[field]));
+}
+export const staffReadHash = (original, reviewer) => hash(JSON.stringify(['m1-staff-read/v1', 'test', 'rev', reviewer, original.action, original.data]));
+function staffReadRequest(original, now) {
+  if (!exactKeys(original, ['action', 'data']) || !STAFF_READ_ACTIONS.has(original.action)
+    || !original.data || typeof original.data !== 'object' || Array.isArray(original.data)) return null;
+  const data = original.data;
+  if (['staffTimeReviewV2', 'staffRecoveryReview'].includes(original.action)) return exactKeys(data, []) ? {} : null;
+  if (original.action === 'staffTimeReviewPageV2') return exactKeys(data, ['viewToken', 'stream', 'offset'])
+    ? sanitizeStaffViewPageRequest({ operation: 'reviewPage', ...data }, 'reviewPage', { includeAudit: true }) : null;
+  if (original.action === 'staffTimeHistoryPageV2') return exactKeys(data, ['viewToken', 'offset'])
+    ? sanitizeStaffTimeHistoryPageRequest({ operation: 'historyPage', ...data }) : null;
+  if (!exactKeys(data, ['viewToken', 'mode', 'staffId', 'date'])) return null;
+  // The original Google request retains these two blank fields; the existing
+  // browser request validator intentionally omits them for recent lookups.
+  const input = data.mode === 'recent' && data.staffId === '' && data.date === ''
+    ? { viewToken: data.viewToken, mode: data.mode } : data;
+  return sanitizeStaffShiftLookupRequest({ operation: 'shiftLookup', ...input }, 'shiftLookup', { now: new Date(now) });
+}
+function validateStaffResult(result, pending, readAt) {
+  if (!exactKeys(pending, ['binding', 'reviewer', 'original']) || !ADMIN_NAMES.includes(pending.reviewer)
+    || pending.binding.staffAction !== pending.original?.action
+    || pending.binding.originalHash !== staffReadHash(pending.original, pending.reviewer)) throw new Error('Staff read binding unavailable.');
+  const expected = staffReadRequest(pending.original, pending.binding.createdAt), action = pending.original.action;
+  if (!expected) throw new Error('Staff read request is invalid.');
+  if (exactKeys(result, ['ok', 'target', 'result']) && result.ok === false && result.target === 'test'
+    && ((result.result === 'stale' && ['staffTimeReviewPageV2', 'staffTimeHistoryPageV2', 'staffTimeShiftLookupV3'].includes(action))
+      || (result.result === 'too_large' && action === 'staffTimeShiftLookupV3'))) return;
+  const options = { now: new Date(readAt) };
+  const validated = action === 'staffTimeReviewV2' ? sanitizeStaffTimeReview(result, 'test', options)
+    : action === 'staffTimeReviewPageV2' ? sanitizeStaffViewPage(result, 'test', expected, options)
+    : action === 'staffTimeHistoryPageV2' ? sanitizeStaffTimeHistoryPage(result, 'test', expected, options)
+    : action === 'staffTimeShiftLookupV3' ? sanitizeStaffShiftLookup(result, 'test', expected, options)
+    : sanitizeStaffRecoveryResponse(result, 'test', options);
+  if (!validated) throw new Error('Staff read result is incomplete.');
 }
 export function validateResult(payload, binding, now, target = 'test', pending) {
   if (!exactKeys(payload, ['binding', 'readAt', 'result'])) fail(422, 'Incomplete callback.');
@@ -96,7 +138,8 @@ export function validateResult(payload, binding, now, target = 'test', pending) 
         || pending.binding.date !== pending.original.date) throw new Error('Original read binding unavailable.');
       validateAdditionCheckCallback(payload.result, pending.original, pending.reviewer, target);
       if (payload.result.ledger.from !== binding.from || payload.result.ledger.to !== binding.to) throw new Error('Callback read range did not match.');
-    } else validateRead(payload.result, binding.gym, binding.to, target);
+    } else if (binding.action === 'staffClockRead') validateStaffResult(payload.result, pending, payload.readAt);
+    else validateRead(payload.result, binding.gym, binding.to, target);
   }
   catch { fail(422, 'The complete authoritative read was not received.'); }
   return payload;
@@ -145,14 +188,14 @@ export async function dispatchProof(store, pending, runtime, dependencies = {}) 
   const timing = { method: 'POST', host: 'script.google.com', status: null, elapsedMs: 0, outcome: 'unavailable', ordinaryReplyUsed: false };
   const confirmed = dependencies.confirmedCallbackSignal;
   const budget = AbortSignal.timeout(25_000);
-  const signal = confirmed ? AbortSignal.any([budget, confirmed]) : budget;
+  const signal = AbortSignal.any([budget, confirmed, dependencies.dispatchSignal].filter(Boolean));
   try {
     validateBinding(pending.binding, started, target);
     trace('dispatch', 'start');
     const response = await (dependencies.fetch || fetch)(runtime.webhookUrl, {
       method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       body: JSON.stringify({ token: runtime.webhookToken, adminActionToken: runtime.adminActionToken, target, action: target === 'test' ? 'managerReviewReadCallbackProof' : 'managerReviewReadCallback', gym: 'rev', from: pending.binding.from, to: pending.binding.to, adminName: pending.reviewer, binding: pending.binding,
-        ...(pending.binding.action === 'adminAdditionCheckRead' ? { original: pending.original } : {}) }),
+        ...(['adminAdditionCheckRead', 'staffClockRead'].includes(pending.binding.action) ? { original: pending.original } : {}) }),
       // This read uses only its authenticated persisted callback, not ContentService.
       redirect: 'manual', signal
     });
@@ -375,4 +418,88 @@ export async function loadCallbackLedger(request, runtime, reviewer, dependencie
   console.warn('M1_TEST_MANAGER_CALLBACK_READ', JSON.stringify({ requestId: id, purpose: pending.binding.action, elapsedMs: clock() - started, state: 'unavailable' }));
   fail(503, 'Review status unavailable. No fresh central read was confirmed.');
   } finally { scheduleReadCleanup(dependencies, trace, target); }
+}
+
+// Staff reads retain their existing single 25-second request budget. The only
+// usable response is the authenticated, complete callback persisted centrally;
+// the discarded ContentService reply cannot supply a fallback or a false clear.
+export async function loadStaffCallbackRead(request, runtime, reviewer, action, data, dependencies = {}) {
+  const clock = dependencies.clock || Date.now, started = clock();
+  const scoped = callbackRuntime(request, STAFF_READ_PATH, dependencies);
+  if (request.method !== 'POST' || !scoped || scoped.target !== 'test' || runtime?.target !== 'test'
+    || request.headers.get('Origin') !== PROOF_ORIGIN) fail(403, 'Authenticated Revolution TEST Staff read required.');
+  const auth = requireAdmin(request, scoped, started);
+  if (auth.response || auth.session.adminName !== reviewer) fail(auth.response?.status || 403, 'Admin login required.');
+  const original = { action, data };
+  if (!staffReadRequest(original, started)) fail(400, 'A pure Staff read is required.');
+  if (typeof dependencies.context?.waitUntil !== 'function') fail(503, 'Staff Clock read unavailable.');
+  const suppliedId = request.headers.get(READ_ID_HEADER), id = validId(suppliedId) ? suppliedId : randomUUID();
+  const trace = createReadTrace(id, dependencies, suppliedId);
+  let deadline = started + STAFF_READ_BUDGET_MS;
+  const budget = new AbortController(), confirmed = new AbortController();
+  const unavailable = () => new ProofError(503, 'Staff Clock read unavailable. No fresh central read was confirmed.');
+  const timer = setTimeout(() => budget.abort(unavailable()), STAFF_READ_BUDGET_MS);
+  const checkBudget = () => { if (budget.signal.aborted || clock() >= deadline) throw unavailable(); };
+  // Real Blob requests share this abort signal. The guard also bounds injected
+  // adapters and module opening, and checks the clock after every awaited step.
+  const bounded = async work => {
+    checkBudget();
+    let stopped;
+    try {
+      const result = await Promise.race([
+        Promise.resolve().then(work),
+        new Promise((_, reject) => {
+          stopped = () => reject(unavailable());
+          budget.signal.addEventListener('abort', stopped, { once: true });
+          if (budget.signal.aborted) stopped();
+        })
+      ]);
+      checkBudget();
+      return result;
+    } finally { if (stopped) budget.signal.removeEventListener('abort', stopped); }
+  };
+  const stage = (name, work) => traceReadStage(trace, name, () => bounded(work));
+  try {
+    const store = await stage('storage.open', () => dependencies.store || proofStore({
+      fetch: (url, options = {}) => fetch(url, { ...options,
+        signal: options.signal ? AbortSignal.any([budget.signal, options.signal]) : budget.signal })
+    }, 'test'));
+    const proposed = { binding: { ...makeBinding(id, started, 'staffClockRead', 'test'),
+      originalHash: staffReadHash(original, reviewer), staffAction: action }, reviewer, original };
+    const created = await stage('pending.write', () => store.set(key(id, 'pending'), JSON.stringify(proposed), { onlyIfNew: true }));
+    const pending = await stage('pending.readback', () => readEntry(store, id, 'pending'));
+    if (!pending || ![true, false].includes(created?.modified)) fail(503, 'Pending Staff read was not confirmed. Nothing was sent.');
+    validateBinding(pending.binding, clock());
+    if (!exactKeys(pending, ['binding', 'reviewer', 'original']) || pending.binding.action !== 'staffClockRead'
+      || pending.binding.requestId !== id || pending.reviewer !== reviewer || pending.binding.staffAction !== action
+      || pending.binding.originalHash !== proposed.binding.originalHash
+      || staffReadHash(pending.original, pending.reviewer) !== proposed.binding.originalHash
+      || !staffReadRequest(pending.original, pending.binding.createdAt)) fail(409, 'Staff read belongs to a different request.');
+    deadline = Math.min(deadline, pending.binding.createdAt + STAFF_READ_BUDGET_MS);
+    checkBudget();
+    if (created.modified) {
+      if (JSON.stringify(pending) !== JSON.stringify(proposed)) fail(503, 'Pending Staff read did not match. Nothing was sent.');
+      dependencies.context.waitUntil(dispatchProof(store, pending, runtime, { ...dependencies, readTrace: trace,
+        dispatchSignal: budget.signal, confirmedCallbackSignal: confirmed.signal }));
+    }
+    trace('callback.wait', 'start');
+    while (clock() < deadline) {
+      const proof = await stage('result.storage.read', () => readProof(store, id, clock()));
+      if (proof.state === 'received') {
+        confirmed.abort(new DOMException('Authoritative callback confirmed', 'AbortError'));
+        trace('callback.wait', 'received');
+        return { readable: true, status: 200, value: proof.result };
+      }
+      const delay = Math.min(1000, deadline - clock());
+      await bounded(() => dependencies.sleep ? dependencies.sleep(delay) : new Promise(resolve => setTimeout(resolve, delay)));
+    }
+    throw unavailable();
+  } catch (error) {
+    trace('callback.wait', 'unavailable', error?.status);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    budget.abort(unavailable());
+    scheduleReadCleanup(dependencies, trace, 'test');
+  }
 }

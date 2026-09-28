@@ -3728,7 +3728,7 @@
           if (traceId) { try { console.info('M1_TEST_READ_CLIENT', JSON.stringify({ clientId: traceId,
             requestId: /^[0-9a-f-]{36}$/.test(requestId || '') ? requestId : null,
             stage: 'admin.delivery', state, status: Number.isInteger(status) ? status : null,
-            ...(staffReadTrace ? { operation: body.operation, category: /^STAFF_(?:TIME_(?:(?:REVIEW|REVIEWPAGE|HISTORYPAGE|SHIFTLOOKUP)_(?:UNREACHABLE|HTTP_FAILURE|OVERSIZE|EMPTY|HTML|MALFORMED_JSON|UNSUPPORTED_JSON|READ_FAILED|REJECTED|FAILED|CONTRACT_MISMATCH|UNREADABLE)|VIEW_STALE|SHIFT_LOOKUP_TOO_LARGE)|RECOVERY_UNCONFIRMED)$/.test(code || '') ? code : state === 'failed' ? 'unclassified' : 'none' } : {}),
+            ...(staffReadTrace ? { operation: body.operation, category: /^STAFF_(?:TIME_(?:(?:REVIEW|REVIEWPAGE|HISTORYPAGE|SHIFTLOOKUP)_(?:UNREACHABLE|HTTP_FAILURE|OVERSIZE|EMPTY|HTML|MALFORMED_JSON|UNSUPPORTED_JSON|READ_FAILED|REJECTED|FAILED|CONTRACT_MISMATCH|UNREADABLE|CALLBACK_UNAVAILABLE)|VIEW_STALE|SHIFT_LOOKUP_TOO_LARGE)|RECOVERY_UNCONFIRMED)$/.test(code || '') ? code : state === 'failed' ? 'unclassified' : 'none' } : {}),
             elapsedMs: Date.now() - traceStarted })); } catch {} }
         };
         traceRead('start');

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ADMIN_COOKIE, ADMIN_REQUEST_HEADER, createAdminSession, runtimeConfig } from '../netlify/functions/_lib/m1-common.mjs';
+import { ADMIN_COOKIE, ADMIN_REQUEST_HEADER, createAdminSession, runtimeConfig, postGoogle } from '../netlify/functions/_lib/m1-common.mjs';
 import { sanitizeStaffClockPunch, sanitizeStaffRecoveryRequest, sanitizeStaffRecoveryDecisionRequest,
   sanitizeStaffRecoveryResponse, sanitizeStaffViewPage } from '../netlify/functions/_lib/m1-staff-clock-contracts.mjs';
 import { STAFF_CLOCK_PATH, handleStaffClock } from '../netlify/functions/m1-staff-clock.mjs';
@@ -50,6 +50,9 @@ function req(body, { admin = false, origin = ORIGIN, auth = true, headerToken = 
 function dependencies(value, overrides = {}) {
   const calls = [];
   return { env: ENV, enabled: true, installationId: 'rev', environment: 'production', context: CONTEXT,
+    // Preserve focused request/response contract tests; persisted callback
+    // delivery is covered by the dedicated Staff callback integration suite.
+    staffCallbackRead: (_request, runtime, _reviewer, action, data, deps) => postGoogle(runtime, action, data, deps.fetch),
     now: +NOW, dateNow: NOW, clock: () => +NOW, calls, fetch: async (url, init) => { calls.push({ url, ...init, body: JSON.parse(init.body) });
       if (value instanceof Error) throw value;
       return value instanceof Response ? value.clone() : new Response(JSON.stringify(value)); }, ...overrides };

@@ -172,6 +172,45 @@ function gibM1ConsumeLateBadge_(binding) {
   finally { if (acquired) { try { lock.releaseLock(); } catch (_) {} } }
 }
 
+// Only these existing Admin reads may use the Revolution TEST callback. The
+// original read data stays exact: it is also the material bound by Netlify.
+function gibM1StaffCallbackOriginalHash_(original, reviewer, target) {
+  if (target !== 'test' || !gibM1TestReadCallbackEnabled_() || GIB_M1_ADMIN_NAMES_.indexOf(reviewer) < 0
+    || !staffClockExactKeys_(original, ['action', 'data'])) return '';
+  var action = original.action, data = original.data, fields, valid = false;
+  if (action === 'staffTimeReviewV2' || action === 'staffRecoveryReview') { fields = []; valid = true; }
+  else if (action === 'staffTimeReviewPageV2') { fields = ['viewToken', 'stream', 'offset']; valid = Boolean(staffClockPageRequest_(data, true)); }
+  else if (action === 'staffTimeHistoryPageV2') { fields = ['viewToken', 'offset']; valid = Boolean(staffClockHistoryPageRequest_(data)); }
+  else if (action === 'staffTimeShiftLookupV3') {
+    fields = ['viewToken', 'mode', 'staffId', 'date'];
+    valid = Boolean(staffClockShiftLookupRequest_(data)) && typeof data.staffId === 'string' && data.staffId.length <= 80 && typeof data.date === 'string';
+  }
+  if (!valid || !staffClockExactKeys_(data, fields)) return '';
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+    JSON.stringify(['m1-staff-read/v1', 'test', 'rev', reviewer, action, data]), Utilities.Charset.UTF_8)
+    .map(function(byte) { return ('0' + ((byte + 256) % 256).toString(16)).slice(-2); }).join('');
+}
+function gibM1StaffCallbackResult_(result, action) {
+  if (!result || typeof result !== 'object' || Array.isArray(result) || result.target !== 'test') return false;
+  // Successful data comes from the unmodified authoritative receiver; Netlify
+  // additionally applies the existing strict, action-specific response schema.
+  if (result.ok === true) return true;
+  if (result.ok !== false || !staffClockExactKeys_(result, ['ok', 'target', 'result'])) return false;
+  return (result.result === 'stale' && ['staffTimeReviewPageV2', 'staffTimeHistoryPageV2', 'staffTimeShiftLookupV3'].indexOf(action) >= 0)
+    || (result.result === 'too_large' && action === 'staffTimeShiftLookupV3');
+}
+function gibM1StaffCallbackRead_(body, trace) {
+  var canTrace = typeof GIB_M1_ACTIVE_STAFF_READ_TRACE_ !== 'undefined';
+  var previousTrace = canTrace ? GIB_M1_ACTIVE_STAFF_READ_TRACE_ : null;
+  if (canTrace) GIB_M1_ACTIVE_STAFF_READ_TRACE_ = { event: function(stage, state) { try { trace(stage, state); } catch (_) {} } };
+  try {
+    // No outer lock: this ordinary authenticated read owns/releases its lock.
+    return adReceiverV2Core_({ postData: { contents: JSON.stringify(body) } });
+  } finally {
+    if (canTrace) GIB_M1_ACTIVE_STAFF_READ_TRACE_ = previousTrace;
+  }
+}
+
 function gibM1TestReadCallback_(body) {
   var trace = function() {};
   var receipt = { event: function() {}, finish: function() {} };
@@ -203,14 +242,21 @@ function gibM1TestReadCallback_(body) {
     stage = 'google.binding';
     var fields = ['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt'];
     var additionCheck = b && b.action === 'adminAdditionCheckRead';
+    var staffRead = b && b.action === 'staffClockRead';
     if (additionCheck) fields = fields.concat(['originalHash', 'date']);
+    if (staffRead) fields = fields.concat(['originalHash', 'staffAction']);
     var rejection = null;
     if (!b || JSON.stringify(Object.keys(b).sort()) !== JSON.stringify(fields.sort())) rejection = 'binding_shape';
     else if (b.schema !== schema || b.target !== target || b.gym !== 'rev'
-      || ['managerReviewRead', 'managerReviewBadgeRead', 'adminAdditionCheckRead'].indexOf(b.action) < 0 || b.from !== body.from || b.to !== body.to
+      || ['managerReviewRead', 'managerReviewBadgeRead', 'adminAdditionCheckRead', 'staffClockRead'].indexOf(b.action) < 0 || b.from !== body.from || b.to !== body.to
     ) rejection = 'binding_scope';
     else if (b.action !== 'managerReviewBadgeRead' ? GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) < 0 : body.adminName !== undefined) rejection = 'binding_reviewer';
-    else if (additionCheck ? (b.originalHash !== managerAdditionCheckHash_(body.original, body.adminName, target)
+    else if (staffRead ? (target !== 'test'
+      || !staffClockExactKeys_(body, ['token', 'adminActionToken', 'target', 'action', 'gym', 'from', 'to', 'adminName', 'binding', 'original'])
+      || typeof b.originalHash !== 'string' || !/^[0-9a-f]{64}$/.test(b.originalHash)
+      || b.originalHash !== gibM1StaffCallbackOriginalHash_(body.original, body.adminName, target)
+      || b.staffAction !== body.original.action)
+      : additionCheck ? (b.originalHash !== managerAdditionCheckHash_(body.original, body.adminName, target)
       || b.date !== body.original.date || b.date < b.from || b.date > b.to) : body.original !== undefined) rejection = 'binding_scope';
     else if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(b.requestId)) rejection = 'binding_id';
     else if (!Number.isSafeInteger(b.createdAt) || b.expiresAt !== b.createdAt + 60000) rejection = 'binding_time';
@@ -226,11 +272,18 @@ function gibM1TestReadCallback_(body) {
     trace('google.fault', lateTest || slowTest ? 'armed' : 'skipped');
     // This existing read owns and releases its lock in finally before returning.
     stage = 'google.read';
-    var readBody = { action: additionCheck ? 'adminAdditionCheckRead' : 'managerReviewRead', target: target, token: body.token,
-      adminActionToken: body.adminActionToken, gym: 'rev', from: body.from, to: body.to, adminName: body.adminName };
-    if (additionCheck) { readBody.original = body.original; readBody.originalHash = b.originalHash; readBody.date = b.date; }
-    else readBody.check = null;
-    var read = managerReviewAction_(readBody, trace);
+    var readBody, read;
+    if (staffRead) {
+      readBody = Object.assign({}, body.original.data, { action: b.staffAction, target: 'test', token: body.token,
+        adminActionToken: body.adminActionToken, adminName: body.adminName });
+      read = gibM1StaffCallbackRead_(readBody, trace);
+    } else {
+      readBody = { action: additionCheck ? 'adminAdditionCheckRead' : 'managerReviewRead', target: target, token: body.token,
+        adminActionToken: body.adminActionToken, gym: 'rev', from: body.from, to: body.to, adminName: body.adminName };
+      if (additionCheck) { readBody.original = body.original; readBody.originalHash = b.originalHash; readBody.date = b.date; }
+      else readBody.check = null;
+      read = managerReviewAction_(readBody, trace);
+    }
     stage = 'google.decode';
     var result = JSON.parse(read.getContent());
     var readAt = Date.now();
@@ -240,8 +293,9 @@ function gibM1TestReadCallback_(body) {
       || result.gym !== 'rev' || result.originalHash !== b.originalHash || result.date !== b.date || result.reviewer !== body.adminName)) {
       error = 'read_rejected'; throw new Error('Addition proof unavailable.');
     }
-    if (!ledger || ledger.ok !== true || ledger.complete !== true || ledger.schema !== 'm1-manager-review/v1'
-      || ledger.gym !== 'rev' || ledger.target !== target || ledger.from !== b.from || ledger.to !== b.to || readAt >= b.expiresAt) {
+    if ((staffRead ? !gibM1StaffCallbackResult_(result, b.staffAction)
+      : (!ledger || ledger.ok !== true || ledger.complete !== true || ledger.schema !== 'm1-manager-review/v1'
+      || ledger.gym !== 'rev' || ledger.target !== target || ledger.from !== b.from || ledger.to !== b.to)) || readAt >= b.expiresAt) {
       error = 'read_rejected'; throw new Error('Read unavailable.');
     }
     stage = 'google.payload';

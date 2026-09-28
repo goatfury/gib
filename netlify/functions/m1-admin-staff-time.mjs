@@ -30,6 +30,7 @@ import { validExactProductionRequest } from './_lib/m1-production-runtime.mjs';
 import { staffClockEnabled } from './_lib/m1-installation.mjs';
 import { managerReviewScope } from './_lib/m1-manager-scope.mjs';
 import { safeStaffReadTraceId } from './_lib/m1-google-trace.mjs';
+import { loadStaffCallbackRead } from './_lib/m1-test-read-callback.mjs';
 
 export const ADMIN_STAFF_TIME_PATH = '/.netlify/functions/m1-admin-staff-time';
 export const ADMIN_STAFF_TIME_SITE = 'Rev';
@@ -51,7 +52,7 @@ const STAFF_READ_OPERATIONS = new Set(['review', 'reviewPage', 'historyPage', 's
 const STAFF_READ_TRACE_CATEGORIES = new Set(['ACCEPTED', 'REQUEST_REJECTED', 'OK', 'STALE', 'TOO_LARGE',
   'VALIDATED', 'NOT_VALIDATED', 'CONTRACT_MISMATCH', 'UNREACHABLE', 'READ_FAILED', 'HTTP_FAILURE',
   'EMPTY', 'OVERSIZE', 'HTML', 'UNSUPPORTED_JSON', 'MALFORMED_JSON', 'UNREADABLE', 'REJECTED', 'FAILED',
-  'EXCEPTION', 'HTTP_SUCCESS', 'HTTP_ERROR']);
+  'EXCEPTION', 'HTTP_SUCCESS', 'HTTP_ERROR', 'CALLBACK_UNAVAILABLE']);
 
 // Called only after the existing authentication and scope checks. Diagnostics
 // contain no business values and can never change a read or its validation.
@@ -215,7 +216,18 @@ async function runAdminStaffTime(request, dependencies, diagnostics) {
     staffReadTraceId: trace.requestId } : runtime;
   const googleRead = async (action, data) => {
     trace?.emit('google.transport', 'ACCEPTED');
-    const google = await postGoogle(readRuntime, action, data, fetchImpl);
+    const callbackRead = target === 'test' && runtime.installationId !== 'richmond'
+      && new URL(request.url).origin === STAFF_READ_TRACE_ORIGIN;
+    let google;
+    if (callbackRead) {
+      try {
+        google = await (dependencies.staffCallbackRead || loadStaffCallbackRead)(request, readRuntime,
+          auth.session.adminName, action, data, dependencies);
+      } catch {
+        // Do not fall back to another Google read or trust the ordinary reply.
+        google = { readable: false, status: 503, failureClass: 'CALLBACK_UNAVAILABLE' };
+      }
+    } else google = await postGoogle(readRuntime, action, data, fetchImpl);
     trace?.emit('google.result', google.readable && google.value?.ok === true ? 'OK'
       : google.readable && isStaffViewStale(google.value, target) ? 'STALE'
         : googleFailureClass(google), google.status);
