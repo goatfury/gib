@@ -88,11 +88,15 @@ var EXPECTED_SPREADSHEET_NAME = GIB_M1_TEST_SPREADSHEET_TITLE_;
 var SHEET_NAME = GIB_M1_TEST_SIGNINS_SHEET_;
 
 function doPost(e) {
+  return adReceiverV2_(e);
+}
+
+function gibM1RunStaffReadTrace_(e, callback) {
   // Invocation-local, editor-armed diagnostics. Never add fields to a Staff reply.
   var trace = gibM1BeginStaffReadTrace_(e), response;
   GIB_M1_ACTIVE_STAFF_READ_TRACE_ = trace;
   try {
-    response = adReceiverV2_(e);
+    response = callback();
     return response;
   } finally {
     GIB_M1_ACTIVE_STAFF_READ_TRACE_ = null;

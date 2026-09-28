@@ -50,5 +50,7 @@ test('Staff trace distinguishes response failure from client cutoff and cannot m
   h.ctx.console.info = () => { throw new Error('logging unavailable'); };
   h.ctx.fetch = async () => Response.json({ ok: true });
   assert.equal((await h.ctx.requestJson(endpoint, { operation: 'review' })).ok, true);
+  h.ctx.crypto.randomUUID = () => { throw new Error('UUID unavailable'); };
+  assert.equal((await h.ctx.requestJson(endpoint, { operation: 'review' })).ok, true);
   assert.doesNotMatch(JSON.stringify(h.logs), /PRIVATE_/);
 });

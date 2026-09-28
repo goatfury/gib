@@ -146,6 +146,13 @@ var GIB_M1_PRODUCTION_STAFF_ADJUSTMENT_HEADERS_ = [
 ];
 
 function adReceiverV2_(e) {
+  if (typeof gibM1RunStaffReadTrace_ === 'function') {
+    return gibM1RunStaffReadTrace_(e, function() { return adReceiverV2Core_(e); });
+  }
+  return adReceiverV2Core_(e);
+}
+
+function adReceiverV2Core_(e) {
   try {
     var body = parseRequestBody_(e);
     if (!body) {

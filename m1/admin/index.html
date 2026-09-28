@@ -3715,9 +3715,13 @@
         if (adminRequestToken) headers[ADMIN_REQUEST_HEADER] = adminRequestToken;
         const staffReadTrace = url === '/.netlify/functions/m1-admin-staff-time'
           && ['review', 'reviewPage', 'historyPage', 'shiftLookup', 'recoveryReview'].includes(body?.operation);
-        const traceId = globalThis.location?.origin === 'https://deploy-preview-89--gib-live.netlify.app'
-          && (staffReadTrace || (url === '/api/m1-manager-review' && body?.action === 'read'))
-          ? (staffReadTrace ? globalThis.crypto?.randomUUID?.() : body.readRequest?.requestId || globalThis.crypto?.randomUUID?.()) : null;
+        let traceId = null;
+        try {
+          if (globalThis.location?.origin === 'https://deploy-preview-89--gib-live.netlify.app'
+            && (staffReadTrace || (url === '/api/m1-manager-review' && body?.action === 'read'))) {
+            traceId = staffReadTrace ? globalThis.crypto?.randomUUID?.() : body.readRequest?.requestId || globalThis.crypto?.randomUUID?.();
+          }
+        } catch { /* Diagnostic identity failure must not prevent the read. */ }
         const traceStarted = Date.now();
         if (traceId) headers['X-GIB-M1-Read-ID'] = traceId;
         const traceRead = (state, status, requestId, code) => {

@@ -124,6 +124,17 @@ test('plain unsuccessful results are not mislabeled as lock failures or thrown e
   assert.equal(h.receipts()[0].stage, 'google.result'); assert.equal(h.receipts()[0].error, 'read_rejected');
 });
 
+test('unchanged doPost and direct receiver callers use the same optional diagnostic wrapper', () => {
+  const h = harness(); h.arm();
+  const expected = h.post(body());
+  const direct = h.context.adReceiverV2_({ postData: { contents: JSON.stringify(body()) } }).getContent();
+  assert.equal(direct, expected); assert.equal(h.receipts().length, 2);
+  assert.deepEqual(h.receipts()[0], h.receipts()[1]);
+  h.context.gibM1RunStaffReadTrace_ = undefined;
+  assert.equal(h.post(body()), expected);
+  assert.equal(h.receipts().length, 2, 'receivers without the TEST helper preserve the ordinary route');
+});
+
 test('unarmed requests do not construct a collector or recheck Admin authentication for diagnostics', () => {
   const h = harness(), auth = h.context.adminActionAuthorized_;
   let authCalls = 0;

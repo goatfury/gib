@@ -52,7 +52,7 @@ export async function traceGoogle(meta, run) {
   const addition = meta.action === 'addMissedInstructor' && meta.gym === 'rev';
   const staffReadTraceId = scopedStaffReadTraceId(meta);
   if (meta.target !== 'test' || (!staffReadTraceId && (meta.enabled !== true || (!actions.has(meta.action) && !addition)))) return run();
-  const context = { id: randomBytes(8).toString('hex'), variant: ['pre-pr', 'native-https'].includes(meta.variant) ? meta.variant : 'current', action: meta.action, gym: meta.gym === 'richmond' ? 'richmond' : 'rev', attempt: Number.isInteger(meta.attempt) ? meta.attempt : 1, hops: 0,
+  const context = { id: staffReadTraceId || randomBytes(8).toString('hex'), variant: ['pre-pr', 'native-https'].includes(meta.variant) ? meta.variant : 'current', action: meta.action, gym: meta.gym === 'richmond' ? 'richmond' : 'rev', attempt: Number.isInteger(meta.attempt) ? meta.attempt : 1, hops: 0,
     ...(staffReadTraceId ? { requestId: staffReadTraceId } : addition ? { requestId: safeAdditionTraceId(meta.requestId) } : {}) };
   return scope.run(context, async () => {
     const started = Date.now();
