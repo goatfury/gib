@@ -189,6 +189,23 @@ export async function migrateWorkflowHistory(scope, deps = {}) {
   requireScope(scope); const store = await storeFor(deps);
   return migrateHistory(store, projector(store, { ...deps, scope }));
 }
+// Read-only cross-namespace guard for a fixed, approved TEST message. It never
+// migrates, reprojects, clears or copies a retained delivery barrier.
+export async function readWorkflowDeliveryHold(message, scope, deps = {}) {
+  requireScope(scope);
+  if (!validMessage(message) || !message.messageId.startsWith('m1-test-scheduled-rev-')) throw new Error('WORKFLOW_MESSAGE_UNAVAILABLE');
+  const store = await storeFor(deps), initial = await historyRoot(store, { incomplete: true });
+  if (initial && (!initial.data.migration.complete || initial.data.pending) || await historyWakePending(store)) return 'PRIOR_DELIVERY_HISTORY_PENDING';
+  if (await provisionalRecipientBarrier(store, 'rev', message.to, { ...deps, scope }, false)) return 'PRIOR_PERMANENT_RECIPIENT_PROOF_UNRESOLVED';
+  if (!initial) {
+    if (await read(store, 'workflow/index')) return 'PRIOR_DELIVERY_HISTORY_PENDING';
+    return null;
+  }
+  const fingerprint = digestHash('m1-mailapp-business/v1\nrevbjjops@gmail.com');
+  const groups = await Promise.all(['unsafe/rev', recipientGroup('rev', message), routeGroup('rev', message, fingerprint)].map(name => historyGroup(store, name, 1)));
+  if ((await historyRoot(store, { incomplete: true }))?.etag !== initial.etag || await historyWakePending(store)) return 'PRIOR_DELIVERY_HISTORY_PENDING';
+  return groups.some(group => group.count) ? 'PRIOR_DELIVERY_HOLD' : null;
+}
 async function priorDeliveryBarrier(store, gym, message, options, policy, guard = {}) {
   const initial = await historyRoot(store);
   if (await historyWakePending(store)) return 'PRIOR_DELIVERY_HISTORY_PENDING';
@@ -326,9 +343,16 @@ async function processWorkflow(input, deps = {}) {
     const assessment = 'Reminder opportunity: ' + date + '. Fresh assessment: ' + input.digest.generatedAt + ' (' + input.binding.jobDate + ', America/New_York).';
     const rendered = route.rendered && { subject: route.rendered.subject + ' · reminder ' + date,
       text: assessment + '\n\n' + route.rendered.text, html: route.rendered.html.replace('<h1 ', '<p>' + assessment + '</p><h1 ') };
-    const message = canPrepare ? { messageId, from: senderFor(deps),
+    let message = canPrepare ? { messageId, from: senderFor(deps),
       to: route.to, cc: route.cc, ...rendered, synthetic: input.digest.syntheticRehearsal === true, target: 'test' } : null;
+    if (message && deps.transformMessage) {
+      const transformed = deps.transformMessage(structuredClone(message));
+      if (!exact(transformed, Object.keys(message)) || ['messageId', 'from', 'to', 'cc', 'synthetic', 'target'].some(field =>
+        JSON.stringify(transformed[field]) !== JSON.stringify(message[field]))) throw new Error('WORKFLOW_MESSAGE_TRANSFORM_INVALID');
+      message = transformed;
+    }
     if (message) message.hash = digestHash(canonical(message));
+    if (message && !validMessage(message)) throw new Error('WORKFLOW_MESSAGE_TRANSFORM_INVALID');
     const gated = message ? policy.gate(message, deps) : null;
     const value = { schema: SCHEMA, messageId, gym: route.gym, date, assessmentDate: input.binding.jobDate, checkAt: input.binding.createdAt,
       firstAttemptAt: null, state: !eligible ? 'not-due' : route.routeStatus === 'suppressed' ? 'suppressed' : route.routeStatus === 'blocked' ? 'not-configured' : 'prepared',

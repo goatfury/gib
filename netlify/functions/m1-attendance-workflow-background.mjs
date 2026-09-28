@@ -3,6 +3,7 @@ import { attendanceDigestScope } from './m1-attendance-digest.mjs';
 import { DIGEST_ORIGIN } from './_lib/m1-attendance-digest.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
 import { runAttendanceWorkflowExamples, runAttendanceWorkflowHistoryExamples, runAttendanceWorkflowDailyExamples, runAttendanceWorkflowMailAppExamples } from './_lib/m1-attendance-workflow-examples.mjs';
+import { runGoogleEmailTest } from './_lib/m1-attendance-google-email-test.mjs';
 
 export const config = { path: '/api/m1-attendance-workflow-background' };
 export async function handleAttendanceWorkflowBackground(request, dependencies = {}) {
@@ -18,9 +19,13 @@ export async function handleAttendanceWorkflowBackground(request, dependencies =
   const parsed = await readJson(request, 4096);
   if (parsed.response) return parsed.response;
   const input = parsed.value;
-  if (!input || Object.keys(input).sort().join('|') !== 'action|requestId' || !['runExamples', 'runHistory', 'runDaily', 'runMailApp'].includes(input.action) || !validId(input.requestId))
+  if (!input || Object.keys(input).sort().join('|') !== 'action|requestId' || !['runExamples', 'runHistory', 'runDaily', 'runMailApp', 'runGoogleEmail'].includes(input.action) || !validId(input.requestId))
     return jsonResponse(400, { ok: false });
   try {
+    if (input.action === 'runGoogleEmail') {
+      await runGoogleEmailTest(input.requestId, { ...dependencies, env: dependencies.env || process.env, scope, runtime });
+      return jsonResponse(200, { ok: true });
+    }
     // One awaited, bounded synthetic run; Netlify's -background lifecycle owns
     // execution after the caller receives 202. It never invokes a real provider.
     const run = input.action === 'runMailApp' ? dependencies.runMailApp || runAttendanceWorkflowMailAppExamples
@@ -31,7 +36,10 @@ export async function handleAttendanceWorkflowBackground(request, dependencies =
     return jsonResponse(200, { ok: true });
   } catch (error) {
     // Keep original durable run/checkpoints for retry; do not log data or auth.
-    const code = ['WORKFLOW_EXAMPLES_IN_PROGRESS', 'WORKFLOW_EXAMPLES_KIND_MISMATCH', 'WORKFLOW_EXAMPLES_ORIGINAL_REQUIRED'].includes(error?.code)
+    const code = ['GOOGLE_EMAIL_ORIGINAL_REQUIRED', 'GOOGLE_EMAIL_AUTHORIZATION_REQUIRED', 'GOOGLE_EMAIL_AUTHORIZATION_CONSUMED',
+      'GOOGLE_EMAIL_EXISTING_DELIVERY_HOLD', 'GOOGLE_EMAIL_STORAGE_UNAVAILABLE', 'GOOGLE_EMAIL_STORAGE_UNCONFIRMED',
+      'GOOGLE_EMAIL_ORIGINAL_INVALID', 'GOOGLE_EMAIL_AUTHORIZATION_INVALID', 'GOOGLE_EMAIL_REQUEST_INVALID', 'GOOGLE_EMAIL_DATE_EXPIRED',
+      'WORKFLOW_EXAMPLES_IN_PROGRESS', 'WORKFLOW_EXAMPLES_KIND_MISMATCH', 'WORKFLOW_EXAMPLES_ORIGINAL_REQUIRED'].includes(error?.code)
       ? error.code : 'WORKFLOW_EXAMPLES_UNAVAILABLE';
     try { (dependencies.traceLog || console.info)('M1_TEST_WORKFLOW_EXAMPLES', JSON.stringify({ requestId: input.requestId, code })); } catch {}
     return jsonResponse(code === 'WORKFLOW_EXAMPLES_ORIGINAL_REQUIRED' ? 404 : code === 'WORKFLOW_EXAMPLES_UNAVAILABLE' ? 503 : 409, { ok: false, code });

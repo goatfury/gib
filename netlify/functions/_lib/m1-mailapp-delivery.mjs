@@ -206,12 +206,16 @@ export async function deliverMailApp(message, deps = {}, policy) {
       preflight = await request(immutable, 'attendanceMailStatus', binding(deps), deps, policy);
       await saveReceipt(store, immutable, preflight);
       original = await retained(store, immutable, policy, clock(deps));
+      if (deps.statusOnly === true) return original.result;
       if (!original.result.retryAllowed || preflight.code !== 'MAILAPP_READY') return original.result;
     } else {
       if (original.result.state !== 'not-started') return original.result;
-      const unavailable = gate(immutable, deps, policy); if (unavailable) return unavailable;
+      const unavailable = deps.statusOnly === true ? null : gate(immutable, deps, policy); if (unavailable) return unavailable;
       preflight = await request(immutable, 'attendanceMailStatus', binding(deps), deps, policy);
     }
+    if (deps.statusOnly === true) return base(immutable, preflight.result?.state === 'not-attempted' ? 'not-started' : 'unknown',
+      preflight.result?.attemptedAt ? 'MAILAPP_ORIGINAL_LOCAL_CLAIM_MISSING' : preflight.code,
+      { receipts: [preflight], ...(preflight.result ? { googleResult: preflight.result } : {}) });
     if (!original.entry && preflight.result?.attemptedAt) {
       // Google already owns this identity. Retain that fact locally; never create a send opportunity.
       claim = { schema: SCHEMA, message: immutable, bindings: [binding(deps)] };

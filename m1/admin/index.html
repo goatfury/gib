@@ -772,6 +772,7 @@
       <section id="attendanceWorkflow" class="panel section" aria-label="Automatic attendance workflow TEST examples" hidden></section>
       <section id="attendanceDigest" class="panel section" aria-label="Attendance reminder preview" hidden></section>
       <section id="attendanceEmail" class="panel section" aria-label="Proposed TEST email" hidden></section>
+      <section id="attendanceGoogleEmail" class="panel section" aria-label="One approved Google TEST email" hidden></section>
       <nav id="managerModes" class="mode-switch" role="tablist" aria-label="Admin mode">
         <a id="dailyModeControl" class="mode-control" href="#sign-ins" role="tab" aria-controls="sign-ins" aria-selected="true">Daily sign-ins</a>
         <a id="staffModeControl" class="mode-control" href="#staff-time" role="tab" aria-controls="staff-time" aria-selected="false">Staff Clock</a>
@@ -1096,6 +1097,7 @@
   <script src="./staff-recovery.js"></script>
   <script src="./attendance-digest.js"></script>
   <script src="./attendance-email.js"></script>
+  <script src="./attendance-google-email.js"></script>
   <script src="../attendance-warning.js"></script>
   <script src="./attendance-workflow.js"></script>
   <script src="./read-callback-proof.js"></script>
@@ -1280,6 +1282,7 @@
       let attendanceDigest = null;
       let attendanceWorkflow = null;
       let attendanceEmail = null;
+      let attendanceGoogleEmail = null;
       let currentDate = '';
       let currentRecords = [];
       let currentWarnings = [];
@@ -3731,7 +3734,7 @@
           : 0;
         let response;
         let data = null;
-        const readDigest = options.method === 'GET' && /^\/api\/m1-attendance-(?:digest(?:-email)?|workflow)(?:\?|$)/.test(url);
+        const readDigest = options.method === 'GET' && /^\/api\/m1-attendance-(?:digest(?:-email)?|google-email|workflow)(?:\?|$)/.test(url);
         try {
           response = await fetch(url, {
             method: readDigest ? 'GET' : 'POST',
@@ -3798,6 +3801,7 @@
         if (typeof attendanceDigest !== 'undefined' && attendanceDigest) attendanceDigest.clear();
         if (typeof attendanceWorkflow !== 'undefined' && attendanceWorkflow) attendanceWorkflow.clear();
         if (typeof attendanceEmail !== 'undefined' && attendanceEmail) attendanceEmail.clear();
+        if (typeof attendanceGoogleEmail !== 'undefined' && attendanceGoogleEmail) attendanceGoogleEmail.clear();
         if (typeof closeRemovalForLogout === 'function') closeRemovalForLogout();
         reviewLoaded = false;
         if (addedClasses) addedClasses.setActive(false);
@@ -3922,7 +3926,15 @@
             if (loaded && location.hash === '#attendanceEmail') window.requestAnimationFrame(() => $('#attendanceEmail').scrollIntoView({ block: 'start' }));
           });
         }
-        if (firstEntry) {
+        const googleEmailHandoff = attendanceGoogleEmail && location.hash === '#attendanceGoogleEmail'
+          && new URLSearchParams(location.search).get('emailTest') === 'google-v1';
+        if (googleEmailHandoff) {
+          void attendanceGoogleEmail.open().then(() => {
+            if (location.hash === '#attendanceGoogleEmail' && !$('#attendanceGoogleEmail').hidden)
+              window.requestAnimationFrame(() => $('#attendanceGoogleEmail').scrollIntoView({ block: 'start' }));
+          });
+        }
+        if (firstEntry && !googleEmailHandoff) {
           window.requestAnimationFrame(() => {
             window.requestAnimationFrame(() => window.scrollTo(0, 0));
           });
@@ -7229,6 +7241,12 @@
       attendanceEmail = globalThis.GIBM1AttendanceEmail?.create({
         root: $('#attendanceEmail'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
         enabled: RECOVERY_PILOT_ENABLED && RECOVERY_PILOT_TARGET === 'test', getAdmin: () => currentAdminName,
+        onUnauthorized: () => setLoggedOut('Admin login required.')
+      });
+      attendanceGoogleEmail = globalThis.GIBM1AttendanceGoogleEmail?.create({
+        root: $('#attendanceGoogleEmail'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
+        enabled: RECOVERY_PILOT_ENABLED && RECOVERY_PILOT_TARGET === 'test',
+        getAdmin: () => currentAdminName, getSession: () => adminRequestToken,
         onUnauthorized: () => setLoggedOut('Admin login required.')
       });
       attendanceWorkflow = globalThis.GIBM1AttendanceWorkflow?.create({
