@@ -5890,7 +5890,7 @@
           } else {
             if (validStaffTimeStaleError(error)) {
               staffAttentionNeedsRefresh = true;
-              staffAttentionLoadError = 'Staff Clock changed while Needs attention was loading. Retry this section.';
+              staffAttentionLoadError = 'The Staff Clock review expired or changed while Needs attention was loading. Retry to load fresh records.';
             } else {
               staffAttentionLoadError = `Needs attention could not be loaded. ${clean(error.message)
                 || 'The request did not complete.'}`;
@@ -5915,6 +5915,12 @@
       }
 
       async function loadStaffTime(options = {}) {
+        if (options.readRecovery === true && document.querySelector(
+          '.staff-adjustment[open], [data-staff-adjust-form][aria-busy="true"], [data-staff-adjust-form][data-staff-request-id]'
+        )) {
+          showMessage($('#staffTimeMessage'), 'Your unfinished correction and its original request are preserved. Finish that correction before refreshing Staff Clock. Records have not been refreshed.');
+          return false;
+        }
         const generation = ++staffTimeLoadGeneration;
         beginStaffShiftLookupLoading();
         showMessage($('#staffTimeMessage'), 'Loading Staff Clock records…', 'working');
@@ -5934,11 +5940,21 @@
           staffRecentQueued = false;
           if (staffAttentionNeedsRefresh) {
             staffRecentNeedsRefresh = true;
-            staffRecentLoadError = 'Staff Clock changed before recent completed shifts could load. Retry this section.';
+            staffRecentLoadError = 'The Staff Clock review expired or changed before recent completed shifts could load. Retry to load fresh records.';
             renderStaffRecentShifts();
+            // A cache expiry and an actual record change share the same strict
+            // stale response. Never reuse that view or mix its partial pages.
+            if (options.staleRestarted !== true) {
+              return await loadStaffTime({ ...options, staleRestarted: true, readRecovery: true });
+            }
           } else {
             renderStaffRecentShifts();
-            void loadStaffRecentShifts(generation);
+            void loadStaffRecentShifts(generation).then(() => {
+              if (generation === staffTimeLoadGeneration
+                && staffRecentNeedsRefresh && options.staleRestarted !== true) {
+                void loadStaffTime({ ...options, staleRestarted: true, readRecovery: true });
+              }
+            });
           }
           if (attentionLoaded) {
             showMessage($('#staffTimeMessage'), 'Needs attention and Clocked in now loaded.', 'success');
@@ -5984,24 +6000,14 @@
 
       async function retryStaffTime() {
         if (staffPrimaryLoading) return;
-        await loadStaffTime();
+        await loadStaffTime({ readRecovery: true });
       }
 
       async function retryStaffAttention() {
-        if (staffAttentionLoading) return;
-        if (staffAttentionNeedsRefresh) {
-          await loadStaffTime({ quiet: true });
-          return;
-        }
-        if (!currentStaffTime) {
-          await loadStaffTime();
-          return;
-        }
-        const loaded = await loadStaffAttention(currentStaffTime, staffTimeLoadGeneration);
-        if (loaded) {
-          showMessage($('#staffTimeMessage'), 'Needs attention and Clocked in now loaded.', 'success');
-          if ($('#staffTimeAdvanced').open) void loadStaffTimeAdvanced();
-        }
+        if (staffPrimaryLoading || staffAttentionLoading || staffRecentLoading) return;
+        // A timed-out page can leave an expired token too. A deliberate Retry
+        // starts with a fresh validated summary, rather than requiring two clicks.
+        await loadStaffTime({ quiet: true, readRecovery: true });
       }
 
       async function loadStaffTimeAdvanced() {
@@ -6099,7 +6105,7 @@
           } else if (validStaffTimeStaleError(error)) {
             currentStaffRecentLookup = null;
             staffRecentNeedsRefresh = true;
-            staffRecentLoadError = 'Staff Clock changed while recent completed shifts were loading. Retry this section.';
+            staffRecentLoadError = 'The Staff Clock review expired or changed while recent completed shifts were loading. Retry to load fresh records.';
           } else {
             currentStaffRecentLookup = null;
             staffRecentLoadError = `Recent completed shifts could not be loaded. ${clean(error.message)
@@ -6119,16 +6125,8 @@
       }
 
       async function retryStaffRecentShifts() {
-        if (staffRecentLoading) return;
-        if (staffRecentNeedsRefresh) {
-          await loadStaffTime({ quiet: true });
-          return;
-        }
-        if (!currentStaffTime) {
-          await loadStaffTime();
-          return;
-        }
-        await loadStaffRecentShifts(staffTimeLoadGeneration);
+        if (staffPrimaryLoading || staffAttentionLoading || staffRecentLoading) return;
+        await loadStaffTime({ quiet: true, readRecovery: true });
       }
 
       function showMoreRecentShifts() {
