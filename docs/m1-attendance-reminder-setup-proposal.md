@@ -13,6 +13,16 @@ Andrew confirmed these settings on September 28, 2026. They supersede earlier re
 
 America/New_York follows daylight saving time. Each gym receives its own message and only its own protected correction links. Andrew is a real BCC recipient, never a visible To/CC recipient or address in the rendered email body. Setting GIB_M1_ATTENDANCE_DIGEST_BCC_ANDREW=false removes BCC from future messages; existing immutable messages, attempts and receipts must not be rewritten.
 
+## Approved Revolution reminder eligibility — September 29, 2026
+
+Andrew approved the simple 8 p.m. rule going forward. For a reliably observed Revolution occurrence dated **2026-09-29 or later**, a class starting before 20:00 with no explicit finish is eligible for the reminder at 20:00 America/New_York. This is reminder eligibility only: `endAt` remains null, stored observations are unchanged, and no duration or payroll hours are created. Explicit later finishes take precedence. A class starting at/after 20:00 without its own finish remains uncertain. Ordinary current-schedule validation and retained dated observations continue automatically.
+
+The 39 start-only labels below are no longer a prerequisite for forward reminder eligibility. They remain a useful record of the source's limits, not a new request to Andrew. The new rule does not apply to older dates or manufacture missing calendars. Richmond retains its explicit ranges; its 21:00 classes are excluded at 20:00 and are eligible in the next daily assessment.
+
+Known unresolved items and unknown coverage remain separate. The saved Richmond TEST capture has three known September23 classes (07:00–08:00 BJJ No-Gi,18:00–19:00 Muay Thai Fundamentals,19:15–21:00 BJJ No-Gi Fundamentals). The06:00 canceled occurrence is excluded. Its separate email section says: **“Checks that could not be completed: The actual dated schedule or class finish times could not be confirmed for 22 dates. No missing instructors were inferred for those dates.”** This preserves older work without claiming that22 dates mean22 missing people. Warnings continue until reliable records/review evidence resolves them; no historical cutoff or silent exclusion is proposed.
+
+See [the exact live change plan and remaining implementation boundary](m1-reminder-live-change-plan.md). The current sender and forgotten-clock-out paths still reject production; TEST success is not a deployable live release.
+
 ## TEST preparation boundary
 
 Actual sending and recurring scheduling stay OFF. Captures are synthetic and are not delivered emails. Reuse the existing temporary Google timer rehearsal with an explicit near-term synthetic opportunity, isolated data and capture delivery. It does not activate the 8 p.m. schedule. Remove its temporary trigger and stop its lease after verification.
@@ -23,7 +33,7 @@ The existing Revolution TEST Google project executes as revbjjops@gmail.com and 
 
 At the latest eligible scheduled opportunity, obtain a fresh assessment, including older unresolved attendance and enabled Staff Clock questions. Repeated ticks and recovery retain one stable gym/date identity, including a complete clean/no-email decision. After downtime, assess only the latest eligible opportunity; do not send a backlog.
 
-8 p.m. is the reminder time, not a claim that every class ends then. Exclude upcoming and still-running classes. A class with a known finish after 8 p.m. remains in dated coverage for the following daily assessment. An unknown finish time is not guessed; report that the class could not be checked when finish evidence is required. A canceled occurrence remains excluded unless recorded teaching creates a contradiction needing review.
+8 p.m. is the reminder time, not a recorded finish. Apply the approved prospective Revolution eligibility rule above; exclude known upcoming and still-running classes. A class with a known finish after 8 p.m. remains in dated coverage for the following daily assessment. Outside that rule, an unknown finish remains uncertain. A canceled occurrence remains excluded unless recorded teaching creates a contradiction needing review.
 
 A successful complete check with no outstanding work produces no message. An incomplete check must say what could not be checked, never invent a missing sign-in or an all-clear. A day not reviewed is not the same as a missing sign-in. One instructor normally satisfies a class's sign-in requirement; identifying a missing second instructor needs an expected count/assignment or explicit manager knowledge.
 
@@ -57,9 +67,9 @@ The narrow parser prepared in this branch derives a finish only from an occurren
 
 The weekday 19:15–21:00 classes are still running at the confirmed 20:00 reminder. Their saved dated occurrences remain eligible in the following assessment. Public weekly ranges do not establish holiday exceptions, cancellations or historical attendance.
 
-### Revolution: 55 occurrences needing business-confirmed finishes
+### Revolution: 55 start-only occurrences — source limitation, not a forward reminder blocker
 
-These 39 grouped labels identify the complete current start-only list. Confirmation must supply the actual finish and the date from which it applies; do not backfill older dates without separate evidence.
+These39 grouped labels identify the complete current start-only list. The approved rule handles their prospective reminder eligibility. If actual finishes are supplied later, retain their effective dates; do not backfill older dates without separate evidence.
 
 | Days | Exact app entry requiring a finish |
 | --- | --- |

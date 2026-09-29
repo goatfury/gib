@@ -3,6 +3,7 @@ import { handleM1Schedule, REFRESH_INTERVAL_MS } from '../m1-schedule.mjs';
 import { defaultAddedClassesStore, publicAddedClasses, readAddedClasses } from './m1-added-classes.mjs';
 import { REVIEW_START, datePlus, localNow } from './m1-manager-review.mjs';
 import temporary from '../../../m1/temporary-classes-core.js';
+import { revolutionReminderEligibility } from './m1-reminder-eligibility.mjs';
 
 const SCHEMA = 'm1-digest-dated-schedule/v1';
 const TIMEZONE = 'America/New_York';
@@ -137,6 +138,8 @@ function occurrences(observed, added, closingTime, cutoffConfirmed) {
     // Project from the retained label without rewriting the dated observation.
     // Older observations with endAt:null therefore retain their original bytes.
     if (explicitFinish !== null) return { ...item, endAt: explicitFinish };
+    const eligibility = !cutoffConfirmed && revolutionReminderEligibility(observed.gym, observed.date, item);
+    if (eligibility) return { ...item, ...eligibility };
     if (!cutoffConfirmed) fail('CLASS_FINISH_UNCONFIRMED');
     const finish = localInstant(observed.date, closingTime);
     if (Date.parse(finish) <= Date.parse(item.startAt)) fail('CLASS_FINISH_UNCONFIRMED');

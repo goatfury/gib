@@ -192,10 +192,10 @@ test('pre-existing dated range evidence is projected without history changes; mi
   assert.equal(days[1].occurrences[0].endAt, '2026-09-25T01:00:00.000Z'); assert.deepEqual([...h.store.entries], before); assert.equal(h.store.writes.length, 0);
 });
 
-test('all 55 Revolution start-only entries still require real finish evidence, even with the reminder time confirmed', async () => {
+test('all 55 historical Revolution start-only entries still require finish evidence before the approved reminder-rule date', async () => {
   const revolution = JSON.parse(readFileSync(new URL('../m1/shared-schedule.json', import.meta.url), 'utf8')); let count = 0;
   for (const [index, [weekday, labels]] of Object.entries(revolution.days).entries()) {
-    const date = new Date(Date.parse('2026-09-28T00:00:00Z') + index * 86400000).toISOString().slice(0, 10), h = fixture();
+    const date = new Date(Date.parse('2026-09-21T00:00:00Z') + index * 86400000).toISOString().slice(0, 10), h = fixture();
     const now = Date.parse(date + 'T23:00:00-04:00');
     h.args = { ...h.args, dates: [date], now, closingTime: '20:00', cutoffConfirmed: true, classFinishCutoffConfirmed: false };
     h.deps.currentSchedule = schedule({ fetchedAt: new Date(now).toISOString(), days: revolution.days });

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { datesThrough, localNow, datePlus, validateRead } from './m1-manager-review.mjs';
+import { revolutionReminderEligibility } from './m1-reminder-eligibility.mjs';
 
 export const DIGEST_SCHEMA = 'm1-attendance-digest/v1';
 export const DIGEST_ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
@@ -121,10 +122,13 @@ function scheduleDay(value, gym, date, now, cutoffConfirmed) {
     if (!safeText(item?.label) || !iso(item.startAt) || localNow(new Date(item.startAt)).date !== date
       || typeof item.cancelled !== 'boolean' || seen.has(labelKey(item.label))) return null;
     let finish;
+    const eligibility = revolutionReminderEligibility(gym.id, date, item);
     // A resolved cancellation needs no inferred finish time. Its only possible
     // attention item is separately recorded teaching that contradicts it.
     if (item.cancelled) finish = null;
     else if (iso(item.endAt) && Date.parse(item.endAt) > Date.parse(item.startAt) && Date.parse(item.endAt) - Date.parse(item.startAt) <= 24 * 3600000) finish = Date.parse(item.endAt);
+    else if (eligibility && item.eligibilityBasis === eligibility.eligibilityBasis
+      && item.reminderEligibleAt === eligibility.reminderEligibleAt) finish = Date.parse(eligibility.reminderEligibleAt);
     else if (item.endAt === null && cutoffConfirmed && item.finishBasis === 'confirmed-gym-close' && iso(item.finishedAtCutoff)
       && Date.parse(item.finishedAtCutoff) > Date.parse(item.startAt) && Date.parse(item.finishedAtCutoff) - Date.parse(item.startAt) <= 24 * 3600000) finish = Date.parse(item.finishedAtCutoff);
     else return null;
