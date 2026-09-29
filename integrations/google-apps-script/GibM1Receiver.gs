@@ -31,6 +31,22 @@ var GIB_M1_AUDIT_HEADERS_ = [
   'Linked Sign-in Record ID'
 ];
 var GIB_M1_ADMIN_NAMES_ = ['Andrew Smith', 'Stuart Turner'];
+
+// The shared list remains the Revolution/Staff contract. Richmond's additional
+// instructor reviewer exists only inside its permanently provisioned TEST scope.
+function instructorAdminNameAllowed_(name, site) {
+  if (GIB_M1_ADMIN_NAMES_.indexOf(name) >= 0) return true;
+  if (name !== 'Trey Martin' || (site !== undefined && site !== 'Richmond')
+    || configuredDeploymentTarget_() !== 'test'
+    || typeof GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ !== 'undefined'
+    || typeof gibM1RichmondTestScope_ !== 'function') return false;
+  try {
+    var scope = gibM1RichmondTestScope_();
+    return Boolean(scope) && scope.installation === 'richmond'
+      && scope.environment === 'test' && scope.gym === 'richmond' && scope.target === 'test';
+  } catch (error) { return false; }
+}
+
 var GIB_M1_MAX_KIOSK_ROWS_ = 50;
 var GIB_M1_MAX_RECOVERY_ROWS_ = 250;
 var GIB_M1_RECORD_ID_MAX_ = 240;
@@ -958,7 +974,7 @@ function adminAttribution_(record) {
   var match = notes.match(
     /^Admin-added \| Admin: ([^|]+) \| Reason: ([^|]+)(?: \| Notes: ([\s\S]*))?$/
   );
-  if (!match || GIB_M1_ADMIN_NAMES_.indexOf(cleanText_(match[1])) === -1) return null;
+  if (!match || !instructorAdminNameAllowed_(cleanText_(match[1]), exactText_(record && record.site))) return null;
   return {
     adminName: cleanText_(match[1]),
     reason: cleanText_(match[2]),
@@ -1922,7 +1938,7 @@ function readAdminAuditHistory_(spreadsheet, date, options) {
         || actionNumber < 1
         || Math.floor(actionNumber) !== actionNumber
         || actionNumber > GIB_M1_MAX_SAFE_INTEGER_
-        || GIB_M1_ADMIN_NAMES_.indexOf(cleanText_(row[1])) === -1
+        || !instructorAdminNameAllowed_(cleanText_(row[1]), exactText_(row[6]))
         || !actionTime
         || !exactText_(row[3])
         || exactText_(row[3]).length > GIB_M1_INSTRUCTOR_MAX_
@@ -2174,7 +2190,7 @@ function validateAdminAddition_(body, spreadsheet) {
   };
   if (
     !value.requestId
-    || GIB_M1_ADMIN_NAMES_.indexOf(value.adminName) === -1
+    || !instructorAdminNameAllowed_(value.adminName, value.site)
     || !validCalendarDate_(value.date)
     || value.date > todayNewYork_()
     || !value.classLabel

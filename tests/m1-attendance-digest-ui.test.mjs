@@ -28,7 +28,7 @@ const capturedStatus = () => ({ requestId: ID, state: 'captured', expiresAt: 160
 
 function harness(options = {}) {
   const calls = [], nodes = [], clicked = [], blobs = [], revoked = [], timers = new Map(), historyChanges = [];
-  const location = options.href ? { href: options.href } : undefined;
+  const location = options.location || (options.href ? { href: options.href } : undefined);
   let now = 100000, timerId = 0, unauthorized = 0, uuidCalls = 0, admin = 'Andrew';
   class Element {
     constructor(tag) { this.tag = tag; this.children = []; this.events = {}; this.dataset = {}; this.style = {}; this.attributes = {}; this.ownText = ''; }
@@ -53,7 +53,7 @@ function harness(options = {}) {
     setTimeout: (fn, ms) => { const id = ++timerId; timers.set(id, { fn, at: now + ms }); return id; },
     clearTimeout: id => timers.delete(id), Blob: class { constructor(parts, options) { blobs.push({ parts, options }); } },
     URL: Object.assign(class extends URL {}, { createObjectURL: () => 'blob:preview', revokeObjectURL: url => revoked.push(url) }),
-    location,
+    location, M1_INSTALLATION_PROFILE: options.profile, M1_MANAGER_REVIEW_CONFIG: options.config,
     history: { state: { retained: true }, replaceState: (state, title, href) => { historyChanges.push({ state, title, href }); location.href = href; } }
   });
   vm.runInContext(source, context);
@@ -631,4 +631,19 @@ test('retry finds an already-persisted arm without another POST and never writes
     assert.equal(h.calls.length, 2); assert.equal(h.calls.filter(call => call.args[1]).length, 0);
     assert.equal(h.uuidCalls(), 0); assert.equal(h.storage.has(REHEARSAL_KEY), true);
   }
+});
+
+test('Richmond capture panel uses its own central capture and journal without synthetic rehearsal controls', async () => {
+  const options = { location: { href: 'https://gib-richmond-test.netlify.app/m1/admin/', origin: 'https://gib-richmond-test.netlify.app', protocol: 'https:', port: '' },
+    profile: { installationId: 'richmond', environment: 'test' }, config: { enabled: true, target: 'test' }, create: { site: 'Richmond' } };
+  const h = harness(options), config = { ...response().configuration, gyms: [{ id: 'richmond', name: 'Richmond BJJ', staffClockEnabled: false }] };
+  const own = response(preview('captured', { groups: [{ gym: 'richmond', name: 'Richmond BJJ', items: [{ summary: 'A Richmond instructor needs review' }] }] }), null, { configuration: config });
+  await open(h, own); assert.match(h.root.textContent, /Richmond instructor/); assert.match(h.root.textContent, /Richmond TEST records only/);
+  assert.equal(h.control('rehearsal'), undefined); assert.ok(h.control('capture'));
+  const read = h.ui.open(); h.calls.at(-1).resolve(response(preview(), null, { configuration: config })); await read;
+  assert.match(visibleStatus(h).textContent, /unavailable/);
+  const recover = h.ui.open(); h.calls.at(-1).resolve(own); await recover; assert.match(visibleStatus(h).textContent, /Ready to capture/);
+  h.click('capture'); await flush(); assert.ok(h.storage.has('m1-attendance-digest-test-richmond-pending-v1')); assert.equal(h.storage.has(KEY), false);
+  const sent = h.calls.find(call => call.args[1]?.action === 'capture'); assert.equal(sent.args[1].requestId, ID);
+  sent.reject(new Error('Lost reply')); await flush(); h.ui.clear();
 });

@@ -87,10 +87,8 @@ test('BCC cannot be changed by a body transformation or silently authorize Richm
   const two = disabled.input('issue', true);
   two.configuration.routing.rev.bcc = [{ key: 'andrew', name: 'Andrew', address: 'andrew@example.invalid' }];
   two.configuration.routing.richmond.bcc = [{ key: 'andrew', name: 'Andrew', address: 'andrew@example.invalid' }];
-  await processAttendanceWorkflow(two, disabled.deps);
-  assert.equal(network, 0); const messages = await disabled.messages(); assert.equal(messages.length, 2);
-  assert.ok(messages.every(item => item.firstAttemptAt === null && item.message.bcc[0] === 'andrew@example.invalid'));
-  assert.notDeepEqual(messages[0].message.to, messages[1].message.to);
+  await assert.rejects(processAttendanceWorkflow(two, disabled.deps), /WORKFLOW_TEST_SCOPE_REQUIRED/);
+  assert.equal(network, 0); assert.deepEqual(await disabled.messages(), [], 'ordinary data cannot prepare a second gym on this installation');
 });
 
 test('legacy one-email flags cannot authorize scheduled delivery and no first check is not a missed run', async () => {
@@ -435,4 +433,20 @@ test('exact later accepted delivery resolves a provisional recipient hold in rea
   assert.equal(h.entries.has('workflow/provider-evidence/' + providerId + '/early_permanent'), true);
   assert.equal(h.entries.has('workflow/provider-evidence/' + providerId + '/later_exact_delivery'), true);
   assert.equal(h.calls.length, 1);
+});
+
+test('capture-only two-gym rehearsal requires every trusted synthetic and send-off marker', async () => {
+  for (const mutate of [
+    h => { h.deps.scope = { ...scope, syntheticRehearsal: false }; },
+    h => { h.deps.env.GIB_M1_ATTENDANCE_DIGEST_SEND_ENABLED = 'true'; },
+    h => { delete h.deps.env.GIB_M1_MAILAPP_TEST_SEND_ENABLED; },
+    h => { h.deps.mailappRuntime = { target: 'test' }; },
+    h => { h.deps.transformMessage = value => value; }
+  ]) {
+    const h = harness(); delete h.deps.simulatedProvider;
+    h.deps.env = { GIB_M1_ATTENDANCE_DIGEST_SEND_ENABLED: 'false', GIB_M1_MAILAPP_TEST_SEND_ENABLED: 'false' };
+    const input = h.input('issue', true); mutate(h);
+    await assert.rejects(processAttendanceWorkflow(input, h.deps), /WORKFLOW_TEST_SCOPE_REQUIRED/);
+    assert.equal(h.entries.size, 0); assert.equal(h.calls.length, 0);
+  }
 });

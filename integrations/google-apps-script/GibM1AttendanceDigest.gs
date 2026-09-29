@@ -1,4 +1,4 @@
-/* Separate Revolution TEST project only. Capture delivery; never sends email. */
+/* Separate, locked TEST projects only. Capture delivery; never sends email. */
 var GIB_M1_DIGEST_SCHEMA_ = 'm1-attendance-digest-job/v1';
 var GIB_M1_DIGEST_URL_ = 'https://deploy-preview-89--gib-live.netlify.app/api/m1-attendance-digest-job';
 var GIB_M1_DIGEST_PENDING_ = 'M1_TEST_DIGEST_PENDING_';
@@ -28,9 +28,17 @@ function testRevolutionAttendanceDigestHmacVectors() {
   return result;
 }
 
-function gibM1DigestEnabled_() {
+function gibM1DigestScope_() {
+  if (typeof gibM1RichmondTestScope_ === 'function') return gibM1RichmondTestScope_();
   return typeof gibM1TestReadCallbackEnabled_ === 'function' && gibM1TestReadCallbackEnabled_()
-    && EXPECTED_SPREADSHEET_NAME === 'RBJJ M1 — TEST';
+    && EXPECTED_SPREADSHEET_NAME === 'RBJJ M1 — TEST' ? { gym: 'rev', target: 'test', digestUrl: GIB_M1_DIGEST_URL_ } : null;
+}
+function gibM1DigestEnabled_() {
+  return Boolean(gibM1DigestScope_());
+}
+function gibM1RevolutionDigestEnabled_() {
+  var scope = gibM1DigestScope_();
+  return Boolean(scope && scope.gym === 'rev');
 }
 function gibM1DigestBinding_(binding, mode, now) {
   var keys = ['createdAt', 'expiresAt', 'jobDate', 'mode', 'requestId', 'schema', 'target'];
@@ -76,6 +84,9 @@ function gibM1DigestReceipt_(properties, binding, started, code, status, acknowl
   } catch (_) { console.log('M1_TEST_DIGEST_RECEIPT_UNAVAILABLE'); }
 }
 function gibM1DigestStaffRead_(body) {
+  var scope = gibM1DigestScope_();
+  if (scope && scope.gym === 'richmond') return { ok: true, complete: true, items: [], notApplicable: true };
+  if (typeof gibM1RichmondTestScope_ === 'function') return { ok: false, code: 'STAFF_READ_UNAVAILABLE' };
   var lock = LockService.getScriptLock(), held = false;
   try {
     held = lock.tryLock(10000);
@@ -85,7 +96,8 @@ function gibM1DigestStaffRead_(body) {
   finally { if (held) lock.releaseLock(); }
 }
 function gibM1DigestDispatch_(binding) {
-  if (!gibM1DigestEnabled_()) throw new Error('Revolution TEST project required.');
+  var scope = gibM1DigestScope_();
+  if (!scope) throw new Error('Locked TEST project required.');
   var started = Date.now(), properties = PropertiesService.getScriptProperties();
   gibM1DigestBinding_(binding, binding.mode, started);
   if (gibM1DigestCleanup_(properties, started) >= 160) throw new Error('DIGEST_RECEIPT_CAPACITY');
@@ -96,7 +108,8 @@ function gibM1DigestDispatch_(binding) {
   properties.setProperty(pendingKey, pending);
   if (properties.getProperty(pendingKey) !== pending) throw new Error('DIGEST_PENDING_UNCONFIRMED');
   var body = { action: 'managerReviewRead', target: 'test', token: configuredReceiverSecret_(),
-    adminActionToken: configuredAdminActionSecret_(), gym: 'rev', from: '2026-09-07', to: binding.jobDate, check: null };
+    adminActionToken: configuredAdminActionSecret_(), gym: scope.gym, from: '2026-09-07', to: binding.jobDate, check: null };
+  if (scope.gym === 'richmond') { body.installation = scope.installation; body.environment = scope.environment; }
   var attendance;
   try {
     var ledger = JSON.parse(managerReviewAction_(body).getContent());
@@ -105,7 +118,7 @@ function gibM1DigestDispatch_(binding) {
   var staff = gibM1DigestStaffRead_(body);
   var payload = {};
   Object.keys(binding).forEach(function(key) { payload[key] = binding[key]; });
-  payload.gyms = [{ gym: 'rev', attendance: attendance, staff: staff }];
+  payload.gyms = [{ gym: scope.gym, attendance: attendance, staff: staff }];
   var raw = JSON.stringify(payload), status = null, acknowledged = false, state = null, code = 'DELIVERY_UNAVAILABLE', responseCode = null;
   try {
     if (Date.now() >= binding.expiresAt) throw new Error('DIGEST_EXPIRED');
@@ -114,13 +127,14 @@ function gibM1DigestDispatch_(binding) {
       .map(function(byte) { return ('0' + ((byte + 256) % 256).toString(16)).slice(-2); }).join('');
     // Both authoritative read locks have been released. Await this bounded single
     // delivery in the trigger/web invocation; never launch detached work.
-    var response = UrlFetchApp.fetch(GIB_M1_DIGEST_URL_, { method: 'post', contentType: 'application/json',
+    var response = UrlFetchApp.fetch(scope.digestUrl, { method: 'post', contentType: 'application/json',
       payload: raw, headers: { 'X-GIB-M1-Digest-Signature': signature }, followRedirects: false, muteHttpExceptions: true });
     status = response.getResponseCode();
     responseCode = 'RESPONSE_NOT_JSON';
     var result = JSON.parse(response.getContentText());
     responseCode = gibM1DigestResponseCode_(result && result.code);
-    var messageId = binding.mode === 'scheduled' ? 'm1-test-daily-' + binding.jobDate : 'm1-test-manual-' + binding.requestId;
+    var gymSuffix = scope.gym === 'richmond' ? 'richmond-' : '';
+    var messageId = binding.mode === 'scheduled' ? 'm1-test-daily-' + gymSuffix + binding.jobDate : 'm1-test-manual-' + gymSuffix + binding.requestId;
     acknowledged = status >= 200 && status < 300 && result && result.ok === true && result.accepted === true
       && result.requestId === binding.requestId && ['not-due', 'awaiting-configuration', 'captured', 'suppressed', 'failed'].indexOf(result.state) >= 0
       && (['not-due', 'awaiting-configuration'].indexOf(result.state) >= 0 ? result.messageId === null : result.messageId === messageId);
@@ -131,7 +145,10 @@ function gibM1DigestDispatch_(binding) {
   return { ok: acknowledged, requestId: binding.requestId, state: state, code: code };
 }
 function gibM1AttendanceDigestCapture_(body) {
-  if (!gibM1DigestEnabled_() || !adminActionAuthorized_(body) || GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) < 0) {
+  var scope = gibM1DigestScope_();
+  var adminAllowed = typeof instructorAdminNameAllowed_ === 'function' ? instructorAdminNameAllowed_(body && body.adminName) : GIB_M1_ADMIN_NAMES_.indexOf(body && body.adminName) >= 0;
+  if (!scope || !adminActionAuthorized_(body) || !adminAllowed
+    || (scope.gym === 'richmond' && (!gibM1RichmondEnvelopeValid_(body) || body.gym !== scope.gym))) {
     return jsonResult_({ ok: false, code: 'DIGEST_AUTHENTICATION_REQUIRED' });
   }
   try {
@@ -142,6 +159,10 @@ function gibM1AttendanceDigestCapture_(body) {
 // Install a 15-minute time-driven trigger through this TEST project's editor.
 // No ScriptApp trigger API, mail API, new permission or browser is needed to run.
 function testRevolutionAttendanceDigestTick() {
+  if (!gibM1RevolutionDigestEnabled_()) { console.log('M1_TEST_DIGEST_DISABLED'); return; }
+  return gibM1AttendanceDigestTick_();
+}
+function gibM1AttendanceDigestTick_() {
   if (!gibM1DigestEnabled_()) { console.log('M1_TEST_DIGEST_DISABLED'); return; }
   var now = Date.now();
   var binding = { schema: GIB_M1_DIGEST_SCHEMA_, target: 'test', requestId: Utilities.getUuid(), mode: 'scheduled',
@@ -157,7 +178,7 @@ function testRevolutionAttendanceDigestTick() {
   console.log('M1_TEST_DIGEST ' + JSON.stringify(result));
 }
 function testRevolutionAttendanceDigestReceipts() {
-  if (!gibM1DigestEnabled_()) throw new Error('Revolution TEST project required.');
+  if (!gibM1RevolutionDigestEnabled_()) throw new Error('Revolution TEST project required.');
   var properties = PropertiesService.getScriptProperties();
   gibM1DigestCleanup_(properties, Date.now());
   properties.getKeys().filter(function(key) { return key.indexOf(GIB_M1_DIGEST_RECEIPT_) === 0; }).sort()
@@ -178,7 +199,7 @@ function gibM1DigestRehearsalLease_(lease, now) {
 // Paste only the public lease returned by authenticated TEST Admin into the null
 // constant above, run this editor helper, then restore that constant to null.
 function testRevolutionAttendanceDigestRehearsalArm() {
-  if (!gibM1DigestEnabled_()) throw new Error('Revolution TEST project required.');
+  if (!gibM1RevolutionDigestEnabled_()) throw new Error('Revolution TEST project required.');
   var now = Date.now(), lease = gibM1DigestRehearsalLease_(GIB_M1_DIGEST_REHEARSAL_PUBLIC_LEASE_, now);
   if (now + 60000 >= lease.expiresAt) throw new Error('DIGEST_REHEARSAL_EXPIRED');
   var properties = PropertiesService.getScriptProperties(), raw = JSON.stringify(lease), prior = properties.getProperty(GIB_M1_DIGEST_REHEARSAL_LEASE_);
@@ -191,7 +212,7 @@ function testRevolutionAttendanceDigestRehearsalArm() {
   console.log('M1_TEST_DIGEST_REHEARSAL_ARMED ' + JSON.stringify({ rehearsalId: lease.rehearsalId, expiresAt: lease.expiresAt }));
 }
 function gibM1DigestRehearsalDispatch_(lease, binding, properties) {
-  if (!gibM1DigestEnabled_()) throw new Error('Revolution TEST project required.');
+  if (!gibM1RevolutionDigestEnabled_()) throw new Error('Revolution TEST project required.');
   var started = Date.now();
   gibM1DigestRehearsalLease_(lease, started);
   if (!binding || Object.keys(binding).sort().join('|') !== 'createdAt|expiresAt|jobDate|mode|rehearsalId|requestId|schema|target'
@@ -233,7 +254,7 @@ function gibM1DigestRehearsalDispatch_(lease, binding, properties) {
 }
 // Temporary editor-created timer only. Never installs a trigger or sends mail.
 function testRevolutionAttendanceDigestRehearsalTick() {
-  if (!gibM1DigestEnabled_()) { console.log('M1_TEST_DIGEST_REHEARSAL_DISABLED'); return; }
+  if (!gibM1RevolutionDigestEnabled_()) { console.log('M1_TEST_DIGEST_REHEARSAL_DISABLED'); return; }
   var now = Date.now(), binding = null, properties = null, result;
   try {
     properties = PropertiesService.getScriptProperties();
@@ -254,7 +275,7 @@ function testRevolutionAttendanceDigestRehearsalTick() {
   console.log('M1_TEST_DIGEST_REHEARSAL ' + JSON.stringify(result));
 }
 function testRevolutionAttendanceDigestRehearsalStop() {
-  if (!gibM1DigestEnabled_()) throw new Error('Revolution TEST project required.');
+  if (!gibM1RevolutionDigestEnabled_()) throw new Error('Revolution TEST project required.');
   PropertiesService.getScriptProperties().deleteProperty(GIB_M1_DIGEST_REHEARSAL_LEASE_);
   console.log('M1_TEST_DIGEST_REHEARSAL_STOPPED');
 }

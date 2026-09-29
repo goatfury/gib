@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 
 const source = readFileSync(new URL('../integrations/google-apps-script/GibM1MailApp.gs', import.meta.url), 'utf8');
 const receiver = readFileSync(new URL('../integrations/google-apps-script/GibM1Receiver.gs', import.meta.url), 'utf8');
+const richmondWrapper = readFileSync(new URL('../integrations/google-apps-script/richmond-test/Code.gs', import.meta.url), 'utf8');
 const authorization = receiver.match(/^function adminActionAuthorized_\(body\) \{[\s\S]*?^\}/m)[0];
 const SENDER = 'revbjjops@gmail.com', ID = '00000000-0000-4000-8000-000000000001';
 const START = Date.parse('2026-09-28T01:00:00Z'), READY = 'GIB_M1_MAILAPP_TEST_LEDGER_READY';
@@ -17,9 +18,53 @@ function message(change = {}) {
     text: 'Synthetic café — second instructor needs review.', synthetic: true, target: 'test', ...change };
   return { ...value, hash: createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex') };
 }
+
+test('Richmond MailApp is scoped and disabled even with an enabled Script Property', () => {
+  const h = harness({ richmond: true });
+  for (const action of ['attendanceMailSend', 'attendanceMailStatus']) {
+    const result = h.request(action);
+    assert.equal(result.gym, 'richmond'); assert.equal(result.messageId, 'm1-test-scheduled-richmond-2026-09-27');
+    assert.equal(result.code, 'MAILAPP_DISABLED'); assert.equal(result.state, 'not-attempted'); assert.equal(result.retrySafe, true);
+  }
+  assert.equal(h.calls.length, 0); assert.equal(h.sheet.rows.length, 1); assert.equal(h.events.some(event => event[0] === 'quota'), false);
+  assert.equal(h.context.gibM1RichmondActionValid_({ action: 'attendanceMailStatus', gym: 'richmond' }), true);
+  assert.equal(h.context.gibM1RichmondActionValid_({ action: 'attendanceMailSend', gym: 'rev' }), false);
+});
+
+test('Richmond MailApp rejects cross-gym messages and request identities before touching records', () => {
+  for (const patch of [{ gym: 'rev' }, { target: 'production' }, { installation: 'rev' }, { environment: 'production' }, { installation: undefined }, { token: 'wrong' }]) {
+    const h = harness({ richmond: true }); assert.equal(h.request('attendanceMailStatus', patch).code, 'MAILAPP_AUTHENTICATION_REQUIRED'); assert.equal(h.events.length, 0);
+  }
+  const h = harness({ richmond: true }); assert.equal(h.request('attendanceMailSend', { message: message() }).code, 'MAILAPP_MESSAGE_INVALID'); assert.equal(h.events.length, 0);
+  for (const key of ['GIB_M1_DEPLOYMENT_TARGET_LOCK', 'GIB_M1_INSTALLATION_LOCK', 'GIB_M1_ENVIRONMENT_LOCK', 'GIB_M1_RICHMOND_TEST_PROVISIONING_CLOSED', 'GIB_M1_RICHMOND_TEST_SPREADSHEET_ID']) {
+    const bad = harness({ richmond: true }); bad.properties.delete(key);
+    assert.equal(bad.request().code, 'MAILAPP_AUTHENTICATION_REQUIRED', key); assert.equal(bad.events.length, 0);
+  }
+});
+
+test('Richmond disabled status preserves permanent own-gym claims and rejects foreign ledger rows', () => {
+  const h = harness({ richmond: true }), original = message({ messageId: 'm1-test-scheduled-richmond-2026-09-27' });
+  h.sheet.rows.push([original.messageId, 'attempt', original.hash, 'richmond', '2026-09-27', ID, new Date(START).toISOString(), '', 'MAILAPP_CALL_PENDING', SENDER]);
+  assert.equal(h.request('attendanceMailStatus').state, 'unknown'); assert.equal(h.request().state, 'unknown'); assert.equal(h.calls.length, 0);
+  h.sheet.rows[1][3] = 'rev'; assert.equal(h.request('attendanceMailStatus').code, 'MAILAPP_ORIGINAL_CONFLICT');
+  assert.equal(h.sheet.rows.length, 2); assert.equal(h.calls.length, 0);
+});
+
+test('Richmond MailApp preparation uses its scoped helpers without altering Revolution payload hashes', () => {
+  const h = harness({ richmond: true, ready: false, missingSheet: true, emptySheet: true });
+  assert.throws(() => h.context.prepareRevolutionTestMailAppLedger(), /MAILAPP_SENDER_UNVERIFIED/);
+  assert.throws(() => h.context.authorizeRevolutionTestMailApp(), /MAILAPP_SENDER_UNVERIFIED/);
+  assert.equal(h.context.prepareRichmondTestMailAppLedger().initialized, true);
+  assert.equal(h.sheet.rows.length, 1); assert.equal(h.calls.length, 0); assert.equal(h.context.GIB_M1_RICHMOND_MAILAPP_SEND_ENABLED, false);
+  const rev = harness(), original = message(); assert.equal(rev.context.gibM1MailAppHash_(original), original.hash);
+  assert.equal(h.context.gibM1MailAppHash_(message({ messageId: 'm1-test-scheduled-richmond-2026-09-27' })), message({ messageId: 'm1-test-scheduled-richmond-2026-09-27' }).hash);
+});
 function harness(options = {}) {
   let stamp = START, held = false, currentStage = null;
   const settings = { ...options }, events = [], calls = [], reads = [], logs = [], properties = new Map();
+  if (settings.richmond) for (const [key, value] of Object.entries({ GIB_M1_RICHMOND_TEST_SPREADSHEET_ID: 'synthetic-richmond-sheet',
+    GIB_M1_DEPLOYMENT_TARGET_LOCK: 'test', GIB_M1_INSTALLATION_LOCK: 'richmond', GIB_M1_ENVIRONMENT_LOCK: 'test',
+    GIB_M1_RICHMOND_TEST_PROVISIONING_CLOSED: 'richmond-test-v1' })) properties.set(key, value);
   if (settings.ready !== false) properties.set(READY, 'v1');
   if (settings.enabled !== false) properties.set(SEND, 'true');
   properties.set(RECIPIENTS, JSON.stringify({ to: ['qa@example.com'], cc: [] }));
@@ -76,6 +121,7 @@ function harness(options = {}) {
     console: { log: value => logs.push(value) },
     Date: class extends Date { constructor(...args) { super(...(args.length ? args : [stamp])); } static now() { return stamp; } },
     EXPECTED_SPREADSHEET_NAME: settings.sheetName || 'RBJJ M1 — TEST',
+    GIB_M1_TARGET_LOCK_PROPERTY_: 'GIB_M1_DEPLOYMENT_TARGET_LOCK',
     configuredDeploymentTarget_: () => settings.target || 'test', deploymentTargetAllowed_: value => value === (settings.target || 'test') && settings.targetLock !== false,
     configuredReceiverSecret_: () => 'synthetic-transport', configuredAdminActionSecret_: () => 'synthetic-admin',
     cleanText_: value => typeof value === 'string' ? value.trim() : '', scriptProperty_: () => '',
@@ -102,10 +148,13 @@ function harness(options = {}) {
     }
   });
   vm.runInContext(authorization + '\n' + source, context);
+  if (settings.richmond) vm.runInContext(richmondWrapper, context);
   if (present && settings.emptySheet !== true) sheet.rows = [plain(context.GIB_M1_MAILAPP_HEADERS_)];
   function request(action = 'attendanceMailSend', patch = {}) {
-    return JSON.parse(context.gibM1MailAppAction_({ action, target: 'test', gym: 'rev', token: 'synthetic-transport', adminActionToken: 'synthetic-admin',
-      binding: { schema: 'm1-mailapp-request/v1', requestId: ID, createdAt: stamp, expiresAt: stamp + 60000 }, message: message(), ...patch }).getContent());
+    return JSON.parse(context.gibM1MailAppAction_({ action, target: 'test', gym: settings.richmond ? 'richmond' : 'rev', token: 'synthetic-transport', adminActionToken: 'synthetic-admin',
+      binding: { schema: 'm1-mailapp-request/v1', requestId: ID, createdAt: stamp, expiresAt: stamp + 60000 },
+      message: message(settings.richmond ? { messageId: 'm1-test-scheduled-richmond-2026-09-27' } : {}),
+      ...(settings.richmond ? { installation: 'richmond', environment: 'test' } : {}), ...patch }).getContent());
   }
   return { context, settings, events, calls, properties, sheet, reads, logs, request, advance: ms => { stamp += ms; }, deleteSheet: () => { present = false; }, held: () => held };
 }

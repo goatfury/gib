@@ -1,10 +1,18 @@
-/* Revolution reads only. Fixed, separate TEST and production destinations. */
+/* Enabled manager reads only. Fixed destinations selected by trusted project scope. */
 var GIB_M1_TEST_READ_CALLBACK_URL_ = 'https://deploy-preview-89--gib-live.netlify.app/api/m1-test-read-result';
+var GIB_M1_RICHMOND_TEST_READ_CALLBACK_URL_ = 'https://gib-richmond-test.netlify.app/api/m1-test-read-result';
 var GIB_M1_TEST_READ_CALLBACK_SCHEMA_ = 'm1-test-read-callback/v1';
 var GIB_M1_LIVE_READ_CALLBACK_URL_ = 'https://gib-live.netlify.app/api/m1-manager-read-result';
 var GIB_M1_LIVE_READ_CALLBACK_SCHEMA_ = 'm1-manager-read-callback/v1';
 
+function gibM1ReadCallbackGym_() {
+  if (typeof GIB_M1_RICHMOND_INSTALLATION_ !== 'undefined') {
+    return typeof gibM1RichmondTestScope_ === 'function' && gibM1RichmondTestScope_() ? 'richmond' : '';
+  }
+  return typeof GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ === 'undefined' ? 'rev' : '';
+}
 function gibM1ReadCallbackTarget_() {
+  if (managerReviewEnabled_() && gibM1ReadCallbackGym_() === 'richmond') return 'test';
   if (!managerReviewEnabled_() || typeof GIB_M1_RICHMOND_INSTALLATION_ !== 'undefined'
     || typeof GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ !== 'undefined') return '';
   var target = configuredDeploymentTarget_();
@@ -69,7 +77,7 @@ function gibM1ReadTraceReceipt_(requestId, started) {
   var events = [], active = false;
   try {
     var until = Number(PropertiesService.getScriptProperties().getProperty(GIB_M1_READ_TRACE_WINDOW_));
-    active = gibM1TestReadCallbackEnabled_() && until > started && until <= started + 20 * 60000;
+    active = (gibM1TestReadCallbackEnabled_() || gibM1RichmondTestReadCallbackEnabled_()) && until > started && until <= started + 20 * 60000;
   } catch (_) {} // Diagnostics never gate the authoritative read or callback.
   return {
     event: function(stage, state, status, elapsedMs) {
@@ -96,7 +104,37 @@ function gibM1ReadTraceReceipt_(requestId, started) {
 }
 
 function gibM1TestReadCallbackEnabled_() {
-  return gibM1ReadCallbackTarget_() === 'test';
+  return gibM1ReadCallbackGym_() === 'rev' && gibM1ReadCallbackTarget_() === 'test';
+}
+
+function gibM1RichmondTestReadCallbackEnabled_() {
+  return gibM1ReadCallbackGym_() === 'richmond' && gibM1ReadCallbackTarget_() === 'test';
+}
+function authorizeRichmondTestReadCallback() {
+  if (!gibM1RichmondTestReadCallbackEnabled_()) throw new Error('Richmond TEST project required.');
+  UrlFetchApp.getRequest(GIB_M1_RICHMOND_TEST_READ_CALLBACK_URL_, { method: 'post' });
+  console.log('Richmond TEST callback permission is available. No request sent.');
+}
+function testRichmondStartReadTrace() {
+  if (!gibM1RichmondTestReadCallbackEnabled_()) throw new Error('Richmond TEST project required.');
+  var properties = PropertiesService.getScriptProperties();
+  gibM1ReadTraceKeys_(properties, Date.now());
+  properties.setProperty(GIB_M1_READ_TRACE_WINDOW_, String(Date.now() + 20 * 60000));
+  console.log('Richmond TEST read tracing armed for 20 minutes. Existing receipts retained.');
+}
+function testRichmondStopReadTrace() {
+  if (!gibM1RichmondTestReadCallbackEnabled_()) throw new Error('Richmond TEST project required.');
+  PropertiesService.getScriptProperties().deleteProperty(GIB_M1_READ_TRACE_WINDOW_);
+  console.log('Richmond TEST read tracing stopped. Existing receipts retained.');
+}
+function testRichmondReadTraceReceipts() {
+  if (!gibM1RichmondTestReadCallbackEnabled_()) throw new Error('Richmond TEST project required.');
+  var properties = PropertiesService.getScriptProperties(), now = Date.now();
+  gibM1ReadTraceKeys_(properties, now).sort().forEach(function(key) {
+    if (Number(key.slice(GIB_M1_READ_TRACE_PREFIX_.length, GIB_M1_READ_TRACE_PREFIX_.length + 13)) <= now) return;
+    try { console.log('M1_TEST_READ_RECEIPT ' + JSON.stringify(gibM1SanitizeReadReceipt_(JSON.parse(properties.getProperty(key))))); }
+    catch (_) { console.log('M1_TEST_READ_TRACE_UNAVAILABLE'); }
+  });
 }
 
 // Run this only from the separate TEST project's editor for the owner's consent.
@@ -217,10 +255,10 @@ function gibM1TestReadCallback_(body) {
   var stage = 'google.request', error = 'thrown_exception', status = null, acknowledged = null;
   var now = Date.now();
   try {
-    var target = gibM1ReadCallbackTarget_();
+    var target = gibM1ReadCallbackTarget_(), gym = gibM1ReadCallbackGym_();
     if (!target || !adminActionAuthorized_(body)) return rejectedAuthResult_();
     var schema = target === 'test' ? GIB_M1_TEST_READ_CALLBACK_SCHEMA_ : GIB_M1_LIVE_READ_CALLBACK_SCHEMA_;
-    var callbackUrl = target === 'test' ? GIB_M1_TEST_READ_CALLBACK_URL_ : GIB_M1_LIVE_READ_CALLBACK_URL_;
+    var callbackUrl = gym === 'richmond' ? GIB_M1_RICHMOND_TEST_READ_CALLBACK_URL_ : target === 'test' ? GIB_M1_TEST_READ_CALLBACK_URL_ : GIB_M1_LIVE_READ_CALLBACK_URL_;
     var b = body.binding;
     if (target === 'test') receipt = gibM1ReadTraceReceipt_(b && b.requestId, now);
     trace = function(stage, state, status, elapsedMs) {
@@ -234,8 +272,9 @@ function gibM1TestReadCallback_(body) {
     };
     trace('google.request', 'accepted');
     stage = 'google.envelope';
-    if (body.action !== (target === 'test' ? 'managerReviewReadCallbackProof' : 'managerReviewReadCallback') || requestTarget_(body) !== target
-      || body.gym !== 'rev' || body.from !== '2026-09-07' || body.to !== todayNewYork_()) {
+    if (body.action !== (target === 'test' && gym === 'rev' ? 'managerReviewReadCallbackProof' : 'managerReviewReadCallback') || requestTarget_(body) !== target
+      || body.gym !== gym || (gym === 'richmond' && (!gibM1RichmondEnvelopeValid_(body)
+      || !gibM1RichmondExactKeys_(body, ['token', 'adminActionToken', 'target', 'installation', 'environment', 'action', 'gym', 'from', 'to', 'binding'].concat(body.adminName === undefined ? [] : ['adminName'])))) || body.from !== '2026-09-07' || body.to !== todayNewYork_()) {
       error = 'validation_rejected'; trace(stage, 'rejected'); return rejectedAuthResult_();
     }
     trace(stage, 'validated');
@@ -247,10 +286,10 @@ function gibM1TestReadCallback_(body) {
     if (staffRead) fields = fields.concat(['originalHash', 'staffAction']);
     var rejection = null;
     if (!b || JSON.stringify(Object.keys(b).sort()) !== JSON.stringify(fields.sort())) rejection = 'binding_shape';
-    else if (b.schema !== schema || b.target !== target || b.gym !== 'rev'
+    else if (b.schema !== schema || b.target !== target || b.gym !== gym || (gym === 'richmond' && (additionCheck || staffRead))
       || ['managerReviewRead', 'managerReviewBadgeRead', 'adminAdditionCheckRead', 'staffClockRead'].indexOf(b.action) < 0 || b.from !== body.from || b.to !== body.to
     ) rejection = 'binding_scope';
-    else if (b.action !== 'managerReviewBadgeRead' ? GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) < 0 : body.adminName !== undefined) rejection = 'binding_reviewer';
+    else if (b.action !== 'managerReviewBadgeRead' ? (gym === 'richmond' ? !instructorAdminNameAllowed_(body.adminName, 'Richmond') : GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) < 0) : body.adminName !== undefined) rejection = 'binding_reviewer';
     else if (staffRead ? (target !== 'test'
       || !staffClockExactKeys_(body, ['token', 'adminActionToken', 'target', 'action', 'gym', 'from', 'to', 'adminName', 'binding', 'original'])
       || typeof b.originalHash !== 'string' || !/^[0-9a-f]{64}$/.test(b.originalHash)
@@ -279,7 +318,7 @@ function gibM1TestReadCallback_(body) {
       read = gibM1StaffCallbackRead_(readBody, trace);
     } else {
       readBody = { action: additionCheck ? 'adminAdditionCheckRead' : 'managerReviewRead', target: target, token: body.token,
-        adminActionToken: body.adminActionToken, gym: 'rev', from: body.from, to: body.to, adminName: body.adminName };
+        adminActionToken: body.adminActionToken, gym: gym, from: body.from, to: body.to, adminName: body.adminName };
       if (additionCheck) { readBody.original = body.original; readBody.originalHash = b.originalHash; readBody.date = b.date; }
       else readBody.check = null;
       read = managerReviewAction_(readBody, trace);
@@ -295,7 +334,7 @@ function gibM1TestReadCallback_(body) {
     }
     if ((staffRead ? !gibM1StaffCallbackResult_(result, b.staffAction)
       : (!ledger || ledger.ok !== true || ledger.complete !== true || ledger.schema !== 'm1-manager-review/v1'
-      || ledger.gym !== 'rev' || ledger.target !== target || ledger.from !== b.from || ledger.to !== b.to)) || readAt >= b.expiresAt) {
+      || ledger.gym !== gym || ledger.target !== target || ledger.from !== b.from || ledger.to !== b.to)) || readAt >= b.expiresAt) {
       error = 'read_rejected'; throw new Error('Read unavailable.');
     }
     stage = 'google.payload';

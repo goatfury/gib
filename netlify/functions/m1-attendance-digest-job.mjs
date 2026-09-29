@@ -4,6 +4,7 @@ import { DIGEST_SIGNATURE_HEADER, authenticateDigestJob, processDigestJob } from
 import { validId } from './_lib/m1-test-read-callback.mjs';
 import { processDigestRehearsal } from './_lib/m1-attendance-digest-rehearsal.mjs';
 import { enqueueAttendanceWorkflow } from './_lib/m1-attendance-digest-workflow.mjs';
+import { digestGym } from './_lib/m1-attendance-digest.mjs';
 
 export const config = { path: '/api/m1-attendance-digest-job', rateLimit: { windowLimit: 20, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 const responseCodes = new Set(['DIGEST_AUTHENTICATION_FAILED', 'DIGEST_RUNTIME_UNAVAILABLE', 'DIGEST_INVALID_JSON', 'DIGEST_INVALID_ENVELOPE',
@@ -25,7 +26,8 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
   const scope = attendanceDigestScope(request, dependencies);
   if (!scope) return reject(403, 'DIGEST_SCOPE_REQUIRED');
   stage = 'job.runtime';
-  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: 'rev' });
+  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url,
+    installationId: scope.profile.installationId, environment: scope.profile.environment });
   if (runtime?.target !== 'test') return reject(503, 'DIGEST_RUNTIME_UNAVAILABLE');
   stage = 'job.envelope';
   const declared = request.headers.get('Content-Length');
@@ -38,6 +40,7 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
     try { const hint = JSON.parse(raw)?.requestId; if (validId(hint)) requestId = hint; } catch {}
     stage = 'job.authentication';
     const job = authenticateDigestJob(raw, request.headers.get(DIGEST_SIGNATURE_HEADER), runtime, clock());
+    if (job.binding.mode === 'rehearsal' && digestGym(scope) !== 'rev') return reject(409, 'DIGEST_GYM_MISMATCH');
     requestId = job.binding.requestId;
     stage = 'job.capture';
     // Await complete central capture before acknowledging the scheduler. No

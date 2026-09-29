@@ -20,7 +20,12 @@
   // authenticated request adapter. GET must not be translated into a POST.
   // Only the original capture identity is journaled; previews and auth are not.
   function create({ root, request, enabled, target, site, getAdmin, onUnauthorized }) {
-    if (enabled !== true || target !== 'test' || site !== 'Rev' || !root
+    const richmond = site === 'Richmond', gym = richmond ? 'richmond' : 'rev';
+    if (richmond && (global.M1_INSTALLATION_PROFILE?.installationId !== 'richmond' || global.M1_INSTALLATION_PROFILE?.environment !== 'test'
+      || global.location?.origin !== 'https://gib-richmond-test.netlify.app' || global.location?.protocol !== 'https:' || global.location?.port
+      || global.M1_MANAGER_REVIEW_CONFIG?.enabled !== true || global.M1_MANAGER_REVIEW_CONFIG?.target !== 'test')) return null;
+    const journalKey = richmond ? 'm1-attendance-digest-test-richmond-pending-v1' : KEY;
+    if (enabled !== true || target !== 'test' || !['Rev', 'Richmond'].includes(site) || !root
       || typeof request !== 'function' || typeof getAdmin !== 'function') return null;
     const document = root.ownerDocument || global.document;
     let active = false, generation = 0, busy = false, current = false;
@@ -45,17 +50,17 @@
     function remember(value) {
       if (value) {
         const serialized = JSON.stringify(value);
-        global.sessionStorage.setItem(KEY, serialized);
-        if (global.sessionStorage.getItem(KEY) !== serialized) throw new Error('Journal unavailable');
+        global.sessionStorage.setItem(journalKey, serialized);
+        if (global.sessionStorage.getItem(journalKey) !== serialized) throw new Error('Journal unavailable');
       } else {
-        global.sessionStorage.removeItem(KEY);
-        if (global.sessionStorage.getItem(KEY) !== null) throw new Error('Journal unavailable');
+        global.sessionStorage.removeItem(journalKey);
+        if (global.sessionStorage.getItem(journalKey) !== null) throw new Error('Journal unavailable');
       }
       pending = value;
     }
     function restore() {
       try {
-        const raw = global.sessionStorage.getItem(KEY);
+        const raw = global.sessionStorage.getItem(journalKey);
         if (!raw) { pending = null; return; }
         const value = JSON.parse(raw);
         if (!value || Object.keys(value).sort().join('|') !== 'requestId|startedAt'
@@ -76,6 +81,7 @@
     }
     function restoreRehearsal() {
       rehearsal = null; selectedGym = null; invalidLink = false;
+      if (richmond) return;
       try {
         const raw = global.sessionStorage.getItem(REHEARSAL_KEY);
         if (raw) {
@@ -111,6 +117,7 @@
         && clean(value.messageId) && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
         && typeof value.subject === 'string' && typeof value.html === 'string'
         && typeof value.text === 'string' && Array.isArray(value.groups)
+        && (!richmond || value.groups.every(group => group.gym === gym) && value.readFailures?.every(item => item.gym === gym))
         && value.groups.every(group => group && typeof group.name === 'string' && Array.isArray(group.items)
           && group.items.every(item => item && typeof item.summary === 'string'))
         && Array.isArray(value.readFailures)
@@ -118,7 +125,7 @@
     }
     function validConfiguration(value) {
       return value?.ok === true && value.target === 'test' && value.sendingEnabled === false
-        && value.configuration && validTime(value.configuration.dailyLocalTime)
+        && value.configuration && (!richmond || value.configuration.gyms?.length === 1 && value.configuration.gyms[0].id === gym && value.configuration.gyms[0].staffClockEnabled === false) && validTime(value.configuration.dailyLocalTime)
         && typeof value.configuration.cutoffConfirmed === 'boolean'
         && typeof value.configuration.timezone === 'string'
         && Array.isArray(value.configuration.recipients)
@@ -139,6 +146,7 @@
       });
     }
     function validProposals(value) {
+      if (richmond) return !value.rehearsal && !Object.hasOwn(value, 'proposedMessages');
       if (!Object.hasOwn(value, 'proposedMessages')) return !selectedGym;
       if (!rehearsal || !validRehearsal(value.rehearsal) || !Array.isArray(value.proposedMessages)
         || ![0, 2].includes(value.proposedMessages.length)) return false;
@@ -204,11 +212,11 @@
         if (config.classFinishCutoffConfirmed === false) root.append(el('p', 'Class finishing times are not confirmed by this reminder time. Upcoming classes stay protected.', 'muted'));
         if (config.senderAddress) root.append(el('p', 'Proposed sender: ' + config.senderAddress + '.', 'muted'));
         if (config.routing) {
-          for (const [gym, name] of [['rev', 'Revolution'], ['richmond', 'Richmond']]) {
+          for (const [gym, name] of (richmond ? [['richmond', 'Richmond']] : [['rev', 'Revolution'], ['richmond', 'Richmond']])) {
             const route = config.routing[gym], setupOnly = !config.gyms?.some(value => value.id === gym);
             root.append(el('p', `${name}${setupOnly ? ' (setup only)' : ''}: ${route.reviewer.name} — ${clean(route.reviewer.address) || 'address not configured'}. CC: ${route.cc.length ? route.cc.map(person => person.address).join(', ') : 'none'}. Hidden BCC copy: ${route.bcc?.length ? route.bcc.map(person => person.address).join(', ') : 'off'}.`, 'muted'));
           }
-          root.append(el('p', 'Richmond’s proposed reviewer still needs existing Admin access; this preview grants no access and enables no delivery.', 'muted'));
+          root.append(el('p', richmond ? 'Trey can use scoped Richmond TEST Admin access. Production reviewer access remains unverified; sending remains off.' : 'Richmond’s proposed reviewer still needs existing Admin access; this preview grants no access and enables no delivery.', 'muted'));
         } else root.append(el('p', 'Recipients: ' + (config.recipients.map(person => `${person.name}: ${clean(person.address) || 'address not configured'}`).join('; ') || 'not configured') + '.', 'muted'));
         root.append(timeControls());
       }
@@ -216,9 +224,12 @@
       controls.append(button('Capture preview', 'capture', busy || !current || Boolean(pending) || Boolean(rehearsal) || storageBlocked),
         button(rehearsal ? 'Refresh rehearsal status' : pending ? 'Check original capture' : 'Refresh status', 'refresh', busy));
       root.append(controls);
+      if (!richmond) {
       root.append(el('h3', 'Controlled synthetic rehearsal'));
       root.append(el('p', 'Uses isolated fixtures only. No real records are changed and no email is sent. This does not change the daily reminder time or confirm class finishing times.', 'muted'));
       root.append(button('Run controlled synthetic rehearsal', 'rehearsal', busy || !current || Boolean(pending) || Boolean(rehearsal) || storageBlocked));
+      }
+      if (richmond) root.append(el('p', 'This capture reads Richmond TEST records only. Staff Clock is disabled.', 'muted'));
       if (rehearsal) {
         root.append(el('p', 'Rehearsal ID: ' + rehearsal.rehearsalId, 'muted'));
         if (!validRehearsal(data?.rehearsal)) root.append(button('Retry original rehearsal', 'rehearsal-retry', busy || storageBlocked || Boolean(pending)));
@@ -469,6 +480,7 @@
       return flight;
     }
     function armRehearsal(retryOriginal = false) {
+      if (richmond) return Promise.resolve(false);
       if (!active || !authenticated()) { clear(); return Promise.resolve(false); }
       if (flight) return flight;
       if (pending || storageBlocked || (retryOriginal ? !rehearsal || validRehearsal(data?.rehearsal) : !current || rehearsal)) return Promise.resolve(false);

@@ -34,6 +34,16 @@ function labelStart(date, label) {
   if (!match) fail('SCHEDULE_TIME_UNAVAILABLE');
   return localInstant(date, `${String(+match[1] % 12 + (match[3].toUpperCase() === 'PM' ? 12 : 0)).padStart(2, '0')}:${match[2]}`);
 }
+function labelFinish(date, label) {
+  // A finish must be explicit in this dated occurrence's own label. Do not
+  // borrow today's timetable, payroll duration, or infer an overnight date.
+  if (!/^(?:0?[1-9]|1[0-2]):[0-5]\d\s+(?:AM|PM)\s*[-–]/i.test(label)) return null;
+  const match = /^(?:0?[1-9]|1[0-2]):[0-5]\d\s+(?:AM|PM)\s*[-–]\s*(0?[1-9]|1[0-2]):([0-5]\d)\s+(AM|PM)\s+\S/i.exec(label);
+  if (!match) fail('SCHEDULE_TIME_UNAVAILABLE');
+  const finish = localInstant(date, `${String(+match[1] % 12 + (match[3].toUpperCase() === 'PM' ? 12 : 0)).padStart(2, '0')}:${match[2]}`);
+  if (Date.parse(finish) <= Date.parse(labelStart(date, label))) fail('SCHEDULE_TIME_UNAVAILABLE');
+  return finish;
+}
 function normalizeBase(date, base) {
   if (!Array.isArray(base) || base.length > 100) fail('DATED_SCHEDULE_INVALID');
   const seen = new Set();
@@ -123,6 +133,10 @@ function occurrences(observed, added, closingTime, cutoffConfirmed) {
   if (byLabel.size > 100) fail('DATED_SCHEDULE_INVALID');
   return [...byLabel.values()].sort((a, b) => a.startAt.localeCompare(b.startAt) || a.label.localeCompare(b.label)).map(item => {
     if (item.cancelled || item.endAt !== null) return item;
+    const explicitFinish = labelFinish(observed.date, item.label);
+    // Project from the retained label without rewriting the dated observation.
+    // Older observations with endAt:null therefore retain their original bytes.
+    if (explicitFinish !== null) return { ...item, endAt: explicitFinish };
     if (!cutoffConfirmed) fail('CLASS_FINISH_UNCONFIRMED');
     const finish = localInstant(observed.date, closingTime);
     if (Date.parse(finish) <= Date.parse(item.startAt)) fail('CLASS_FINISH_UNCONFIRMED');

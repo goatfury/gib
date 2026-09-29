@@ -84,6 +84,7 @@ export async function handleAdminReview(request, dependencies = {}) {
   );
   const review = google.readable && google.value && google.value.ok === true
     ? sanitizeDailyReviewPayload(google.value, date, {
+      adminScope: config,
       allowInstructorSigninVoid, allowRevolutionRemoval: Boolean(removal),
       managerReviewTestSite: MANAGER_REVIEW_ENABLED && config.target === 'test'
         ? config.installationId === 'richmond' ? 'Richmond' : 'Rev'

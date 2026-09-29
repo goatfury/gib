@@ -45,6 +45,75 @@ function job(body, options = {}) {
 }
 const body = (requestId = id, mode = 'scheduled') => ({ ...makeDigestBinding(requestId, mode, now), gyms: gyms() });
 
+const richmondOrigin = 'https://gib-richmond-test.netlify.app';
+function richmondHarness() {
+  const h = harness();
+  h.deps.installationId = 'richmond'; h.deps.environment = 'test';
+  h.deps.env = { GIB_M1_INSTALLATION: 'richmond', GIB_M1_ENVIRONMENT: 'test', GIB_RICHMOND_TEST_WEBHOOK_URL: 'https://script.google.com/macros/s/SYNTHETIC_RICHMOND/exec',
+    GIB_RICHMOND_TEST_WEBHOOK_TOKEN: 'synthetic-richmond-transport-secret',
+    GIB_RICHMOND_TEST_ADMIN_ACTION_TOKEN: 'synthetic-richmond-admin-secret-12345678901234567890' };
+  h.deps.context.site = { id: '42736c77-e3c8-40aa-ba97-4f935d0999ad', name: 'gib-richmond-test' };
+  h.deps.context.deploy = { context: 'production', published: true };
+  h.deps.traceLog = () => {};
+  h.runtime = runtimeConfig(h.deps.env, { admin: true, requestUrl: richmondOrigin, installationId: 'richmond', environment: 'test' });
+  h.admin = (input, query = '', reviewer = 'Trey Martin') => new Request(richmondOrigin + '/api/m1-attendance-digest' + query, {
+    method: input ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', Origin: richmondOrigin,
+      Cookie: `${ADMIN_COOKIE}=${encodeURIComponent(createAdminSession(reviewer, h.runtime.sessionSecret, now, 'x'.repeat(43), h.runtime))}`,
+      [ADMIN_REQUEST_HEADER]: 'x'.repeat(43) }, ...(input ? { body: JSON.stringify(input) } : {}) });
+  h.body = (requestId = id, mode = 'manual') => { const value = body(requestId, mode); value.gyms[0].gym = 'richmond';
+    value.gyms[0].attendance.ledger.gym = 'richmond'; value.gyms[0].staff = { ok: true, complete: true, items: [], notApplicable: true }; return value; };
+  h.job = (value, secret = h.runtime.adminActionToken) => { const raw = JSON.stringify(value); return new Request(richmondOrigin + '/api/m1-attendance-digest-job', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', [DIGEST_SIGNATURE_HEADER]: digestSignature(raw, secret) }, body: raw }); };
+  return h;
+}
+
+test('Richmond own Admin capture persists before scoped receiver dispatch, captures once and keeps Trey history visible', async () => {
+  const h = richmondHarness();
+  const config = await handleAttendanceDigest(h.admin({ action: 'configure', dailyLocalTime: '20:00' }), h.deps);
+  assert.equal(config.status, 200); assert.equal(h.store.entries.get('configuration').data.reviewer, 'Trey Martin');
+  const initial = await handleAttendanceDigest(h.admin({ action: 'capture', requestId: id }), h.deps);
+  assert.equal(initial.status, 202); assert.ok(h.store.entries.has('requests/' + id)); await Promise.all(h.tasks);
+  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].adminName, 'Trey Martin');
+  assert.deepEqual([h.calls[0].target, h.calls[0].installation, h.calls[0].environment, h.calls[0].gym], ['test', 'richmond', 'test', 'richmond']);
+  const captured = await handleAttendanceDigestJob(h.job(h.body()), h.deps); assert.equal(captured.status, 200);
+  assert.equal((await captured.json()).messageId, 'm1-test-manual-richmond-' + id);
+  assert.equal((await handleAttendanceDigestJob(h.job(h.body()), h.deps)).status, 200);
+  assert.equal([...h.store.entries.keys()].filter(key => key.startsWith('captures/')).length, 1);
+  const state = await (await handleAttendanceDigest(h.admin(null, '?requestId=' + id, 'Andrew Smith'), h.deps)).json();
+  assert.equal(state.latest.state, 'captured'); assert.equal(state.sendingEnabled, false);
+  assert.deepEqual(state.configuration.gyms.map(g => [g.id, g.staffClockEnabled]), [['richmond', false]]);
+  assert.deepEqual(state.configuration.recipients.map(p => p.address), ['info@richmondbjj.com']);
+  assert.doesNotMatch(state.latest.html + state.latest.text, /deploy-preview-89|info@revolutionbjj.com|#staff-time/);
+  assert.equal(h.calls.length, 1, 'callbacks and repeat reads never redispatch or send');
+});
+
+test('Richmond rejects cross-gym payloads, wrong secret, Staff data and synthetic actions before storing a capture', async () => {
+  for (const mutate of [v => { v.gyms[0].gym = 'rev'; }, v => { v.gyms[0].staff.items.push({ private: 'unexpected' }); },
+    v => { delete v.gyms[0].staff.notApplicable; }, v => { v.mode = 'rehearsal'; v.rehearsalId = id2; v.gyms = []; }]) {
+    const h = richmondHarness(), value = h.body(id, 'scheduled'); mutate(value);
+    assert.equal((await handleAttendanceDigestJob(h.job(value), h.deps)).status, 409); assert.equal(h.store.entries.size, 0);
+  }
+  const h = richmondHarness();
+  assert.equal((await handleAttendanceDigestJob(h.job(h.body(), env.GIB_TEST_ADMIN_ACTION_TOKEN), h.deps)).status, 403);
+  assert.equal((await handleAttendanceDigest(h.admin({ action: 'armRehearsal', rehearsalId: id }), h.deps)).status, 403);
+  assert.equal((await handleAttendanceDigest(h.admin(null, '?rehearsalId=' + id), h.deps)).status, 403);
+  h.deps.context.site.id = '9b7757a9-70f4-4977-9ca2-270b41e34007';
+  assert.equal((await handleAttendanceDigest(h.admin(), h.deps)).status, 403); assert.equal(h.store.entries.size, 0);
+});
+
+test('Richmond attendance failure produces an unavailable capture and later fresh request recovers without erasing it', async () => {
+  const h = richmondHarness(); await handleAttendanceDigest(h.admin({ action: 'capture', requestId: id }), h.deps); await Promise.all(h.tasks);
+  const value = h.body(); value.gyms[0].attendance = { ok: false, code: 'READ_UNAVAILABLE' };
+  assert.equal((await handleAttendanceDigestJob(h.job(value), h.deps)).status, 200);
+  const failed = structuredClone(h.store.entries.get('outbox/m1-test-manual-richmond-' + id));
+  assert.equal(failed.data.itemCount, 0); assert.equal(failed.data.readFailures[0].code, 'ATTENDANCE_UNAVAILABLE');
+  assert.equal(failed.data.state, 'captured'); assert.match(failed.data.subject, /check incomplete/);
+  await handleAttendanceDigest(h.admin({ action: 'capture', requestId: id2 }), h.deps); await Promise.all(h.tasks);
+  assert.equal((await handleAttendanceDigestJob(h.job(h.body(id2)), h.deps)).status, 200);
+  assert.deepEqual(h.store.entries.get('outbox/m1-test-manual-richmond-' + id), failed);
+  assert.equal(h.store.entries.get('outbox/m1-test-manual-richmond-' + id2).data.readFailures.length, 0);
+});
+
 test('manual capture persists before its one supported dispatch; repeat and concurrent starts preserve the same original', async () => {
   const h = harness();
   h.deps.fetch = async (_url, init) => {

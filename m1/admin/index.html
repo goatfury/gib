@@ -1114,6 +1114,14 @@
         return;
       }
       const IS_RICHMOND = INSTALLATION.installationId === 'richmond';
+      const RICHMOND_TEST_ADMIN_ENABLED = IS_RICHMOND && INSTALLATION.environment === 'test'
+        && location.protocol === 'https:' && !location.port
+        && /^(?:gib-richmond-test|[0-9a-f]{24}--gib-richmond-test)\.netlify\.app$/.test(location.hostname);
+      if (RICHMOND_TEST_ADMIN_ENABLED) {
+        const option = document.createElement('option');
+        option.value = 'Trey Martin'; option.textContent = 'Trey Martin';
+        document.getElementById('loginAdminName').append(option);
+      }
       const REV_REMOVAL_ENABLED = INSTALLATION.installationId === 'rev'
         && location.protocol === 'https:'
         && /^(?:gib-live|deploy-preview-\d+--gib-live|[0-9a-f]{24}--gib-live)\.netlify\.app$/.test(location.hostname)
@@ -1143,6 +1151,10 @@
         && location.protocol === 'https:' && !location.port
         && RECOVERY_PILOT_TARGET === 'test'
         && location.origin === 'https://deploy-preview-89--gib-live.netlify.app';
+      const ATTENDANCE_REMINDER_TEST_ENABLED = globalThis.M1_MANAGER_REVIEW_CONFIG?.enabled === true
+        && RECOVERY_PILOT_TARGET === 'test' && location.protocol === 'https:' && !location.port
+        && ((INSTALLATION.installationId === 'rev' && location.origin === 'https://deploy-preview-89--gib-live.netlify.app')
+          || (IS_RICHMOND && INSTALLATION.environment === 'test' && location.origin === 'https://gib-richmond-test.netlify.app'));
       const STAFF_CLOCK_PAIRING_ENABLED = INSTALLATION.featureFlags.staffClockPairing === true;
       const STAFF_CLOCK_PAIRING_CONFIG = INSTALLATION.staffClockPairing;
       const TABLET_PAIRING_AVAILABLE = STAFF_CLOCK_ENABLED
@@ -1945,7 +1957,9 @@
           && validReviewTimestamp(value.actionTime)
           && value.actionTime !== ''
           && value.classDate === expectedDate
-          && ['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
+          && (['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
+            || (typeof RICHMOND_TEST_ADMIN_ENABLED !== 'undefined' && RICHMOND_TEST_ADMIN_ENABLED
+              && value.adminName === 'Trey Martin' && value.site === 'Richmond'))
           && typeof value.adminName === 'string'
           && value.adminName.length >= 1
           && value.adminName.length <= 80
@@ -1994,7 +2008,9 @@
         if (
           value.ok !== true
           || typeof value.test !== 'boolean'
-          || !['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
+          || !(['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
+            || (typeof RICHMOND_TEST_ADMIN_ENABLED !== 'undefined' && RICHMOND_TEST_ADMIN_ENABLED
+              && value.test === true && value.adminName === 'Trey Martin'))
           || value.date !== expectedDate
           || !Array.isArray(value.records)
           || !Array.isArray(value.warnings)
@@ -2142,7 +2158,9 @@
         if (
           value.ok !== true
           || typeof value.test !== 'boolean'
-          || !['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
+          || !(['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
+            || (typeof RICHMOND_TEST_ADMIN_ENABLED !== 'undefined' && RICHMOND_TEST_ADMIN_ENABLED
+              && value.test === true && value.adminName === 'Trey Martin'))
           || value.instructor !== expectedInstructor
           || value.date !== expectedDate
           || !Array.isArray(value.selectedDateRecords)
@@ -3955,7 +3973,7 @@
         showMessage($('#loginMessage'), '');
         const adminName = $('#loginAdminName').value;
         if (!adminName) {
-          showMessage($('#loginMessage'), 'Choose Andrew Smith or Stuart Turner.');
+          showMessage($('#loginMessage'), 'Choose an Admin name.');
           return;
         }
         button.disabled = true;
@@ -3965,6 +3983,11 @@
             passphrase: testShortcut ? '' : $('#loginPassphrase').value,
             testShortcut
           });
+          if ((adminName === 'Trey Martin' || data.adminName === 'Trey Martin')
+            && (typeof RICHMOND_TEST_ADMIN_ENABLED === 'undefined' || !RICHMOND_TEST_ADMIN_ENABLED
+              || !testShortcut || data.test !== true || data.adminName !== adminName)) {
+            throw new Error('The Richmond TEST reviewer was not confirmed.');
+          }
           if (!/^[A-Za-z0-9_-]{32,256}$/.test(String(data.requestToken || ''))) {
             throw new Error('Admin login must be renewed for this page.');
           }
@@ -6878,7 +6901,9 @@
         if (!deployPreviewHost) return false;
         $('#passphraseField').hidden = true;
         $('#loginButton').hidden = true;
-        $('#loginCopy').textContent = 'Choose Andrew Smith or Stuart Turner, then enter the isolated TEST Admin. Production credentials are not used on this Deploy Preview.';
+        $('#loginCopy').textContent = typeof RICHMOND_TEST_ADMIN_ENABLED !== 'undefined' && RICHMOND_TEST_ADMIN_ENABLED
+          ? 'Choose Andrew Smith, Stuart Turner or Trey Martin, then enter the isolated Richmond TEST Admin. Production credentials are not used.'
+          : 'Choose Andrew Smith or Stuart Turner, then enter the isolated TEST Admin. Production credentials are not used on this Deploy Preview.';
         $('#testEntryHeading').textContent = IS_RICHMOND
           ? 'RICHMOND TEST ADMIN — Deploy Preview'
           : 'TEST ADMIN — Deploy Preview';
@@ -7241,7 +7266,7 @@
       });
       attendanceDigest = globalThis.GIBM1AttendanceDigest?.create({
         root: $('#attendanceDigest'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
-        enabled: RECOVERY_PILOT_ENABLED && RECOVERY_PILOT_TARGET === 'test', getAdmin: () => currentAdminName,
+        enabled: ATTENDANCE_REMINDER_TEST_ENABLED, getAdmin: () => currentAdminName,
         onUnauthorized: () => setLoggedOut('Admin login required.')
       });
       attendanceEmail = globalThis.GIBM1AttendanceEmail?.create({
@@ -7257,7 +7282,7 @@
       });
       attendanceWorkflow = globalThis.GIBM1AttendanceWorkflow?.create({
         root: $('#attendanceWorkflow'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
-        enabled: RECOVERY_PILOT_ENABLED, getAdmin: () => currentAdminName, getSession: () => adminRequestToken,
+        enabled: ATTENDANCE_REMINDER_TEST_ENABLED, getAdmin: () => currentAdminName, getSession: () => adminRequestToken,
         onUnauthorized: () => setLoggedOut('Admin login required.')
       });
       managerDayReview = globalThis.GIBM1ManagerReview?.create({

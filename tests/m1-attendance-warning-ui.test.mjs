@@ -13,7 +13,7 @@ function harness(options = {}) {
   const document = { readyState: 'complete', hidden: false, getElementById: () => null };
   root.ownerDocument = document;
   const context = vm.createContext({ document, location: { origin: ORIGIN, protocol: 'https:', port: '', ...options.location },
-    M1_MANAGER_REVIEW_CONFIG: { enabled: true, target: 'test', ...options.config }, M1_INSTALLATION_PROFILE: { installationId: options.gym || 'rev' },
+    M1_MANAGER_REVIEW_CONFIG: { enabled: true, target: 'test', ...options.config }, M1_INSTALLATION_PROFILE: { installationId: options.gym || 'rev', environment: options.environment },
     Date: class extends Date { static now() { return NOW; } }, AbortSignal: { timeout: ms => ({ timeout: ms }) },
     setTimeout: (fn, ms) => { const id = ++sequence; timers.set(id, { fn, ms }); return id; }, clearTimeout: id => timers.delete(id) });
   vm.runInContext(source, context);
@@ -53,4 +53,12 @@ test('polls never overlap, and late results cannot overwrite a cleared or hidden
   h.document.hidden = true; const before = h.root.textContent; h.calls[1].resolve({ ok: true, json: async () => response('clear') }); await flush(); assert.equal(h.root.textContent, before);
   h.document.hidden = false; const late = h.ui.refresh(); await flush(); h.ui.clear();
   h.calls[2].resolve({ ok: true, json: async () => response('clear') }); await late; assert.equal(h.root.textContent, before); assert.equal(h.timers.size, 0);
+});
+
+test('Richmond aggregate warning is same-gym only and recovers visibly from failed reads', async () => {
+  const h = harness({ gym: 'richmond', environment: 'test', location: { origin: 'https://gib-richmond-test.netlify.app' } }); assert.ok(h.ui);
+  await h.read({ ...response(), gym: 'richmond' }); assert.match(h.root.textContent, /could not be sent/);
+  await h.read(response('clear')); assert.match(h.root.textContent, /unavailable/); assert.equal(h.root.hidden, false);
+  const failed = h.ui.refresh(); await flush(); h.calls.at(-1).reject(new Error('Offline')); await failed; assert.match(h.root.textContent, /unavailable/);
+  await h.read({ ...response('clear'), gym: 'richmond' }); assert.equal(h.root.hidden, true);
 });

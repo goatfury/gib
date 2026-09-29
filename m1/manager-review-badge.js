@@ -16,8 +16,9 @@
     };
     trace('start');
     try {
-      const revolution = globalThis.M1_INSTALLATION_PROFILE?.installationId === 'rev';
-      const data = revolution ? await globalThis.GIBM1ReadClient.run({ ticket: globalThis.GIBM1ReadClient.createTicket(),
+      const profile = globalThis.M1_INSTALLATION_PROFILE;
+      const callbackRead = profile?.installationId === 'rev' || (profile?.installationId === 'richmond' && profile.environment === 'test' && globalThis.M1_MANAGER_REVIEW_CONFIG?.target === 'test');
+      const data = callbackRead ? await globalThis.GIBM1ReadClient.run({ ticket: globalThis.GIBM1ReadClient.createTicket(),
         send: async (readRequest, options) => {
           response = await fetch('/api/m1-manager-review', { cache: 'no-store', signal: AbortSignal.timeout(options.timeoutMs), headers: {
             'X-GIB-M1-Read-Operation': readRequest.operation, 'X-GIB-M1-Read-ID': readRequest.requestId

@@ -699,11 +699,12 @@ test('Google proof refuses other actions, installations, expired bindings, bad a
   assert.doesNotMatch(read('integrations/google-apps-script/GibM1TestReadCallback.gs'), /appendRow|setValues|setValue\(|deleteRow|managerReviewSave|managerReviewVoid/);
 });
 
-test('callback scope is declared only for Revolution packages; production remains an approval-only prepared manifest', () => {
+test('callback scope is declared for isolated TEST packages and prepared Revolution production only', () => {
   const scope = 'https://www.googleapis.com/auth/script.external_request';
   assert.ok(JSON.parse(read('integrations/google-apps-script/appsscript.json')).oauthScopes.includes(scope));
   assert.ok(JSON.parse(read('integrations/google-apps-script/production/appsscript.json')).oauthScopes.includes(scope));
-  for (const project of ['richmond-test', 'richmond-production']) assert.ok(!JSON.parse(read(`integrations/google-apps-script/${project}/appsscript.json`)).oauthScopes.includes(scope));
+  assert.ok(JSON.parse(read('integrations/google-apps-script/richmond-test/appsscript.json')).oauthScopes.includes(scope));
+  assert.ok(!JSON.parse(read('integrations/google-apps-script/richmond-production/appsscript.json')).oauthScopes.includes(scope));
   assert.match(read('integrations/google-apps-script/.claspignore'), /!GibM1TestReadCallback\.gs/);
   assert.match(read('integrations/google-apps-script/production/.claspignore'), /!GibM1TestReadCallback/);
   const g = googleHarness(); g.ctx.authorizeRevolutionTestReadCallback(); assert.equal(g.sent.length, 0);

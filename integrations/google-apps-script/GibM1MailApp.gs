@@ -1,4 +1,4 @@
-/* Revolution TEST only. No call is repeated after a durable gym/day claim. */
+/* Locked TEST projects only. No call is repeated after a durable gym/day claim. */
 var GIB_M1_MAILAPP_SENDER_ = 'revbjjops@gmail.com';
 var GIB_M1_MAILAPP_SCHEMA_ = 'm1-mailapp-request/v1';
 var GIB_M1_MAILAPP_TAB_ = 'MailApp Attempts';
@@ -8,9 +8,14 @@ var GIB_M1_MAILAPP_HEADERS_ = ['Message ID', 'Event', 'Payload Hash', 'Gym', 'Op
 function gibM1MailAppExact_(value, keys) {
   return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join('|') === keys.slice().sort().join('|');
 }
-function gibM1MailAppScope_() {
+function gibM1MailAppContext_() {
+  if (typeof gibM1RichmondTestScope_ === 'function') return gibM1RichmondTestScope_();
   return typeof configuredDeploymentTarget_ === 'function' && configuredDeploymentTarget_() === 'test'
-    && deploymentTargetAllowed_('test') && typeof EXPECTED_SPREADSHEET_NAME !== 'undefined' && EXPECTED_SPREADSHEET_NAME === 'RBJJ M1 — TEST';
+    && deploymentTargetAllowed_('test') && typeof EXPECTED_SPREADSHEET_NAME !== 'undefined' && EXPECTED_SPREADSHEET_NAME === 'RBJJ M1 — TEST'
+    ? { gym: 'rev', target: 'test' } : null;
+}
+function gibM1MailAppScope_() {
+  return Boolean(gibM1MailAppContext_());
 }
 function gibM1MailAppActor_() {
   try { return Session.getEffectiveUser().getEmail() === GIB_M1_MAILAPP_SENDER_; } catch (_) { return false; }
@@ -38,9 +43,11 @@ function gibM1MailAppHash_(message) {
     .map(function(byte) { return ('0' + ((byte + 256) % 256).toString(16)).slice(-2); }).join('');
 }
 function gibM1MailAppMessage_(message) {
+  var scope = gibM1MailAppContext_();
   var hasBcc = message && Object.prototype.hasOwnProperty.call(message, 'bcc'), bcc = hasBcc ? message.bcc : [];
   if (!gibM1MailAppExact_(message, ['messageId', 'hash', 'from', 'to', 'cc', 'subject', 'html', 'text', 'synthetic', 'target'].concat(hasBcc ? ['bcc'] : []))
-    || typeof message.messageId !== 'string' || !/^m1-test-scheduled-rev-\d{4}-\d{2}-\d{2}$/.test(message.messageId)
+    || !scope || typeof message.messageId !== 'string' || !/^m1-test-scheduled-(?:rev|richmond)-\d{4}-\d{2}-\d{2}$/.test(message.messageId)
+    || message.messageId !== 'm1-test-scheduled-' + scope.gym + '-' + message.messageId.slice(-10)
     || !gibM1MailAppDate_(message.messageId.slice(-10)) || message.from !== GIB_M1_MAILAPP_SENDER_ || message.target !== 'test'
     || typeof message.synthetic !== 'boolean' || !gibM1MailAppAddresses_(message.to, 1) || !gibM1MailAppAddresses_(message.cc, 0)
     || !gibM1MailAppAddresses_(bcc, 0) || bcc.length > 1
@@ -57,7 +64,8 @@ function gibM1MailAppBinding_(binding, now) {
   }
 }
 function gibM1MailAppResult_(message, state, code, attempt, completed) {
-  return { ok: code === 'MAILAPP_READY' || code === 'MAILAPP_SUBMITTED', target: 'test', gym: 'rev',
+  var scope = gibM1MailAppContext_();
+  return { ok: code === 'MAILAPP_READY' || code === 'MAILAPP_SUBMITTED', target: 'test', gym: scope ? scope.gym : null,
     messageId: message ? message.messageId : null, hash: message ? message.hash : null, state: state, code: code,
     attemptedAt: attempt || null, completedAt: completed || null, retrySafe: state === 'not-attempted' };
 }
@@ -74,6 +82,8 @@ function gibM1MailAppSheet_(body) {
   return gibM1MailAppHeaders_(openExpectedSpreadsheet_(body).getSheetByName(GIB_M1_MAILAPP_TAB_));
 }
 function gibM1MailAppRead_(sheet, message) {
+  var scope = gibM1MailAppContext_();
+  if (!scope) throw new Error('MAILAPP_LEDGER_UNAVAILABLE');
   var last = sheet.getLastRow();
   if (last === 1) return null;
   var finder = sheet.getRange(2, 1, last - 1, 1).createTextFinder(message.messageId).matchEntireCell(true).matchCase(true).useRegularExpression(false);
@@ -90,7 +100,7 @@ function gibM1MailAppRead_(sheet, message) {
   var attempt = null, receipt = null;
   rows.forEach(function(row) {
     if (row.length !== 10 || row.some(function(value) { return typeof value !== 'string'; }) || row[0] !== message.messageId
-      || row[2] !== message.hash || row[3] !== 'rev' || row[4] !== message.messageId.slice(-10) || row[9] !== GIB_M1_MAILAPP_SENDER_
+      || row[2] !== message.hash || row[3] !== scope.gym || row[4] !== message.messageId.slice(-10) || row[9] !== GIB_M1_MAILAPP_SENDER_
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row[5])
       || !Number.isFinite(Date.parse(row[6])) || new Date(row[6]).toISOString() !== row[6]) throw new Error('MAILAPP_ORIGINAL_CONFLICT');
     if (row[1] === 'attempt' && !attempt && row[7] === '' && row[8] === 'MAILAPP_CALL_PENDING') attempt = row;
@@ -108,6 +118,8 @@ function gibM1MailAppAppend_(sheet, row) {
   if (JSON.stringify(destination.getValues()[0]) !== JSON.stringify(row)) throw new Error('MAILAPP_STORAGE_UNCONFIRMED');
 }
 function gibM1MailAppConfiguration_(message) {
+  var scope = gibM1MailAppContext_();
+  if (!scope || (scope.gym === 'richmond' && (typeof GIB_M1_RICHMOND_MAILAPP_SEND_ENABLED === 'undefined' || GIB_M1_RICHMOND_MAILAPP_SEND_ENABLED !== true))) return 'MAILAPP_DISABLED';
   var properties = PropertiesService.getScriptProperties();
   if (properties.getProperty('GIB_M1_MAILAPP_TEST_SEND_ENABLED') !== 'true') return 'MAILAPP_DISABLED';
   try {
@@ -121,12 +133,16 @@ function gibM1MailAppConfiguration_(message) {
   return null;
 }
 function gibM1MailAppAction_(body) {
-  if (!gibM1MailAppScope_() || !adminActionAuthorized_(body) || body?.target !== 'test' || body?.gym !== 'rev') {
+  var scope = gibM1MailAppContext_();
+  if (!scope || !adminActionAuthorized_(body) || body?.target !== 'test' || body?.gym !== scope.gym
+    || (scope.gym === 'richmond' && !gibM1RichmondEnvelopeValid_(body))) {
     return jsonResult_(gibM1MailAppResult_(null, 'unknown', 'MAILAPP_AUTHENTICATION_REQUIRED'));
   }
   var message = null, lock = null, held = false, sheet = null, row = null;
   try {
-    if (!gibM1MailAppExact_(body, ['action', 'target', 'gym', 'token', 'adminActionToken', 'binding', 'message'])
+    var requestKeys = ['action', 'target', 'gym', 'token', 'adminActionToken', 'binding', 'message'];
+    if (scope.gym === 'richmond') requestKeys = requestKeys.concat(['installation', 'environment']);
+    if (!gibM1MailAppExact_(body, requestKeys)
       || ['attendanceMailSend', 'attendanceMailStatus'].indexOf(body.action) < 0) throw new Error('MAILAPP_REQUEST_INVALID');
     gibM1MailAppMessage_(body.message); message = body.message; gibM1MailAppBinding_(body.binding, Date.now());
     if (!gibM1MailAppActor_()) return jsonResult_(gibM1MailAppResult_(message, 'unknown', 'MAILAPP_SENDER_UNVERIFIED'));
@@ -147,7 +163,7 @@ function gibM1MailAppAction_(body) {
     if (readiness) return jsonResult_(gibM1MailAppResult_(message, 'not-attempted', readiness));
     gibM1MailAppBinding_(body.binding, Date.now());
     if (body.action === 'attendanceMailStatus') return jsonResult_(gibM1MailAppResult_(message, 'not-attempted', 'MAILAPP_READY'));
-    row = [message.messageId, 'attempt', message.hash, 'rev', message.messageId.slice(-10), body.binding.requestId, new Date().toISOString(), '', 'MAILAPP_CALL_PENDING', GIB_M1_MAILAPP_SENDER_];
+    row = [message.messageId, 'attempt', message.hash, scope.gym, message.messageId.slice(-10), body.binding.requestId, new Date().toISOString(), '', 'MAILAPP_CALL_PENDING', GIB_M1_MAILAPP_SENDER_];
     gibM1MailAppAppend_(sheet, row);
     var claimed = gibM1MailAppRead_(sheet, message);
     if (!claimed || claimed.attemptedAt !== row[6] || claimed.state !== 'unknown') throw new Error('MAILAPP_STORAGE_UNCONFIRMED');
@@ -183,6 +199,11 @@ function gibM1MailAppAction_(body) {
 
 // Editor-only consent handoff. Uses no send method and changes no records.
 function authorizeRevolutionTestMailApp() {
+  var scope = gibM1MailAppContext_();
+  if (!scope || scope.gym !== 'rev') throw new Error('MAILAPP_SENDER_UNVERIFIED');
+  return gibM1AuthorizeTestMailApp_();
+}
+function gibM1AuthorizeTestMailApp_() {
   if (!gibM1MailAppScope_() || !gibM1MailAppActor_()) throw new Error('MAILAPP_SENDER_UNVERIFIED');
   var quota = MailApp.getRemainingDailyQuota();
   if (!Number.isSafeInteger(quota) || quota < 0) throw new Error('MAILAPP_QUOTA_UNAVAILABLE');
@@ -192,10 +213,17 @@ function authorizeRevolutionTestMailApp() {
 }
 // One explicit TEST setup; ordinary requests never create or replace this tab.
 function prepareRevolutionTestMailAppLedger() {
+  var scope = gibM1MailAppContext_();
+  if (!scope || scope.gym !== 'rev') throw new Error('MAILAPP_SENDER_UNVERIFIED');
+  return gibM1PrepareTestMailAppLedger_();
+}
+function gibM1PrepareTestMailAppLedger_() {
   if (!gibM1MailAppScope_() || !gibM1MailAppActor_()) throw new Error('MAILAPP_SENDER_UNVERIFIED');
   var lock = LockService.getScriptLock(); if (!lock.tryLock(10000)) throw new Error('MAILAPP_LEDGER_UNAVAILABLE');
   try {
-    var properties = PropertiesService.getScriptProperties(), book = openExpectedSpreadsheet_({ target: 'test' }), sheet = book.getSheetByName(GIB_M1_MAILAPP_TAB_);
+    var scope = gibM1MailAppContext_(), body = { target: 'test' };
+    if (scope.gym === 'richmond') { body.installation = scope.installation; body.environment = scope.environment; }
+    var properties = PropertiesService.getScriptProperties(), book = openExpectedSpreadsheet_(body), sheet = book.getSheetByName(GIB_M1_MAILAPP_TAB_);
     if (properties.getProperty(GIB_M1_MAILAPP_READY_) === 'v1') { gibM1MailAppHeaders_(sheet); return { ok: true, target: 'test', initialized: true }; }
     if (sheet && sheet.getLastRow() > 1) throw new Error('MAILAPP_LEDGER_UNAVAILABLE');
     if (!sheet) sheet = book.insertSheet(GIB_M1_MAILAPP_TAB_);

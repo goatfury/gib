@@ -1,3 +1,5 @@
+import { adminNamesForScope } from './m1-common.mjs';
+
 const DISPLAY_ID_PATTERN = /^sheet-row-[1-9][0-9]*$/u;
 const AUDIT_ID_PATTERN = /^audit-row-[1-9][0-9]*$/u;
 const SIGNIN_ROW_ID_PATTERN = /^gib-m1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -216,7 +218,8 @@ export function sanitizeAuditRecord(input, expectedDate = '', options = {}) {
     !AUDIT_ID_PATTERN.test(value.auditId || '')
     || !Number.isSafeInteger(value.actionNumber)
     || value.actionNumber < 1
-    || !ADMIN_NAMES.has(value.adminName)
+    || !(ADMIN_NAMES.has(value.adminName) || (value.site === 'Richmond'
+      && adminNamesForScope(options.adminScope).includes(value.adminName)))
     || !validTimestamp(value.actionTime)
     || !validDate(value.classDate)
     || (expectedDate && value.classDate !== expectedDate)

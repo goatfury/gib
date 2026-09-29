@@ -1,6 +1,6 @@
 import { ADMIN_REQUEST_HEADER, jsonResponse, readJson, requireAdmin, runtimeConfig } from './_lib/m1-common.mjs';
 import { attendanceDigestScope } from './m1-attendance-digest.mjs';
-import { DIGEST_ORIGIN, defaultDigestConfiguration } from './_lib/m1-attendance-digest.mjs';
+import { DIGEST_ORIGIN, digestGym, digestOrigin, defaultDigestConfiguration } from './_lib/m1-attendance-digest.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
 import { readAttendanceWorkflowExamples, prepareAttendanceWorkflowExamples, prepareAttendanceWorkflowHistoryExamples, prepareAttendanceWorkflowDailyExamples, prepareAttendanceWorkflowMailAppExamples } from './_lib/m1-attendance-workflow-examples.mjs';
 import { workflowHealth, workflowMessages } from './_lib/m1-attendance-digest-workflow.mjs';
@@ -13,21 +13,23 @@ export async function handleAttendanceWorkflow(request, dependencies = {}) {
     || [...url.searchParams.keys()].some(key => key !== 'runId') || url.searchParams.getAll('runId').length > 1
     || (request.method === 'POST' && url.search)) return response(404, { ok: false, message: 'TEST workflow unavailable.' });
   const scope = attendanceDigestScope(request, dependencies);
-  if (!scope) return response(403, { ok: false, message: 'Revolution TEST required.' });
-  if ((request.headers.get('Origin') && request.headers.get('Origin') !== DIGEST_ORIGIN)
+  if (!scope) return response(403, { ok: false, message: 'An enabled TEST installation is required.' });
+  if ((request.headers.get('Origin') && request.headers.get('Origin') !== digestOrigin(scope))
     || (request.headers.get('Sec-Fetch-Site') && !['same-origin', 'none'].includes(request.headers.get('Sec-Fetch-Site'))))
     return response(403, { ok: false, message: 'Use the authenticated Admin page.' });
-  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: 'rev' });
+  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: digestGym(scope), environment: scope.profile.environment });
   if (runtime?.target !== 'test') return response(503, { ok: false, message: 'TEST service unavailable.' });
   const auth = requireAdmin(request, runtime, (dependencies.clock || Date.now)());
   if (auth.response) return auth.response;
   const deps = { ...dependencies, scope };
   try {
     let latestRun;
+    const gym = digestGym(scope);
+    if (gym !== 'rev' && (request.method !== 'GET' || url.search)) return response(403, { ok: false, message: 'Synthetic examples are confined to Revolution TEST.' });
     if (request.method === 'GET') {
       const id = url.searchParams.get('runId');
       if (id !== null && !validId(id)) return response(400, { ok: false, message: 'Use the original TEST example request.' });
-      latestRun = await (dependencies.readExamples || readAttendanceWorkflowExamples)(id, deps);
+      latestRun = gym === 'rev' ? await (dependencies.readExamples || readAttendanceWorkflowExamples)(id, deps) : null;
     } else {
       const parsed = await readJson(request, 4096);
       if (parsed.response) return parsed.response;
@@ -67,7 +69,7 @@ export async function handleAttendanceWorkflow(request, dependencies = {}) {
       latestRun: latestRun || null, current: { health, messages },
       setup: { revolutionReviewer: 'Stu', richmondReviewer: 'Trey', senderAddress: selected.senderAddress,
         revolutionTo: selected.routing.rev.reviewer.address, richmondTo: selected.routing.richmond.reviewer.address,
-        cc: selected.routing.rev.cc.map(person => person.address), bcc: selected.routing.rev.bcc.map(person => person.address),
+        cc: selected.routing[gym].cc.map(person => person.address), bcc: selected.routing[gym].bcc.map(person => person.address),
         dailyLocalTime: selected.dailyLocalTime, timezone: selected.timezone, reminderTimeConfirmed: selected.cutoffConfirmed,
         classFinishCutoffConfirmed: false, richmondReviewerAccessVerified: false } });
   } catch (error) {

@@ -43,22 +43,25 @@
             && addresses(message.cc) && text(message.subject, 300) && text(message.html, 100000) && text(message.text, 100000))));
   }
   function create({ root, request, enabled, target, site, getAdmin, getSession, onUnauthorized = () => {} }) {
-    if (!root || enabled !== true || target !== 'test' || site !== 'Rev' || typeof request !== 'function' || typeof getAdmin !== 'function' || typeof getSession !== 'function'
-      || global.location?.origin !== ORIGIN || global.location?.protocol !== 'https:' || global.location?.port
-      || global.M1_MANAGER_REVIEW_CONFIG?.enabled !== true || global.M1_MANAGER_REVIEW_CONFIG?.target !== 'test'
-      || global.M1_INSTALLATION_PROFILE?.installationId !== 'rev') return null;
+    const gym = global.M1_INSTALLATION_PROFILE?.installationId, richmond = gym === 'richmond';
+    if (!['rev', 'richmond'].includes(gym) || richmond && global.M1_INSTALLATION_PROFILE?.environment !== 'test') return null;
+    const journalKey = richmond ? 'm1-attendance-workflow-test-richmond-pending-v1' : KEY;
+    if (!root || enabled !== true || target !== 'test' || site !== (richmond ? 'Richmond' : 'Rev') || typeof request !== 'function' || typeof getAdmin !== 'function' || typeof getSession !== 'function'
+      || global.location?.origin !== (richmond ? 'https://gib-richmond-test.netlify.app' : ORIGIN) || global.location?.protocol !== 'https:' || global.location?.port
+      || global.M1_MANAGER_REVIEW_CONFIG?.enabled !== true || global.M1_MANAGER_REVIEW_CONFIG?.target !== 'test') return null;
     const document = root.ownerDocument || global.document;
     let active = false, generation = 0, owner = '', session = null, flight = null, data = null, current = false, pending = null, storageBlocked = false, note = '', pollTimer = null, pollUntil = 0, pollCount = 0;
     const el = (tag, value = '', className = '') => { const node = document.createElement(tag); node.textContent = value; if (className) node.className = className; return node; };
     const live = own => active && generation === own && owner === getAdmin() && session === getSession();
     function retain(value) {
-      if (value) { const raw = JSON.stringify(value); global.sessionStorage.setItem(KEY, raw); if (global.sessionStorage.getItem(KEY) !== raw) throw new Error('Journal unavailable'); }
-      else { global.sessionStorage.removeItem(KEY); if (global.sessionStorage.getItem(KEY) !== null) throw new Error('Journal unavailable'); }
+      if (value) { const raw = JSON.stringify(value); global.sessionStorage.setItem(journalKey, raw); if (global.sessionStorage.getItem(journalKey) !== raw) throw new Error('Journal unavailable'); }
+      else { global.sessionStorage.removeItem(journalKey); if (global.sessionStorage.getItem(journalKey) !== null) throw new Error('Journal unavailable'); }
       pending = value;
     }
     function restore() {
       storageBlocked = false;
-      try { const raw = global.sessionStorage.getItem(KEY); pending = raw ? JSON.parse(raw) : null;
+      if (richmond) { pending = null; return; }
+      try { const raw = global.sessionStorage.getItem(journalKey); pending = raw ? JSON.parse(raw) : null;
         if (pending && (!exact(pending, ['requestId', 'adminName', ...(Object.hasOwn(pending, 'action') ? ['action'] : [])])
           || Object.hasOwn(pending, 'action') && !runAction(pending.action) || !UUID.test(pending.requestId) || !text(pending.adminName, 120))) throw new Error('Invalid retained run');
       } catch { storageBlocked = true; }
@@ -66,14 +69,14 @@
     function render() {
       if (!live(generation)) return;
       root.hidden = false; root.setAttribute('aria-busy', String(Boolean(flight))); root.replaceChildren(el('h2', 'Automatic attendance workflow · TEST'));
-      root.append(el('p', 'Synthetic examples run through the workflow with a simulated email provider. No emails are sent and recurring sending is off.', 'manager-warning'));
-      root.append(el('p', 'Google MailApp checks use simulated sending. A completed Google call means submitted to Google, not confirmed delivery to an inbox. Older Resend examples remain historical evidence for the previous provider policy.', 'manager-note'));
+      if (!richmond) root.append(el('p', 'Synthetic examples run through the workflow with a simulated email provider. No emails are sent and recurring sending is off.', 'manager-warning'));
+      if (!richmond) root.append(el('p', 'Google MailApp checks use simulated sending. A completed Google call means submitted to Google, not confirmed delivery to an inbox. Older Resend examples remain historical evidence for the previous provider policy.', 'manager-note'));
       const setup = current && data?.setup?.senderAddress ? data.setup : null;
       if (setup) {
-        root.append(el('p', `Proposed sender: ${setup.senderAddress}. Revolution: Stu at ${setup.revolutionTo}. Richmond: Trey at ${setup.richmondTo}. CC: none. Hidden BCC copy: ${setup.bcc.length ? setup.bcc.join(', ') : 'off'}.`, 'manager-note'));
+        root.append(el('p', richmond ? `Proposed sender: ${setup.senderAddress}. Richmond: Trey at ${setup.richmondTo}. CC: none. Hidden BCC copy: ${setup.bcc.length ? setup.bcc.join(', ') : 'off'}.` : `Proposed sender: ${setup.senderAddress}. Revolution: Stu at ${setup.revolutionTo}. Richmond: Trey at ${setup.richmondTo}. CC: none. Hidden BCC copy: ${setup.bcc.length ? setup.bcc.join(', ') : 'off'}.`, 'manager-note'));
         root.append(el('p', `Daily reminder: ${setup.dailyLocalTime} ${setup.timezone}${setup.reminderTimeConfirmed ? ' (confirmed)' : ' (not confirmed)'}. This local time follows daylight saving time. The reminder does not confirm class finishing times.`, 'manager-note'));
       } else root.append(el('p', 'Current reminder and recipient configuration has not been loaded.', 'manager-note'));
-      root.append(el('p', 'Trey still needs existing Admin access. No access is granted here. Sending and recurring sending remain off in these examples.', 'manager-note'));
+      root.append(el('p', richmond ? 'Trey can use scoped Richmond TEST Admin access. Production reviewer access remains unverified. Sending remains off.' : 'Trey still needs existing Admin access. No access is granted here. Sending and recurring sending remain off in these examples.', 'manager-note'));
       root.append(el('p', 'An unreviewed day does not prove a missing sign-in. Every instructor, including a second instructor, must remain covered. Staff Clock finish corrections remain separate.', 'manager-note'));
       const health = data?.current?.health;
       const hasHistory = ['historicalUnconfirmedCount', 'historicalFailedCount', 'opportunityDate'].some(key => Object.hasOwn(health || {}, key));
@@ -103,6 +106,12 @@
             + (health.historicalFailedCount === 1 ? ' earlier reminder has' : ' earlier reminders have')
             + ' a recorded email failure. This failure history is retained.', 'manager-warning'));
         }
+      }
+      if (richmond) {
+        root.append(el('p', 'Richmond TEST uses its own attendance and review history. Staff Clock is disabled. Sending remains off.', 'manager-note'));
+        const refresh = el('button', 'Refresh Richmond reminder status', 'btn'); refresh.type = 'button'; refresh.dataset.workflowAction = 'refresh'; refresh.disabled = Boolean(flight); root.append(refresh);
+        const status = el('p', note || 'Loading Richmond reminder status...', 'message'); status.style.display = 'block'; status.setAttribute('role', 'status'); root.append(status);
+        return;
       }
       const controls = el('div', '', 'manager-controls');
       for (const [action, label] of [['refresh', pending ? 'Check original example run' : 'Refresh workflow examples'], ['mailapp', 'Run synthetic Google MailApp checks'], ['run', 'Run synthetic workflow examples'],
@@ -149,6 +158,7 @@
       if (flight) return flight;
       if (polling && Date.now() >= pollUntil) { note = 'The original example run is not yet confirmed. Use Check original example run to continue; its request ID is retained.'; render(); return; }
       const send = action !== null;
+      if (richmond && send) return;
       if (send && storageBlocked) return;
       if (send && (action === 'retry' ? !pending || pending.adminName !== owner : !runAction(action) || Boolean(pending))) return;
       if (send && !pending) {
@@ -158,18 +168,18 @@
       global.clearTimeout(pollTimer);
       if (!polling) { pollUntil = Date.now() + 120000; pollCount = 0; }
       const own = generation, original = pending?.requestId || null, originalAction = pending?.action || 'runExamples';
-      current = false; note = send ? 'Running isolated synthetic examples…' : 'Loading confirmed workflow examples…';
+      current = false; note = richmond ? 'Loading Richmond reminder status...' : send ? 'Running isolated synthetic examples…' : 'Loading confirmed workflow examples…';
       const task = (async () => {
         try {
           const result = await Promise.resolve().then(() => send ? request(API, { action: originalAction, requestId: original }, { timeoutMs: 25000 })
             : request(API + (original ? '?runId=' + encodeURIComponent(original) : ''), undefined, { method: 'GET', timeoutMs: 25000 }));
           if (!live(own)) return;
-          if (!valid(result) || original && result.latestRun && result.latestRun.runId !== original
+          if (!valid(result) || richmond && (result.latestRun !== null || result.request || result.current?.messages?.messages?.some(message => message.gym !== gym)) || original && result.latestRun && result.latestRun.runId !== original
             || result.request && (result.request.runId !== original || result.request.action && result.request.action !== originalAction)
             || send && !result.latestRun && !result.request) throw new Error('Unconfirmed workflow run');
           data = result; current = true;
           if (original && result.latestRun?.runId === original) { retain(null); note = 'The original synthetic run is confirmed centrally. No real email was sent.'; }
-          else note = original ? 'The original synthetic run is still waiting for confirmation. Checking it automatically; its request ID is retained.'
+          else note = richmond ? 'Richmond reminder status loaded. Sending remains off.' : original ? 'The original synthetic run is still waiting for confirmation. Checking it automatically; its request ID is retained.'
             : result.latestRun ? 'Saved synthetic examples loaded. No real email was sent.' : 'No confirmed workflow example run yet.';
         } catch (error) {
           if (!live(own)) return;

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { digestHash } from './m1-attendance-digest.mjs';
+import { digestGym, digestHash } from './m1-attendance-digest.mjs';
 
 const SCHEMA = 'm1-mailapp-delivery/v1', RECEIPT = 'm1-mailapp-receipt/v1', HEAD = 'm1-mailapp-status/v1';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -24,7 +24,7 @@ const canonical = message => ({ messageId: message.messageId, from: message.from
 function validMessage(message, policy) {
   try {
     return exact(message, ['messageId', 'hash', 'from', 'to', 'cc', 'subject', 'html', 'text', 'synthetic', 'target', ...(Object.hasOwn(message || {}, 'bcc') ? ['bcc'] : [])])
-      && /^m1-test-scheduled-rev-\d{4}-\d{2}-\d{2}$/.test(message.messageId) && iso(message.messageId.slice(-10) + 'T00:00:00.000Z')
+      && /^m1-test-scheduled-(?:rev|richmond)-\d{4}-\d{2}-\d{2}$/.test(message.messageId) && iso(message.messageId.slice(-10) + 'T00:00:00.000Z')
       && message.from === 'revbjjops@gmail.com' && message.target === 'test' && typeof message.synthetic === 'boolean'
       && Array.isArray(message.to) && Array.isArray(message.cc)
       && (!Object.hasOwn(message, 'bcc') || Array.isArray(message.bcc) && message.bcc.length <= 1
@@ -41,7 +41,9 @@ function base(message, state, code, details = {}) {
     retryAllowed: false, deliveryConfirmed: false, ...details };
 }
 function validateInput(message, deps, policy) {
-  if (deps.scope?.target !== 'test' || deps.scope?.profile?.installationId !== 'rev') return base(message, 'blocked', 'TEST_REVOLUTION_REQUIRED');
+  const gym = digestGym(deps.scope);
+  if (!gym) return base(message, 'blocked', 'TEST_INSTALLATION_REQUIRED');
+  if (!message?.messageId?.startsWith('m1-test-scheduled-' + gym + '-')) return base(message, 'blocked', 'MAILAPP_GYM_MISMATCH');
   if (!validMessage(message, policy)) return base(message, 'blocked', 'INVALID_MAILAPP_MESSAGE');
   if (!stamp(clock(deps))) return base(message, 'blocked', 'CLOCK_UNAVAILABLE');
   return null;
@@ -67,7 +69,7 @@ function validBinding(value) {
 }
 function validReply(reply, message) {
   if (!exact(reply, ['ok', 'target', 'gym', 'messageId', 'hash', 'state', 'code', 'attemptedAt', 'completedAt', 'retrySafe'])
-    || reply.target !== 'test' || reply.gym !== 'rev' || reply.messageId !== message.messageId || reply.hash !== message.hash
+    || reply.target !== 'test' || !['rev', 'richmond'].includes(reply.gym) || !message.messageId.startsWith('m1-test-scheduled-' + reply.gym + '-') || reply.messageId !== message.messageId || reply.hash !== message.hash
     || !GOOGLE_CODES.has(reply.code) || reply.ok !== ['MAILAPP_READY', 'MAILAPP_SUBMITTED'].includes(reply.code)
     || !['not-attempted', 'unknown', 'submitted'].includes(reply.state) || reply.retrySafe !== (reply.state === 'not-attempted')
     || reply.attemptedAt !== null && !iso(reply.attemptedAt) || reply.completedAt !== null && !iso(reply.completedAt)

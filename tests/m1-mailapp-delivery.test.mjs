@@ -64,6 +64,24 @@ test('optional BCC is immutable, hash-bound and passed separately without changi
   assert.doesNotMatch(h.sends()[0].message.html + h.sends()[0].message.text, /andrew@example/);
 });
 
+test('Richmond TEST status binds own message ID and reply gym; cross-gym, production and unknown environments make no calls', async () => {
+  const prepare = () => { const h = harness(); h.deps.scope.profile = { installationId: 'richmond', environment: 'test' };
+    h.message.messageId = 'm1-test-scheduled-richmond-2026-09-28'; h.message.to = ['trey@example.invalid'];
+    h.message.hash = digestHash(canonical(h.message)); return h; };
+  const h = prepare(); h.deps.statusOnly = true;
+  h.provider(async () => ({ ...h.result('not-attempted', 'MAILAPP_DISABLED'), gym: 'richmond' }));
+  const result = await h.send(); assert.equal(result.state, 'not-started'); assert.equal(result.code, 'MAILAPP_DISABLED');
+  assert.equal(h.calls.length, 1); assert.equal(h.sends().length, 0); assert.equal(h.writes.length, 0);
+  const mismatch = prepare(); mismatch.deps.statusOnly = true;
+  assert.equal((await mismatch.send()).code, 'MAILAPP_RESPONSE_INVALID'); assert.equal(mismatch.sends().length, 0); assert.equal(mismatch.writes.length, 0);
+  for (const change of [h => { h.deps.scope.target = 'production'; }, h => { delete h.deps.scope.profile.environment; },
+    h => { h.deps.scope.profile.environment = 'production'; }, h => { h.deps.scope.profile.installationId = 'rev'; },
+    h => { h.message.messageId = 'm1-test-scheduled-rev-2026-09-28'; h.message.hash = digestHash(canonical(h.message)); }]) {
+    const invalid = prepare(); change(invalid); assert.equal((await invalid.send()).state, 'blocked');
+    assert.equal(invalid.calls.length, 0); assert.equal(invalid.writes.length, 0);
+  }
+});
+
 test('BCC tampering, invalid addresses and duplicate To/CC recipients cannot dispatch', async () => {
   for (const bcc of ['andrew@example.invalid', null, ['andrew@example.invalid', 'other@example.invalid'], ['STU@example.invalid'], ['injected\r\n@example.invalid']]) {
     const h = harness(); h.message.bcc = bcc; h.message.hash = digestHash(canonical(h.message));

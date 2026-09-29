@@ -141,6 +141,87 @@ test('explicit authoritative occurrence end times work without cutoff confirmati
   }
 });
 
+test('all 23 current Richmond entries retain their official explicit finishes without a confirmed gym close', async () => {
+  const richmond = JSON.parse(readFileSync(new URL('../m1/richmond-schedule.json', import.meta.url), 'utf8'));
+  // Official https://www.richmondbjj.com/schedule observed September 29, 2026.
+  // These expected ends are independently listed, not computed by the parser.
+  const expected = {
+    Monday: ['07:00', '08:00', '19:00', '21:00'], Tuesday: ['07:00', '08:00', '19:00', '21:00'],
+    Wednesday: ['07:00', '08:00', '19:00', '21:00'], Thursday: ['07:00', '08:00', '19:00', '21:00'],
+    Friday: ['07:00', '08:00', '19:00', '21:00'], Saturday: ['11:00', '13:00'], Sunday: ['11:00']
+  };
+  let count = 0;
+  for (const [index, [weekday, ends]] of Object.entries(expected).entries()) {
+    const date = new Date(Date.parse('2026-09-28T00:00:00Z') + index * 86400000).toISOString().slice(0, 10);
+    const now = Date.parse(date + 'T23:00:00-04:00'), h = fixture();
+    h.args = { ...h.args, gym: 'richmond', dates: [date], now, cutoffConfirmed: false, classFinishCutoffConfirmed: false };
+    h.deps.currentSchedule = schedule({ site: 'Richmond', fetchedAt: new Date(now).toISOString(), days: richmond.days });
+    const day = await first(h); assert.equal(day.status, 'complete', weekday); assert.equal(day.occurrences.length, ends.length);
+    day.occurrences.forEach((occurrence, i) => {
+      assert.equal(occurrence.label, richmond.days[weekday][i]);
+      assert.equal(occurrence.endAt, new Date(date + 'T' + ends[i] + ':00-04:00').toISOString(), occurrence.label);
+      assert.equal(Object.hasOwn(occurrence, 'finishedAtCutoff'), false); assert.equal(Object.hasOwn(occurrence, 'finishBasis'), false); count++;
+    });
+  }
+  assert.equal(count, 23);
+});
+
+test('explicit end after the 20:00 reminder stays upcoming and reopens next day from the unchanged dated observation', async () => {
+  const h = fixture(), label = '7:15 PM–9:00 PM TEST Richmond class';
+  h.args = { ...h.args, gym: 'richmond', dates: [TODAY], now: Date.parse(TODAY + 'T20:00:00-04:00'), closingTime: '20:00', cutoffConfirmed: true, classFinishCutoffConfirmed: false };
+  h.deps.currentSchedule = schedule({ site: 'Richmond', fetchedAt: new Date(h.args.now).toISOString(), days: { Friday: [label] } });
+  const day = await first(h); assert.equal(day.status, 'complete'); assert.ok(Date.parse(day.occurrences[0].endAt) > h.args.now);
+  const preserved = structuredClone([...h.store.entries]);
+  assert.equal(preserved[0][1].data.base[0].endAt, null, 'original observation format is not rewritten by derived projection');
+  h.args.now = Date.parse('2026-09-26T20:00:00-04:00');
+  h.deps.loadCurrentSchedule = () => { throw new Error('past observation must not fetch a replacement schedule'); };
+  const reopened = await first(h); assert.deepEqual(reopened.occurrences, day.occurrences); assert.ok(Date.parse(reopened.occurrences[0].endAt) < h.args.now);
+  assert.deepEqual([...h.store.entries], preserved); assert.equal(h.store.writes.length, 1);
+});
+
+test('pre-existing dated range evidence is projected without history changes; missing dates never borrow the current week', async () => {
+  const h = fixture(); h.args = { ...h.args, gym: 'richmond', dates: ['2026-09-23', '2026-09-24'], cutoffConfirmed: false };
+  const original = { schema: 'm1-digest-dated-schedule/v1', target: 'test', gym: 'richmond', timezone: 'America/New_York',
+    date: '2026-09-24', observedAt, sourceVersion: 'retained-explicit-range', base: [{ label: '7:15 PM–9:00 PM TEST retained class',
+      startAt: '2026-09-24T23:15:00.000Z', endAt: null, cancelled: false }] };
+  h.store.entries.set('schedules/test/richmond/2026-09-24', { data: structuredClone(original), etag: 'existing' });
+  const before = structuredClone([...h.store.entries]);
+  h.deps.loadCurrentSchedule = () => { throw new Error('historical dates must not fetch today'); };
+  const days = (await run(h)).days;
+  assert.equal(days[0].code, 'MISSING_DATED_SCHEDULE'); assert.equal(days[1].status, 'complete');
+  assert.equal(days[1].occurrences[0].endAt, '2026-09-25T01:00:00.000Z'); assert.deepEqual([...h.store.entries], before); assert.equal(h.store.writes.length, 0);
+});
+
+test('all 55 Revolution start-only entries still require real finish evidence, even with the reminder time confirmed', async () => {
+  const revolution = JSON.parse(readFileSync(new URL('../m1/shared-schedule.json', import.meta.url), 'utf8')); let count = 0;
+  for (const [index, [weekday, labels]] of Object.entries(revolution.days).entries()) {
+    const date = new Date(Date.parse('2026-09-28T00:00:00Z') + index * 86400000).toISOString().slice(0, 10), h = fixture();
+    const now = Date.parse(date + 'T23:00:00-04:00');
+    h.args = { ...h.args, dates: [date], now, closingTime: '20:00', cutoffConfirmed: true, classFinishCutoffConfirmed: false };
+    h.deps.currentSchedule = schedule({ fetchedAt: new Date(now).toISOString(), days: revolution.days });
+    assert.equal((await first(h)).code, 'CLASS_FINISH_UNCONFIRMED', weekday);
+    const stored = h.store.entries.get('schedules/test/rev/' + date).data;
+    assert.equal(stored.base.length, labels.length); assert.ok(stored.base.every(item => item.endAt === null)); count += labels.length;
+  }
+  assert.equal(count, 55);
+});
+
+test('range parsing refuses missing meridiem, invalid/reversed/overnight and DST-ambiguous finishes instead of guessing close', async () => {
+  for (const label of ['6:00 PM–7:00 TEST no meridiem', '6:00 PM–25:00 PM TEST invalid', '6:00 PM–6:00 PM TEST equal',
+    '6:00 PM–5:00 PM TEST reversed', '11:00 PM–1:00 AM TEST overnight', '6:00 PM–7:90 PM TEST invalid']) {
+    const h = fixture(); h.deps.currentSchedule = schedule({ days: { Friday: [label] } });
+    assert.equal((await first(h)).code, 'SCHEDULE_TIME_UNAVAILABLE', label);
+  }
+  for (const [date, label] of [['2026-11-01', '12:30 AM–1:30 AM TEST ambiguous finish'], ['2027-03-14', '1:30 AM–2:30 AM TEST nonexistent finish']]) {
+    const h = fixture(); h.args = { ...h.args, dates: [date], now: Date.parse(date + 'T23:00:00Z') };
+    h.deps.currentSchedule = schedule({ fetchedAt: new Date(h.args.now).toISOString(), days: { Sunday: [label] } });
+    assert.equal((await first(h)).code, 'SCHEDULE_TIME_UNAVAILABLE', label);
+  }
+  const h = fixture(); h.args = { ...h.args, dates: ['2026-11-02'], now: Date.parse('2026-11-03T03:00:00Z'), cutoffConfirmed: false };
+  h.deps.currentSchedule = schedule({ fetchedAt: new Date(h.args.now).toISOString(), days: { Monday: ['6:00 PM–7:00 PM TEST winter'] } });
+  assert.equal((await first(h)).occurrences[0].endAt, '2026-11-03T00:00:00.000Z', 'winter offset comes from New York local time');
+});
+
 test('ambiguous/nonexistent DST wall times fail closed while explicit offsets and seasonal close times remain exact', async () => {
   for (const [date, label] of [['2026-11-01', '1:30 AM TEST ambiguous'], ['2027-03-14', '2:30 AM TEST nonexistent']]) {
     const h = fixture(); h.args = { ...h.args, dates: [date], now: Date.parse(date + 'T23:00:00.000Z'), reviewSnapshots: [] };

@@ -491,13 +491,13 @@ test('refresh preserves an unfinished instructor form and Cancel leaves the reco
   h.nodes.get('[data-cancel]').events.click();
   assert.equal(form.open, false); assert.equal(h.calls.length, 1);
 });
-function badge(traced = false, realClient = false) {
+function badge(traced = false, realClient = false, scopedTest = false) {
   const link = { style: {} }, calls = [], events = {}, timers = [], logs = [];
   const document = { hidden: false, readyState: 'complete', getElementById: () => link, addEventListener: (k, fn) => { events[k] = fn; } };
-  const ctx = vm.createContext({ document, Date, AbortSignal, M1_INSTALLATION_PROFILE: { installationId: traced ? 'rev' : 'richmond' },
+  const ctx = vm.createContext({ document, Date, AbortSignal, M1_INSTALLATION_PROFILE: { installationId: traced ? 'rev' : 'richmond', ...(scopedTest ? { environment: 'test' } : {}) },
     location: { origin: traced ? 'https://deploy-preview-89--gib-live.netlify.app' : 'https://gib-richmond-test.netlify.app' },
     crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' }, console: { info: (_, json) => logs.push(JSON.parse(json)) },
-    M1_MANAGER_REVIEW_CONFIG: { enabled: true }, clearTimeout() {}, setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, fetch: (...args) => { const d = deferred(); calls.push({ ...d, args }); return d.promise; } });
+    M1_MANAGER_REVIEW_CONFIG: { enabled: true, ...(scopedTest ? { target: 'test' } : {}) }, clearTimeout() {}, setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, fetch: (...args) => { const d = deferred(); calls.push({ ...d, args }); return d.promise; } });
   if (realClient) vm.runInContext(source('m1/manager-read-client.js'), ctx);
   else ctx.GIBM1ReadClient = { createTicket: () => ({ requestId: '00000000-0000-4000-8000-000000000001' }), run: ({ ticket, send }) => send({ operation: 'start', requestId: ticket.requestId }, { timeoutMs: 25000 }) };
   vm.runInContext(source('m1/manager-review-badge.js'), ctx);
@@ -577,4 +577,18 @@ test('tablet badge treats a missing, failed or stale zero-count read as unavaila
   assert.equal(h.link.textContent, 'Admin · Review status unavailable');
   h.events.visibilitychange(); h.calls[2].resolve(Response.json({ ok: true, pendingDays: 2, asOf: new Date().toISOString() })); await flush();
   assert.equal(h.link.textContent, 'Admin · 2 days need review');
+});
+
+
+test('Richmond TEST normal Admin and badge use read tickets while its original save path remains separate', async () => {
+  const h = manager('test', { site: 'Richmond' }), opened = h.ui.open();
+  assert.equal(h.calls[0].args[1].readRequest.operation, 'start');
+  assert.equal(h.calls[0].args[2].timeoutMs, 25000);
+  h.calls[0].resolve(result(2)); await opened;
+  assert.match(h.root.innerHTML, /2 days need review/);
+  const b = badge(false, false, true);
+  assert.equal(b.calls[0].args[1].headers['X-GIB-M1-Read-Operation'], 'start');
+  b.events.visibilitychange(); assert.equal(b.calls.length, 1);
+  b.calls[0].resolve(Response.json({ ok: false }, { status: 503 })); await flush();
+  assert.equal(b.link.textContent, 'Admin · Review status unavailable');
 });

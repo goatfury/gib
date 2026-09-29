@@ -1,13 +1,13 @@
 (function (global) {
   'use strict';
-  const ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
+  const ORIGINS = { rev: 'https://deploy-preview-89--gib-live.netlify.app', richmond: 'https://gib-richmond-test.netlify.app' };
   const LABELS = Object.freeze({ CHECK_OVERDUE: 'Attendance check overdue. Open Admin.',
     CHECK_INCOMPLETE: 'Attendance could not be fully checked. Open Admin.', DELIVERY_FAILED: 'Attendance email could not be sent. Open Admin.',
     DELIVERY_UNCONFIRMED: 'Attendance email delivery is unconfirmed. Open Admin.', CONFIGURATION_REQUIRED: 'Attendance reminders are not set up yet.' });
   const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).sort().join('|') === [...fields].sort().join('|');
-  function valid(value) {
-    return exact(value, ['ok', 'target', 'gym', 'status', 'warnings', 'checkedAt']) && value.ok === true && value.target === 'test' && value.gym === 'rev'
+  function valid(value, gym = 'rev') {
+    return exact(value, ['ok', 'target', 'gym', 'status', 'warnings', 'checkedAt']) && value.ok === true && value.target === 'test' && value.gym === gym
       && ['not-configured', 'clear', 'attention'].includes(value.status) && Array.isArray(value.warnings) && value.warnings.length <= 5
       && new Set(value.warnings.map(warning => warning?.code)).size === value.warnings.length
       && value.warnings.every(warning => exact(warning, ['code', 'message']) && Object.hasOwn(LABELS, warning.code)
@@ -19,9 +19,10 @@
       && (value.status !== 'clear' || value.checkedAt !== null && Date.now() - Date.parse(value.checkedAt) <= 30 * 60 * 1000);
   }
   function create({ root, fetch = global.fetch } = {}) {
-    if (!root || typeof fetch !== 'function' || global.location?.origin !== ORIGIN || global.location?.protocol !== 'https:' || global.location?.port
-      || global.M1_MANAGER_REVIEW_CONFIG?.enabled !== true || global.M1_MANAGER_REVIEW_CONFIG?.target !== 'test'
-      || global.M1_INSTALLATION_PROFILE?.installationId !== 'rev') return null;
+    const gym = global.M1_INSTALLATION_PROFILE?.installationId;
+    if (!Object.hasOwn(ORIGINS, gym) || gym === 'richmond' && global.M1_INSTALLATION_PROFILE?.environment !== 'test') return null;
+    if (!root || typeof fetch !== 'function' || global.location?.origin !== ORIGINS[gym] || global.location?.protocol !== 'https:' || global.location?.port
+      || global.M1_MANAGER_REVIEW_CONFIG?.enabled !== true || global.M1_MANAGER_REVIEW_CONFIG?.target !== 'test') return null;
     let active = true, generation = 0, flight = null, timer = null, queued = false;
     const document = root.ownerDocument || global.document;
     function show(message, state) { root.hidden = false; root.textContent = message; root.dataset.attendanceState = state; }
@@ -35,7 +36,7 @@
           const response = await Promise.resolve().then(() => fetch('/api/m1-attendance-warning', { method: 'GET', cache: 'no-store', credentials: 'omit', redirect: 'error', signal: global.AbortSignal.timeout(10000) }));
           const value = await response.json();
           if (!active || own !== generation || document.hidden) return;
-          if (!response.ok || !valid(value)) throw new Error('Unconfirmed warning read');
+          if (!response.ok || !valid(value, gym)) throw new Error('Unconfirmed warning read');
           if (value.status === 'clear') { root.hidden = true; root.textContent = ''; root.dataset.attendanceState = 'clear'; }
           else show(value.status === 'not-configured' ? 'Attendance reminders are not configured.'
             : value.warnings.map(warning => LABELS[warning.code]).join(' '), value.status);

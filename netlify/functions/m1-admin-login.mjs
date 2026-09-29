@@ -1,5 +1,5 @@
 import {
-  ADMIN_NAMES,
+  adminNamesForScope,
   adminCookieHeader,
   constantTimeEqual,
   createAdminRequestToken,
@@ -27,7 +27,7 @@ export async function handleAdminLogin(request, dependencies = {}) {
   }
 
   const adminName = safeText(parsed.value.adminName, 80);
-  if (!ADMIN_NAMES.includes(adminName)) {
+  if (!adminNamesForScope(config).includes(adminName)) {
     return jsonResponse(400, { ok: false, message: 'Choose an Admin name.' });
   }
 
@@ -47,7 +47,8 @@ export async function handleAdminLogin(request, dependencies = {}) {
     adminName,
     config.sessionSecret,
     dependencies.now || Date.now(),
-    requestToken
+    requestToken,
+    config
   );
   return jsonResponse(200, {
     ok: true,

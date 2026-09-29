@@ -1,14 +1,14 @@
 import { jsonResponse, readJson, requireAdmin, runtimeConfig } from './_lib/m1-common.mjs';
 import { managerReviewScope } from './_lib/m1-manager-scope.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
-import { DIGEST_ORIGIN } from './_lib/m1-attendance-digest.mjs';
+import { digestGym, digestOrigin } from './_lib/m1-attendance-digest.mjs';
 import { defaultDigestStore, digestState, saveDigestConfiguration, startManualDigest } from './_lib/m1-attendance-digest-outbox.mjs';
 import { armDigestRehearsal, digestRehearsalState } from './_lib/m1-attendance-digest-rehearsal.mjs';
 
 export const config = { path: '/api/m1-attendance-digest', rateLimit: { windowLimit: 40, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 export function attendanceDigestScope(request, dependencies = {}) {
   const url = new URL(request.url), scope = managerReviewScope(request, dependencies);
-  if (url.origin !== DIGEST_ORIGIN || !scope || scope.target !== 'test' || scope.profile.installationId !== 'rev') return null;
+  if (!digestGym(scope) || url.origin !== digestOrigin(scope)) return null;
   return scope;
 }
 export async function handleAttendanceDigest(request, dependencies = {}) {
@@ -17,10 +17,11 @@ export async function handleAttendanceDigest(request, dependencies = {}) {
     || [...url.searchParams.keys()].some(key => !['requestId', 'rehearsalId'].includes(key)) || url.searchParams.getAll('requestId').length > 1 || url.searchParams.getAll('rehearsalId').length > 1
     || (url.search && request.method !== 'GET')) return jsonResponse(404, { ok: false, message: 'Digest capture unavailable.' });
   const scope = attendanceDigestScope(request, dependencies);
-  if (!scope) return jsonResponse(403, { ok: false, message: 'Revolution TEST capture required.' });
-  if ((request.headers.get('Origin') && request.headers.get('Origin') !== DIGEST_ORIGIN)
+  if (!scope) return jsonResponse(403, { ok: false, message: 'Isolated TEST capture required.' });
+  if ((request.headers.get('Origin') && request.headers.get('Origin') !== digestOrigin(scope))
     || (request.headers.get('Sec-Fetch-Site') && !['same-origin', 'none'].includes(request.headers.get('Sec-Fetch-Site')))) return jsonResponse(403, { ok: false, message: 'Use the authenticated Admin page.' });
-  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: 'rev' });
+  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url,
+    installationId: scope.profile.installationId, environment: scope.profile.environment });
   if (runtime?.target !== 'test') return jsonResponse(503, { ok: false, message: 'TEST service unavailable.' });
   const auth = requireAdmin(request, runtime, (dependencies.clock || Date.now)());
   if (auth.response) return auth.response;
@@ -29,6 +30,7 @@ export async function handleAttendanceDigest(request, dependencies = {}) {
       const id = url.searchParams.get('requestId');
       if (id !== null && !validId(id)) return jsonResponse(400, { ok: false, message: 'Use the original capture request.' });
       const rehearsalId = url.searchParams.get('rehearsalId');
+      if (rehearsalId !== null && digestGym(scope) !== 'rev') return jsonResponse(403, { ok: false, message: 'Synthetic rehearsals require the Revolution TEST installation.' });
       if (rehearsalId !== null) return jsonResponse(200, await digestRehearsalState(rehearsalId, id, scope, dependencies));
       return jsonResponse(200, await digestState(scope, id, dependencies));
     }
@@ -36,6 +38,7 @@ export async function handleAttendanceDigest(request, dependencies = {}) {
     if (parsed.response) return parsed.response;
     const input = parsed.value;
     if (input.action === 'armRehearsal' && Object.keys(input).sort().join('|') === 'action|rehearsalId') {
+      if (digestGym(scope) !== 'rev') return jsonResponse(403, { ok: false, message: 'Synthetic rehearsals require the Revolution TEST installation.' });
       const rehearsal = await armDigestRehearsal(input.rehearsalId, auth.session.adminName, scope, dependencies);
       return jsonResponse(200, { ok: true, target: 'test', sendingEnabled: false, rehearsal });
     }

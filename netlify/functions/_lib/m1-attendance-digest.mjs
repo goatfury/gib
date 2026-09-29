@@ -3,6 +3,16 @@ import { datesThrough, localNow, datePlus, validateRead } from './m1-manager-rev
 
 export const DIGEST_SCHEMA = 'm1-attendance-digest/v1';
 export const DIGEST_ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
+const DIGEST_ORIGINS = Object.freeze({ rev: DIGEST_ORIGIN, richmond: 'https://gib-richmond-test.netlify.app' });
+// Callers obtain this scope from the installation/site/context validator. A
+// request body or query parameter must never select the gym or callback host.
+export function digestGym(scope) {
+  if (scope?.target !== 'test') return null;
+  if (scope.profile?.installationId === 'rev') return 'rev';
+  if (scope.profile?.installationId === 'richmond' && scope.profile.environment === 'test') return 'richmond';
+  return null;
+}
+export const digestOrigin = scope => DIGEST_ORIGINS[digestGym(scope)] || null;
 export const DIGEST_TIMEZONE = 'America/New_York';
 export const DIGEST_STORE = 'gib-m1-attendance-digest-test-v1';
 export const DIGEST_CONFIRMED_SENDER = 'revbjjops@gmail.com';
@@ -31,7 +41,8 @@ const validPerson = (person, key, name) => exact(person, ['key', 'name', 'addres
   && (person.address === null || mailbox(person.address));
 
 export function defaultDigestConfiguration(scope, env = {}) {
-  if (scope?.target !== 'test' || scope.profile?.installationId !== 'rev') throw new Error('Revolution TEST digest required.');
+  const gym = digestGym(scope);
+  if (!gym) throw new Error('Isolated TEST digest required.');
   const address = (key, fallback) => {
     const value = env[key] === undefined ? fallback : env[key];
     if (value === undefined || value === null || value === '') return null;
@@ -57,8 +68,8 @@ export function defaultDigestConfiguration(scope, env = {}) {
   return { schema: DIGEST_SCHEMA, target: 'test', sendingEnabled: false, senderAddress: DIGEST_CONFIRMED_SENDER, dailyLocalTime,
     ...(scope.syntheticRehearsal === true ? { syntheticRehearsal: true } : {}),
     cutoffConfirmed: confirmed === 'true' || (confirmed !== 'false' && dailyLocalTime === '20:00'), classFinishCutoffConfirmed: false, timezone: DIGEST_TIMEZONE,
-    recipients: [routing.rev.reviewer, ...routing.rev.cc], routing,
-    gyms: [{ id: 'rev', name: scope.profile.gymName, timezone: DIGEST_TIMEZONE, staffClockEnabled: true, adminUrl: DIGEST_ORIGIN + '/m1/admin/' }] };
+    recipients: [routing[gym].reviewer, ...routing[gym].cc], routing,
+    gyms: [{ id: gym, name: scope.profile.gymName, timezone: DIGEST_TIMEZONE, staffClockEnabled: gym === 'rev', adminUrl: digestOrigin(scope) + '/m1/admin/' }] };
 }
 
 function validateConfiguration(config) {
@@ -82,6 +93,7 @@ function validateConfiguration(config) {
       || !validPerson(config.recipients[1], 'stu', 'Stu')) throw new Error('Digest legacy scope is incomplete.');
     return;
   }
+  const primaryGym = config.gyms.length === 1 ? config.gyms[0].id : 'rev';
   if (!exact(config.routing, ['rev', 'richmond']) || Object.entries(reviewerFor).some(([gym, [key, name]]) => {
     const route = config.routing[gym];
     return !exact(route, ['reviewer', 'cc', ...(Object.hasOwn(route || {}, 'bcc') ? ['bcc'] : [])]) || !validPerson(route.reviewer, key, name)
@@ -89,9 +101,10 @@ function validateConfiguration(config) {
         || person.address.toLowerCase() === route.reviewer.address?.toLowerCase())
       || Object.hasOwn(route, 'bcc') && (!Array.isArray(route.bcc) || route.bcc.length > 1 || route.bcc.some(person => !validPerson(person, 'andrew', 'Andrew') || !person.address
         || person.address.toLowerCase() === route.reviewer.address?.toLowerCase() || route.cc.some(copy => copy.address.toLowerCase() === person.address.toLowerCase())));
-  }) || config.recipients.length !== 1 + config.routing.rev.cc.length
-    || JSON.stringify(config.recipients) !== JSON.stringify([config.routing.rev.reviewer, ...config.routing.rev.cc])
-    || (config.gyms.some(gym => gym.id === 'richmond') && config.syntheticRehearsal !== true)) throw new Error('Digest routing is incomplete.');
+  }) || config.recipients.length !== 1 + config.routing[primaryGym].cc.length
+    || JSON.stringify(config.recipients) !== JSON.stringify([config.routing[primaryGym].reviewer, ...config.routing[primaryGym].cc])
+    || config.gyms.length > 1 && config.syntheticRehearsal !== true
+    || config.syntheticRehearsal !== true && config.gyms.some(gym => gym.id === 'richmond' && gym.staffClockEnabled !== false)) throw new Error('Digest routing is incomplete.');
 }
 
 function link(gym, date, staff = false) {

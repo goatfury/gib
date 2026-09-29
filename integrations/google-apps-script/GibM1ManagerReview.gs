@@ -1,4 +1,9 @@
 /* Explicitly gated day review journal. Attendance remains in Signins and AdminAudit. */
+function managerReviewerAllowed_(name) {
+  return typeof instructorAdminNameAllowed_ === 'function'
+    ? instructorAdminNameAllowed_(name)
+    : GIB_M1_ADMIN_NAMES_.indexOf(name) >= 0;
+}
 function managerReviewTestEnabled_() {
   return typeof GIB_M1_MANAGER_REVIEW_TEST_ENABLED !== 'undefined'
     && GIB_M1_MANAGER_REVIEW_TEST_ENABLED === true && configuredDeploymentTarget_() === 'test';
@@ -54,7 +59,8 @@ function managerJournal_(spreadsheet, create) {
     ids[row[0]] = true;
     var date = displayDate_(row[2]);
     var revision = Number(row[3]);
-    if (!validCalendarDate_(date) || revision !== (revisions[date] || 0) + 1 || ['partial', 'complete'].indexOf(row[6]) < 0) throw new Error('Review history conflict.');
+    if (!validCalendarDate_(date) || revision !== (revisions[date] || 0) + 1 || ['partial', 'complete'].indexOf(row[6]) < 0
+      || !managerReviewerAllowed_(row[4]) || (row[4] === 'Trey Martin' && row[1] !== 'richmond')) throw new Error('Review history conflict.');
     revisions[date] = revision;
     return { requestId: row[0], gym: row[1], date: date, revision: revision, reviewer: row[4], time: String(row[5]), action: row[6], attendanceHash: row[7], scheduleHash: row[8], decisions: JSON.parse(row[9]), snapshot: JSON.parse(row[10]), requestHash: row[11] };
   });
@@ -85,6 +91,7 @@ function managerDay_(date, state, events) {
 function managerReviewAction_(body, readTrace) {
   var target = configuredDeploymentTarget_();
   if (!managerReviewEnabled_() || requestTarget_(body) !== target || !adminActionAuthorized_(body)) return rejectedAuthResult_();
+  if ((body.adminName !== undefined || body.check) && !managerReviewerAllowed_(body.adminName)) return rejectedAuthResult_();
   if (['managerReviewRead', 'managerReviewSave', 'adminAdditionCheckRead'].indexOf(body.action) < 0 && !(body.action === 'managerReviewVoid' && managerReviewTestEnabled_())) return rejectedAuthResult_();
   var gym = typeof GIB_M1_RICHMOND_INSTALLATION_ !== 'undefined' ? 'richmond' : 'rev';
   if (body.gym !== gym || body.from !== '2026-09-07' || body.to !== todayNewYork_()) return rejectedAuthResult_();
@@ -129,7 +136,7 @@ function managerReviewAction_(body, readTrace) {
           date: body.date, reviewer: body.adminName,
           dailyRead: { ok: true, test: target === 'test', adminName: body.adminName, date: daily.date, records: daily.records, warnings: daily.warnings, auditHistory: daily.auditHistory }, ledger: result };
       }
-      if (body.check && GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) >= 0) {
+      if (body.check && managerReviewerAllowed_(body.adminName)) {
         var checked = journal.events.filter(function(e) { return e.requestId === body.check.requestId; });
         if (checked.length && checked[0].requestHash !== managerRequestHash_(body.adminName, body.check)) return jsonResult_({ ok: false, message: 'Review request identity conflict.' });
         if (checked.length) result.receipt = { saved: true, requestId: checked[0].requestId, revision: checked[0].revision };
@@ -138,7 +145,7 @@ function managerReviewAction_(body, readTrace) {
       trace('google.read', 'validated');
       return jsonResult_(result);
     }
-    if (GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) < 0 || !validCalendarDate_(body.date) || body.date < body.from || body.date > body.to) return rejectedAuthResult_();
+    if (!managerReviewerAllowed_(body.adminName) || !validCalendarDate_(body.date) || body.date < body.from || body.date > body.to) return rejectedAuthResult_();
     if (body.action === 'managerReviewVoid') return managerReviewVoid_(body, spreadsheet, state);
     var input = body.review;
     if (!input || input.date !== body.date || !/^manager-[a-zA-Z0-9-]{16,100}$/.test(input.requestId) || ['partial', 'complete'].indexOf(input.action) < 0 || !Array.isArray(input.decisions) || !input.snapshot || JSON.stringify(input).length > 42000) return rejectedAuthResult_();

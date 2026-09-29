@@ -1,5 +1,6 @@
 import { constantTimeSecretEqual, jsonResponse, runtimeConfig } from './_lib/m1-common.mjs';
 import { attendanceDigestScope } from './m1-attendance-digest.mjs';
+import { digestGym } from './_lib/m1-attendance-digest.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
 import { executeAttendanceWorkflowJob, workflowDispatchSignature, WORKFLOW_DISPATCH_HEADER, WORKFLOW_DISPATCH_PATH } from './_lib/m1-attendance-digest-workflow.mjs';
 
@@ -9,7 +10,7 @@ export async function handleAttendanceDeliveryBackground(request, dependencies =
   if (request.method !== 'POST' || url.pathname !== WORKFLOW_DISPATCH_PATH || url.search || url.hash) return jsonResponse(404, { ok: false });
   const scope = attendanceDigestScope(request, dependencies);
   if (!scope) return jsonResponse(403, { ok: false, code: 'WORKFLOW_TEST_SCOPE_REQUIRED' });
-  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: 'rev' });
+  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: digestGym(scope), environment: scope.profile.environment });
   if (runtime?.target !== 'test') return jsonResponse(503, { ok: false, code: 'WORKFLOW_RUNTIME_UNAVAILABLE' });
   try {
     const raw = await request.text(), signature = request.headers.get(WORKFLOW_DISPATCH_HEADER);

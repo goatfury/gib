@@ -12,6 +12,12 @@ import { traceGoogle, safeAdditionTraceId, scopedStaffReadTraceId } from './m1-g
 import { nativeHttpsControl } from './m1-google-native-control.mjs';
 
 export const ADMIN_NAMES = Object.freeze(['Andrew Smith', 'Stuart Turner']);
+const RICHMOND_TEST_ADMIN_NAMES = Object.freeze([...ADMIN_NAMES, 'Trey Martin']);
+export function adminNamesForScope(config) {
+  return config?.installationId === 'richmond' && config.environment === 'test'
+    && config.target === 'test' && config.preview === true
+    ? RICHMOND_TEST_ADMIN_NAMES : ADMIN_NAMES;
+}
 export const ADMIN_COOKIE = 'gib_m1_admin_session';
 export const ADMIN_REQUEST_HEADER = 'X-GIB-M1-Admin-Request-Token';
 export const ADMIN_SESSION_SECONDS = 30 * 60;
@@ -617,9 +623,9 @@ function validRequestToken(value) {
     && /^[A-Za-z0-9_-]+$/u.test(token);
 }
 
-export function createAdminSession(adminName, secret, now = Date.now(), requestToken = '') {
+export function createAdminSession(adminName, secret, now = Date.now(), requestToken = '', scope) {
   if (
-    !ADMIN_NAMES.includes(adminName)
+    !adminNamesForScope(scope).includes(adminName)
     || !clean(secret)
     || !validRequestToken(requestToken)
   ) {
@@ -630,12 +636,13 @@ export function createAdminSession(adminName, secret, now = Date.now(), requestT
     n: adminName,
     r: requestToken,
     iat: Math.floor(now / 1000),
-    exp: Math.floor(now / 1000) + ADMIN_SESSION_SECONDS
+    exp: Math.floor(now / 1000) + ADMIN_SESSION_SECONDS,
+    ...(adminName === 'Trey Martin' ? { s: 'richmond:test' } : {})
   });
   return `${payload}.${signPayload(payload, secret)}`;
 }
 
-export function readAdminSession(value, secret, now = Date.now()) {
+export function readAdminSession(value, secret, now = Date.now(), scope) {
   const parts = clean(value).split('.');
   if (parts.length !== 2 || !clean(secret)) return null;
   const expected = Buffer.from(signPayload(parts[0], secret), 'utf8');
@@ -651,7 +658,8 @@ export function readAdminSession(value, secret, now = Date.now()) {
   if (
     !payload
     || payload.v !== 2
-    || !ADMIN_NAMES.includes(payload.n)
+    || !adminNamesForScope(scope).includes(payload.n)
+    || (payload.n === 'Trey Martin' ? payload.s !== 'richmond:test' : Object.hasOwn(payload, 's'))
     || !validRequestToken(payload.r)
     || !Number.isInteger(payload.exp)
     || payload.exp <= Math.floor(now / 1000)
@@ -711,7 +719,8 @@ export function requireAdmin(request, config, now = Date.now()) {
   const session = readAdminSession(
     cookieValue(request, ADMIN_COOKIE),
     config.sessionSecret,
-    now
+    now,
+    config
   );
   if (!session) {
     return { response: jsonResponse(401, { ok: false, message: 'Admin login required.' }) };

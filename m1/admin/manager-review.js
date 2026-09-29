@@ -58,7 +58,7 @@
       inFlight = (async () => {
         let note = '';
         try {
-          const result = site === 'Rev'
+          const result = site === 'Rev' || (test && site === 'Richmond')
             ? await globalThis.GIBM1ReadClient.run({ ticket: globalThis.GIBM1ReadClient.createTicket(), current: () => active && own === generation,
               send: (readRequest, options) => request(endpoint, { action: 'read', readRequest }, options) })
             : await request(endpoint, { action: 'read' }, { timeoutMs: 60000, timeoutMessage: 'Review status unavailable. No fresh central read was confirmed.' });

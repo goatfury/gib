@@ -102,7 +102,7 @@ export async function handleManagerReview(request, dependencies = {}) {
     ? { operation: request.headers.get(READ_OPERATION_HEADER), requestId: request.headers.get(READ_ID_HEADER) } : input.readRequest : null;
   if (ticketRequested && (!callbackRead || !ticket || typeof ticket !== 'object' || Array.isArray(ticket)
     || Object.keys(ticket).sort().join('|') !== 'operation|requestId' || !['start', 'status'].includes(ticket.operation) || !validId(ticket.requestId))) {
-    return jsonResponse(400, { ok: false, message: 'An identified Revolution read ticket is required.' });
+    return jsonResponse(400, { ok: false, message: 'An identified read ticket is required.' });
   }
   const trace = callbackRead ? createReadTrace(ticket?.requestId || randomUUID(), dependencies, request.headers.get(READ_ID_HEADER)) : () => {};
   const respond = (status, value) => {

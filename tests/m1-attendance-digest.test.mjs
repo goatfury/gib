@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildAttendanceDigest, defaultDigestConfiguration, renderAttendanceDigest, splitAttendanceDigest, digestDue, latestEligibleOpportunity, DIGEST_ORIGIN } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
+import { buildAttendanceDigest, defaultDigestConfiguration, renderAttendanceDigest, splitAttendanceDigest, digestDue, latestEligibleOpportunity, digestGym, digestOrigin, DIGEST_ORIGIN } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
 import { buildTestDigestEmail } from '../netlify/functions/_lib/m1-attendance-digest-email-proposal.mjs';
 import { datesThrough } from '../netlify/functions/_lib/m1-manager-review.mjs';
 
 const now = Date.parse('2026-09-25T02:30:00Z'), today = '2026-09-24';
 const scope = { target: 'test', profile: { installationId: 'rev', gymName: 'Revolution BJJ' } };
+const richmondScope = { target: 'test', profile: { installationId: 'richmond', environment: 'test', gymName: 'Richmond BJJ' } };
 const configuration = (env = {}) => defaultDigestConfiguration(scope, { GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true',
   GIB_M1_ATTENDANCE_DIGEST_LOCAL_TIME: '22:00', GIB_M1_ATTENDANCE_DIGEST_BCC_ANDREW: 'false',
   GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL: '', GIB_M1_ATTENDANCE_DIGEST_TREY_EMAIL: '', GIB_M1_ATTENDANCE_DIGEST_ANDREW_EMAIL: '', ...env });
@@ -27,6 +28,27 @@ test('one valid instructor satisfies a finished class; unreviewed days and addit
   });
   assert.equal(value.shouldCapture, false); assert.equal(value.itemCount, 0); assert.deepEqual(value.readFailures, []);
   assert.equal(build().shouldCapture, false);
+});
+
+test('actual Richmond TEST configuration reads only its own gym, keeps Staff disabled and routes only to Trey', () => {
+  const config = defaultDigestConfiguration(richmondScope);
+  assert.equal(digestGym(richmondScope), 'richmond'); assert.equal(digestOrigin(richmondScope), 'https://gib-richmond-test.netlify.app');
+  assert.deepEqual(config.gyms.map(g => [g.id, g.staffClockEnabled]), [['richmond', false]]);
+  assert.deepEqual(config.recipients.map(p => p.address), ['info@richmondbjj.com']); assert.equal(config.sendingEnabled, false);
+  const dates = schedules('richmond'); dates.days.at(-1).occurrences.push(occurrence());
+  const input = { jobDate: today, snapshots: [{ gym: 'richmond', attendance: { ok: true, ledger: ledger('richmond') },
+    staff: { ok: true, complete: true, items: [], notApplicable: true } }], schedules: [dates], configuration: config, now };
+  const digest = buildAttendanceDigest(input), routed = splitAttendanceDigest(digest, config);
+  assert.equal(digest.itemCount, 1); assert.deepEqual(digest.readFailures, []);
+  assert.equal(routed.length, 1); assert.equal(routed[0].gym, 'richmond');
+  assert.doesNotMatch(routed[0].rendered.html + routed[0].rendered.text, /deploy-preview-89|info@revolutionbjj.com|#staff-time/);
+  input.snapshots[0].attendance = { ok: false };
+  const failed = buildAttendanceDigest(input); assert.equal(failed.shouldCapture, true); assert.equal(failed.itemCount, 0);
+  assert.equal(failed.readFailures[0].code, 'ATTENDANCE_UNAVAILABLE');
+  for (const invalid of [{ ...richmondScope, target: 'production' }, { target: 'test', profile: { installationId: 'richmond' } },
+    { target: 'test', profile: { installationId: 'richmond', environment: 'production' } }]) {
+    assert.equal(digestGym(invalid), null); assert.equal(digestOrigin(invalid), null); assert.throws(() => defaultDigestConfiguration(invalid));
+  }
 });
 
 test('missing sign-ins require confirmed class finish; upcoming and in-progress classes are excluded', () => {

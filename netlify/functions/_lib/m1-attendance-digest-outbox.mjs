@@ -1,8 +1,8 @@
 import { createHmac } from 'node:crypto';
-import { constantTimeSecretEqual } from './m1-common.mjs';
+import { adminNamesForScope, constantTimeSecretEqual } from './m1-common.mjs';
 import { validId } from './m1-test-read-callback.mjs';
 import { localNow } from './m1-manager-review.mjs';
-import { DIGEST_SCHEMA, DIGEST_STORE, digestHash, digestDate, datesThrough, defaultDigestConfiguration, buildAttendanceDigest, renderAttendanceDigest, digestDue, latestEligibleOpportunity } from './m1-attendance-digest.mjs';
+import { DIGEST_SCHEMA, DIGEST_STORE, digestGym, digestHash, digestDate, datesThrough, defaultDigestConfiguration, buildAttendanceDigest, renderAttendanceDigest, digestDue, latestEligibleOpportunity } from './m1-attendance-digest.mjs';
 
 export const DIGEST_JOB_SCHEMA = 'm1-attendance-digest-job/v1';
 export const DIGEST_SIGNATURE_HEADER = 'X-GIB-M1-Digest-Signature';
@@ -13,6 +13,10 @@ const bindingKeys = ['schema', 'target', 'requestId', 'mode', 'jobDate', 'create
 const clock = dependencies => (dependencies.clock || Date.now)();
 const reqKey = id => 'requests/' + id;
 const outKey = id => 'outbox/' + id;
+const reviewersFor = scope => adminNamesForScope({ target: scope?.target, installationId: scope?.profile?.installationId,
+  environment: scope?.profile?.environment, preview: true });
+const runtimeGym = runtime => runtime?.target !== 'test' ? null : runtime.installationId === 'richmond'
+  ? runtime.environment === 'test' ? 'richmond' : null : !runtime.installationId || runtime.installationId === 'rev' ? 'rev' : null;
 function validateOutbox(record, messageId) {
   if (!record || record.schema !== DIGEST_SCHEMA || record.messageId !== messageId || record.sendingEnabled !== false
     || !['prepared', 'captured', 'suppressed', 'failed'].includes(record.state) || !digestDate(record.date)
@@ -56,14 +60,17 @@ export function validateDigestBinding(binding, now) {
   return binding;
 }
 export function authenticateDigestJob(raw, header, runtime, now) {
-  if (runtime?.target !== 'test') digestFail(503, 'DIGEST_RUNTIME_UNAVAILABLE');
+  const gym = runtimeGym(runtime);
+  if (!gym) digestFail(503, 'DIGEST_RUNTIME_UNAVAILABLE');
   if (!/^[0-9a-f]{64}$/.test(header || '') || !constantTimeSecretEqual(header, digestSignature(raw, runtime.adminActionToken))) digestFail(403, 'DIGEST_AUTHENTICATION_FAILED');
   let body;
   try { body = JSON.parse(raw); } catch { digestFail(400, 'DIGEST_INVALID_JSON'); }
   if (!exact(body, [...bindingKeys, 'gyms', ...(body?.mode === 'rehearsal' ? ['rehearsalId'] : [])])) digestFail(400, 'DIGEST_INVALID_ENVELOPE');
   const { gyms, ...binding } = body;
   validateDigestBinding(binding, now);
-  if (!Array.isArray(gyms) || (binding.mode === 'rehearsal' ? gyms.length !== 0 : gyms.length !== 1 || gyms[0]?.gym !== 'rev')) digestFail(409, 'DIGEST_GYM_MISMATCH');
+  if (!Array.isArray(gyms) || (binding.mode === 'rehearsal' ? gym !== 'rev' || gyms.length !== 0 : gyms.length !== 1 || gyms[0]?.gym !== gym)) digestFail(409, 'DIGEST_GYM_MISMATCH');
+  if (gym === 'richmond' && (!exact(gyms[0].staff, ['ok', 'complete', 'items', 'notApplicable']) || gyms[0].staff.ok !== true
+    || gyms[0].staff.complete !== true || gyms[0].staff.notApplicable !== true || !Array.isArray(gyms[0].staff.items) || gyms[0].staff.items.length)) digestFail(409, 'DIGEST_GYM_MISMATCH');
   return { binding, gyms };
 }
 
@@ -73,11 +80,11 @@ export async function loadDigestConfiguration(store, scope, dependencies = {}) {
   if (!entry) return base;
   if (!exact(entry.data, ['schema', 'dailyLocalTime', 'cutoffConfirmed', 'updatedAt', 'reviewer']) || entry.data.schema !== DIGEST_SCHEMA
     || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(entry.data.dailyLocalTime) || entry.data.cutoffConfirmed !== true
-    || !['Andrew Smith', 'Stuart Turner'].includes(entry.data.reviewer) || !Number.isFinite(Date.parse(entry.data.updatedAt))) digestFail(503, 'DIGEST_CONFIGURATION_UNAVAILABLE');
+    || !reviewersFor(scope).includes(entry.data.reviewer) || !Number.isFinite(Date.parse(entry.data.updatedAt))) digestFail(503, 'DIGEST_CONFIGURATION_UNAVAILABLE');
   return { ...base, dailyLocalTime: entry.data.dailyLocalTime, cutoffConfirmed: true };
 }
 export async function saveDigestConfiguration(store, scope, time, reviewer, dependencies = {}) {
-  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time || '') || !['Andrew Smith', 'Stuart Turner'].includes(reviewer)) digestFail(400, 'DIGEST_CONFIGURATION_INVALID');
+  if (!digestGym(scope) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time || '') || !reviewersFor(scope).includes(reviewer)) digestFail(400, 'DIGEST_CONFIGURATION_INVALID');
   const value = { schema: DIGEST_SCHEMA, dailyLocalTime: time, cutoffConfirmed: true, reviewer, updatedAt: new Date(clock(dependencies)).toISOString() };
   const previous = await readDigestEntry(store, 'configuration');
   const saved = previous ? await replaceConfirmed(store, 'configuration', previous, value) : await createConfirmed(store, 'configuration', value);
@@ -187,7 +194,8 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
     if (due !== 'due') return completeRequest(store, binding.requestId, { state: due });
   }
   const rendered = renderAttendanceDigest(digest);
-  const messageId = binding.mode === 'scheduled' ? (dependencies.dailyMessagePrefix || 'm1-test-daily-') + binding.jobDate : 'm1-test-manual-' + binding.requestId;
+  const gym = digestGym(scope), suffix = gym === 'richmond' ? 'richmond-' : '';
+  const messageId = binding.mode === 'scheduled' ? (dependencies.dailyMessagePrefix || 'm1-test-daily-' + suffix) + binding.jobDate : 'm1-test-manual-' + suffix + binding.requestId;
   const prepared = { schema: DIGEST_SCHEMA, messageId, date: binding.jobDate, mode: binding.mode, state: digest.shouldCapture ? 'prepared' : 'suppressed',
     requestId: binding.requestId, createdAt: new Date(now).toISOString(), capturedAt: null, sendingEnabled: false,
     ...rendered, groups: digest.groups, readFailures: digest.readFailures, itemCount: digest.itemCount, contentHash: digestHash(rendered), lastFailure: null };
@@ -201,7 +209,8 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
 }
 
 export async function startManualDigest(requestId, reviewer, runtime, scope, dependencies = {}) {
-  if (!validId(requestId) || !['Andrew Smith', 'Stuart Turner'].includes(reviewer) || runtime?.target !== 'test') digestFail(400, 'DIGEST_REQUEST_INVALID');
+  const gym = digestGym(scope);
+  if (!validId(requestId) || !gym || !reviewersFor(scope).includes(reviewer) || runtimeGym(runtime) !== gym) digestFail(400, 'DIGEST_REQUEST_INVALID');
   if (typeof dependencies.context?.waitUntil !== 'function') digestFail(503, 'DIGEST_LIFECYCLE_UNAVAILABLE');
   const store = dependencies.digestStore || await defaultDigestStore(), now = clock(dependencies);
   const existing = await readDigestEntry(store, reqKey(requestId));
@@ -223,7 +232,9 @@ export async function startManualDigest(requestId, reviewer, runtime, scope, dep
       let category = 'ordinary-reply-discarded';
       try {
         const response = await (dependencies.fetch || fetch)(runtime.webhookUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-          body: JSON.stringify({ token: runtime.webhookToken, adminActionToken: runtime.adminActionToken, target: 'test', action: 'attendanceDigestCapture', adminName: reviewer, binding }),
+          body: JSON.stringify({ token: runtime.webhookToken, adminActionToken: runtime.adminActionToken, target: 'test',
+            ...(gym === 'richmond' ? { installation: 'richmond', environment: 'test', gym: 'richmond' } : {}),
+            action: 'attendanceDigestCapture', adminName: reviewer, binding }),
           redirect: 'manual', signal: AbortSignal.timeout(25000) });
         await response.body?.cancel();
       } catch { category = 'ordinary-reply-unavailable'; }

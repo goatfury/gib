@@ -35,7 +35,7 @@ function harness(options = {}) {
   const document = { readyState: 'complete', hidden: false, createElement: tag => { const node = new Element(tag); nodes.push(node); return node; }, getElementById: () => null };
   const root = new Element('section'); root.ownerDocument = document;
   const context = vm.createContext({ document, location: { origin: ORIGIN, protocol: 'https:', port: '', ...options.location },
-    M1_MANAGER_REVIEW_CONFIG: { enabled: true, target: 'test', ...options.config }, M1_INSTALLATION_PROFILE: { installationId: options.gym || 'rev' },
+    M1_MANAGER_REVIEW_CONFIG: { enabled: true, target: 'test', ...options.config }, M1_INSTALLATION_PROFILE: { installationId: options.gym || 'rev', environment: options.environment },
     Date: class extends Date { static now() { return now; } }, crypto: { randomUUID: () => ID },
     sessionStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => { if (options.brokenStorage) throw new Error('Storage failed'); storage.set(key, value); }, removeItem: key => storage.delete(key) },
     setTimeout: (fn, ms) => { const id = ++sequence; timers.set(id, { fn, at: now + ms }); return id; }, clearTimeout: id => timers.delete(id) });
@@ -325,4 +325,18 @@ test('real Admin wiring preserves authenticated GET and lifecycle clearing', () 
   assert.match(admin, /<section id="attendanceWorkflow"/); assert.match(admin, /src="\.\/attendance-workflow\.js"/);
   assert.match(admin, /digest\(\?:-email\)\?\|workflow/); assert.match(admin, /attendanceWorkflow\.clear\(\)/);
   assert.match(admin, /GIBM1AttendanceWorkflow\?\.create\([\s\S]*?getSession:\s*\(\)\s*=>\s*adminRequestToken/);
+});
+
+test('canonical Richmond TEST shows only its real reminder status and no Revolution synthetic controls or journal', async () => {
+  const storage = new Map([[KEY, JSON.stringify({ requestId: ID, adminName: 'Andrew Smith', action: 'runExamples' })]]);
+  const h = harness({ gym: 'richmond', environment: 'test', location: { origin: 'https://gib-richmond-test.netlify.app' }, create: { site: 'Richmond' }, storage });
+  assert.ok(h.ui); await h.open(response(null, { setup: setup(), current: { health: { ok: true, target: 'test', state: 'not-configured', codes: ['CONFIGURATION_REQUIRED'], checkedAt: null,
+    pendingCount: 0, failedCount: 0, unconfirmedCount: 0 }, messages: { messages: [{ gym: 'richmond' }] } } }));
+  assert.match(h.root.textContent, /Richmond TEST uses its own attendance/); assert.match(h.root.textContent, /Staff Clock is disabled/);
+  assert.match(h.root.textContent, /Trey can use scoped Richmond TEST/); assert.doesNotMatch(h.root.textContent, /Revolution: Stu|Run synthetic|needs existing Admin access/);
+  assert.ok(h.find('refresh')); assert.equal(h.find('run'), undefined); assert.equal(h.calls[0].args[0], '/api/m1-attendance-workflow');
+  assert.ok(storage.has(KEY)); const failed = h.ui.refresh(); await flush(); h.calls.at(-1).reject(new Error('Offline')); await failed;
+  assert.match(h.root.textContent, /status unavailable/); assert.doesNotMatch(h.root.textContent, /check completed/);
+  const recovered = h.ui.refresh(); await flush(); h.calls.at(-1).resolve(response()); await recovered;
+  assert.match(h.root.textContent, /Richmond reminder status loaded/);
 });

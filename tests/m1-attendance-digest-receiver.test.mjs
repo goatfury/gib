@@ -9,7 +9,9 @@ import { datesThrough } from '../netlify/functions/_lib/m1-manager-review.mjs';
 
 const source = readFileSync(new URL('../integrations/google-apps-script/GibM1AttendanceDigest.gs', import.meta.url), 'utf8');
 const receiverSource = readFileSync(new URL('../integrations/google-apps-script/GibM1Receiver.gs', import.meta.url), 'utf8');
+const richmondWrapper = readFileSync(new URL('../integrations/google-apps-script/richmond-test/Code.gs', import.meta.url), 'utf8');
 const adminAuthorizationSource = receiverSource.match(/^function adminActionAuthorized_\(body\) \{[\s\S]*?^\}/m)?.[0];
+const instructorAdminSource = receiverSource.match(/^function instructorAdminNameAllowed_\(name, site\) \{[\s\S]*?^\}/m)?.[0];
 assert.ok(adminAuthorizationSource, 'existing receiver authorization must be exercised');
 const now = Date.parse('2026-09-25T02:30:00Z'), date = '2026-09-24';
 const id = '00000000-0000-4000-8000-000000000001';
@@ -23,10 +25,54 @@ const binding = (patch = {}) => ({ schema, target: 'test', requestId: id, mode: 
 const ledger = (to = date) => ({ ok: true, target: 'test', schema: 'm1-manager-review/v1', complete: true, gym: 'rev', from: '2026-09-07', to,
   days: datesThrough(to).map(date => ({ date, attendanceHash: 'a'.repeat(64), records: [], warnings: [], review: null })) });
 
+test('Richmond digest binds its exact locked project, own destination and signed gym without reading Staff', () => {
+  const h = harness({ richmond: true, ledger: { ...ledger(), gym: 'richmond', label: 'café — Richmond TEST' } });
+  assert.equal(h.manual().ok, true);
+  const sent = h.requests[0];
+  assert.equal(sent.body.gyms[0].gym, 'richmond');
+  assert.deepEqual(sent.body.gyms[0].staff, { ok: true, complete: true, items: [], notApplicable: true });
+  assert.equal(h.events.some(event => event.kind === 'staff'), false);
+  assert.equal(sent.init.headers['X-GIB-M1-Digest-Signature'], createHmac('sha256', secret).update(schema + '\n' + sent.init.payload, 'utf8').digest('hex'));
+  assert.deepEqual(Object.keys(sent.body).sort(), [...Object.keys(binding()), 'gyms'].sort());
+  assert.equal(h.context.gibM1RichmondActionValid_({ action: 'managerReviewReadCallback', gym: 'richmond' }), true);
+  assert.equal(h.context.gibM1RichmondActionValid_({ action: 'managerReviewReadCallbackProof', gym: 'richmond' }), false);
+  assert.equal(h.context.gibM1RichmondActionValid_({ action: 'staffRecoveryRead', gym: 'richmond' }), false);
+  assert.equal(h.context.gibM1RichmondActionValid_({ action: 'attendanceDigestCapture', gym: 'rev' }), false);
+  const trey = harness({ richmond: true }); assert.equal(trey.manual({ adminName: 'Trey Martin' }).ok, true);
+  const rev = harness(); assert.equal(rev.manual({ adminName: 'Trey Martin' }).code, 'DIGEST_AUTHENTICATION_REQUIRED');
+});
+
+test('Richmond digest rejects missing or crossed locks, sheet identities, envelope and old gym acknowledgments', () => {
+  for (const key of ['GIB_M1_DEPLOYMENT_TARGET_LOCK', 'GIB_M1_INSTALLATION_LOCK', 'GIB_M1_ENVIRONMENT_LOCK', 'GIB_M1_RICHMOND_TEST_PROVISIONING_CLOSED', 'GIB_M1_RICHMOND_TEST_SPREADSHEET_ID']) {
+    const h = harness({ richmond: true }); h.properties.set(key, 'wrong');
+    assert.equal(h.manual().code, 'DIGEST_AUTHENTICATION_REQUIRED', key); assert.equal(h.events.length, 0); assert.equal(h.requests.length, 0);
+  }
+  for (const patch of [{ installation: 'rev' }, { environment: 'production' }, { target: 'production' }, { gym: 'rev' }, { installation: undefined }, { token: 'wrong' }, { adminActionToken: 'wrong' }]) {
+    const h = harness({ richmond: true }); assert.equal(h.manual(patch).code, 'DIGEST_AUTHENTICATION_REQUIRED'); assert.equal(h.requests.length, 0);
+  }
+  for (const [key, value] of [['EXPECTED_SPREADSHEET_NAME', 'RBJJ M1 — TEST'], ['GIB_M1_STAFF_CLOCK_ENABLED', true]]) {
+    const h = harness({ richmond: true }); h.context[key] = value; assert.equal(h.manual().code, 'DIGEST_AUTHENTICATION_REQUIRED');
+  }
+  const stale = harness({ richmond: true, response: { ok: true, accepted: true, requestId: id, state: 'captured', messageId: 'm1-test-manual-' + id } });
+  assert.equal(stale.manual().code, 'ACKNOWLEDGMENT_INVALID');
+});
+
+test('Richmond scheduled entrypoint captures only Richmond while Revolution helpers remain closed', () => {
+  const h = harness({ richmond: true }); h.context.testRevolutionAttendanceDigestTick(); h.context.testRevolutionAttendanceDigestRehearsalTick();
+  assert.equal(h.requests.length, 0);
+  assert.throws(() => h.context.testRevolutionAttendanceDigestRehearsalArm(), /Revolution TEST project required/);
+  h.context.testRichmondAttendanceDigestTick();
+  assert.equal(h.requests.length, 1); assert.equal(h.requests[0].body.mode, 'scheduled');
+  assert.equal(h.requests[0].body.gyms[0].gym, 'richmond'); assert.equal(h.receipts()[0].value.acknowledged, true);
+});
+
 function harness(options = {}) {
   let stamp = now, serial = 10, lockHeld = false;
   const properties = new Map(), events = [], requests = [], logs = [];
   const settings = { ...options };
+  if (settings.richmond) for (const [key, value] of Object.entries({ GIB_M1_RICHMOND_TEST_SPREADSHEET_ID: 'synthetic-richmond-sheet',
+    GIB_M1_DEPLOYMENT_TARGET_LOCK: 'test', GIB_M1_INSTALLATION_LOCK: 'richmond', GIB_M1_ENVIRONMENT_LOCK: 'test',
+    GIB_M1_RICHMOND_TEST_PROVISIONING_CLOSED: 'richmond-test-v1' })) properties.set(key, value);
   const pendingWrites = new Set();
   function assertPersisted() {
     const entry = [...properties.entries()].find(([key]) => key.startsWith('M1_TEST_DIGEST_PENDING_'));
@@ -66,6 +112,8 @@ function harness(options = {}) {
     console: { log: value => logs.push(value) },
     EXPECTED_SPREADSHEET_NAME: settings.spreadsheetName || 'RBJJ M1 — TEST',
     GIB_M1_ADMIN_NAMES_: ['Andrew Smith', 'Stuart Turner'],
+    GIB_M1_TARGET_LOCK_PROPERTY_: 'GIB_M1_DEPLOYMENT_TARGET_LOCK',
+    configuredDeploymentTarget_: () => 'test',
     PropertiesService: { getScriptProperties: () => store },
     LockService: { getScriptLock: () => lock },
     Utilities: {
@@ -90,7 +138,8 @@ function harness(options = {}) {
     jsonResult_: value => ({ getContent: () => JSON.stringify(value) }),
     managerReviewAction_(body) {
       assertPersisted();
-      assert.equal(body.action, 'managerReviewRead'); assert.equal(body.target, 'test'); assert.equal(body.gym, 'rev');
+      assert.equal(body.action, 'managerReviewRead'); assert.equal(body.target, 'test'); assert.equal(body.gym, settings.richmond ? 'richmond' : 'rev');
+      if (settings.richmond) { assert.equal(body.installation, 'richmond'); assert.equal(body.environment, 'test'); }
       assert.equal(body.token, transportSecret); assert.equal(body.adminActionToken, secret); assert.equal(body.check, null);
       assert.equal(body.from, '2026-09-07');
       assert.equal(lock.tryLock(10000), true);
@@ -98,7 +147,7 @@ function harness(options = {}) {
       try {
         if (settings.attendanceThrows) throw new Error('synthetic private attendance contents');
         if (settings.readElapsed) stamp += settings.readElapsed;
-        return { getContent: () => settings.attendanceRaw ?? JSON.stringify(settings.ledger ?? ledger(body.to)) };
+        return { getContent: () => settings.attendanceRaw ?? JSON.stringify(settings.ledger ?? { ...ledger(body.to), gym: body.gym }) };
       } finally { lock.releaseLock(); }
     },
     openExpectedSpreadsheet_(body) { assert.equal(lockHeld, true); assert.equal(body.target, 'test'); return { syntheticSpreadsheet: true }; },
@@ -110,21 +159,23 @@ function harness(options = {}) {
     },
     UrlFetchApp: { fetch(url, init) {
       assertPersisted(); assert.equal(lockHeld, false, 'all authoritative read locks are released before network dispatch');
-      assert.equal(url, endpoint); assert.equal(init.method, 'post'); assert.equal(init.contentType, 'application/json');
+      assert.equal(url, settings.richmond ? 'https://gib-richmond-test.netlify.app/api/m1-attendance-digest-job' : endpoint); assert.equal(init.method, 'post'); assert.equal(init.contentType, 'application/json');
       assert.equal(init.followRedirects, false); assert.equal(init.muteHttpExceptions, true);
       const body = JSON.parse(init.payload); requests.push({ url, init: plain(init), body }); events.push({ kind: 'dispatch' });
       if (settings.deliveryThrows) throw new Error('synthetic private response URL or body');
       const response = (typeof settings.response === 'function' ? settings.response(body) : settings.response) ?? { ok: true, accepted: true, requestId: body.requestId, state: 'captured',
         messageId: body.mode === 'rehearsal' ? 'm1-test-rehearsal-' + body.rehearsalId + '-' + body.jobDate :
-          body.mode === 'scheduled' ? 'm1-test-daily-' + body.jobDate : 'm1-test-manual-' + body.requestId };
+          body.mode === 'scheduled' ? 'm1-test-daily-' + (settings.richmond ? 'richmond-' : '') + body.jobDate : 'm1-test-manual-' + (settings.richmond ? 'richmond-' : '') + body.requestId };
       return { getResponseCode: () => settings.httpStatus ?? 200, getContentText: () => typeof response === 'string' ? response : JSON.stringify(response) };
     } }
   });
-  vm.runInContext(adminAuthorizationSource + '\n' + source, context);
+  vm.runInContext(adminAuthorizationSource + '\n' + instructorAdminSource + '\n' + source, context);
+  if (settings.richmond) vm.runInContext(richmondWrapper, context);
   return { context, settings, properties, events, requests, logs, store,
     advance: ms => { stamp += ms; }, stamp: () => stamp,
     receipts: () => [...properties.entries()].filter(([key]) => key.startsWith('M1_TEST_DIGEST_RECEIPT_')).map(([key, raw]) => ({ key, value: JSON.parse(raw) })),
-    manual(patch = {}) { return JSON.parse(context.gibM1AttendanceDigestCapture_({ target: 'test', token: transportSecret, adminActionToken: secret, adminName: 'Andrew Smith', binding: binding(), ...patch }).getContent()); }
+    manual(patch = {}) { return JSON.parse(context.gibM1AttendanceDigestCapture_({ target: 'test', token: transportSecret, adminActionToken: secret, adminName: 'Andrew Smith', binding: binding(),
+      ...(settings.richmond ? { installation: 'richmond', environment: 'test', gym: 'richmond' } : {}), ...patch }).getContent()); }
   };
 }
 

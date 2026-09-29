@@ -1,5 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto';
-import { digestHash, splitAttendanceDigest, DIGEST_ORIGIN, latestEligibleOpportunity } from './m1-attendance-digest.mjs';
+import { digestHash, splitAttendanceDigest, digestGym, digestOrigin, latestEligibleOpportunity } from './m1-attendance-digest.mjs';
 export { latestEligibleOpportunity } from './m1-attendance-digest.mjs';
 import { validId } from './m1-test-read-callback.mjs';
 import { validateDigestBinding } from './m1-attendance-digest-outbox.mjs';
@@ -43,8 +43,28 @@ const validMessage = message => exact(message, ['messageId', 'hash', 'from', 'to
   && ['html', 'text'].every(field => typeof message[field] === 'string' && message[field].length > 0 && message[field].length <= 200000)
   && /^[a-f0-9]{64}$/.test(message.hash) && digestHash(canonical(message)) === message.hash;
 function requireScope(scope) {
-  if (scope?.target !== 'test' || scope.profile?.installationId !== 'rev') throw new Error('WORKFLOW_TEST_SCOPE_REQUIRED');
+  if (!digestGym(scope)) throw new Error('WORKFLOW_TEST_SCOPE_REQUIRED');
 }
+// The existing two-gym proposal rehearsal owns an isolated store and explicitly
+// disables both send gates. It prepares synthetic bodies without a provider.
+function captureOnlyRehearsal(deps) {
+  return digestGym(deps.scope) === 'rev' && deps.scope.syntheticRehearsal === true && Boolean(deps.workflowStore)
+    && deps.env?.GIB_M1_ATTENDANCE_DIGEST_SEND_ENABLED === 'false' && deps.env?.GIB_M1_MAILAPP_TEST_SEND_ENABLED === 'false'
+    && !deps.simulatedProvider && !deps.mailappRuntime && !deps.transformMessage;
+}
+function scopedRoutes(input, deps) {
+  requireScope(deps.scope);
+  const routes = splitAttendanceDigest(input.digest, input.configuration), gym = digestGym(deps.scope);
+  const isolatedSimulator = deps.simulatedProvider && input.digest.syntheticRehearsal === true && input.configuration.syntheticRehearsal === true;
+  const isolatedCapture = captureOnlyRehearsal(deps) && input.digest.syntheticRehearsal === true
+    && input.configuration.syntheticRehearsal === true && input.configuration.sendingEnabled === false;
+  if (!isolatedSimulator && !isolatedCapture && (routes.length !== 1 || routes[0].gym !== gym)) throw new Error('WORKFLOW_TEST_SCOPE_REQUIRED');
+  return routes;
+}
+const runtimeFor = deps => deps.mailappRuntime || runtimeConfig(deps.env || process.env, {
+  admin: true, requestUrl: digestOrigin(deps.scope) + WORKFLOW_DISPATCH_PATH,
+  installationId: digestGym(deps.scope), environment: deps.scope.profile.environment
+});
 async function storeFor(deps) {
   if (deps.workflowStore || deps.digestStore) return deps.workflowStore || deps.digestStore;
   const { getStore } = await import('@netlify/blobs'); return getStore({ name: STORE, consistency: 'strong' });
@@ -95,9 +115,9 @@ function policyFor(configuration, deps) {
     const approved = String(env(deps, 'GIB_M1_ATTENDANCE_DIGEST_VERIFIED_RECIPIENTS') || '').split(',').map(value => value.trim());
     if (!configuration.cutoffConfirmed || env(deps, 'GIB_M1_ATTENDANCE_DIGEST_VERIFIED_SENDER') !== message.from
       || ![...message.to, ...message.cc, ...(message.bcc || [])].every(address => approved.includes(address))) return { state: 'blocked', code: 'SCHEDULED_CONFIGURATION_UNVERIFIED' };
-    if (message.from !== 'revbjjops@gmail.com' || !message.messageId.startsWith('m1-test-scheduled-rev-')) return { state: 'blocked', code: 'MAILAPP_TEST_SCOPE_REQUIRED' };
-    const runtime = deps.mailappRuntime || runtimeConfig(deps.env || process.env, { admin: true, requestUrl: DIGEST_ORIGIN + WORKFLOW_DISPATCH_PATH, installationId: 'rev' });
-    return runtime?.target === 'test' ? null : { state: 'disabled', code: 'SCHEDULED_PROVIDER_UNAVAILABLE' };
+    if (message.from !== 'revbjjops@gmail.com' || !message.messageId.startsWith('m1-test-scheduled-' + digestGym(deps.scope) + '-')) return { state: 'blocked', code: 'MAILAPP_TEST_SCOPE_REQUIRED' };
+    const runtime = runtimeFor(deps);
+    return runtime?.target === 'test' && (runtime.installationId || 'rev') === digestGym(deps.scope) ? null : { state: 'disabled', code: 'SCHEDULED_PROVIDER_UNAVAILABLE' };
   };
   return { canonical, validMessage, gate,
     beforeDispatch: async message => {
@@ -109,9 +129,9 @@ function policyFor(configuration, deps) {
     credentialFingerprint: () => digestHash(simulator ? 'm1-digest-simulator/v1\n' + simulator.identity : 'm1-mailapp-business/v1\nrevbjjops@gmail.com'),
     request: async (message, options, signal) => {
       if (simulator) return simulator.send(structuredClone(message), { ...options, signal });
-      const runtime = deps.mailappRuntime || runtimeConfig(deps.env || process.env, { admin: true, requestUrl: DIGEST_ORIGIN + WORKFLOW_DISPATCH_PATH, installationId: 'rev' });
-      if (runtime?.target !== 'test') throw new Error('MAILAPP_TEST_SCOPE_REQUIRED');
-      const response = await postGoogle(runtime, options.action, { gym: 'rev', binding: options.binding, message }, deps.fetch || fetch);
+      const runtime = runtimeFor(deps);
+      if (runtime?.target !== 'test' || (runtime.installationId || 'rev') !== digestGym(deps.scope)) throw new Error('MAILAPP_TEST_SCOPE_REQUIRED');
+      const response = await postGoogle(runtime, options.action, { gym: digestGym(deps.scope), ...(digestGym(deps.scope) === 'richmond' ? { installation: 'richmond', environment: 'test' } : {}), binding: options.binding, message }, deps.fetch || fetch);
       if (!response.readable) throw new Error('MAILAPP_RESPONSE_UNAVAILABLE');
       return response.value;
     } };
@@ -198,16 +218,16 @@ export async function migrateWorkflowHistory(scope, deps = {}) {
 // migrates, reprojects, clears or copies a retained delivery barrier.
 export async function readWorkflowDeliveryHold(message, scope, deps = {}) {
   requireScope(scope);
-  if (!validMessage(message) || !message.messageId.startsWith('m1-test-scheduled-rev-')) throw new Error('WORKFLOW_MESSAGE_UNAVAILABLE');
+  if (!validMessage(message) || !message.messageId.startsWith('m1-test-scheduled-' + digestGym(scope) + '-')) throw new Error('WORKFLOW_MESSAGE_UNAVAILABLE');
   const store = await storeFor(deps), initial = await historyRoot(store, { incomplete: true });
   if (initial && (!initial.data.migration.complete || initial.data.pending) || await historyWakePending(store)) return 'PRIOR_DELIVERY_HISTORY_PENDING';
-  if (await provisionalRecipientBarrier(store, 'rev', message.to, { ...deps, scope }, false)) return 'PRIOR_PERMANENT_RECIPIENT_PROOF_UNRESOLVED';
+  if (await provisionalRecipientBarrier(store, digestGym(scope), message.to, { ...deps, scope }, false)) return 'PRIOR_PERMANENT_RECIPIENT_PROOF_UNRESOLVED';
   if (!initial) {
     if (await read(store, 'workflow/index')) return 'PRIOR_DELIVERY_HISTORY_PENDING';
     return null;
   }
   const fingerprint = digestHash('m1-mailapp-business/v1\nrevbjjops@gmail.com');
-  const groups = await Promise.all(['unsafe/rev', recipientGroup('rev', message), routeGroup('rev', message, fingerprint)].map(name => historyGroup(store, name, 1)));
+  const groups = await Promise.all(['unsafe/' + digestGym(scope), recipientGroup(digestGym(scope), message), routeGroup(digestGym(scope), message, fingerprint)].map(name => historyGroup(store, name, 1)));
   if ((await historyRoot(store, { incomplete: true }))?.etag !== initial.etag || await historyWakePending(store)) return 'PRIOR_DELIVERY_HISTORY_PENDING';
   return groups.some(group => group.count) ? 'PRIOR_DELIVERY_HOLD' : null;
 }
@@ -281,7 +301,7 @@ async function processWorkflow(input, deps = {}) {
   const now = clock(deps); validateDigestBinding(input.binding, now);
   if (input.binding.mode !== 'scheduled' || !['due', 'not-due', 'awaiting-configuration'].includes(input.due)
     || input.digest.date !== input.binding.jobDate || Date.parse(input.digest.generatedAt) < input.binding.createdAt || Date.parse(input.digest.generatedAt) > now) throw new Error('WORKFLOW_FRESH_CHECK_REQUIRED');
-  const routes = splitAttendanceDigest(input.digest, input.configuration), store = await storeFor(deps);
+  const routes = scopedRoutes(input, deps), store = await storeFor(deps);
   if (input.dueByGym && (!exact(input.dueByGym, routes.map(route => route.gym))
     || Object.values(input.dueByGym).some(due => !['due', 'not-due', 'awaiting-configuration'].includes(due)))) throw new Error('WORKFLOW_FRESH_CHECK_REQUIRED');
   if (input.opportunityDueByGym && (!exact(input.opportunityDueByGym, routes.map(route => route.gym))
@@ -310,6 +330,8 @@ async function processWorkflow(input, deps = {}) {
   const dueOriginals = await Promise.all(routes.map(route => historyRoundRobin(store, 'retry/' + route.gym)));
   const active = [...new Set([...(await historyPage(store)).ids, ...oldDrafts.flatMap(group => group.ids), ...dueOriginals.flatMap(group => group.ids)])];
   for (const previous of await records(store, active)) {
+    if (!routes.some(route => route.gym === previous.data.gym)) continue;
+    if (captureOnlyRehearsal(deps) && previous.data.firstAttemptAt) throw new Error('WORKFLOW_TEST_SCOPE_REQUIRED');
     if (previous.data.firstAttemptAt && previous.data.claimUntil && clock(deps) >= previous.data.claimUntil) {
       const retained = await readDelivery(previous.data.message, options, policy);
       if (retained.state === 'not-started') {
@@ -398,7 +420,7 @@ async function processWorkflow(input, deps = {}) {
   // The Google timer also recovers prior-day attempts. No newer digest can
   // mutate them or reset their original 23-hour identity window.
   for (const entry of await records(store, [...new Set([...active, ...(await historyPage(store)).ids])])) {
-    if (!entry.data.firstAttemptAt) continue;
+    if (!routes.some(route => route.gym === entry.data.gym) || !entry.data.firstAttemptAt) continue;
     const head = await readHistoryOpportunity(store, entry.data.gym);
     let delivery = await readDelivery(entry.data.message, options, policy);
     // At most one current-day status check per tick. An existing Google claim
@@ -425,7 +447,7 @@ async function processWorkflow(input, deps = {}) {
 }
 
 export async function processAttendanceWorkflow(input, deps = {}) {
-  requireScope(deps.scope);
+  scopedRoutes(input, deps);
   const store = await storeFor(deps), now = clock(deps), previous = await read(store, 'workflow/processor');
   const pending = async () => {
     try { return { ...(await workflowHealth(deps.scope, deps)), pending: true }; }
@@ -521,8 +543,8 @@ async function jobHead(store, job) {
 export async function enqueueAttendanceWorkflow(input, runtime, deps = {}) {
   requireScope(deps.scope);
   validateDigestBinding(input.binding, clock(deps));
-  if (runtime?.target !== 'test' || input.binding.mode !== 'scheduled') throw new Error('WORKFLOW_TEST_SCOPE_REQUIRED');
-  splitAttendanceDigest(input.digest, input.configuration);
+  if (runtime?.target !== 'test' || (runtime.installationId || 'rev') !== digestGym(deps.scope) || input.binding.mode !== 'scheduled') throw new Error('WORKFLOW_TEST_SCOPE_REQUIRED');
+  scopedRoutes(input, deps);
   const store = await storeFor(deps), id = input.binding.requestId, path = 'workflow/jobs/' + id;
   const value = { schema: WORKFLOW_DISPATCH_SCHEMA, input: structuredClone(input), inputHash: digestHash(input), state: 'queued', createdAt: clock(deps), leaseUntil: null };
   const saved = await write(store, path, value, null);
@@ -531,7 +553,7 @@ export async function enqueueAttendanceWorkflow(input, runtime, deps = {}) {
   await jobHead(store, saved.data);
   const raw = JSON.stringify({ jobId: id });
   try {
-    const response = await (deps.backgroundFetch || deps.fetch || fetch)(DIGEST_ORIGIN + WORKFLOW_DISPATCH_PATH, { method: 'POST', redirect: 'error',
+    const response = await (deps.backgroundFetch || deps.fetch || fetch)(digestOrigin(deps.scope) + WORKFLOW_DISPATCH_PATH, { method: 'POST', redirect: 'error',
       headers: { 'Content-Type': 'application/json', [WORKFLOW_DISPATCH_HEADER]: workflowDispatchSignature(raw, runtime.adminActionToken) },
       body: raw, signal: AbortSignal.timeout(25000) });
     await response.body?.cancel();
@@ -553,6 +575,7 @@ export async function executeAttendanceWorkflowJob(jobId, scope, deps = {}) {
   const store = await storeFor(deps), path = 'workflow/jobs/' + jobId, before = await read(store, path), now = clock(deps);
   if (!before || before.data.schema !== WORKFLOW_DISPATCH_SCHEMA || before.data.input?.binding.requestId !== jobId
     || before.data.inputHash !== digestHash(before.data.input)) throw new Error('WORKFLOW_JOB_UNAVAILABLE');
+  scopedRoutes(before.data.input, { ...deps, scope });
   if (before.data.state === 'complete') return { complete: true, jobId };
   if (before.data.leaseUntil > now) return { complete: false, jobId, pending: true };
   if (now >= before.data.input.binding.expiresAt) {
@@ -665,7 +688,7 @@ async function drainWorkflowWakes(store, deps) {
     // Provider-keyed provisional evidence is not assigned to a same-address
     // message. An exact later accepted provider ID is the only binding.
     if (node.messageId === null) {
-      await addProvisionalRecipientHold(store, 'rev', node.event);
+      await addProvisionalRecipientHold(store, digestGym(deps.scope), node.event);
       await advanceHistoryGeneration(store); return;
     }
     const entry = (await records(store, [node.messageId]))[0];
@@ -743,7 +766,10 @@ export async function workflowMessages(scope, deps = {}) {
   const store = await storeFor(deps);
   const root = await historyRoot(store), page = await historyPage(store, deps.historyCursor);
   const opportunities = new Map(await Promise.all(['rev', 'richmond'].map(async gym => [gym, await readHistoryOpportunity(store, gym)])));
-  const messages = (await records(store, page.ids)).map(entry => ({ ...structuredClone(entry.data), ...retirement(entry.data, opportunities.get(entry.data.gym)) }));
+  const retained = await records(store, page.ids), captureOnly = captureOnlyRehearsal({ ...deps, scope });
+  if (captureOnly && retained.some(entry => entry.data.firstAttemptAt || entry.data.message && entry.data.message.synthetic !== true)) throw new Error('WORKFLOW_TEST_SCOPE_REQUIRED');
+  const messages = retained.filter(entry => deps.simulatedProvider || captureOnly || entry.data.gym === digestGym(scope))
+    .map(entry => ({ ...structuredClone(entry.data), ...retirement(entry.data, opportunities.get(entry.data.gym)) }));
   for (const [gym, before] of opportunities) if ((await readHistoryOpportunity(store, gym))?.etag !== before?.etag) throw new Error('WORKFLOW_HISTORY_TRANSITION_PENDING');
   if ((await historyRoot(store))?.etag !== root?.etag || await historyWakePending(store)) throw new Error('WORKFLOW_HISTORY_TRANSITION_PENDING');
   return { ok: true, target: 'test', messages, nextCursor: page.nextCursor, historyComplete: true };
