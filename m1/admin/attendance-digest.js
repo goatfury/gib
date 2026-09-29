@@ -227,6 +227,17 @@
         if (validRehearsal(lease)) {
           const at = value => new Date(value).toLocaleString('en-US', { timeZone: 'America/New_York' });
           root.append(el('p', `Synthetic cutoff: ${at(lease.cutoffAt)} Eastern. Expires: ${at(lease.expiresAt)} Eastern. Status: ${lease.state}.`));
+          if (current && !busy && lease.state === 'armed' && lease.expiresAt > Date.now()) {
+            const setup = el('details'); setup.open = false;
+            setup.append(el('summary', 'Temporary TEST timer setup'));
+            // Only the existing public timer contract is exposed. Never copy
+            // the response, local journal, reviewer or authentication fields.
+            const publicLease = { rehearsalId: lease.rehearsalId, createdAt: lease.createdAt, cutoffAt: lease.cutoffAt,
+              expiresAt: lease.expiresAt, jobDate: lease.jobDate, synthetic: true, state: 'armed' };
+            const text = el('pre', JSON.stringify(publicLease, null, 2));
+            text.contentEditable = 'false'; text.style.whiteSpace = 'pre-wrap'; text.style.overflowWrap = 'anywhere';
+            setup.append(text); root.append(setup);
+          }
         }
       }
       const status = el('p', note || (busy ? 'Checking capture status…' : pending

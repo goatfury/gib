@@ -322,6 +322,42 @@ const proposedMessages = () => ['rev', 'richmond'].map((gym, index) => ({
 }));
 const gymLink = gym => `https://deploy-preview-89--gib-live.netlify.app/m1/admin/?digestRehearsal=${ID}&digestGym=${gym}#attendanceDigest`;
 
+test('temporary TEST timer setup exposes only the exact seven public armed-lease fields in collapsed read-only text', async () => {
+  const h = harness({ href: gymLink('rev') });
+  const original = lease({ reviewer: 'private reviewer', session: 'private session', token: 'private token' });
+  await open(h, rehearsalResponse(null, { rehearsal: original, proposedMessages: [] }));
+  const details = h.nodes.find(node => h.root.contains(node) && node.tag === 'details'
+    && node.children[0]?.textContent === 'Temporary TEST timer setup');
+  assert.ok(details); assert.equal(details.open, false);
+  const pre = details.children.find(node => node.tag === 'pre');
+  assert.equal(pre.contentEditable, 'false');
+  const expected = lease();
+  assert.deepEqual(JSON.parse(pre.textContent), expected);
+  assert.deepEqual(Object.keys(JSON.parse(pre.textContent)).sort(), ['createdAt', 'cutoffAt', 'expiresAt', 'jobDate', 'rehearsalId', 'state', 'synthetic']);
+  assert.doesNotMatch(pre.textContent, /private|startedAt/);
+  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].args[2].method, 'GET');
+  assert.deepEqual([...h.storage.keys()], [REHEARSAL_KEY]);
+});
+
+test('timer setup stays hidden for missing, invalid, expired, refreshing or unconfirmed leases', async () => {
+  const setupVisible = h => h.nodes.some(node => h.root.contains(node) && node.tag === 'details'
+    && node.children[0]?.textContent === 'Temporary TEST timer setup');
+  for (const original of [null, lease({ state: 'expired' }), lease({ state: 'unrecognized' }), lease({ synthetic: false }),
+    lease({ expiresAt: 1900001 }), lease({ rehearsalId: 'wrong' })]) {
+    const h = harness({ href: gymLink('rev') });
+    await open(h, rehearsalResponse(null, { rehearsal: original, proposedMessages: [] }));
+    assert.equal(setupVisible(h), false);
+  }
+  const h = harness({ href: gymLink('rev') });
+  await open(h, rehearsalResponse(null, { proposedMessages: [] }));
+  assert.equal(setupVisible(h), true);
+  h.click('refresh'); assert.equal(setupVisible(h), false);
+  h.calls[1].reject(new Error('offline')); await flush(); assert.equal(setupVisible(h), false);
+  h.click('refresh'); h.calls[2].resolve(rehearsalResponse(null, { proposedMessages: [] })); await flush();
+  await h.tick(1800000); h.click('refresh'); h.calls[3].resolve(rehearsalResponse(null, { proposedMessages: [] })); await flush();
+  assert.equal(setupVisible(h), false, 'an expired timestamp cannot become usable merely because a response still says armed');
+});
+
 test('confirmed reminder configuration exposes hidden-copy settings without treating20:00 as class closing', async () => {
   const value = response(preview());
   Object.assign(value.configuration, { senderAddress: 'revbjjops@gmail.com', dailyLocalTime: '20:00', cutoffConfirmed: true, classFinishCutoffConfirmed: false,
