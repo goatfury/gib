@@ -1,5 +1,6 @@
-import { defaultDigestStore, digestFail, digestState, loadDigestConfiguration, processDigestJob, readDigestEntry, validateDigestBinding } from './m1-attendance-digest-outbox.mjs';
-import { digestHash, datesThrough } from './m1-attendance-digest.mjs';
+import { captureDigestMessage, defaultDigestStore, digestFail, digestState, loadDigestConfiguration, processDigestJob, readDigestEntry, validateDigestBinding } from './m1-attendance-digest-outbox.mjs';
+import { buildAttendanceDigest, digestHash, datesThrough } from './m1-attendance-digest.mjs';
+import { processAttendanceWorkflow, workflowMessages } from './m1-attendance-digest-workflow.mjs';
 import { localNow } from './m1-manager-review.mjs';
 import { validId } from './m1-test-read-callback.mjs';
 
@@ -8,6 +9,11 @@ const activeKey = 'rehearsal-active';
 const clock = dependencies => (dependencies.clock || Date.now)();
 const leaseKey = id => 'rehearsals/' + id + '/lease';
 const iso = value => new Date(value).toISOString();
+const ROUTES = Object.freeze({
+  rev: { name: 'Revolution BJJ', to: 'info@revolutionbjj.com', adminUrl: 'https://deploy-preview-89--gib-live.netlify.app/m1/admin/' },
+  richmond: { name: 'Richmond BJJ', to: 'info@richmondbjj.com', adminUrl: 'https://gib-richmond-test.netlify.app/m1/admin/' }
+});
+const SENDER = 'revbjjops@gmail.com', BCC = 'andrew@revolutionbjj.com';
 function requireScope(scope) {
   if (scope?.target !== 'test' || scope.profile?.installationId !== 'rev') digestFail(403, 'DIGEST_SCOPE_REQUIRED');
 }
@@ -22,10 +28,82 @@ function validateLease(lease, id) {
 }
 const publicLease = (lease, now) => ({ rehearsalId: lease.rehearsalId, createdAt: lease.createdAt, cutoffAt: lease.cutoffAt,
   expiresAt: lease.expiresAt, jobDate: lease.jobDate, synthetic: true, state: now >= lease.expiresAt ? 'expired' : 'armed' });
-function isolatedStore(store, id) {
-  const prefix = 'rehearsals/' + id + '/data/';
+function isolatedStore(store, id, area = 'data') {
+  const prefix = 'rehearsals/' + id + '/' + area + '/';
   return { getWithMetadata: (key, options) => store.getWithMetadata(prefix + key, options),
     set: (key, value, options) => store.set(prefix + key, value, options) };
+}
+
+function proposalFrom(message, gym, lease) {
+  const route = ROUTES[gym];
+  const canonical = { messageId: message?.messageId, from: message?.from, to: message?.to, cc: message?.cc,
+    subject: message?.subject, html: message?.html, text: message?.text, synthetic: message?.synthetic, target: message?.target, bcc: message?.bcc };
+  if (!route || !message || Object.keys(message).sort().join('|') !== 'bcc|cc|from|hash|html|messageId|subject|synthetic|target|text|to'
+    || message.synthetic !== true || message.target !== 'test' || message.from !== SENDER
+    || message.messageId !== 'm1-test-scheduled-' + gym + '-' + lease.jobDate || digestHash(canonical) !== message.hash
+    || JSON.stringify(message.to) !== JSON.stringify([route.to]) || JSON.stringify(message.cc) !== '[]' || JSON.stringify(message.bcc) !== JSON.stringify([BCC])
+    || ['subject', 'html', 'text'].some(key => typeof message[key] !== 'string' || !message[key].trim() || message[key].length > (key === 'subject' ? 998 : 200000))
+    || message.html.includes(BCC) || message.text.includes(BCC)) digestFail(503, 'DIGEST_REHEARSAL_UNAVAILABLE');
+  return { messageId: message.messageId, hash: message.hash, gym, name: route.name, from: message.from, to: message.to, cc: message.cc,
+    bcc: message.bcc, subject: message.subject, html: message.html, text: message.text, adminUrl: route.adminUrl, state: 'captured', synthetic: true };
+}
+async function proposedMessages(store, lease) {
+  const values = await Promise.all(Object.keys(ROUTES).map(async gym => {
+    const retained = await readDigestEntry(store, 'proposals/' + gym);
+    if (!retained) return null;
+    if (Object.keys(retained.data).sort().join('|') !== 'gym|message|rehearsalId' || retained.data.rehearsalId !== lease.rehearsalId
+      || retained.data.gym !== gym) digestFail(503, 'DIGEST_REHEARSAL_UNAVAILABLE');
+    const proposal = proposalFrom(retained.data.message, gym, lease), captured = await readDigestEntry(store, 'captures/' + proposal.messageId);
+    if (!captured) return null;
+    const expected = { messageId: proposal.messageId, contentHash: digestHash({ subject: proposal.subject, html: proposal.html, text: proposal.text }),
+      subject: proposal.subject, html: proposal.html, text: proposal.text };
+    if (digestHash(captured.data) !== digestHash(expected)) digestFail(503, 'DIGEST_CAPTURE_CONFLICT');
+    return proposal;
+  }));
+  // A partial capture is retained centrally but never presented as a complete
+  // two-gym rehearsal. The next original timer tick can finish it.
+  return values.every(Boolean) ? values : [];
+}
+
+async function captureWorkflow(input, lease, data, store, dependencies) {
+  if (data.scope.syntheticRehearsal !== true || input.digest.syntheticRehearsal !== true || input.configuration.sendingEnabled !== false
+    || clock(dependencies) < lease.cutoffAt || input.due !== 'due') return;
+  const isolated = isolatedStore(store, lease.rehearsalId, 'workflow-data');
+  const configuration = { ...input.configuration, senderAddress: SENDER, sendingEnabled: false, syntheticRehearsal: true,
+    gyms: Object.entries(ROUTES).map(([id, route]) => ({ id, name: route.name, adminUrl: route.adminUrl,
+      timezone: 'America/New_York', staffClockEnabled: id === 'rev' })),
+    routing: Object.fromEntries(Object.keys(ROUTES).map(gym => [gym, { reviewer: { ...input.configuration.routing[gym].reviewer, address: ROUTES[gym].to },
+      cc: [], bcc: [{ key: 'andrew', name: 'Andrew', address: BCC }] }])) };
+  configuration.recipients = [configuration.routing.rev.reviewer];
+  const snapshots = Object.keys(ROUTES).map(gym => ({ gym, attendance: { ok: true, ledger: { ...structuredClone(data.gyms[0].attendance.ledger), gym } },
+    ...(gym === 'rev' ? { staff: { ok: true, complete: true, items: [{ id: 'synthetic-rehearsal-unknown-finish', kind: 'forgotten-clock-out',
+      staffName: 'SYNTHETIC employee', date: lease.jobDate, status: 'pending', summary: 'Previous finish time is unknown; manager review is needed. No hours were guessed.' }] } } : {}) }));
+  const schedules = await Promise.all(Object.keys(ROUTES).map(async gym => ({ ...await data.dependencies.loadSchedules(), gym })));
+  const digest = buildAttendanceDigest({ jobDate: lease.jobDate, snapshots, schedules, configuration, now: clock(dependencies) });
+  // Never forward caller provider hooks, credentials or enabled sending flags.
+  // This invokes the ordinary workflow's preparation, with its send gate OFF.
+  const safe = { scope: data.scope, workflowStore: isolated, clock: () => clock(dependencies),
+    env: { GIB_M1_ATTENDANCE_DIGEST_SEND_ENABLED: 'false', GIB_M1_MAILAPP_TEST_SEND_ENABLED: 'false' },
+    fetch: async () => { throw new Error('Synthetic rehearsal network is disabled.'); } };
+  const result = await processAttendanceWorkflow({ ...input, digest, configuration,
+    dueByGym: { rev: input.dueByGym.rev, richmond: input.dueByGym.rev },
+    opportunityDueByGym: { rev: input.opportunityDueByGym.rev, richmond: input.opportunityDueByGym.rev } }, safe);
+  if (result.pending) return;
+  const current = await workflowMessages(data.scope, safe);
+  if (current.messages.length !== 2 || current.historyComplete !== true) digestFail(503, 'DIGEST_REHEARSAL_UNAVAILABLE');
+  for (const gym of Object.keys(ROUTES)) {
+    const prepared = current.messages.find(value => value.gym === gym && value.date === lease.jobDate);
+    if (!prepared?.message || prepared.firstAttemptAt !== null || prepared.code !== 'SCHEDULED_SENDING_DISABLED') digestFail(503, 'DIGEST_REHEARSAL_UNAVAILABLE');
+    proposalFrom(prepared.message, gym, lease);
+    const candidate = { rehearsalId: lease.rehearsalId, gym, message: prepared.message };
+    const written = await isolated.set('proposals/' + gym, JSON.stringify(candidate), { onlyIfNew: true });
+    const retained = await readDigestEntry(isolated, 'proposals/' + gym);
+    if (![true, false].includes(written?.modified) || !retained || written.modified && digestHash(retained.data) !== digestHash(candidate)) digestFail(503, 'DIGEST_STORAGE_UNCONFIRMED');
+    const original = proposalFrom(retained.data.message, gym, lease);
+    // Use the existing immutable capture boundary. A subsequent tick retains
+    // the original body even when its fresh workflow assessment is newer.
+    await captureDigestMessage(isolated, { ...original, contentHash: digestHash({ subject: original.subject, html: original.html, text: original.text }) });
+  }
 }
 async function loadLease(store, id) {
   if (!validId(id)) digestFail(400, 'DIGEST_REHEARSAL_INVALID');
@@ -82,7 +160,8 @@ export async function processDigestRehearsal(job, scope, dependencies = {}) {
   if (active?.data.rehearsalId !== lease.rehearsalId || active.data.expiresAt !== lease.expiresAt || job.binding.jobDate !== lease.jobDate) digestFail(409, 'DIGEST_BINDING_MISMATCH');
   const data = rehearsalData(lease, scope, dependencies), { rehearsalId, ...binding } = job.binding;
   return processDigestJob({ binding: { ...binding, mode: 'scheduled' }, gyms: data.gyms }, data.scope,
-    { ...data.dependencies, digestStore: isolatedStore(store, rehearsalId) });
+    { ...data.dependencies, digestStore: isolatedStore(store, rehearsalId), captureTransport: captureDigestMessage,
+      onDigestCheck: input => captureWorkflow(input, lease, data, store, dependencies) });
 }
 
 export async function digestRehearsalState(id, requestId, scope, dependencies = {}) {
@@ -91,5 +170,6 @@ export async function digestRehearsalState(id, requestId, scope, dependencies = 
   const configuration = await loadDigestConfiguration(store, scope, dependencies);
   const data = rehearsalData(lease, scope, dependencies);
   const isolated = await digestState(data.scope, requestId, { ...data.dependencies, digestStore: isolatedStore(store, id) });
-  return { ...isolated, configuration, rehearsal: publicLease(lease, now) };
+  return { ...isolated, configuration, rehearsal: publicLease(lease, now),
+    proposedMessages: await proposedMessages(isolatedStore(store, id, 'workflow-data'), lease) };
 }

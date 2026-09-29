@@ -61,6 +61,16 @@ test('unconfirmed cutoff never creates missing-class finish times but retains th
   assert.equal((await first(h)).code, 'CLASS_FINISH_UNCONFIRMED', 'an occurrence at or after close is not presumed finished');
 });
 
+test('a confirmed reminder time is never treated as class-finish evidence and dated observations survive next-day reads', async () => {
+  const h = fixture(); h.args.closingTime = '20:00'; h.args.cutoffConfirmed = true; h.args.classFinishCutoffConfirmed = false;
+  assert.deepEqual(await first(h), { date: TODAY, status: 'unavailable', code: 'CLASS_FINISH_UNCONFIRMED' });
+  const preserved = structuredClone([...h.store.entries]);
+  assert.equal(h.store.entries.get('schedules/test/rev/' + TODAY).data.base[0].endAt, null);
+  h.args.now = Date.parse('2026-09-27T00:00:00.000Z');
+  assert.deepEqual(await first(h), { date: TODAY, status: 'unavailable', code: 'CLASS_FINISH_UNCONFIRMED' });
+  assert.deepEqual([...h.store.entries], preserved, 'no historical schedule or finish is invented');
+});
+
 test('weekly current source never invents a past schedule; later validated review observations establish only their exact date', async () => {
   const h = fixture(); h.args.dates = ['2026-09-18', '2026-09-24', TODAY];
   h.args.reviewSnapshots = [dated('2026-09-24', ['7:00 AM TEST historical class'])];

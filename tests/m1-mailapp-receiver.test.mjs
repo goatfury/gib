@@ -110,6 +110,52 @@ function harness(options = {}) {
   return { context, settings, events, calls, properties, sheet, reads, logs, request, advance: ms => { stamp += ms; }, deleteSheet: () => { present = false; }, held: () => held };
 }
 
+test('BCC is an actual private MailApp option, approved exactly, and included in the permanent hash', () => {
+  const h = harness(), original = message({ bcc: ['andrew@example.invalid'] });
+  h.properties.set(RECIPIENTS, JSON.stringify({ to: ['qa@example.com'], cc: [], bcc: ['andrew@example.invalid'] }));
+  assert.equal(h.request('attendanceMailStatus', { message: original }).code, 'MAILAPP_READY');
+  assert.equal(h.request('attendanceMailSend', { message: original }).state, 'submitted');
+  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].to, 'qa@example.com');
+  assert.equal(h.calls[0].bcc, 'andrew@example.invalid'); assert.equal(Object.hasOwn(h.calls[0], 'cc'), false);
+  assert.doesNotMatch(h.calls[0].body + h.calls[0].htmlBody, /andrew@example/);
+  assert.equal(h.sheet.rows[1][2], original.hash);
+  // Removing future BCC does not alter a sent original or authorize a retry.
+  h.properties.set(RECIPIENTS, JSON.stringify({ to: ['qa@example.com'], cc: [] }));
+  assert.equal(h.request('attendanceMailStatus', { message: original }).state, 'submitted');
+  assert.equal(h.request('attendanceMailSend', { message: message() }).code, 'MAILAPP_ORIGINAL_CONFLICT');
+  assert.equal(h.calls.length, 1);
+});
+
+test('BCC permission, quota, malformed fields and hash tampering fail before any MailApp call', () => {
+  const original = message({ bcc: ['andrew@example.invalid'] }), h = harness();
+  assert.equal(h.request('attendanceMailSend', { message: original }).code, 'MAILAPP_RECIPIENTS_UNAPPROVED');
+  assert.equal(h.calls.length, 0); assert.equal(h.sheet.rows.length, 1);
+  const limited = harness({ quota: 1 });
+  limited.properties.set(RECIPIENTS, JSON.stringify({ to: ['qa@example.com'], cc: [], bcc: ['andrew@example.invalid'] }));
+  assert.equal(limited.request('attendanceMailSend', { message: original }).code, 'MAILAPP_QUOTA_UNAVAILABLE');
+  assert.equal(limited.calls.length, 0); assert.equal(limited.sheet.rows.length, 1);
+  for (const bcc of [null, 'andrew@example.invalid', ['QA@example.com'], ['a@example.invalid', 'b@example.invalid'], ['bad\r\n@example.invalid']]) {
+    const rejected = harness(); assert.equal(rejected.request('attendanceMailSend', { message: message({ bcc }) }).code, 'MAILAPP_MESSAGE_INVALID');
+    assert.equal(rejected.events.length, 0);
+  }
+  const tampered = { ...message(), bcc: ['andrew@example.invalid'] };
+  assert.equal(h.request('attendanceMailSend', { message: tampered }).code, 'MAILAPP_MESSAGE_INVALID'); assert.equal(h.calls.length, 0);
+});
+
+test('no-BCC legacy hashes and receiver receipts remain valid, and removal applies only to a fresh day', () => {
+  const h = harness(), original = message();
+  assert.equal(h.context.gibM1MailAppHash_(original), original.hash);
+  assert.equal(h.request('attendanceMailSend', { message: original }).state, 'submitted');
+  const rows = plain(h.sheet.rows);
+  h.properties.set(RECIPIENTS, JSON.stringify({ to: ['qa@example.com'], cc: [], bcc: ['andrew@example.invalid'] }));
+  assert.equal(h.request('attendanceMailStatus', { message: original }).state, 'submitted');
+  assert.equal(h.request('attendanceMailSend', { message: message({ bcc: ['andrew@example.invalid'] }) }).code, 'MAILAPP_ORIGINAL_CONFLICT');
+  assert.deepEqual(h.sheet.rows, rows); assert.equal(h.calls.length, 1);
+  const fresh = harness(); fresh.properties.set(RECIPIENTS, JSON.stringify({ to: ['qa@example.com'], cc: [], bcc: [] }));
+  assert.equal(fresh.request('attendanceMailSend', { message: message({ bcc: [] }) }).state, 'submitted');
+  assert.equal(Object.hasOwn(fresh.calls[0], 'bcc'), false);
+});
+
 test('ordinary sends are TEST/rev only and use both existing authentication secrets before storage or quota', () => {
   for (const options of [{ target: 'production' }, { targetLock: false }, { sheetName: 'RBJJ M1 — PRODUCTION' }, { sheetName: 'Richmond BJJ M1 — TEST' }]) {
     const h = harness(options); assert.equal(h.request().code, 'MAILAPP_AUTHENTICATION_REQUIRED'); assert.equal(h.events.length, 0);

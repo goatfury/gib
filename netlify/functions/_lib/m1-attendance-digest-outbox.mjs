@@ -161,7 +161,8 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
       } catch {} // Unavailable attendance cannot invent historical schedule evidence.
       return await loader({ gym: gym.id, dates: datesThrough(binding.jobDate), now, store,
         closingTime: gym.dailyLocalTime ?? configuration.dailyLocalTime,
-        cutoffConfirmed: gym.cutoffConfirmed ?? configuration.cutoffConfirmed, reviewSnapshots });
+        cutoffConfirmed: gym.cutoffConfirmed ?? configuration.cutoffConfirmed,
+        classFinishCutoffConfirmed: gym.classFinishCutoffConfirmed ?? configuration.classFinishCutoffConfirmed ?? gym.cutoffConfirmed ?? configuration.cutoffConfirmed, reviewSnapshots });
     } catch { return { gym: gym.id, timezone: configuration.timezone, days: [] }; }
   }));
   const digest = buildAttendanceDigest({ jobDate: binding.jobDate, snapshots: gyms, schedules, configuration, now });
@@ -173,6 +174,7 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
       const perGym = { ...configuration,
         dailyLocalTime: gym.dailyLocalTime ?? configuration.dailyLocalTime,
         cutoffConfirmed: gym.cutoffConfirmed ?? configuration.cutoffConfirmed,
+        classFinishCutoffConfirmed: gym.classFinishCutoffConfirmed ?? configuration.classFinishCutoffConfirmed ?? gym.cutoffConfirmed ?? configuration.cutoffConfirmed,
       }, ownSchedules = schedules.filter(schedule => schedule.gym === gym.id);
       dueByGym[gym.id] = digestDue(binding.jobDate, now, perGym, ownSchedules);
       const opportunity = latestEligibleOpportunity(configuration, now, gym.id);

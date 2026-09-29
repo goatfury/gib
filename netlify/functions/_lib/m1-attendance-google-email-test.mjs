@@ -48,9 +48,13 @@ async function write(store, key, value, before) {
 }
 function fixture(now, scope) {
   const configuration = defaultDigestConfiguration({ ...scope, syntheticRehearsal: true, profile: { ...scope.profile, gymName: 'Revolution TEST — fictional examples' } }, {
-    GIB_M1_DIGEST_DAILY_LOCAL_TIME: '00:01', GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true', GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL: ADDRESS,
-    GIB_M1_ATTENDANCE_DIGEST_COPY_ANDREW: 'false'
+    GIB_M1_ATTENDANCE_DIGEST_LOCAL_TIME: '00:01', GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true', GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL: ADDRESS,
+    GIB_M1_ATTENDANCE_DIGEST_COPY_ANDREW: 'false', GIB_M1_ATTENDANCE_DIGEST_BCC_ANDREW: 'false'
   });
+  // This closed one-message approval retains its original no-BCC v1 payload.
+  // New daily reminder defaults cannot add a recipient or change its identity.
+  for (const route of Object.values(configuration.routing)) delete route.bcc;
+  delete configuration.classFinishCutoffConfirmed;
   // This is a fixture-only eligibility time, never saved as the gym's real closing time.
   configuration.dailyLocalTime = '00:01';
   const days = datesThrough(GOOGLE_EMAIL_TEST_DATE);

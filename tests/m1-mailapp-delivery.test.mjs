@@ -7,7 +7,7 @@ const START = Date.parse('2026-09-28T22:00:00.000Z');
 const uuid = n => '00000000-0000-4000-8000-' + String(n).padStart(12, '0');
 const clone = value => structuredClone(value);
 const canonical = m => ({ messageId: m.messageId, from: m.from, to: m.to, cc: m.cc, subject: m.subject,
-  html: m.html, text: m.text, synthetic: m.synthetic, target: m.target });
+  html: m.html, text: m.text, synthetic: m.synthetic, target: m.target, ...(Object.hasOwn(m, 'bcc') ? { bcc: m.bcc } : {}) });
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const flush = async () => { for (let n = 0; n < 80; n++) await Promise.resolve(); };
 
@@ -42,6 +42,46 @@ function harness() {
     sends() { return calls.filter(call => call.options.action === 'attendanceMailSend'); },
     claimKey: 'mailapp/messages/' + message.messageId };
 }
+
+test('optional BCC is immutable, hash-bound and passed separately without changing legacy payloads', async () => {
+  const old = harness(), original = clone(old.message), oldHash = old.message.hash;
+  assert.equal((await old.send()).state, 'submitted');
+  assert.deepEqual(old.entries.get(old.claimKey).data.message, original);
+  assert.equal(old.entries.get(old.claimKey).data.message.hash, oldHash);
+  assert.equal(Object.hasOwn(old.entries.get(old.claimKey).data.message, 'bcc'), false);
+  const changed = { ...original, bcc: ['andrew@example.invalid'] }; changed.hash = digestHash(canonical(changed));
+  assert.equal((await old.send(changed)).code, 'RETAINED_MESSAGE_MISMATCH'); assert.equal(old.sends().length, 1);
+  const h = harness(); h.message.bcc = ['andrew@example.invalid']; h.message.hash = digestHash(canonical(h.message));
+  const saved = clone(h.message), waiting = deferred(), entered = deferred();
+  h.provider(async (_message, options) => {
+    if (options.action === 'attendanceMailStatus') { entered.resolve(); await waiting.promise; }
+    return { ...h.result(options.action === 'attendanceMailSend' ? 'submitted' : 'not-attempted'), hash: saved.hash };
+  });
+  const send = h.send(); await entered.promise; h.message.bcc[0] = 'changed@example.invalid'; waiting.resolve();
+  assert.equal((await send).state, 'submitted');
+  assert.deepEqual(h.entries.get(h.claimKey).data.message, saved);
+  assert.deepEqual(h.sends()[0].message.bcc, ['andrew@example.invalid']); assert.deepEqual(h.sends()[0].message.cc, []);
+  assert.doesNotMatch(h.sends()[0].message.html + h.sends()[0].message.text, /andrew@example/);
+});
+
+test('BCC tampering, invalid addresses and duplicate To/CC recipients cannot dispatch', async () => {
+  for (const bcc of ['andrew@example.invalid', null, ['andrew@example.invalid', 'other@example.invalid'], ['STU@example.invalid'], ['injected\r\n@example.invalid']]) {
+    const h = harness(); h.message.bcc = bcc; h.message.hash = digestHash(canonical(h.message));
+    assert.equal((await h.send()).code, 'INVALID_MAILAPP_MESSAGE'); assert.equal(h.calls.length, 0); assert.equal(h.writes.length, 0);
+  }
+  const h = harness(); h.message.bcc = ['andrew@example.invalid'];
+  assert.equal((await h.send()).code, 'INVALID_MAILAPP_MESSAGE'); assert.equal(h.calls.length, 0);
+});
+
+test('lost confirmation retains the original BCC and never resends or accepts removing it from that day', async () => {
+  const h = harness(); h.message.bcc = ['andrew@example.invalid']; h.message.hash = digestHash(canonical(h.message));
+  h.provider(async (_, options) => { if (options.action === 'attendanceMailSend') throw new Error('Synthetic reply lost'); return h.result(); });
+  assert.equal((await h.send()).state, 'unknown'); const original = clone(h.entries.get(h.claimKey).data);
+  h.at(START + 61000); assert.equal((await h.send()).state, 'unknown'); assert.equal(h.sends().length, 1);
+  const removed = { ...h.message }; delete removed.bcc; removed.hash = digestHash(canonical(removed));
+  assert.equal((await h.send(removed)).code, 'RETAINED_MESSAGE_MISMATCH'); assert.equal(h.sends().length, 1);
+  assert.deepEqual(h.entries.get(h.claimKey).data, original);
+});
 
 test('read is local and a single submitted send has an immutable, read-back claim and receipt', async () => {
   const h = harness(); assert.equal((await h.read()).state, 'not-started'); assert.equal(h.calls.length, 0);

@@ -28,14 +28,17 @@ const retired = (value, head) => Boolean(head && value.date < head.data.opportun
 const retirement = (value, head) => retired(value, head) ? { automaticRetriesRetired: true, retiredByOpportunity: head.data.opportunityDate, nextAttemptAt: null } : {};
 const key = id => 'workflow/messages/' + id;
 const canonical = message => ({ messageId: message?.messageId, from: message?.from, to: message?.to, cc: message?.cc,
-  subject: message?.subject, html: message?.html, text: message?.text, synthetic: message?.synthetic, target: message?.target });
+  subject: message?.subject, html: message?.html, text: message?.text, synthetic: message?.synthetic, target: message?.target,
+  ...(Object.hasOwn(message || {}, 'bcc') ? { bcc: message.bcc } : {}) });
 const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join('|') === [...fields].sort().join('|');
 const safeAddress = value => typeof value === 'string' && value.length <= 254 && /^[^\s<>@,]+@[^\s<>@,]+\.[^\s<>@,]+$/.test(value);
-const validMessage = message => exact(message, ['messageId', 'hash', 'from', 'to', 'cc', 'subject', 'html', 'text', 'synthetic', 'target'])
+const validMessage = message => exact(message, ['messageId', 'hash', 'from', 'to', 'cc', 'subject', 'html', 'text', 'synthetic', 'target', ...(Object.hasOwn(message || {}, 'bcc') ? ['bcc'] : [])])
   && /^m1-test-scheduled-(rev|richmond)-\d{4}-\d{2}-\d{2}$/.test(message.messageId) && message.target === 'test' && typeof message.synthetic === 'boolean'
   && typeof message.from === 'string' && message.from.length > 0 && message.from.length <= 300 && !/[\r\n]/.test(message.from)
   && Array.isArray(message.to) && message.to.length === 1 && message.to.every(safeAddress)
   && Array.isArray(message.cc) && message.cc.length <= 1 && message.cc.every(safeAddress) && new Set([...message.to, ...message.cc]).size === message.to.length + message.cc.length
+  && (!Object.hasOwn(message, 'bcc') || Array.isArray(message.bcc) && message.bcc.length <= 1 && message.bcc.every(safeAddress)
+    && new Set([...message.to, ...message.cc, ...message.bcc].map(address => address.toLowerCase())).size === message.to.length + message.cc.length + message.bcc.length)
   && typeof message.subject === 'string' && message.subject.length > 0 && message.subject.length <= 998 && !/[\r\n]/.test(message.subject)
   && ['html', 'text'].every(field => typeof message[field] === 'string' && message[field].length > 0 && message[field].length <= 200000)
   && /^[a-f0-9]{64}$/.test(message.hash) && digestHash(canonical(message)) === message.hash;
@@ -91,7 +94,7 @@ function policyFor(configuration, deps) {
     if (env(deps, 'GIB_M1_ATTENDANCE_DIGEST_SEND_ENABLED') !== 'true') return { state: 'disabled', code: 'SCHEDULED_SENDING_DISABLED' };
     const approved = String(env(deps, 'GIB_M1_ATTENDANCE_DIGEST_VERIFIED_RECIPIENTS') || '').split(',').map(value => value.trim());
     if (!configuration.cutoffConfirmed || env(deps, 'GIB_M1_ATTENDANCE_DIGEST_VERIFIED_SENDER') !== message.from
-      || ![...message.to, ...message.cc].every(address => approved.includes(address))) return { state: 'blocked', code: 'SCHEDULED_CONFIGURATION_UNVERIFIED' };
+      || ![...message.to, ...message.cc, ...(message.bcc || [])].every(address => approved.includes(address))) return { state: 'blocked', code: 'SCHEDULED_CONFIGURATION_UNVERIFIED' };
     if (message.from !== 'revbjjops@gmail.com' || !message.messageId.startsWith('m1-test-scheduled-rev-')) return { state: 'blocked', code: 'MAILAPP_TEST_SCOPE_REQUIRED' };
     const runtime = deps.mailappRuntime || runtimeConfig(deps.env || process.env, { admin: true, requestUrl: DIGEST_ORIGIN + WORKFLOW_DISPATCH_PATH, installationId: 'rev' });
     return runtime?.target === 'test' ? null : { state: 'disabled', code: 'SCHEDULED_PROVIDER_UNAVAILABLE' };
@@ -145,6 +148,8 @@ async function records(store, ids) {
   }));
 }
 const routeGroup = (gym, message, fingerprint) => 'reject/' + gym + '/' + digestHash([message.from, message.to, message.cc, fingerprint]);
+// Adding or removing a blind copy cannot clear an existing sender/primary-route
+// rejection. Original route group keys remain valid across the BCC extension.
 const recipientGroup = (gym, message) => 'bounce/' + gym + '/' + digestHash(message.to);
 const uncertainRouteGroup = (gym, message) => 'uncertain-route/' + gym + '/' + digestHash([message.from, message.to]);
 function projector(store, deps) {
@@ -254,7 +259,8 @@ async function healthEvidence(store, input, now, deps) {
     gyms: input.digest.groups.map(group => ({ gym: group.gym, itemCount: group.items.length, complete: !input.digest.readFailures.some(failure => failure.gym === group.gym),
       deliveryRoute: { from: senderFor(deps),
         to: input.configuration.routing[group.gym].reviewer.address ? [input.configuration.routing[group.gym].reviewer.address] : [],
-        cc: input.configuration.routing[group.gym].cc.map(person => person.address), fingerprint: policy.credentialFingerprint() } })) };
+        cc: input.configuration.routing[group.gym].cc.map(person => person.address), fingerprint: policy.credentialFingerprint(),
+        ...(Object.hasOwn(input.configuration.routing[group.gym], 'bcc') ? { bcc: input.configuration.routing[group.gym].bcc.map(person => person.address) } : {}) } })) };
   for (let count = 0; count < 3; count++) {
     const before = await read(store, 'workflow/health');
     if (before && (before.data.checkedAt > value.checkedAt || (before.data.checkedAt === value.checkedAt && !before.data.complete && value.complete))) return before.data;
@@ -344,10 +350,11 @@ async function processWorkflow(input, deps = {}) {
     const rendered = route.rendered && { subject: route.rendered.subject + ' · reminder ' + date,
       text: assessment + '\n\n' + route.rendered.text, html: route.rendered.html.replace('<h1 ', '<p>' + assessment + '</p><h1 ') };
     let message = canPrepare ? { messageId, from: senderFor(deps),
-      to: route.to, cc: route.cc, ...rendered, synthetic: input.digest.syntheticRehearsal === true, target: 'test' } : null;
+      to: route.to, cc: route.cc, ...rendered, synthetic: input.digest.syntheticRehearsal === true, target: 'test',
+      ...(Object.hasOwn(route, 'bcc') ? { bcc: route.bcc } : {}) } : null;
     if (message && deps.transformMessage) {
       const transformed = deps.transformMessage(structuredClone(message));
-      if (!exact(transformed, Object.keys(message)) || ['messageId', 'from', 'to', 'cc', 'synthetic', 'target'].some(field =>
+      if (!exact(transformed, Object.keys(message)) || ['messageId', 'from', 'to', 'cc', 'bcc', 'synthetic', 'target'].some(field =>
         JSON.stringify(transformed[field]) !== JSON.stringify(message[field]))) throw new Error('WORKFLOW_MESSAGE_TRANSFORM_INVALID');
       message = transformed;
     }
@@ -467,8 +474,10 @@ export async function workflowHealth(scope, deps = {}) {
   let failedCount = opportunity ? currentFailed : counts?.failed || 0;
   const route = own?.deliveryRoute;
   if (route) {
-    if (!exact(route, ['from', 'to', 'cc', 'fingerprint']) || typeof route.from !== 'string' || !Array.isArray(route.to) || route.to.length > 1
-      || !route.to.every(safeAddress) || !Array.isArray(route.cc) || route.cc.length > 1 || !route.cc.every(safeAddress) || !/^[a-f0-9]{64}$/.test(route.fingerprint)) throw new Error('WORKFLOW_HEALTH_UNAVAILABLE');
+    if (!exact(route, ['from', 'to', 'cc', 'fingerprint', ...(Object.hasOwn(route, 'bcc') ? ['bcc'] : [])]) || typeof route.from !== 'string' || !Array.isArray(route.to) || route.to.length > 1
+      || !route.to.every(safeAddress) || !Array.isArray(route.cc) || route.cc.length > 1 || !route.cc.every(safeAddress)
+      || Object.hasOwn(route, 'bcc') && (!Array.isArray(route.bcc) || route.bcc.length > 1 || !route.bcc.every(safeAddress))
+      || !/^[a-f0-9]{64}$/.test(route.fingerprint)) throw new Error('WORKFLOW_HEALTH_UNAVAILABLE');
     if (route.to.length && history && !history.data.pending && history.data.migration.complete) {
       const holds = await Promise.all([routeGroup(scope.profile.installationId, route, route.fingerprint), recipientGroup(scope.profile.installationId, route)].map(name => historyGroup(store, name, 1)));
       const provisional = await provisionalRecipientBarrier(store, scope.profile.installationId, route.to, deps, false);
@@ -591,7 +600,7 @@ async function latestDeliveryEvidence(store, message, delivery, now) {
 async function evidenceDecision(store, message, delivery, now) {
   const ordinary = retryDecision(delivery, now), receipt = await latestDeliveryEvidence(store, message, delivery, now);
   if (receipt && ['email.failed', 'email.bounced'].includes(receipt.type)) return { state: 'failed', code: receipt.permanentFailure === true ? 'PERMANENT_RECIPIENT_BOUNCE' : 'PROVIDER_DELIVERY_FAILED', nextAttemptAt: null };
-  return receipt?.type === 'email.delivered' ? message.cc.length ? { state: 'unconfirmed', code: 'CC_DELIVERY_UNCONFIRMED', nextAttemptAt: null }
+  return receipt?.type === 'email.delivered' ? message.cc.length || message.bcc?.length ? { state: 'unconfirmed', code: message.bcc?.length ? 'BCC_DELIVERY_UNCONFIRMED' : 'CC_DELIVERY_UNCONFIRMED', nextAttemptAt: null }
     : { state: 'delivered', code: 'PROVIDER_DELIVERY_CONFIRMED', nextAttemptAt: null } : ordinary;
 }
 async function persistDeliveryEvidence(store, event) {

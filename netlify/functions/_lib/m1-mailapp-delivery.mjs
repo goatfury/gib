@@ -18,14 +18,19 @@ const key = id => 'mailapp/messages/' + id;
 const receiptKey = (id, requestId) => 'mailapp/receipts/' + id + '/' + requestId;
 const headKey = id => 'mailapp/status/' + id;
 const canonical = message => ({ messageId: message.messageId, from: message.from, to: message.to, cc: message.cc,
-  subject: message.subject, html: message.html, text: message.text, synthetic: message.synthetic, target: message.target });
+  subject: message.subject, html: message.html, text: message.text, synthetic: message.synthetic, target: message.target,
+  ...(Object.hasOwn(message, 'bcc') ? { bcc: message.bcc } : {}) });
 
 function validMessage(message, policy) {
   try {
-    return exact(message, ['messageId', 'hash', 'from', 'to', 'cc', 'subject', 'html', 'text', 'synthetic', 'target'])
+    return exact(message, ['messageId', 'hash', 'from', 'to', 'cc', 'subject', 'html', 'text', 'synthetic', 'target', ...(Object.hasOwn(message || {}, 'bcc') ? ['bcc'] : [])])
       && /^m1-test-scheduled-rev-\d{4}-\d{2}-\d{2}$/.test(message.messageId) && iso(message.messageId.slice(-10) + 'T00:00:00.000Z')
       && message.from === 'revbjjops@gmail.com' && message.target === 'test' && typeof message.synthetic === 'boolean'
-      && Array.isArray(message.to) && Array.isArray(message.cc) && /^[0-9a-f]{64}$/.test(message.hash)
+      && Array.isArray(message.to) && Array.isArray(message.cc)
+      && (!Object.hasOwn(message, 'bcc') || Array.isArray(message.bcc) && message.bcc.length <= 1
+        && message.bcc.every(address => typeof address === 'string' && address.length <= 254 && /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(address))
+        && new Set([...message.to, ...message.cc, ...message.bcc].map(address => address.toLowerCase())).size === message.to.length + message.cc.length + message.bcc.length)
+      && /^[0-9a-f]{64}$/.test(message.hash)
       && policy?.validMessage(message) === true && digestHash(canonical(message)) === message.hash
       && digestHash(policy.canonical(message)) === message.hash;
   } catch { return false; }
@@ -187,7 +192,8 @@ function gate(message, deps, policy) {
 // Projection reads are local only: they never contact Google or create an attempt.
 export async function readMailAppDelivery(message, deps = {}, policy) {
   const invalid = validateInput(message, deps, policy); if (invalid) return invalid;
-  const immutable = { ...canonical(message), to: [...message.to], cc: [...message.cc], hash: message.hash };
+  const immutable = { ...canonical(message), to: [...message.to], cc: [...message.cc],
+    ...(Object.hasOwn(message, 'bcc') ? { bcc: [...message.bcc] } : {}), hash: message.hash };
   try { return (await retained(await storeFor(deps), immutable, policy, clock(deps))).result; }
   catch { return base(immutable, 'unknown', 'DELIVERY_STORAGE_UNAVAILABLE'); }
 }
@@ -196,7 +202,8 @@ export async function readMailAppDelivery(message, deps = {}, policy) {
 // prior Send receipt to prove no call occurred, plus fresh readiness and a new CAS claim.
 export async function deliverMailApp(message, deps = {}, policy) {
   const invalid = validateInput(message, deps, policy); if (invalid) return invalid;
-  const immutable = { ...canonical(message), to: [...message.to], cc: [...message.cc], hash: message.hash };
+  const immutable = { ...canonical(message), to: [...message.to], cc: [...message.cc],
+    ...(Object.hasOwn(message, 'bcc') ? { bcc: [...message.bcc] } : {}), hash: message.hash };
   let store, original, claim;
   try {
     store = await storeFor(deps); original = await retained(store, immutable, policy, clock(deps));

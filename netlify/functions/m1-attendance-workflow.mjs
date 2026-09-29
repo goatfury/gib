@@ -1,6 +1,6 @@
 import { ADMIN_REQUEST_HEADER, jsonResponse, readJson, requireAdmin, runtimeConfig } from './_lib/m1-common.mjs';
 import { attendanceDigestScope } from './m1-attendance-digest.mjs';
-import { DIGEST_ORIGIN } from './_lib/m1-attendance-digest.mjs';
+import { DIGEST_ORIGIN, defaultDigestConfiguration } from './_lib/m1-attendance-digest.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
 import { readAttendanceWorkflowExamples, prepareAttendanceWorkflowExamples, prepareAttendanceWorkflowHistoryExamples, prepareAttendanceWorkflowDailyExamples, prepareAttendanceWorkflowMailAppExamples } from './_lib/m1-attendance-workflow-examples.mjs';
 import { workflowHealth, workflowMessages } from './_lib/m1-attendance-digest-workflow.mjs';
@@ -62,10 +62,14 @@ export async function handleAttendanceWorkflow(request, dependencies = {}) {
     }
     const health = await (dependencies.readHealth || workflowHealth)(scope, deps);
     const messages = await (dependencies.readMessages || workflowMessages)(scope, deps);
+    const selected = defaultDigestConfiguration(scope, dependencies.env || process.env);
     return response(200, { ok: true, target: 'test', sendingEnabled: false, recurringEnabled: false,
       latestRun: latestRun || null, current: { health, messages },
-      setup: { revolutionReviewer: 'Stu', richmondReviewer: 'Trey', copyAndrewDefault: false,
-        recipientAddressesVerified: false, richmondReviewerAccessVerified: false, senderVerified: false, cutoffConfirmed: false } });
+      setup: { revolutionReviewer: 'Stu', richmondReviewer: 'Trey', senderAddress: selected.senderAddress,
+        revolutionTo: selected.routing.rev.reviewer.address, richmondTo: selected.routing.richmond.reviewer.address,
+        cc: selected.routing.rev.cc.map(person => person.address), bcc: selected.routing.rev.bcc.map(person => person.address),
+        dailyLocalTime: selected.dailyLocalTime, timezone: selected.timezone, reminderTimeConfirmed: selected.cutoffConfirmed,
+        classFinishCutoffConfirmed: false, richmondReviewerAccessVerified: false } });
   } catch (error) {
     const code = ['WORKFLOW_EXAMPLES_IN_PROGRESS', 'WORKFLOW_EXAMPLES_KIND_MISMATCH'].includes(error?.code) ? error.code : 'WORKFLOW_UNAVAILABLE';
     return response(code === 'WORKFLOW_UNAVAILABLE' ? 503 : 409, { ok: false, code,

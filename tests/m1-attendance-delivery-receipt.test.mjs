@@ -197,7 +197,13 @@ function workflowFixture() {
   h.deps.simulatedProvider = { identity: 'receipt-test-simulator', async send() {
     sends++; if (beforeAcceptance) await beforeAcceptance(); return new Response(JSON.stringify({ id: providerId }), { status: 200 });
   } };
-  const configuration = defaultDigestConfiguration(scope, h.deps.env), jobDate = '2026-09-27', dates = datesThrough(jobDate);
+  const configuration = defaultDigestConfiguration(scope, { ...h.deps.env,
+    GIB_M1_ATTENDANCE_DIGEST_COPY_ANDREW: 'false',
+    GIB_M1_ATTENDANCE_DIGEST_BCC_ANDREW: 'false' }), jobDate = '2026-09-27', dates = datesThrough(jobDate);
+  // These original provider receipts cover To only. Preserve their no-copy
+  // message shape rather than treating a To receipt as BCC delivery evidence.
+  delete configuration.classFinishCutoffConfirmed;
+  for (const route of Object.values(configuration.routing)) delete route.bcc;
   const snapshots = [{ gym: 'rev', attendance: { ok: true, ledger: { ok: true, target: 'test', schema: 'm1-manager-review/v1', complete: true,
     gym: 'rev', from: dates[0], to: jobDate, days: dates.map(date => ({ date, attendanceHash: 'a'.repeat(64), records: [], warnings: [], review: null })) } },
     staff: { ok: true, complete: true, items: [] } }];

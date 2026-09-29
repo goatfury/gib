@@ -39,6 +39,13 @@ test('all saved examples exercise the workflow using only synthetic per-gym deli
   assert.equal(result.complete, true); assert.equal(result.synthetic, true); assert.equal(result.scenarios.length, 12);
   assert.deepEqual(result.scenarios.filter(s => !s.passed).map(s => [s.key, s.summary]), []);
   assert.equal(network, 0); assert.equal(envReads, 0);
+  const retainedMessages = [...store.entries].filter(([key]) => key.includes('/workflow/messages/')).map(([, value]) => value.data.message).filter(Boolean);
+  assert.ok(retainedMessages.length > 0);
+  for (const message of retainedMessages) {
+    assert.equal(Object.hasOwn(message, 'bcc'), false, 'historical examples keep their original no-BCC canonical shape');
+    assert.equal(message.hash, digestHash({ messageId: message.messageId, from: message.from, to: message.to, cc: message.cc,
+      subject: message.subject, html: message.html, text: message.text, synthetic: message.synthetic, target: message.target }));
+  }
   const routing = result.scenarios.find(s => s.key === 'routing');
   assert.equal(routing.messages.length, 2);
   for (const message of routing.messages) {

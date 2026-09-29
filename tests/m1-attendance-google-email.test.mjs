@@ -3,7 +3,7 @@ import test from 'node:test';
 import { handleAttendanceGoogleEmail } from '../netlify/functions/m1-attendance-google-email.mjs';
 import { handleAttendanceWorkflowBackground } from '../netlify/functions/m1-attendance-workflow-background.mjs';
 import { googleEmailTestState, queueGoogleEmailTest, runGoogleEmailTest, checkGoogleEmailOriginal, disableGoogleEmailTest,
-  GOOGLE_EMAIL_TEST_ID, GOOGLE_EMAIL_TEST_REQUEST_ID } from '../netlify/functions/_lib/m1-attendance-google-email-test.mjs';
+  buildGoogleEmailTestMessage, GOOGLE_EMAIL_TEST_ID, GOOGLE_EMAIL_TEST_REQUEST_ID } from '../netlify/functions/_lib/m1-attendance-google-email-test.mjs';
 import { processAttendanceWorkflow } from '../netlify/functions/_lib/m1-attendance-digest-workflow.mjs';
 import { changeHistoryMessage } from '../netlify/functions/_lib/m1-attendance-workflow-history.mjs';
 import { digestHash, DIGEST_ORIGIN } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
@@ -55,6 +55,15 @@ function harness() {
 }
 const sendBody = value => ({ action: 'sendApprovedTest', messageId: value.message.messageId, hash: value.message.hash });
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+
+test('closed original email keeps its captured complete-body hash and no-BCC recipients', () => {
+  // Exact timestamp and hash retained in the completed September28 checkpoint.
+  const original = buildGoogleEmailTestMessage(Date.parse('2026-09-28T18:37:10.497Z'));
+  assert.equal(original.messageId, 'm1-test-scheduled-rev-2026-09-28');
+  assert.equal(original.hash, '2c58908f79f5546b7f741f71335ba402be93e05b372903a34fd695f52f024ee1');
+  assert.deepEqual(original.to, ['revbjjops@gmail.com']); assert.deepEqual(original.cc, []);
+  assert.equal(Object.hasOwn(original, 'bcc'), false);
+});
 
 test('authenticated preparation persists one exact fictional message with no Google call or recurring setting change', async () => {
   const h = harness(), response = await handleAttendanceGoogleEmail(h.request(), h.deps), value = await response.json();

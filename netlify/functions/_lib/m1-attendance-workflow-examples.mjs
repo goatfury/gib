@@ -9,9 +9,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const START = Date.parse('2026-09-25T02:30:00.000Z');
 const DATE = '2026-09-24';
 const SCOPE = Object.freeze({ target: 'test', syntheticRehearsal: true, profile: { installationId: 'rev', gymName: 'Revolution TEST — synthetic examples' } });
-const SAFE_ENV = Object.freeze({ GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true', GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL: 'stu@example.invalid',
+const SAFE_ENV = Object.freeze({ GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true', GIB_M1_ATTENDANCE_DIGEST_LOCAL_TIME: '22:00', GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL: 'stu@example.invalid',
   GIB_M1_ATTENDANCE_DIGEST_TREY_EMAIL: 'trey@example.invalid', GIB_M1_ATTENDANCE_DIGEST_ANDREW_EMAIL: 'andrew@example.invalid',
-  GIB_M1_ATTENDANCE_DIGEST_COPY_ANDREW: 'false', GIB_M1_ATTENDANCE_DIGEST_SEND_ENABLED: 'false' });
+  GIB_M1_ATTENDANCE_DIGEST_COPY_ANDREW: 'false', GIB_M1_ATTENDANCE_DIGEST_BCC_ANDREW: 'false', GIB_M1_ATTENDANCE_DIGEST_SEND_ENABLED: 'false' });
 const MINUTE = 60000, LEASE_MS = 5 * MINUTE;
 const scenarioKeys = ['routing', 'clean', 'incomplete', 'upcoming-canceled', 'duplicate-concurrent', 'temporary-recovery',
   'uncertain-reload', 'permanent-failure', 'resolved-before-attempt', 'immutable-after-attempt', 'expired-uncertain', 'health-ordering'];
@@ -186,6 +186,11 @@ async function prepareExamples(runId, deps, kind) {
 
 function input(mode = 'issue', stamp = START, both = false) {
   const configuration = defaultDigestConfiguration(SCOPE, SAFE_ENV);
+  // These retained examples keep their original synthetic 22:00 closing rule
+  // and no-BCC message shape. Current operational defaults belong to new runs
+  // of the dedicated configuration rehearsal, not this historical evidence.
+  delete configuration.classFinishCutoffConfirmed;
+  for (const route of Object.values(configuration.routing)) delete route.bcc;
   if (both) configuration.gyms.push({ id: 'richmond', name: 'Richmond TEST — synthetic examples', timezone: 'America/New_York', adminUrl: 'https://gib-richmond-test.netlify.app/m1/admin/' });
   const jobDate = makeDigestBinding(idFor('fixture'), 'scheduled', stamp).jobDate;
   const snapshots = configuration.gyms.map(gym => ({ gym: gym.id, attendance: { ok: true, ledger: {

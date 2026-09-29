@@ -11,10 +11,21 @@
   const text = (value, max = 500) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
   const addresses = value => Array.isArray(value) && value.length <= 4 && value.every(address => typeof address === 'string'
     && address.length <= 254 && /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(address));
+  function validSetup(value) {
+    if (!Object.hasOwn(value || {}, 'senderAddress')) return true; // Historical example metadata remains readable.
+    return exact(value, ['revolutionReviewer', 'richmondReviewer', 'senderAddress', 'revolutionTo', 'richmondTo', 'cc', 'bcc',
+      'dailyLocalTime', 'timezone', 'reminderTimeConfirmed', 'classFinishCutoffConfirmed', 'richmondReviewerAccessVerified'])
+      && value.revolutionReviewer === 'Stu' && value.richmondReviewer === 'Trey'
+      && addresses([value.senderAddress, value.revolutionTo, value.richmondTo]) && addresses(value.cc) && value.cc.length === 0
+      && addresses(value.bcc) && value.bcc.length <= 1 && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.dailyLocalTime)
+      && value.timezone === 'America/New_York' && typeof value.reminderTimeConfirmed === 'boolean'
+      && value.classFinishCutoffConfirmed === false && value.richmondReviewerAccessVerified === false;
+  }
   function valid(value) {
     const run = value?.latestRun;
     const optional = ['request', 'current', 'setup'].filter(key => Object.hasOwn(value || {}, key));
     return exact(value, ['ok', 'target', 'sendingEnabled', 'recurringEnabled', 'latestRun', ...optional]) && value.ok === true && value.target === 'test'
+      && (!Object.hasOwn(value, 'setup') || validSetup(value.setup))
       && (!Object.hasOwn(value, 'request') || exact(value.request, ['runId', 'state', ...(Object.hasOwn(value.request || {}, 'action') ? ['action'] : [])])
         && (!Object.hasOwn(value.request, 'action') || runAction(value.request.action)) && UUID.test(value.request.runId) && value.request.state === 'pending' && run === null)
       && value.sendingEnabled === false && value.recurringEnabled === false && (run === null ||
@@ -57,7 +68,12 @@
       root.hidden = false; root.setAttribute('aria-busy', String(Boolean(flight))); root.replaceChildren(el('h2', 'Automatic attendance workflow · TEST'));
       root.append(el('p', 'Synthetic examples run through the workflow with a simulated email provider. No emails are sent and recurring sending is off.', 'manager-warning'));
       root.append(el('p', 'Google MailApp checks use simulated sending. A completed Google call means submitted to Google, not confirmed delivery to an inbox. Older Resend examples remain historical evidence for the previous provider policy.', 'manager-note'));
-      root.append(el('p', 'Live setup is unverified: Stu and Trey’s email addresses are not configured; Trey still needs existing Admin access. The actual closing cutoff has not been confirmed.', 'manager-note'));
+      const setup = current && data?.setup?.senderAddress ? data.setup : null;
+      if (setup) {
+        root.append(el('p', `Proposed sender: ${setup.senderAddress}. Revolution: Stu at ${setup.revolutionTo}. Richmond: Trey at ${setup.richmondTo}. CC: none. Hidden BCC copy: ${setup.bcc.length ? setup.bcc.join(', ') : 'off'}.`, 'manager-note'));
+        root.append(el('p', `Daily reminder: ${setup.dailyLocalTime} ${setup.timezone}${setup.reminderTimeConfirmed ? ' (confirmed)' : ' (not confirmed)'}. This local time follows daylight saving time. The reminder does not confirm class finishing times.`, 'manager-note'));
+      } else root.append(el('p', 'Current reminder and recipient configuration has not been loaded.', 'manager-note'));
+      root.append(el('p', 'Trey still needs existing Admin access. No access is granted here. Sending and recurring sending remain off in these examples.', 'manager-note'));
       root.append(el('p', 'An unreviewed day does not prove a missing sign-in. Every instructor, including a second instructor, must remain covered. Staff Clock finish corrections remain separate.', 'manager-note'));
       const health = data?.current?.health;
       const hasHistory = ['historicalUnconfirmedCount', 'historicalFailedCount', 'opportunityDate'].some(key => Object.hasOwn(health || {}, key));

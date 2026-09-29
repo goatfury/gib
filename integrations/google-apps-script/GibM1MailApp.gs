@@ -26,19 +26,25 @@ function gibM1MailAppAddresses_(value, minimum) {
   });
 }
 function gibM1MailAppCanonical_(message) {
-  return { messageId: message.messageId, from: message.from, to: message.to, cc: message.cc, subject: message.subject,
+  var value = { messageId: message.messageId, from: message.from, to: message.to, cc: message.cc, subject: message.subject,
     html: message.html, text: message.text, synthetic: message.synthetic, target: message.target };
+  // Absent BCC is the original v1 payload. Never change retained hashes by
+  // inserting an empty list into messages created before BCC was configured.
+  if (Object.prototype.hasOwnProperty.call(message, 'bcc')) value.bcc = message.bcc;
+  return value;
 }
 function gibM1MailAppHash_(message) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify(gibM1MailAppCanonical_(message)), Utilities.Charset.UTF_8)
     .map(function(byte) { return ('0' + ((byte + 256) % 256).toString(16)).slice(-2); }).join('');
 }
 function gibM1MailAppMessage_(message) {
-  if (!gibM1MailAppExact_(message, ['messageId', 'hash', 'from', 'to', 'cc', 'subject', 'html', 'text', 'synthetic', 'target'])
+  var hasBcc = message && Object.prototype.hasOwnProperty.call(message, 'bcc'), bcc = hasBcc ? message.bcc : [];
+  if (!gibM1MailAppExact_(message, ['messageId', 'hash', 'from', 'to', 'cc', 'subject', 'html', 'text', 'synthetic', 'target'].concat(hasBcc ? ['bcc'] : []))
     || typeof message.messageId !== 'string' || !/^m1-test-scheduled-rev-\d{4}-\d{2}-\d{2}$/.test(message.messageId)
     || !gibM1MailAppDate_(message.messageId.slice(-10)) || message.from !== GIB_M1_MAILAPP_SENDER_ || message.target !== 'test'
     || typeof message.synthetic !== 'boolean' || !gibM1MailAppAddresses_(message.to, 1) || !gibM1MailAppAddresses_(message.cc, 0)
-    || new Set(message.to.concat(message.cc).map(function(address) { return address.toLowerCase(); })).size !== message.to.length + message.cc.length
+    || !gibM1MailAppAddresses_(bcc, 0) || bcc.length > 1
+    || new Set(message.to.concat(message.cc, bcc).map(function(address) { return address.toLowerCase(); })).size !== message.to.length + message.cc.length + bcc.length
     || typeof message.subject !== 'string' || !message.subject.trim() || message.subject.length > 998 || /[\r\n]/.test(message.subject)
     || ['html', 'text'].some(function(key) { return typeof message[key] !== 'string' || !message[key].trim() || message[key].length > 200000; })
     || typeof message.hash !== 'string' || !/^[0-9a-f]{64}$/.test(message.hash) || message.hash !== gibM1MailAppHash_(message)) throw new Error('MAILAPP_MESSAGE_INVALID');
@@ -106,8 +112,11 @@ function gibM1MailAppConfiguration_(message) {
   if (properties.getProperty('GIB_M1_MAILAPP_TEST_SEND_ENABLED') !== 'true') return 'MAILAPP_DISABLED';
   try {
     var recipients = JSON.parse(properties.getProperty('GIB_M1_MAILAPP_TEST_RECIPIENTS_JSON') || 'null');
-    if (!gibM1MailAppExact_(recipients, ['to', 'cc']) || !gibM1MailAppAddresses_(recipients.to, 1) || !gibM1MailAppAddresses_(recipients.cc, 0)
-      || JSON.stringify(recipients.to) !== JSON.stringify(message.to) || JSON.stringify(recipients.cc) !== JSON.stringify(message.cc)) return 'MAILAPP_RECIPIENTS_UNAPPROVED';
+    var hasBcc = recipients && Object.prototype.hasOwnProperty.call(recipients, 'bcc'), bcc = hasBcc ? recipients.bcc : [];
+    if (!gibM1MailAppExact_(recipients, ['to', 'cc'].concat(hasBcc ? ['bcc'] : [])) || !gibM1MailAppAddresses_(recipients.to, 1) || !gibM1MailAppAddresses_(recipients.cc, 0)
+      || !gibM1MailAppAddresses_(bcc, 0) || bcc.length > 1
+      || JSON.stringify(recipients.to) !== JSON.stringify(message.to) || JSON.stringify(recipients.cc) !== JSON.stringify(message.cc)
+      || JSON.stringify(bcc) !== JSON.stringify(message.bcc || [])) return 'MAILAPP_RECIPIENTS_UNAPPROVED';
   } catch (_) { return 'MAILAPP_RECIPIENTS_UNAPPROVED'; }
   return null;
 }
@@ -126,7 +135,7 @@ function gibM1MailAppAction_(body) {
     var readiness = gibM1MailAppConfiguration_(message), quota;
     if (!readiness) {
       try { quota = MailApp.getRemainingDailyQuota(); } catch (_) { readiness = 'MAILAPP_AUTHORIZATION_UNAVAILABLE'; }
-      if (!readiness && (!Number.isSafeInteger(quota) || quota < message.to.length + message.cc.length)) readiness = 'MAILAPP_QUOTA_UNAVAILABLE';
+      if (!readiness && (!Number.isSafeInteger(quota) || quota < message.to.length + message.cc.length + (message.bcc || []).length)) readiness = 'MAILAPP_QUOTA_UNAVAILABLE';
     }
     lock = LockService.getScriptLock(); held = lock.tryLock(10000);
     if (!held) throw new Error('MAILAPP_LEDGER_UNAVAILABLE');
@@ -154,6 +163,7 @@ function gibM1MailAppAction_(body) {
   try {
     var options = { to: message.to.join(','), subject: message.subject, body: message.text, htmlBody: message.html };
     if (message.cc.length) options.cc = message.cc.join(',');
+    if (message.bcc && message.bcc.length) options.bcc = message.bcc.join(',');
     MailApp.sendEmail(options); returned = true;
   } catch (_) { /* May have sent. Preserve uncertainty; never retry this gym/day. */ }
   var completed = row.slice(); completed[1] = returned ? 'submitted' : 'exception'; completed[7] = new Date().toISOString();

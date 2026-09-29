@@ -14,6 +14,9 @@ const fixture = (runId = ID) => ({ runId, complete: true, synthetic: true, scena
   checks: ['Original records are unchanged.'], messages: [{ gym: 'rev', name: 'Revolution', to: ['stu@example.invalid'], cc: [],
     subject: 'Synthetic attendance needs attention', html: '<p>Second instructor requires review.</p>', text: 'Second instructor requires review.', adminUrl: ORIGIN + '/m1/admin/' }] }] });
 const response = (latestRun = null, extra = {}) => ({ ok: true, target: 'test', sendingEnabled: false, recurringEnabled: false, latestRun, ...extra });
+const setup = () => ({ revolutionReviewer: 'Stu', richmondReviewer: 'Trey', senderAddress: 'revbjjops@gmail.com',
+  revolutionTo: 'info@revolutionbjj.com', richmondTo: 'info@richmondbjj.com', cc: [], bcc: ['andrew@revolutionbjj.com'],
+  dailyLocalTime: '20:00', timezone: 'America/New_York', reminderTimeConfirmed: true, classFinishCutoffConfirmed: false, richmondReviewerAccessVerified: false });
 function harness(options = {}) {
   let now = 100000, sequence = 0, owner = 'Andrew Smith', session = 'session-one', unauthorized = 0;
   const nodes = [], calls = [], timers = new Map(), storage = options.storage || new Map();
@@ -54,6 +57,33 @@ test('workflow UI is inert outside exact enabled Revolution TEST origin', () => 
     { location: { origin: 'https://gib-live.netlify.app' } }, { location: { port: '443' } }, { create: { enabled: false } }, { create: { getSession: null } }]) {
     const h = harness(options); assert.equal(h.ui, null); assert.equal(h.root.hidden, true); assert.equal(h.calls.length, 0);
   }
+});
+
+test('current selected recipient setup distinguishes confirmed reminder time from class ending and access', async () => {
+  const h = harness(); await h.open(response(fixture(), { setup: setup() }));
+  assert.match(h.root.textContent, /Proposed sender: revbjjops@gmail.com/);
+  assert.match(h.root.textContent, /Revolution: Stu at info@revolutionbjj.com\. Richmond: Trey at info@richmondbjj.com\. CC: none\. Hidden BCC copy: andrew@revolutionbjj.com/);
+  assert.match(h.root.textContent, /Daily reminder: 20:00 America\/New_York \(confirmed\)/);
+  assert.match(h.root.textContent, /follows daylight saving time/); assert.match(h.root.textContent, /does not confirm class finishing times/);
+  assert.match(h.root.textContent, /Trey still needs existing Admin access/);
+  assert.doesNotMatch(h.root.textContent, /email addresses are not configured|actual closing cutoff/);
+  for (const frame of h.nodes.filter(node => h.root.contains(node) && node.tag === 'iframe')) assert.doesNotMatch(frame.srcdoc, /andrew@revolutionbjj.com/);
+  const off = harness(); await off.open(response(null, { setup: { ...setup(), bcc: [] } }));
+  assert.match(off.root.textContent, /Hidden BCC copy: off/);
+  const refresh = h.ui.refresh(); await flush(); h.calls[1].reject(new Error('offline')); await refresh;
+  assert.match(h.root.textContent, /Current reminder and recipient configuration has not been loaded/);
+  assert.doesNotMatch(h.root.textContent, /Daily reminder: 20:00/);
+});
+
+test('new invalid setup cannot become current while old saved examples retain their historical content', async () => {
+  for (const change of [{ senderAddress: 'unsafe\naddress' }, { cc: ['andrew@revolutionbjj.com'] }, { cc: null },
+    { bcc: ['bad'] }, { dailyLocalTime: '25:00' }, { timezone: 'UTC' }, { classFinishCutoffConfirmed: true }, { richmondReviewerAccessVerified: true }]) {
+    const h = harness(); await h.open(response(fixture(), { setup: { ...setup(), ...change } }));
+    assert.match(h.root.textContent, /status unavailable/); assert.doesNotMatch(h.root.textContent, /Example passed/);
+  }
+  const legacy = harness(); await legacy.open(response(fixture(), { setup: { copyAndrewDefault: false, recipientAddressesVerified: false } }));
+  assert.match(legacy.root.textContent, /Example passed/);
+  assert.equal(legacy.nodes.find(node => legacy.root.contains(node) && node.tag === 'iframe').srcdoc.includes(fixture().scenarios[0].messages[0].html), true);
 });
 
 test('authenticated examples label simulation, preserve coverage, and render only fixed per-gym correction links', async () => {

@@ -6,7 +6,8 @@ import { processAttendanceWorkflow, workflowMessages, workflowHealth, recordWork
 
 const NOW = Date.parse('2026-09-25T02:30:00Z'), DATE = '2026-09-24', providerId = '00000000-0000-4000-8000-000000000001';
 const scope = { target: 'test', syntheticRehearsal: true, profile: { installationId: 'rev', gymName: 'Revolution synthetic TEST' } };
-const SAFE_ENV = { GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true', GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL: 'stu@example.invalid', GIB_M1_ATTENDANCE_DIGEST_TREY_EMAIL: 'trey@example.invalid' };
+const SAFE_ENV = { GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true', GIB_M1_ATTENDANCE_DIGEST_LOCAL_TIME: '22:00', GIB_M1_ATTENDANCE_DIGEST_BCC_ANDREW: 'false',
+  GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL: 'stu@example.invalid', GIB_M1_ATTENDANCE_DIGEST_TREY_EMAIL: 'trey@example.invalid' };
 function harness() {
   let stamp = NOW, serial = 0, request = 10;
   const entries = new Map(), calls = [];
@@ -20,6 +21,10 @@ function harness() {
   } } };
   function input(mode = 'issue', both = false, createdAt = stamp) {
     const configuration = defaultDigestConfiguration(scope, SAFE_ENV), binding = makeDigestBinding('00000000-0000-4000-8000-' + String(++request).padStart(12, '0'), 'scheduled', createdAt);
+    // These retained regression fixtures model the earlier explicit 22:00
+    // closing policy and no-BCC payload; new routing is covered separately.
+    delete configuration.classFinishCutoffConfirmed;
+    for (const route of Object.values(configuration.routing)) delete route.bcc;
     if (both) configuration.gyms.push({ id: 'richmond', name: 'Richmond synthetic TEST', timezone: 'America/New_York', adminUrl: 'https://gib-richmond-test.netlify.app/m1/admin/' });
     const snapshots = configuration.gyms.map(gym => ({ gym: gym.id, attendance: { ok: true, ledger: { ok: true, complete: true, target: 'test', schema: 'm1-manager-review/v1', gym: gym.id, from: '2026-09-07', to: binding.jobDate,
       days: datesThrough(binding.jobDate).map(date => ({ date, attendanceHash: digestHash(date), records: mode === 'clean' && date === DATE ? [{ recordId: 'fixture-' + gym.id, date, classLabel: 'SYNTHETIC class', instructor: 'SYNTHETIC instructor', duration: 1, reviewRequired: false }] : [], warnings: [], review: null })) } }, staff: { ok: true, complete: true, items: [] } }));
@@ -33,10 +38,65 @@ function harness() {
 }
 const evidence = (message, patch = {}) => ({ eventId: 'msg_fixture_delivered', providerId, type: 'email.delivered', occurredAt: new Date(NOW).toISOString(), from: message.from, to: message.to, ...patch });
 
+test('MailApp workflow binds actual BCC behind recipient verification and never exposes it in the visible email', async () => {
+  const h = harness(); delete h.deps.simulatedProvider;
+  const input = h.input(); input.configuration.routing.rev.bcc = [{ key: 'andrew', name: 'Andrew', address: 'andrew@example.invalid' }];
+  h.deps.env = { GIB_M1_ATTENDANCE_DIGEST_SEND_ENABLED: 'true', GIB_M1_ATTENDANCE_DIGEST_VERIFIED_SENDER: 'revbjjops@gmail.com',
+    GIB_M1_ATTENDANCE_DIGEST_VERIFIED_RECIPIENTS: 'stu@example.invalid' };
+  h.deps.mailappRuntime = { target: 'test', preview: true, webhookUrl: 'https://script.google.com/macros/s/synthetic-test/exec', webhookToken: 'synthetic-receiver', adminActionToken: 'synthetic-admin' };
+  const requests = [];
+  h.deps.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body); requests.push(body); const sent = body.action === 'attendanceMailSend';
+    return new Response(JSON.stringify({ ok: true, target: 'test', gym: 'rev', messageId: body.message.messageId, hash: body.message.hash,
+      state: sent ? 'submitted' : 'not-attempted', code: sent ? 'MAILAPP_SUBMITTED' : 'MAILAPP_READY',
+      attemptedAt: sent ? new Date(body.binding.createdAt).toISOString() : null, completedAt: sent ? new Date(body.binding.createdAt).toISOString() : null, retrySafe: !sent }));
+  };
+  await processAttendanceWorkflow(input, h.deps);
+  assert.equal(requests.length, 0, 'unverified BCC cannot dispatch even when To and sender are verified');
+  assert.equal((await h.messages())[0].code, 'SCHEDULED_CONFIGURATION_UNVERIFIED');
+  h.deps.env.GIB_M1_ATTENDANCE_DIGEST_VERIFIED_RECIPIENTS += ',andrew@example.invalid';
+  await processAttendanceWorkflow(input, h.deps);
+  assert.deepEqual(requests.map(body => body.action), ['attendanceMailStatus', 'attendanceMailSend']);
+  const stored = (await h.messages())[0], original = structuredClone(stored.message);
+  assert.deepEqual(original.to, ['stu@example.invalid']); assert.deepEqual(original.cc, []);
+  assert.deepEqual(original.bcc, ['andrew@example.invalid']);
+  assert.equal(original.hash, digestHash({ messageId: original.messageId, from: original.from, to: original.to, cc: original.cc,
+    subject: original.subject, html: original.html, text: original.text, synthetic: original.synthetic, target: original.target, bcc: original.bcc }));
+  assert.doesNotMatch(original.html + original.text, /andrew@example\.invalid/);
+  await processAttendanceWorkflow(input, h.deps); assert.equal(requests.filter(body => body.action === 'attendanceMailSend').length, 1);
+  // Future configuration removal cannot mutate an already submitted day.
+  input.configuration.routing.rev.bcc = [];
+  await processAttendanceWorkflow(input, h.deps);
+  assert.deepEqual((await h.messages())[0].message, original);
+  assert.equal(requests.filter(body => body.action === 'attendanceMailSend').length, 1);
+  h.at(NOW + 86400000); const next = h.input(); next.configuration.routing.rev.bcc = [];
+  await processAttendanceWorkflow(next, h.deps);
+  const sends = requests.filter(body => body.action === 'attendanceMailSend');
+  assert.equal(sends.length, 2); assert.deepEqual(sends[1].message.bcc, []);
+  assert.notEqual(sends[0].message.messageId, sends[1].message.messageId);
+  assert.deepEqual((await h.messages()).find(item => item.messageId === original.messageId).message, original);
+});
+
+test('BCC cannot be changed by a body transformation or silently authorize Richmond Google delivery', async () => {
+  const h = harness(), input = h.input();
+  input.configuration.routing.rev.bcc = [{ key: 'andrew', name: 'Andrew', address: 'andrew@example.invalid' }];
+  h.deps.transformMessage = message => ({ ...message, bcc: [] });
+  await assert.rejects(processAttendanceWorkflow(input, h.deps), /WORKFLOW_MESSAGE_TRANSFORM_INVALID/); assert.equal(h.calls.length, 0);
+  const disabled = harness(); delete disabled.deps.simulatedProvider; let network = 0;
+  disabled.deps.fetch = async () => { network++; throw new Error('No external sending allowed'); };
+  const two = disabled.input('issue', true);
+  two.configuration.routing.rev.bcc = [{ key: 'andrew', name: 'Andrew', address: 'andrew@example.invalid' }];
+  two.configuration.routing.richmond.bcc = [{ key: 'andrew', name: 'Andrew', address: 'andrew@example.invalid' }];
+  await processAttendanceWorkflow(two, disabled.deps);
+  assert.equal(network, 0); const messages = await disabled.messages(); assert.equal(messages.length, 2);
+  assert.ok(messages.every(item => item.firstAttemptAt === null && item.message.bcc[0] === 'andrew@example.invalid'));
+  assert.notDeepEqual(messages[0].message.to, messages[1].message.to);
+});
+
 test('legacy one-email flags cannot authorize scheduled delivery and no first check is not a missed run', async () => {
   const h = harness(); delete h.deps.simulatedProvider;
   let network = 0; h.deps.fetch = async () => { network++; throw new Error(); };
-  h.deps.env = { GIB_M1_DIGEST_TEST_SEND_ENABLED: 'true', GIB_M1_DIGEST_TEST_RESEND_API_KEY: 'synthetic-not-a-secret' };
+  h.deps.env = { GIB_M1_DIGEST_TEST_SEND_ENABLED: 'true', GIB_M1_DIGEST_TEST_RESEND_API_KEY: 'synthetic-not-a-secret', GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'false' };
   const before = await h.health(); assert.deepEqual(before.codes, ['CONFIGURATION_REQUIRED']); assert.equal(before.state, 'not-configured');
   await h.run(); assert.equal(network, 0); assert.equal((await h.messages())[0].firstAttemptAt, null);
   assert.ok((await h.health()).codes.includes('CONFIGURATION_REQUIRED'));

@@ -7,6 +7,13 @@
   const TERMINAL = new Set(['captured', 'suppressed', 'failed', 'expired']);
   const clean = value => typeof value === 'string' ? value.trim() : '';
   const validTime = value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
+  const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).sort().join('|') === [...fields].sort().join('|');
+  const address = value => typeof value === 'string' && value.length <= 254 && /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(value);
+  const PROPOSAL_ROUTES = Object.freeze({
+    rev: { name: 'Revolution BJJ', to: 'info@revolutionbjj.com', adminUrl: 'https://deploy-preview-89--gib-live.netlify.app/m1/admin/' },
+    richmond: { name: 'Richmond BJJ', to: 'info@richmondbjj.com', adminUrl: 'https://gib-richmond-test.netlify.app/m1/admin/' }
+  });
   const PREVIEW_CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'";
 
   // The caller supplies the existing exact gym/target/origin pilot gate and an
@@ -19,10 +26,10 @@
     let active = false, generation = 0, busy = false, current = false;
     let data = null, pending = null, storageBlocked = false, note = '', flight = null;
     let draftTime = '', timeConfirmed = false;
-    let rehearsal = null;
+    let rehearsal = null, selectedGym = null, invalidLink = false, owner = '';
     const timers = new Map(), downloads = new Set();
     const authenticated = () => Boolean(clean(getAdmin()));
-    const live = own => active && generation === own && authenticated();
+    const live = own => active && generation === own && authenticated() && owner === clean(getAdmin());
     const el = (tag, text = '', className = '') => {
       const node = document.createElement(tag);
       node.textContent = text;
@@ -68,7 +75,7 @@
       rehearsal = value;
     }
     function restoreRehearsal() {
-      rehearsal = null;
+      rehearsal = null; selectedGym = null; invalidLink = false;
       try {
         const raw = global.sessionStorage.getItem(REHEARSAL_KEY);
         if (raw) {
@@ -78,14 +85,17 @@
           rehearsal = value;
         }
         const params = global.location?.href ? new global.URL(global.location.href).searchParams : null;
+        if (params?.has('digestGym') && (params.getAll('digestGym').length !== 1
+          || !Object.hasOwn(PROPOSAL_ROUTES, params.get('digestGym')) || !params.has('digestRehearsal'))) throw new Error('Invalid gym preview link');
         if (params?.has('digestRehearsal')) {
           const id = params.get('digestRehearsal');
           if (params.getAll('digestRehearsal').length !== 1 || !UUID.test(id)
             || (rehearsal && rehearsal.rehearsalId !== id)) throw new Error('Invalid rehearsal link');
           if (!rehearsal) rememberRehearsal({ rehearsalId: id, startedAt: Date.now() });
+          selectedGym = params.get('digestGym');
         }
       } catch {
-        storageBlocked = true;
+        storageBlocked = true; invalidLink = true;
         note = 'The original rehearsal or its link could not be verified. New actions are paused.';
       }
     }
@@ -114,19 +124,42 @@
         && Array.isArray(value.configuration.recipients)
         && value.configuration.recipients.every(person => person && typeof person.name === 'string'
           && (person.address === null || typeof person.address === 'string'))
+        && (!Object.hasOwn(value.configuration, 'senderAddress') || address(value.configuration.senderAddress))
+        && (!Object.hasOwn(value.configuration, 'classFinishCutoffConfirmed') || typeof value.configuration.classFinishCutoffConfirmed === 'boolean')
         && (!Object.hasOwn(value.configuration, 'routing') || validRouting(value.configuration.routing));
     }
     function validRouting(routing) {
       const person = (value, key, name) => value && Object.keys(value).sort().join('|') === 'address|key|name' && value.key === key && value.name === name
-        && (value.address === null || typeof value.address === 'string' && value.address.length <= 254 && /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(value.address));
+        && (value.address === null || address(value.address));
       return routing && Object.keys(routing).sort().join('|') === 'rev|richmond' && [['rev', 'stu', 'Stu'], ['richmond', 'trey', 'Trey']].every(([gym, key, name]) => {
         const route = routing[gym];
-        return route && Object.keys(route).sort().join('|') === 'cc|reviewer' && person(route.reviewer, key, name)
-          && Array.isArray(route.cc) && route.cc.length <= 1 && route.cc.every(value => person(value, 'andrew', 'Andrew') && value.address !== null);
+        return exact(route, ['cc', 'reviewer', ...(Object.hasOwn(route || {}, 'bcc') ? ['bcc'] : [])]) && person(route.reviewer, key, name)
+          && ['cc', ...(Object.hasOwn(route, 'bcc') ? ['bcc'] : [])].every(field => Array.isArray(route[field]) && route[field].length <= 1
+            && route[field].every(value => person(value, 'andrew', 'Andrew') && value.address !== null));
       });
     }
+    function validProposals(value) {
+      if (!Object.hasOwn(value, 'proposedMessages')) return !selectedGym;
+      if (!rehearsal || !validRehearsal(value.rehearsal) || !Array.isArray(value.proposedMessages)
+        || ![0, 2].includes(value.proposedMessages.length)) return false;
+      return new Set(value.proposedMessages.map(message => message?.gym)).size === value.proposedMessages.length
+        && value.proposedMessages.every(message => {
+          const route = Object.hasOwn(PROPOSAL_ROUTES, message?.gym) ? PROPOSAL_ROUTES[message.gym] : null;
+          return route && exact(message, ['messageId', 'hash', 'gym', 'name', 'from', 'to', 'cc', 'bcc', 'subject', 'html', 'text', 'adminUrl', 'state', 'synthetic'])
+            && message.messageId === `m1-test-scheduled-${message.gym}-${value.rehearsal.jobDate}`
+            && typeof message.hash === 'string' && /^[0-9a-f]{64}$/.test(message.hash)
+            && message.name === route.name && message.adminUrl === route.adminUrl && message.from === 'revbjjops@gmail.com'
+            && Array.isArray(message.to) && message.to.length === 1 && message.to[0] === route.to
+            && Array.isArray(message.cc) && message.cc.length === 0
+            && Array.isArray(message.bcc) && message.bcc.length === 1 && message.bcc[0] === 'andrew@revolutionbjj.com'
+            && message.state === 'captured' && message.synthetic === true
+            && ['subject', 'html', 'text'].every(field => typeof message[field] === 'string' && message[field].trim().length > 0
+              && message[field].length <= (field === 'subject' ? 998 : 200000)
+              && !message[field].toLowerCase().includes(message.bcc[0]));
+        });
+    }
     function validResponse(value) {
-      return validConfiguration(value) && (value.latest === null || validCapture(value.latest));
+      return !invalidLink && validConfiguration(value) && (value.latest === null || validCapture(value.latest)) && validProposals(value);
     }
     function canReturnToNormal() {
       return current && validRehearsal(data?.rehearsal) && (data.rehearsal.state === 'expired'
@@ -137,7 +170,7 @@
     function timeControls() {
       const fieldset = el('fieldset');
       fieldset.disabled = busy || !current || Boolean(pending) || Boolean(rehearsal) || storageBlocked;
-      fieldset.append(el('legend', 'Daily message time'));
+      fieldset.append(el('legend', 'Daily reminder time'));
       const label = el('label', 'Time in ' + data.configuration.timezone);
       label.htmlFor = 'attendanceDigestTime';
       const time = el('input'); time.type = 'time'; time.id = 'attendanceDigestTime';
@@ -145,7 +178,7 @@
       const confirmLabel = el('label');
       const confirm = el('input'); confirm.type = 'checkbox'; confirm.id = 'attendanceDigestConfirm';
       confirm.checked = timeConfirmed;
-      confirmLabel.append(confirm, el('span', 'Confirm this is after the final class'));
+      confirmLabel.append(confirm, el('span', 'Confirm this daily reminder time'));
       const save = button('Save confirmed time', 'configure', fieldset.disabled || !timeConfirmed || !validTime(time.value));
       time.addEventListener('input', () => {
         draftTime = time.value; timeConfirmed = false; confirm.checked = false; save.disabled = true;
@@ -156,22 +189,24 @@
         save.disabled = fieldset.disabled || !timeConfirmed || !validTime(draftTime);
       });
       fieldset.append(label, time, confirmLabel, save);
-      fieldset.append(el('p', 'Saving confirms this cutoff time. Sending remains off in TEST.', 'muted'));
+      fieldset.append(el('p', 'Saving confirms the reminder time, not when classes finish. Upcoming classes stay protected. Sending remains off in TEST.', 'muted'));
       return fieldset;
     }
     function render() {
-      if (!active || !authenticated()) return;
+      if (!live(generation)) return;
       root.hidden = false;
       root.setAttribute('aria-busy', String(busy));
       root.replaceChildren(el('h2', 'Attendance digest · TEST'));
       root.append(el('p', 'Capture only. No email will be sent.'));
       if (data) {
         const config = data.configuration;
-        root.append(el('p', `Daily cutoff: ${config.dailyLocalTime} ${config.timezone}${config.cutoffConfirmed ? '' : ' (not confirmed)'}.`, 'muted'));
+        root.append(el('p', `Daily reminder: ${config.dailyLocalTime} ${config.timezone}${config.cutoffConfirmed ? ' (confirmed)' : ' (not confirmed)'}. This local time follows daylight saving time.`, 'muted'));
+        if (config.classFinishCutoffConfirmed === false) root.append(el('p', 'Class finishing times are not confirmed by this reminder time. Upcoming classes stay protected.', 'muted'));
+        if (config.senderAddress) root.append(el('p', 'Proposed sender: ' + config.senderAddress + '.', 'muted'));
         if (config.routing) {
           for (const [gym, name] of [['rev', 'Revolution'], ['richmond', 'Richmond']]) {
             const route = config.routing[gym], setupOnly = !config.gyms?.some(value => value.id === gym);
-            root.append(el('p', `${name}${setupOnly ? ' (setup only)' : ''}: ${route.reviewer.name} — ${clean(route.reviewer.address) || 'address not configured'}. Andrew copy: ${route.cc.length ? route.cc.map(person => person.address).join(', ') : 'off'}.`, 'muted'));
+            root.append(el('p', `${name}${setupOnly ? ' (setup only)' : ''}: ${route.reviewer.name} — ${clean(route.reviewer.address) || 'address not configured'}. CC: ${route.cc.length ? route.cc.map(person => person.address).join(', ') : 'none'}. Hidden BCC copy: ${route.bcc?.length ? route.bcc.map(person => person.address).join(', ') : 'off'}.`, 'muted'));
           }
           root.append(el('p', 'Richmond’s proposed reviewer still needs existing Admin access; this preview grants no access and enables no delivery.', 'muted'));
         } else root.append(el('p', 'Recipients: ' + (config.recipients.map(person => `${person.name}: ${clean(person.address) || 'address not configured'}`).join('; ') || 'not configured') + '.', 'muted'));
@@ -182,7 +217,7 @@
         button(rehearsal ? 'Refresh rehearsal status' : pending ? 'Check original capture' : 'Refresh status', 'refresh', busy));
       root.append(controls);
       root.append(el('h3', 'Controlled synthetic rehearsal'));
-      root.append(el('p', 'Uses isolated fixtures only. No real records are changed and no email is sent. This does not approve or change the real daily cutoff.', 'muted'));
+      root.append(el('p', 'Uses isolated fixtures only. No real records are changed and no email is sent. This does not change the daily reminder time or confirm class finishing times.', 'muted'));
       root.append(button('Run controlled synthetic rehearsal', 'rehearsal', busy || !current || Boolean(pending) || Boolean(rehearsal) || storageBlocked));
       if (rehearsal) {
         root.append(el('p', 'Rehearsal ID: ' + rehearsal.rehearsalId, 'muted'));
@@ -201,6 +236,9 @@
       // explicit display override so progress and failures are actually visible.
       status.style.display = 'block';
       status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); root.append(status);
+      if (data?.proposedMessages?.length) renderProposals(data.proposedMessages);
+      else if (selectedGym) root.append(el('p', 'The requested gym preview is not yet confirmed. Keep this original rehearsal and refresh its status.', 'manager-warning'));
+      if (selectedGym) return;
       const capture = data?.latest;
       if (!capture) return;
       root.append(el('h3', `${rehearsal ? 'Synthetic rehearsal preview' : pending ? 'Previous preview' : 'Latest preview'} · ${capture.date}`));
@@ -251,6 +289,27 @@
         root.append(actions);
       }
     }
+    function renderProposals(messages) {
+      root.append(el('h3', 'Proposed separate TEST emails'));
+      root.append(el('p', 'Synthetic examples only. No real work was recorded and no email was sent. Each gym receives only its own message.', 'muted'));
+      if (!current) root.append(el('p', 'These are previously loaded proposals. Their current status could not be checked.', 'manager-warning'));
+      for (const message of messages.filter(value => !selectedGym || value.gym === selectedGym)) {
+        const section = el('section'); section.dataset.digestGym = message.gym;
+        section.append(el('h4', message.name + ' · proposed TEST email'));
+        section.append(el('p', 'From: ' + message.from), el('p', 'To: ' + message.to.join(', ')), el('p', 'CC: none'), el('p', 'Subject: ' + message.subject));
+        section.append(el('p', 'Private delivery configuration: hidden BCC copy to ' + message.bcc.join(', ') + '. This address is absent from the recipient-visible message.', 'muted'));
+        const frame = el('iframe'); frame.title = message.name + ' proposed TEST email';
+        frame.setAttribute('sandbox', ''); frame.setAttribute('referrerpolicy', 'no-referrer'); frame.setAttribute('csp', PREVIEW_CSP);
+        frame.style.width = '100%'; frame.style.height = '480px'; frame.style.border = '1px solid #cbd5e1';
+        frame.srcdoc = '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'
+          + PREVIEW_CSP + '"></head><body inert>' + message.html + '</body></html>';
+        section.append(frame, el('p', 'Links inside the preview are inactive.', 'muted'));
+        const plain = el('details'); plain.append(el('summary', 'Read proposed plain text'));
+        const text = el('pre', message.text); text.style.whiteSpace = 'pre-wrap'; text.style.overflowWrap = 'anywhere'; plain.append(text); section.append(plain);
+        if (current) { const link = el('a', 'Open ' + message.name + ' TEST correction tools', 'btn'); link.href = PROPOSAL_ROUTES[message.gym].adminUrl; section.append(link); }
+        root.append(section);
+      }
+    }
     function delay(ms) {
       return new Promise(resolve => {
         const id = global.setTimeout(() => { timers.delete(id); resolve(); }, ms);
@@ -279,7 +338,8 @@
       if (rehearsal) {
         note = value.rehearsal.state === 'expired'
           ? 'The synthetic rehearsal has expired. Any displayed preview remains isolated from real records. No email was sent.'
-          : value.latest?.state === 'captured' ? 'Synthetic rehearsal preview captured. No real records changed and no email was sent.'
+          : value.proposedMessages?.length === 2 ? 'Both separate synthetic TEST email previews are captured. No real records changed and no email was sent.'
+            : value.latest?.state === 'captured' ? 'Synthetic rehearsal preview captured. No real records changed and no email was sent.'
             : 'Synthetic rehearsal armed. Refresh its status after the temporary trigger runs. No email will be sent.';
         // Any pending ordinary capture belongs to its original scope. Reading
         // a synthetic rehearsal can neither confirm nor clear that journal.
@@ -412,7 +472,7 @@
           return Promise.resolve(false);
         }
       }
-      data = data ? { ...data, latest: null } : null; busy = true; timeConfirmed = false; draftTime = '';
+      data = data ? { ...data, latest: null, proposedMessages: [] } : null; busy = true; timeConfirmed = false; draftTime = '';
       note = retryOriginal ? 'Checking the original rehearsal before retrying…' : 'Arming the isolated synthetic rehearsal…'; render();
       const operation = (async () => {
         try {
@@ -456,6 +516,7 @@
           const url = new global.URL(global.location.href);
           if (url.searchParams.has('digestRehearsal')) {
             url.searchParams.delete('digestRehearsal');
+            url.searchParams.delete('digestGym');
             global.history.replaceState(global.history.state, '', url.href);
           }
         }
@@ -467,7 +528,7 @@
         note = 'Normal capture could not be reopened. The original rehearsal remains available; try again.';
         render(); return Promise.resolve(false);
       }
-      rehearsal = null; data = null; current = false; timeConfirmed = false; draftTime = '';
+      rehearsal = null; selectedGym = null; data = null; current = false; timeConfirmed = false; draftTime = '';
       return run(false);
     }
     function download(format) {
@@ -484,7 +545,7 @@
       timers.set(id, () => {});
     }
     function clear() {
-      generation++; active = false; busy = false; current = false; data = null; note = ''; flight = null;
+      generation++; active = false; owner = ''; busy = false; current = false; data = null; note = ''; flight = null;
       timeConfirmed = false; draftTime = '';
       timers.forEach((finish, id) => { global.clearTimeout(id); finish(); }); timers.clear();
       downloads.forEach(url => global.URL.revokeObjectURL(url)); downloads.clear();
@@ -506,7 +567,8 @@
     return Object.freeze({
       open() {
         if (!authenticated()) { clear(); return Promise.resolve(false); }
-        if (!active) { active = true; storageBlocked = false; restore(); restoreRehearsal(); }
+        if (active && owner !== clean(getAdmin())) clear();
+        if (!active) { active = true; owner = clean(getAdmin()); storageBlocked = false; restore(); restoreRehearsal(); }
         return run(false);
       },
       clear

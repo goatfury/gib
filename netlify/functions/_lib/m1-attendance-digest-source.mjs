@@ -133,12 +133,12 @@ function occurrences(observed, added, closingTime, cutoffConfirmed) {
 // One <=40KB observation per date/gym in the existing bounded manager cleanup
 // domain (3661 dates). No rolling deletion can lose an unresolved historical
 // date. Current additions always come from their separate authoritative store.
-export async function loadDigestScheduleSnapshots({ gym, dates, now = Date.now(), store, closingTime = '22:00', cutoffConfirmed = false, reviewSnapshots = [] }, dependencies = {}) {
+export async function loadDigestScheduleSnapshots({ gym, dates, now = Date.now(), store, closingTime = '22:00', cutoffConfirmed = false, classFinishCutoffConfirmed = cutoffConfirmed, reviewSnapshots = [] }, dependencies = {}) {
   now = now instanceof Date ? now.getTime() : now;
   if (!['rev', 'richmond'].includes(gym) || !Number.isFinite(now) || !store?.getWithMetadata || !store?.set
     || !Array.isArray(dates) || dates.length > MAX_DATES || new Set(dates).size !== dates.length
     || dates.some(date => !temporary.validDate(date) || date < REVIEW_START || date > LAST_DATE)
-    || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(closingTime) || typeof cutoffConfirmed !== 'boolean'
+    || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(closingTime) || typeof cutoffConfirmed !== 'boolean' || typeof classFinishCutoffConfirmed !== 'boolean'
     || !Array.isArray(reviewSnapshots) || reviewSnapshots.length > MAX_DATES) throw new Error('Invalid TEST digest schedule scope.');
   const today = localNow(new Date(now)).date;
   const [current, added] = await Promise.allSettled([
@@ -168,7 +168,7 @@ export async function loadDigestScheduleSnapshots({ gym, dates, now = Date.now()
       if (added.status !== 'fulfilled') fail('ADDED_CLASSES_UNAVAILABLE');
       return { date, status: 'complete', observedAt: observed.observedAt,
         sourceVersion: digest([observed.sourceVersion, added.value.version, added.value.history]),
-        occurrences: occurrences(observed, added.value, closingTime, cutoffConfirmed) };
+        occurrences: occurrences(observed, added.value, closingTime, classFinishCutoffConfirmed) };
     } catch (error) {
       const codes = ['SCHEDULE_STORAGE_UNAVAILABLE', 'DATED_SCHEDULE_INVALID', 'DATED_SCHEDULE_CONFLICT', 'SCHEDULE_TIME_UNAVAILABLE', 'CLASS_FINISH_UNCONFIRMED', 'CURRENT_SCHEDULE_UNAVAILABLE', 'ADDED_CLASSES_UNAVAILABLE', 'MISSING_DATED_SCHEDULE', 'FUTURE_SCHEDULE_UNAVAILABLE'];
       return { date, status: 'unavailable', code: codes.includes(error?.code) ? error.code : 'SCHEDULE_STORAGE_UNAVAILABLE' };

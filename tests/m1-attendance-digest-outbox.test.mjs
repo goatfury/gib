@@ -69,7 +69,9 @@ test('scheduled repeated and concurrent invocations produce exactly one durable 
   assert.equal((await handleAttendanceDigestJob(job(body()), h.deps)).status, 200);
   const state = await (await handleAttendanceDigest(admin(), h.deps)).json();
   assert.equal(state.sendingEnabled, false); assert.equal(state.latest.state, 'captured'); assert.equal(state.latest.itemCount, 1);
-  assert.equal(state.configuration.recipients.every(r => r.address === null), true);
+  assert.deepEqual(state.configuration.recipients.map(r => r.address), ['info@revolutionbjj.com']);
+  assert.equal(state.configuration.senderAddress, 'revbjjops@gmail.com');
+  assert.equal(state.configuration.classFinishCutoffConfirmed, false);
   assert.equal(h.calls.length, 0, 'no mail provider or Google redispatch is used to capture');
 });
 
@@ -133,7 +135,7 @@ test('before-due and unconfirmed cutoff ticks observe schedules without capturin
   }
 });
 
-test('scheduled workflow receives per-gym due evidence and retains the known upcoming-class guard', async () => {
+test('scheduled workflow is due at the reminder time but never calls a still-running class missing', async () => {
   for (const upcoming of [false, true]) {
     const h = harness(), loader = h.deps.loadSchedules, checks = [];
     h.deps.loadSchedules = async input => {
@@ -145,11 +147,13 @@ test('scheduled workflow receives per-gym due evidence and retains the known upc
     const { gyms: snapshots, ...binding } = body();
     await processDigestJob({ binding, gyms: snapshots }, attendanceDigestScope(job(body()), h.deps), h.deps);
     assert.equal(checks.length, 1);
-    assert.deepEqual(checks[0].dueByGym, { rev: upcoming ? 'not-due' : 'due' });
-    assert.deepEqual(checks[0].opportunityDueByGym, { rev: upcoming ? 'not-due' : 'due' });
+    assert.deepEqual(checks[0].dueByGym, { rev: 'due' });
+    assert.deepEqual(checks[0].opportunityDueByGym, { rev: 'due' });
+    assert.equal(checks[0].digest.itemCount, upcoming ? 0 : 1);
     assert.equal(checks[0].binding.jobDate, date);
-    assert.equal(h.scheduleCalls[0].closingTime, '22:00');
+    assert.equal(h.scheduleCalls[0].closingTime, '20:00');
     assert.equal(h.scheduleCalls[0].cutoffConfirmed, true);
+    assert.equal(h.scheduleCalls[0].classFinishCutoffConfirmed, false);
     assert.equal(h.calls.length, 0, 'forwarding an assessment is not an email send');
   }
 });
@@ -169,7 +173,7 @@ test('prior-date catch-up keeps an overnight class unfinished until its known fi
     await processDigestJob({ binding: makeDigestBinding(id, 'scheduled', stamp), gyms: snapshots }, attendanceDigestScope(job(body()), h.deps), h.deps);
     assert.equal(checks.length, 1); assert.equal(checks[0].binding.jobDate, currentDate);
     assert.deepEqual(checks[0].dueByGym, { rev: 'not-due' });
-    assert.deepEqual(checks[0].opportunityDueByGym, { rev: upcoming ? 'not-due' : 'due' });
+    assert.deepEqual(checks[0].opportunityDueByGym, { rev: 'due' });
     assert.equal(checks[0].digest.itemCount, upcoming ? 0 : 1, 'an unfinished overnight class is never called missing');
   }
 });

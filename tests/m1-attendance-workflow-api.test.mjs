@@ -23,6 +23,20 @@ function request(path, body, options = {}) {
       ...(options.token === false ? {} : { [ADMIN_REQUEST_HEADER]: token }) }, ...(body ? { body: JSON.stringify(body) } : {}) });
 }
 
+test('protected setup reports selected per-gym addresses and20:00 reminder without claiming class closure or access', async () => {
+  const deps = dependencies();
+  const res = await handleAttendanceWorkflow(request('/api/m1-attendance-workflow'), deps);
+  assert.equal(res.status, 200); const data = await res.json();
+  assert.deepEqual(data.setup, { revolutionReviewer: 'Stu', richmondReviewer: 'Trey', senderAddress: 'revbjjops@gmail.com',
+    revolutionTo: 'info@revolutionbjj.com', richmondTo: 'info@richmondbjj.com', cc: [], bcc: ['andrew@revolutionbjj.com'],
+    dailyLocalTime: '20:00', timezone: 'America/New_York', reminderTimeConfirmed: true, classFinishCutoffConfirmed: false, richmondReviewerAccessVerified: false });
+  assert.equal(data.sendingEnabled, false); assert.equal(data.recurringEnabled, false);
+  deps.env = { ...env, GIB_M1_ATTENDANCE_DIGEST_BCC_ANDREW: 'false' };
+  const copyOff = await (await handleAttendanceWorkflow(request('/api/m1-attendance-workflow'), deps)).json();
+  assert.deepEqual(copyOff.setup.bcc, []); assert.deepEqual(copyOff.setup.cc, []);
+  assert.equal(copyOff.setup.revolutionTo, 'info@revolutionbjj.com');
+});
+
 test('all full workflow data and simulation starts remain behind the existing Admin and exact TEST boundary', async () => {
   const deps = dependencies(); let touched = 0;
   deps.readExamples = deps.prepareExamples = deps.prepareHistory = deps.prepareDaily = deps.runExamples = deps.runHistory = deps.runDaily = async () => { touched++; };

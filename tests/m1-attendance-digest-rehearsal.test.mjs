@@ -3,7 +3,7 @@ import test from 'node:test';
 import { handleAttendanceDigest } from '../netlify/functions/m1-attendance-digest.mjs';
 import { handleAttendanceDigestJob } from '../netlify/functions/m1-attendance-digest-job.mjs';
 import { DIGEST_ORIGIN } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
-import { digestSignature, makeDigestBinding, DIGEST_SIGNATURE_HEADER, captureDigestMessage } from '../netlify/functions/_lib/m1-attendance-digest-outbox.mjs';
+import { digestSignature, makeDigestBinding, DIGEST_SIGNATURE_HEADER } from '../netlify/functions/_lib/m1-attendance-digest-outbox.mjs';
 import { ADMIN_COOKIE, ADMIN_REQUEST_HEADER, createAdminSession, runtimeConfig } from '../netlify/functions/_lib/m1-common.mjs';
 
 const start = Date.parse('2026-09-25T18:00:15Z');
@@ -74,38 +74,106 @@ test('concurrent different arming requests can claim only one active synthetic s
   assert.equal(h.entries.has('configuration'), false);
 });
 
-test('normal scheduled processor guards the synthetic cutoff then creates one isolated capture with no real-read dependencies', async () => {
+test('normal scheduled processor guards the synthetic cutoff then captures two private gym proposals without browser or real-read dependencies', async () => {
   const h = harness(), armed = await (await h.arm()).json();
   const early = await (await h.tick(10)).json(); assert.equal(early.state, 'not-due'); assert.equal(early.messageId, null);
   assert.equal([...h.entries.keys()].some(key => key.includes('/captures/')), false);
+  assert.deepEqual((await (await h.read()).json()).proposedMessages, []);
+  assert.equal([...h.entries.keys()].some(key => key.includes('/workflow-data/')), false);
   h.at(armed.rehearsal.cutoffAt);
   const first = await (await h.tick(11)).json(); assert.equal(first.state, 'captured');
   assert.equal(first.messageId, 'm1-test-rehearsal-' + rehearsalId + '-' + armed.rehearsal.jobDate);
   h.at(armed.rehearsal.cutoffAt + 60000);
   const repeated = await Promise.all([h.tick(12), h.tick(13)]);
   for (const result of repeated) assert.equal((await result.json()).messageId, first.messageId);
-  assert.equal([...h.entries.keys()].filter(key => key.includes('/captures/')).length, 1);
+  assert.equal([...h.entries.keys()].filter(key => key.includes('/data/captures/')).length, 1, 'legacy combined capture is preserved separately');
+  assert.equal([...h.entries.keys()].filter(key => key.includes('/workflow-data/captures/')).length, 2);
   assert.equal(h.entries.has('latest'), false); assert.equal(h.entries.has('configuration'), false);
   assert.ok(h.writes.every(key => key === 'rehearsal-active' || key.startsWith('rehearsals/' + rehearsalId + '/')));
   const state = await (await h.read(rehearsalId, id(11))).json();
-  assert.equal(state.configuration.cutoffConfirmed, false); assert.equal(state.latest.itemCount, 1);
+  assert.equal(state.configuration.cutoffConfirmed, true); assert.equal(state.configuration.dailyLocalTime, '20:00'); assert.equal(state.latest.itemCount, 1);
   assert.match(state.latest.subject, /SYNTHETIC REHEARSAL/); assert.match(state.latest.html, /not real attendance/);
-  assert.match(state.latest.text, /No real closing time has been confirmed/);
+  assert.match(state.latest.text, /synthetic|Synthetic/);
   assert.doesNotMatch(state.latest.html, /href=/, 'synthetic fixtures cannot invite correction of real records');
   assert.equal((await h.read(rehearsalId, undefined, { noAuth: true })).status, 401);
   const otherReviewer = await (await h.read(rehearsalId, id(11), { reviewer: 'Stuart Turner' })).json();
   assert.deepEqual(otherReviewer.latest, state.latest);
+  assert.deepEqual(otherReviewer.proposedMessages, state.proposedMessages);
+  assert.equal(state.proposedMessages.length, 2);
+  for (const message of state.proposedMessages) {
+    const to = message.gym === 'rev' ? 'info@revolutionbjj.com' : 'info@richmondbjj.com';
+    assert.deepEqual(message.to, [to]); assert.deepEqual(message.cc, []); assert.deepEqual(message.bcc, ['andrew@revolutionbjj.com']);
+    assert.equal(message.from, 'revbjjops@gmail.com'); assert.equal(message.synthetic, true); assert.equal(message.state, 'captured');
+    assert.match(message.hash, /^[a-f0-9]{64}$/); assert.match(message.subject, /SYNTHETIC REHEARSAL/);
+    assert.doesNotMatch(message.html + message.text, /andrew@revolutionbjj\.com/);
+    assert.ok(message.html.includes(message.adminUrl));
+    assert.doesNotMatch(message.html + message.text, message.gym === 'rev' ? /Richmond BJJ|gib-richmond-test/ : /Revolution BJJ|deploy-preview-89--gib-live/);
+  }
+  assert.match(state.proposedMessages[0].text, /Previous finish time is unknown/); assert.match(state.proposedMessages[0].text, /No hours were guessed/);
+  assert.doesNotMatch(state.proposedMessages[1].text + state.proposedMessages[1].html, /#staff-time|SYNTHETIC employee|Previous finish time|Staff Clock/);
   h.entries.set('latest', { etag: 'ordinary-sentinel', data: { messageId: 'unrelated-ordinary-capture' } });
   assert.equal((await h.read()).status, 200, 'an unrelated ordinary capture cannot block isolated proof readback');
 });
 
+test('caller sending flags and provider hooks cannot turn the synthetic two-gym capture into a send', async () => {
+  const h = harness(); let externalCalls = 0;
+  h.dependencies.env = { ...env, GIB_M1_ATTENDANCE_DIGEST_SEND_ENABLED: 'true', GIB_M1_MAILAPP_TEST_SEND_ENABLED: 'true', GIB_M1_DIGEST_TEST_SEND_ENABLED: 'true' };
+  h.dependencies.fetch = h.dependencies.onDigestCheck = async () => { externalCalls++; throw new Error('Unexpected real action'); };
+  h.dependencies.captureTransport = async () => { externalCalls++; throw new Error('Caller capture hook must never run'); };
+  h.dependencies.simulatedProvider = { kind: 'mailapp', identity: 'caller-must-be-ignored', send: h.dependencies.fetch };
+  h.dependencies.workflowStore = { set: h.dependencies.fetch, getWithMetadata: h.dependencies.fetch };
+  const armed = await (await h.arm()).json(); h.at(armed.rehearsal.cutoffAt);
+  assert.equal((await h.tick(10)).status, 200); assert.equal(externalCalls, 0);
+  const state = await (await h.read()).json(); assert.equal(state.proposedMessages.length, 2);
+  assert.equal([...h.entries.keys()].some(key => key.includes('/workflow/delivery/')), false, 'no provider request or attempt was created');
+  const records = [...h.entries.values()].map(entry => entry.data).filter(value => value.schema === 'm1-digest-workflow/v1');
+  assert.equal(records.length, 2); assert.ok(records.every(record => record.firstAttemptAt === null && record.code === 'SCHEDULED_SENDING_DISABLED'));
+});
+
+test('concurrent original timer jobs capture each gym once and later jobs retain the exact proposed message bodies', async () => {
+  const h = harness(), armed = await (await h.arm()).json(); h.at(armed.rehearsal.cutoffAt);
+  const simultaneous = await Promise.all([h.tick(10), h.tick(11)]); assert.ok(simultaneous.every(response => response.status === 200));
+  const initial = (await (await h.read()).json()).proposedMessages; assert.equal(initial.length, 2);
+  h.at(armed.rehearsal.cutoffAt + 60000); assert.equal((await h.tick(12)).status, 200);
+  assert.deepEqual((await (await h.read()).json()).proposedMessages, initial);
+  assert.equal([...h.entries.keys()].filter(key => key.includes('/workflow-data/proposals/')).length, 2);
+  assert.equal([...h.entries.keys()].filter(key => key.includes('/workflow-data/captures/')).length, 2);
+});
+
+test('a partial proposal capture fails visibly, then the existing next timer tick finishes it without replacing history', async () => {
+  const h = harness(), armed = await (await h.arm()).json(); h.at(armed.rehearsal.cutoffAt);
+  const set = h.store.set; let failed = false;
+  h.store.set = async (key, ...args) => { if (key.includes('/workflow-data/captures/m1-test-scheduled-richmond-') && !failed) { failed = true; throw new Error('Capture unavailable'); } return set(key, ...args); };
+  assert.equal((await h.tick(10)).status, 503);
+  const originalKey = [...h.entries.keys()].find(key => key.includes('/workflow-data/captures/m1-test-scheduled-rev-'));
+  const original = structuredClone(h.entries.get(originalKey)); assert.ok(original);
+  assert.deepEqual((await (await h.read()).json()).proposedMessages, []);
+  h.at(armed.rehearsal.cutoffAt + 60000); assert.equal((await h.tick(11)).status, 200);
+  assert.equal((await (await h.read()).json()).proposedMessages.length, 2); assert.deepEqual(h.entries.get(originalKey), original);
+  h.at(armed.rehearsal.expiresAt); assert.equal((await h.tick(12)).status, 410);
+  assert.equal((await (await h.read()).json()).proposedMessages.length, 2, 'lease expiration preserves immutable captures');
+  const saved = structuredClone([...h.entries.entries()]); await h.arm(id(2));
+  for (const [key, value] of saved.filter(([key]) => key.startsWith('rehearsals/'))) assert.deepEqual(h.entries.get(key), value);
+});
+
+test('incomplete or conflicting private proposal evidence never appears as a verified capture', async () => {
+  const h = harness(), armed = await (await h.arm()).json(); h.at(armed.rehearsal.cutoffAt); assert.equal((await h.tick(10)).status, 200);
+  const key = [...h.entries.keys()].find(key => key.endsWith('/workflow-data/proposals/rev'));
+  h.entries.get(key).data.message.hash = '0'.repeat(64);
+  assert.equal((await h.read()).status, 503);
+});
+
 test('capture failure retains an immutable receipt and a later tick recovers the same rendered message', async () => {
   const h = harness(), armed = await (await h.arm()).json(); h.at(armed.rehearsal.cutoffAt);
-  h.dependencies.captureTransport = async () => { throw new Error('isolated capture unavailable'); };
+  const set = h.store.set; let failedOnce = false;
+  h.store.set = async (key, ...args) => {
+    if (key.includes('/data/captures/') && !failedOnce) { failedOnce = true; throw new Error('isolated capture storage unavailable'); }
+    return set(key, ...args);
+  };
   const failed = await (await h.tick(10)).json(); assert.equal(failed.state, 'failed');
   const failureKey = [...h.entries.keys()].find(key => key.includes('/failures/')), receipt = structuredClone(h.entries.get(failureKey));
   const original = (await (await h.read()).json()).latest;
-  h.dependencies.captureTransport = captureDigestMessage; h.at(armed.rehearsal.cutoffAt + 60000);
+  h.at(armed.rehearsal.cutoffAt + 60000);
   const recovered = await (await h.tick(11)).json(); assert.equal(recovered.state, 'captured'); assert.equal(recovered.messageId, failed.messageId);
   assert.deepEqual(h.entries.get(failureKey), receipt);
   const after = (await (await h.read()).json()).latest;

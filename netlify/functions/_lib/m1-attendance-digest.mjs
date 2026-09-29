@@ -5,6 +5,7 @@ export const DIGEST_SCHEMA = 'm1-attendance-digest/v1';
 export const DIGEST_ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
 export const DIGEST_TIMEZONE = 'America/New_York';
 export const DIGEST_STORE = 'gib-m1-attendance-digest-test-v1';
+export const DIGEST_CONFIRMED_SENDER = 'revbjjops@gmail.com';
 export const digestHash = value => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 export const digestDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
   && Number.isFinite(Date.parse(value + 'T12:00:00Z')) && new Date(value + 'T12:00:00Z').toISOString().slice(0, 10) === value;
@@ -31,36 +32,46 @@ const validPerson = (person, key, name) => exact(person, ['key', 'name', 'addres
 
 export function defaultDigestConfiguration(scope, env = {}) {
   if (scope?.target !== 'test' || scope.profile?.installationId !== 'rev') throw new Error('Revolution TEST digest required.');
-  const address = key => {
-    const value = env[key];
+  const address = (key, fallback) => {
+    const value = env[key] === undefined ? fallback : env[key];
     if (value === undefined || value === null || value === '') return null;
     if (!mailbox(value)) throw new Error('Digest recipient configuration is invalid.');
     return value;
   };
-  const dailyLocalTime = env.GIB_M1_ATTENDANCE_DIGEST_LOCAL_TIME || '22:00';
+  const dailyLocalTime = env.GIB_M1_ATTENDANCE_DIGEST_LOCAL_TIME || '20:00';
   if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(dailyLocalTime)) throw new Error('Digest time configuration is invalid.');
+  const confirmed = env.GIB_M1_DIGEST_CUTOFF_CONFIRMED;
+  if (![undefined, '', 'true', 'false'].includes(confirmed)) throw new Error('Digest cutoff configuration is invalid.');
   const copy = env.GIB_M1_ATTENDANCE_DIGEST_COPY_ANDREW;
   if (![undefined, '', 'true', 'false'].includes(copy)) throw new Error('Digest copy configuration is invalid.');
-  const andrew = { key: 'andrew', name: 'Andrew', address: address('GIB_M1_ATTENDANCE_DIGEST_ANDREW_EMAIL') };
-  if (copy === 'true' && !andrew.address) throw new Error('Andrew copy address is not configured.');
+  const blindCopy = env.GIB_M1_ATTENDANCE_DIGEST_BCC_ANDREW;
+  if (![undefined, '', 'true', 'false'].includes(blindCopy)) throw new Error('Digest BCC configuration is invalid.');
+  const andrew = { key: 'andrew', name: 'Andrew', address: address('GIB_M1_ATTENDANCE_DIGEST_ANDREW_EMAIL', 'andrew@revolutionbjj.com') };
+  if ((copy === 'true' || blindCopy !== 'false') && !andrew.address) throw new Error('Andrew copy address is not configured.');
   const routing = Object.fromEntries(Object.entries(reviewerFor).map(([gym, [key, name]]) => {
-    const reviewer = { key, name, address: address('GIB_M1_ATTENDANCE_DIGEST_' + key.toUpperCase() + '_EMAIL') };
-    return [gym, { reviewer, cc: copy === 'true' && reviewer.address?.toLowerCase() !== andrew.address.toLowerCase() ? [andrew] : [] }];
+    const reviewer = { key, name, address: address('GIB_M1_ATTENDANCE_DIGEST_' + key.toUpperCase() + '_EMAIL', gym === 'rev' ? 'info@revolutionbjj.com' : 'info@richmondbjj.com') };
+    const distinct = reviewer.address?.toLowerCase() !== andrew.address?.toLowerCase();
+    return [gym, { reviewer, cc: copy === 'true' && distinct ? [andrew] : [],
+      bcc: blindCopy !== 'false' && copy !== 'true' && distinct ? [andrew] : [] }];
   }));
-  return { schema: DIGEST_SCHEMA, target: 'test', sendingEnabled: false, dailyLocalTime,
+  return { schema: DIGEST_SCHEMA, target: 'test', sendingEnabled: false, senderAddress: DIGEST_CONFIRMED_SENDER, dailyLocalTime,
     ...(scope.syntheticRehearsal === true ? { syntheticRehearsal: true } : {}),
-    cutoffConfirmed: env.GIB_M1_DIGEST_CUTOFF_CONFIRMED === 'true', timezone: DIGEST_TIMEZONE,
+    cutoffConfirmed: confirmed === 'true' || (confirmed !== 'false' && dailyLocalTime === '20:00'), classFinishCutoffConfirmed: false, timezone: DIGEST_TIMEZONE,
     recipients: [routing.rev.reviewer, ...routing.rev.cc], routing,
-    gyms: [{ id: 'rev', name: scope.profile.gymName, timezone: DIGEST_TIMEZONE, adminUrl: DIGEST_ORIGIN + '/m1/admin/' }] };
+    gyms: [{ id: 'rev', name: scope.profile.gymName, timezone: DIGEST_TIMEZONE, staffClockEnabled: true, adminUrl: DIGEST_ORIGIN + '/m1/admin/' }] };
 }
 
 function validateConfiguration(config) {
   if (config?.schema !== DIGEST_SCHEMA || config.target !== 'test' || config.sendingEnabled !== false || config.timezone !== DIGEST_TIMEZONE
     || typeof config.cutoffConfirmed !== 'boolean' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(config.dailyLocalTime)
+    || Object.hasOwn(config, 'senderAddress') && !mailbox(config.senderAddress)
+    || Object.hasOwn(config, 'classFinishCutoffConfirmed') && typeof config.classFinishCutoffConfirmed !== 'boolean'
     || !Array.isArray(config.gyms) || !config.gyms.length || config.gyms.length > 2 || new Set(config.gyms.map(g => g.id)).size !== config.gyms.length
     || config.gyms.some(g => !['rev', 'richmond'].includes(g.id) || !safeText(g.name, 100) || /[\r\n]/.test(g.name) || g.timezone !== DIGEST_TIMEZONE
       || Object.hasOwn(g, 'dailyLocalTime') && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(g.dailyLocalTime)
       || Object.hasOwn(g, 'cutoffConfirmed') && typeof g.cutoffConfirmed !== 'boolean'
+      || Object.hasOwn(g, 'classFinishCutoffConfirmed') && typeof g.classFinishCutoffConfirmed !== 'boolean'
+      || Object.hasOwn(g, 'staffClockEnabled') && typeof g.staffClockEnabled !== 'boolean'
       || g.adminUrl !== (g.id === 'rev' ? DIGEST_ORIGIN : 'https://gib-richmond-test.netlify.app') + '/m1/admin/')
     || !Array.isArray(config.recipients)) {
     throw new Error('Digest scope is incomplete.');
@@ -73,9 +84,11 @@ function validateConfiguration(config) {
   }
   if (!exact(config.routing, ['rev', 'richmond']) || Object.entries(reviewerFor).some(([gym, [key, name]]) => {
     const route = config.routing[gym];
-    return !exact(route, ['reviewer', 'cc']) || !validPerson(route.reviewer, key, name)
+    return !exact(route, ['reviewer', 'cc', ...(Object.hasOwn(route || {}, 'bcc') ? ['bcc'] : [])]) || !validPerson(route.reviewer, key, name)
       || !Array.isArray(route.cc) || route.cc.length > 1 || route.cc.some(person => !validPerson(person, 'andrew', 'Andrew') || !person.address
-        || person.address.toLowerCase() === route.reviewer.address?.toLowerCase());
+        || person.address.toLowerCase() === route.reviewer.address?.toLowerCase())
+      || Object.hasOwn(route, 'bcc') && (!Array.isArray(route.bcc) || route.bcc.length > 1 || route.bcc.some(person => !validPerson(person, 'andrew', 'Andrew') || !person.address
+        || person.address.toLowerCase() === route.reviewer.address?.toLowerCase() || route.cc.some(copy => copy.address.toLowerCase() === person.address.toLowerCase())));
   }) || config.recipients.length !== 1 + config.routing.rev.cc.length
     || JSON.stringify(config.recipients) !== JSON.stringify([config.routing.rev.reviewer, ...config.routing.rev.cc])
     || (config.gyms.some(gym => gym.id === 'richmond') && config.syntheticRehearsal !== true)) throw new Error('Digest routing is incomplete.');
@@ -134,7 +147,8 @@ export function buildAttendanceDigest({ jobDate, snapshots, schedules, configura
       const scheduleValid = schedule?.timezone === DIGEST_TIMEZONE && Array.isArray(schedule.days) && new Set(schedule.days.map(d => d.date)).size === schedule.days.length;
       for (const day of ledger.days) {
         const records = day.records, decisions = day.review?.decisions || [];
-        const occurrences = scheduleValid ? scheduleDay(schedule.days.find(d => d.date === day.date), gym, day.date, now, configuration.cutoffConfirmed) : null;
+        const finishCutoffConfirmed = gym.classFinishCutoffConfirmed ?? configuration.classFinishCutoffConfirmed ?? gym.cutoffConfirmed ?? configuration.cutoffConfirmed;
+        const occurrences = scheduleValid ? scheduleDay(schedule.days.find(d => d.date === day.date), gym, day.date, now, finishCutoffConfirmed) : null;
         if (!occurrences) unknownDates.push(day.date);
         else for (const occurrence of occurrences) {
           const matching = records.filter(r => labelKey(r.classLabel) === labelKey(occurrence.label));
@@ -163,7 +177,8 @@ export function buildAttendanceDigest({ jobDate, snapshots, schedules, configura
       }
       if (unknownDates.length) failure('schedule', 'SCHEDULE_COVERAGE_UNAVAILABLE', 'The actual dated schedule or class finish times could not be confirmed for ' + unknownDates.length + ' date' + (unknownDates.length === 1 ? '' : 's') + '. No missing instructors were inferred for those dates.', unknownDates);
     }
-    try {
+    // Trusted installation capability, never inferred from a failed read.
+    if (gym.staffClockEnabled !== false) try {
       const staff = snapshot.staff;
       if (staff?.ok !== true || staff.complete !== true || !Array.isArray(staff.items) || staff.items.length > 1000
         || new Set(staff.items.map(item => item.id)).size !== staff.items.length
@@ -256,11 +271,13 @@ export function splitAttendanceDigest(digest, configuration) {
     const own = { schema: DIGEST_SCHEMA, target: 'test', date: digest.date, generatedAt: digest.generatedAt, sendingEnabled: false,
       ...(digest.syntheticRehearsal === true ? { syntheticRehearsal: true } : {}), routedGym: gym.id,
       recipients: structuredClone([route.reviewer]), cc: structuredClone(route.cc), groups: structuredClone([group]),
+      ...(Object.hasOwn(route, 'bcc') ? { bcc: structuredClone(route.bcc) } : {}),
       readFailures: structuredClone(digest.readFailures.filter(value => value.gym === gym.id)), itemCount: group.items.length };
     own.shouldCapture = Boolean(own.itemCount || own.readFailures.length);
     const routeStatus = !own.shouldCapture ? 'suppressed' : !route.reviewer.address ? 'blocked' : 'ready';
     return { gym: gym.id, routeStatus, code: routeStatus === 'suppressed' ? 'NO_OUTSTANDING_ITEMS' : routeStatus === 'blocked' ? 'REVIEWER_UNCONFIGURED' : null,
       to: route.reviewer.address ? [route.reviewer.address] : [], cc: route.cc.map(person => person.address), digest: own,
+      ...(Object.hasOwn(route, 'bcc') ? { bcc: route.bcc.map(person => person.address) } : {}),
       rendered: own.shouldCapture ? renderAttendanceDigest(own) : null };
   });
 }
@@ -269,6 +286,9 @@ export function digestDue(jobDate, now, configuration, schedules) {
   if (!configuration.cutoffConfirmed) return 'awaiting-configuration';
   const clock = localNow(new Date(now)), [hours, minutes] = configuration.dailyLocalTime.split(':').map(Number);
   if (jobDate > clock.date || (jobDate === clock.date && clock.minutes < hours * 60 + minutes)) return 'not-due';
+  // A confirmed reminder time is not a promise that every class has finished.
+  // Later occurrences stay excluded by the builder and roll into the next day.
+  if (configuration.classFinishCutoffConfirmed === false) return 'due';
   for (const schedule of schedules) {
     const day = schedule?.days?.find(day => day.date === jobDate);
     const occurrences = day && scheduleDay(day, {}, jobDate, now, configuration.cutoffConfirmed);

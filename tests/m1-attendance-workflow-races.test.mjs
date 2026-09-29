@@ -8,7 +8,8 @@ import { processAttendanceWorkflow, workflowMessages, workflowHealth, recordWork
 const NOW = Date.parse('2026-09-25T02:30:00Z'), DATE = '2026-09-24';
 const providerId = '00000000-0000-4000-8000-000000000001';
 const scope = { target: 'test', syntheticRehearsal: true, profile: { installationId: 'rev', gymName: 'Revolution synthetic TEST' } };
-const SAFE_ENV = { GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true', GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL: 'stu@example.invalid',
+const SAFE_ENV = { GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true', GIB_M1_ATTENDANCE_DIGEST_LOCAL_TIME: '22:00',
+  GIB_M1_ATTENDANCE_DIGEST_COPY_ANDREW: 'false', GIB_M1_ATTENDANCE_DIGEST_BCC_ANDREW: 'false', GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL: 'stu@example.invalid',
   GIB_M1_ATTENDANCE_DIGEST_TREY_EMAIL: 'trey@example.invalid' };
 
 // The same isolated fixture used during independent review. Store hooks below
@@ -34,6 +35,10 @@ function harness() {
     } } };
   function input(mode = 'issue') {
     const configuration = defaultDigestConfiguration(scope, SAFE_ENV);
+    // Preserve the reviewed legacy no-copy fixture and its explicit closing
+    // policy; new reminder defaults must not change the race under test.
+    delete configuration.classFinishCutoffConfirmed;
+    for (const route of Object.values(configuration.routing)) delete route.bcc;
     const binding = makeDigestBinding('00000000-0000-4000-8000-' + String(++request).padStart(12, '0'), 'scheduled', stamp);
     const snapshots = configuration.gyms.map(gym => ({ gym: gym.id, attendance: { ok: true, ledger: {
       ok: true, complete: true, target: 'test', schema: 'm1-manager-review/v1', gym: gym.id, from: '2026-09-07', to: binding.jobDate,

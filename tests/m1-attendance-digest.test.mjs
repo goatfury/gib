@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildAttendanceDigest, defaultDigestConfiguration, renderAttendanceDigest, splitAttendanceDigest, digestDue, DIGEST_ORIGIN } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
+import { buildAttendanceDigest, defaultDigestConfiguration, renderAttendanceDigest, splitAttendanceDigest, digestDue, latestEligibleOpportunity, DIGEST_ORIGIN } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
 import { buildTestDigestEmail } from '../netlify/functions/_lib/m1-attendance-digest-email-proposal.mjs';
 import { datesThrough } from '../netlify/functions/_lib/m1-manager-review.mjs';
 
 const now = Date.parse('2026-09-25T02:30:00Z'), today = '2026-09-24';
-const configuration = (env = {}) => defaultDigestConfiguration({ target: 'test', profile: { installationId: 'rev', gymName: 'Revolution BJJ' } }, { GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true', ...env });
+const scope = { target: 'test', profile: { installationId: 'rev', gymName: 'Revolution BJJ' } };
+const configuration = (env = {}) => defaultDigestConfiguration(scope, { GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true',
+  GIB_M1_ATTENDANCE_DIGEST_LOCAL_TIME: '22:00', GIB_M1_ATTENDANCE_DIGEST_BCC_ANDREW: 'false',
+  GIB_M1_ATTENDANCE_DIGEST_STU_EMAIL: '', GIB_M1_ATTENDANCE_DIGEST_TREY_EMAIL: '', GIB_M1_ATTENDANCE_DIGEST_ANDREW_EMAIL: '', ...env });
 const ledger = (gym = 'rev', to = today) => ({ ok: true, target: 'test', schema: 'm1-manager-review/v1', complete: true, gym, from: '2026-09-07', to,
   days: datesThrough(to).map(date => ({ date, attendanceHash: 'a'.repeat(64), records: [], warnings: [], review: null })) });
 const snapshots = () => [{ gym: 'rev', attendance: { ok: true, ledger: ledger() }, staff: { ok: true, complete: true, items: [] } }];
@@ -92,10 +95,10 @@ test('missing or incomplete authoritative reads and unknown dated schedule are s
 });
 
 test('an explicit confirmed closing-time cutoff is distinct from actual class end and never guessed from paid hours', () => {
-  const change = input => input.schedules[0].days.at(-1).occurrences.push(occurrence({ endAt: null, finishedAtCutoff: '2026-09-25T02:00:00.000Z', finishBasis: 'confirmed-gym-close' }));
+  const change = input => { input.configuration.classFinishCutoffConfirmed = true; input.schedules[0].days.at(-1).occurrences.push(occurrence({ endAt: null, finishedAtCutoff: '2026-09-25T02:00:00.000Z', finishBasis: 'confirmed-gym-close' })); };
   assert.equal(build(change, Date.parse('2026-09-25T01:59:00Z')).itemCount, 0);
   assert.equal(build(change).itemCount, 1);
-  const unconfirmed = build(input => { change(input); input.configuration.cutoffConfirmed = false; });
+  const unconfirmed = build(input => { change(input); input.configuration.classFinishCutoffConfirmed = false; });
   assert.equal(unconfirmed.itemCount, 0); assert.equal(unconfirmed.readFailures[0].component, 'schedule');
 });
 
@@ -135,7 +138,7 @@ const issueForBoth = input => {
   }
 };
 
-test('routing defaults Revolution to Stu and Richmond to Trey; Andrew is never copied just because his address exists', () => {
+test('routing honors explicit copy-off fixtures while keeping Revolution and Richmond reviewers separate', () => {
   const { config, messages } = routed(issueForBoth);
   assert.deepEqual(config.recipients.map(person => person.key), ['stu']);
   assert.deepEqual(config.routing.rev.reviewer, { key: 'stu', name: 'Stu', address: 'stu@example.test' });
@@ -252,9 +255,91 @@ test('duplicate permanent IDs and teaching on canceled occurrences cannot silent
 
 test('scheduled capture waits for configuration and final finish even when the configured check time has passed', () => {
   const config = configuration(), dates = [schedules()];
+  config.classFinishCutoffConfirmed = true;
   assert.equal(digestDue(today, now, { ...config, cutoffConfirmed: false }, dates), 'awaiting-configuration');
   assert.equal(digestDue(today, Date.parse('2026-09-25T01:59:00Z'), config, dates), 'not-due');
   dates[0].days.at(-1).occurrences.push(occurrence({ endAt: '2026-09-25T03:00:00.000Z' }));
   assert.equal(digestDue(today, now, config, dates), 'not-due');
   assert.equal(digestDue(today, Date.parse('2026-09-25T03:01:00Z'), config, dates), 'due');
+});
+
+test('confirmed TEST defaults use the approved sender, separate gym reviewers and removable private BCC with sending off', () => {
+  const config = defaultDigestConfiguration(scope);
+  assert.equal(config.senderAddress, 'revbjjops@gmail.com'); assert.equal(config.sendingEnabled, false);
+  assert.equal(config.dailyLocalTime, '20:00'); assert.equal(config.cutoffConfirmed, true);
+  assert.equal(config.classFinishCutoffConfirmed, false); assert.equal(config.timezone, 'America/New_York');
+  assert.deepEqual(config.gyms.map(gym => [gym.id, gym.staffClockEnabled]), [['rev', true]], 'configuration alone never starts a Richmond read');
+  assert.deepEqual(Object.entries(config.routing).map(([gym, route]) => [gym, route.reviewer.address, route.cc, route.bcc.map(person => person.address)]), [
+    ['rev', 'info@revolutionbjj.com', [], ['andrew@revolutionbjj.com']], ['richmond', 'info@richmondbjj.com', [], ['andrew@revolutionbjj.com']]
+  ]);
+  const input = { jobDate: today, snapshots: snapshots(), schedules: [schedules()], configuration: config, now };
+  input.snapshots[0].staff.items.push({ id: 'pending', kind: 'time-correction', staffName: 'TEST Staff', date: today, status: 'pending', summary: 'Confirm actual hours.' });
+  const [message] = splitAttendanceDigest(buildAttendanceDigest(input), config);
+  assert.deepEqual(message.to, ['info@revolutionbjj.com']); assert.deepEqual(message.cc, []); assert.deepEqual(message.bcc, ['andrew@revolutionbjj.com']);
+  assert.doesNotMatch(message.rendered.text + message.rendered.html, /andrew@revolutionbjj\.com|Bcc:/i);
+  const without = defaultDigestConfiguration(scope, { GIB_M1_ATTENDANCE_DIGEST_BCC_ANDREW: 'false' });
+  assert.deepEqual(without.routing.rev.bcc, []); assert.deepEqual(without.routing.richmond.bcc, []);
+  const legacy = structuredClone(config); delete legacy.routing.rev.bcc; delete legacy.routing.richmond.bcc;
+  const [preserved] = splitAttendanceDigest(buildAttendanceDigest({ ...input, configuration: legacy }), legacy);
+  assert.equal(Object.hasOwn(preserved, 'bcc'), false); assert.equal(Object.hasOwn(preserved.digest, 'bcc'), false);
+  assert.deepEqual(preserved.rendered, message.rendered, 'adding BCC never rewrites recipient-visible content');
+  for (const patch of [{ GIB_M1_ATTENDANCE_DIGEST_BCC_ANDREW: 'yes' }, { GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'yes' }]) assert.throws(() => defaultDigestConfiguration(scope, patch));
+});
+
+test('a 20:00 reminder excludes later finishes and carries the same original class into the next daily assessment', () => {
+  const config = defaultDigestConfiguration(scope), atCutoff = Date.parse('2026-09-25T00:00:00Z');
+  const dates = schedules(), late = occurrence({ label: '7:30 PM TEST late class', startAt: '2026-09-24T23:30:00.000Z', endAt: '2026-09-25T01:00:00.000Z' });
+  dates.days.at(-1).occurrences.push(late);
+  assert.equal(digestDue(today, atCutoff - 1, config, [dates]), 'not-due'); assert.equal(digestDue(today, atCutoff, config, [dates]), 'due');
+  const first = buildAttendanceDigest({ jobDate: today, snapshots: snapshots(), schedules: [dates], configuration: config, now: atCutoff });
+  assert.equal(first.itemCount, 0); assert.equal(first.shouldCapture, false);
+  const nextDate = '2026-09-25', nextSnapshots = [{ gym: 'rev', attendance: { ok: true, ledger: ledger('rev', nextDate) }, staff: { ok: true, complete: true, items: [] } }];
+  const nextDates = schedules('rev', nextDate); nextDates.days.find(day => day.date === today).occurrences.push(late);
+  const nextInput = { jobDate: nextDate, snapshots: nextSnapshots, schedules: [nextDates], configuration: config, now: Date.parse('2026-09-26T00:00:00Z') };
+  const next = buildAttendanceDigest(nextInput);
+  assert.equal(next.itemCount, 1); assert.equal(next.groups[0].items[0].date, today);
+  nextSnapshots[0].attendance.ledger.days.find(day => day.date === today).records.push(instructor({ classLabel: late.label }));
+  assert.equal(buildAttendanceDigest(nextInput).shouldCapture, false, 'an authoritative late upload resolves the old occurrence');
+});
+
+test('confirmed reminder time cannot validate guessed class endings or suppress explicit incomplete-check warnings', () => {
+  const config = defaultDigestConfiguration(scope), dates = schedules();
+  dates.days.at(-1).occurrences.push(occurrence({ endAt: null, finishedAtCutoff: '2026-09-25T00:00:00.000Z', finishBasis: 'confirmed-gym-close' }));
+  const value = buildAttendanceDigest({ jobDate: today, snapshots: snapshots(), schedules: [dates], configuration: config, now });
+  assert.equal(value.itemCount, 0); assert.equal(value.shouldCapture, true);
+  assert.deepEqual(value.readFailures[0].dates, [today]); assert.match(value.readFailures[0].message, /No missing instructors were inferred/);
+  assert.equal(digestDue(today, now, config, [dates]), 'due', 'a could-not-check reminder still runs at its configured time');
+});
+
+test('local 20:00 opportunities follow DST and choose only the latest eligible date after downtime', () => {
+  const config = defaultDigestConfiguration(scope);
+  for (const [before, cutoff, previous, date] of [
+    ['2027-03-09T00:59:59Z', '2027-03-09T01:00:00Z', '2027-03-07', '2027-03-08'],
+    ['2027-03-15T23:59:59Z', '2027-03-16T00:00:00Z', '2027-03-14', '2027-03-15'],
+    ['2026-11-02T00:59:59Z', '2026-11-02T01:00:00Z', '2026-10-31', '2026-11-01']
+  ]) {
+    assert.equal(latestEligibleOpportunity(config, Date.parse(before), 'rev').date, previous);
+    assert.equal(latestEligibleOpportunity(config, Date.parse(cutoff), 'rev').date, date);
+  }
+  const spring = ['2027-03-14T01:00:00Z', '2027-03-15T00:00:00Z'].map(Date.parse);
+  assert.equal((spring[1] - spring[0]) / 3600000, 23);
+  assert.equal(latestEligibleOpportunity(config, spring[0], 'rev').date, '2027-03-13');
+  assert.equal(latestEligibleOpportunity(config, spring[1], 'rev').date, '2027-03-14');
+  const fall = ['2026-11-01T00:00:00Z', '2026-11-02T01:00:00Z'].map(Date.parse);
+  assert.equal((fall[1] - fall[0]) / 3600000, 25);
+  assert.equal(latestEligibleOpportunity(config, Date.parse('2026-10-10T15:00:00Z'), 'rev').date, '2026-10-09');
+  assert.equal(latestEligibleOpportunity(config, Date.parse('2026-10-11T00:00:00Z'), 'rev').date, '2026-10-10');
+});
+
+test('trusted Staff-disabled Richmond skips that component while Revolution failures and older instructor work remain visible', () => {
+  const { config } = routed(); config.gyms[1].staffClockEnabled = false;
+  const gyms = [...snapshots(), { gym: 'richmond', attendance: { ok: true, ledger: ledger('richmond') } }];
+  gyms[0].staff = { ok: false };
+  const dates = [schedules(), schedules('richmond')], originalDate = '2026-09-07';
+  dates[1].days[0].occurrences.push(occurrence({ startAt: originalDate + 'T22:00:00.000Z', endAt: originalDate + 'T23:00:00.000Z' }));
+  const value = buildAttendanceDigest({ jobDate: today, snapshots: gyms, schedules: dates, configuration: config, now });
+  assert.deepEqual(value.readFailures.map(failure => [failure.gym, failure.component]), [['rev', 'staff']]);
+  assert.equal(value.groups[1].items[0].date, originalDate); assert.equal(value.groups[1].items[0].kind, 'missing-instructor');
+  delete config.gyms[1].staffClockEnabled;
+  assert.ok(buildAttendanceDigest({ jobDate: today, snapshots: gyms, schedules: dates, configuration: config, now }).readFailures.some(failure => failure.gym === 'richmond' && failure.component === 'staff'));
 });

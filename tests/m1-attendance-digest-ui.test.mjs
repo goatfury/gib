@@ -63,7 +63,7 @@ function harness(options = {}) {
   const all = () => { const found = []; const visit = node => { found.push(node); node.children.forEach(visit); }; visit(root); return found; };
   const control = action => all().find(node => node.dataset.digestAction === action);
   return { ui, calls, root, nodes, storage, clicked, blobs, revoked, timers, control, element: id => all().find(node => node.id === id),
-    unauthorized: () => unauthorized, uuidCalls: () => uuidCalls, location, historyChanges, logout: () => { admin = ''; },
+    unauthorized: () => unauthorized, uuidCalls: () => uuidCalls, location, historyChanges, logout: () => { admin = ''; }, setAdmin: value => { admin = value; },
     click: action => { const target = control(action); if (target) root.events.click({ target }); },
     tick: async ms => {
       const end = now + ms;
@@ -120,17 +120,17 @@ test('open only reads configuration, shows unconfigured addresses, and isolates 
   h.ui.clear(); assert.equal(h.root.textContent, ''); assert.equal(h.revoked.includes('blob:preview'), true);
 });
 
-test('new per-gym routing displays each proposed reviewer and keeps Andrew copying explicitly off by default', async () => {
+test('historical per-gym routing remains readable without inventing a hidden copy', async () => {
   const value = response(); value.configuration.routing = { rev: { reviewer: { key: 'stu', name: 'Stu', address: null }, cc: [] },
     richmond: { reviewer: { key: 'trey', name: 'Trey', address: null }, cc: [] } };
   value.configuration.recipients = [value.configuration.routing.rev.reviewer];
   const h = harness(); await open(h, value);
-  assert.match(h.root.textContent, /Revolution: Stu — address not configured\. Andrew copy: off/);
-  assert.match(h.root.textContent, /Richmond \(setup only\): Trey — address not configured\. Andrew copy: off/);
+  assert.match(h.root.textContent, /Revolution: Stu — address not configured\. CC: none\. Hidden BCC copy: off/);
+  assert.match(h.root.textContent, /Richmond \(setup only\): Trey — address not configured\. CC: none\. Hidden BCC copy: off/);
   assert.match(h.root.textContent, /grants no access and enables no delivery/); assert.equal(h.calls.length, 1);
   assert.doesNotMatch(h.root.textContent, /Recipients: Andrew/);
   value.configuration.routing.rev.cc = [{ key: 'andrew', name: 'Andrew', address: 'andrew@example.invalid' }];
-  const copied = harness(); await open(copied, value); assert.match(copied.root.textContent, /Andrew copy: andrew@example.invalid/);
+  const copied = harness(); await open(copied, value); assert.match(copied.root.textContent, /CC: andrew@example.invalid\. Hidden BCC copy: off/);
 });
 
 test('malformed new routing never becomes confirmed configuration while legacy captures remain compatible', async () => {
@@ -312,6 +312,102 @@ const lease = (overrides = {}) => ({ rehearsalId: ID, createdAt: 100000, cutoffA
 const armed = (overrides = {}) => ({ ok: true, target: 'test', sendingEnabled: false, rehearsal: lease(), ...overrides });
 const syntheticPreview = (overrides = {}) => preview('captured', { messageId: `m1-test-rehearsal-${ID}-2026-09-25`, subject: 'SYNTHETIC REHEARSAL · TEST attendance attention', ...overrides });
 const rehearsalResponse = (latest = null, overrides = {}) => response(latest, null, { rehearsal: lease(), ...overrides });
+const proposedMessages = () => ['rev', 'richmond'].map((gym, index) => ({
+  messageId: `m1-test-scheduled-${gym}-2026-09-25`, hash: (index ? 'b' : 'a').repeat(64), gym,
+  name: index ? 'Richmond BJJ' : 'Revolution BJJ', from: 'revbjjops@gmail.com',
+  to: [index ? 'info@richmondbjj.com' : 'info@revolutionbjj.com'], cc: [], bcc: ['andrew@revolutionbjj.com'],
+  subject: `SYNTHETIC ${gym} TEST reminder`, html: `<p>${gym} isolated example</p>`, text: `${gym} isolated example`,
+  adminUrl: index ? 'https://gib-richmond-test.netlify.app/m1/admin/' : 'https://deploy-preview-89--gib-live.netlify.app/m1/admin/',
+  state: 'captured', synthetic: true
+}));
+const gymLink = gym => `https://deploy-preview-89--gib-live.netlify.app/m1/admin/?digestRehearsal=${ID}&digestGym=${gym}#attendanceDigest`;
+
+test('confirmed reminder configuration exposes hidden-copy settings without treating20:00 as class closing', async () => {
+  const value = response(preview());
+  Object.assign(value.configuration, { senderAddress: 'revbjjops@gmail.com', dailyLocalTime: '20:00', cutoffConfirmed: true, classFinishCutoffConfirmed: false,
+    routing: { rev: { reviewer: { key: 'stu', name: 'Stu', address: 'info@revolutionbjj.com' }, cc: [], bcc: [{ key: 'andrew', name: 'Andrew', address: 'andrew@revolutionbjj.com' }] },
+      richmond: { reviewer: { key: 'trey', name: 'Trey', address: 'info@richmondbjj.com' }, cc: [], bcc: [] } } });
+  const h = harness(); await open(h, value);
+  assert.match(h.root.textContent, /Daily reminder: 20:00 America\/New_York \(confirmed\)/);
+  assert.match(h.root.textContent, /follows daylight saving time/);
+  assert.match(h.root.textContent, /Class finishing times are not confirmed/);
+  assert.match(h.root.textContent, /Confirm this daily reminder time/);
+  assert.match(h.root.textContent, /Revolution: Stu — info@revolutionbjj.com\. CC: none\. Hidden BCC copy: andrew@revolutionbjj.com/);
+  assert.match(h.root.textContent, /Richmond \(setup only\): Trey — info@richmondbjj.com\. CC: none\. Hidden BCC copy: off/);
+  assert.doesNotMatch(h.root.textContent, /after the final class/);
+  assert.equal(h.nodes.find(node => node.tag === 'iframe').srcdoc.includes(preview().html), true, 'saved legacy body remains unchanged');
+});
+
+test('two private per-gym proposals keep BCC outside each email and direct links select only the requested gym using one GET', async () => {
+  for (const gym of ['rev', 'richmond']) {
+    const h = harness({ href: gymLink(gym) }), messages = proposedMessages();
+    await open(h, rehearsalResponse(syntheticPreview(), { proposedMessages: messages }));
+    assert.equal(h.calls.length, 1); assert.equal(h.calls[0].args[0], `/api/m1-attendance-digest?rehearsalId=${ID}`);
+    assert.equal(h.calls[0].args[2].method, 'GET');
+    const frames = h.nodes.filter(node => node.tag === 'iframe' && h.root.contains(node));
+    assert.equal(frames.length, 1); assert.ok(frames[0].srcdoc.includes(`${gym} isolated example`));
+    assert.doesNotMatch(frames[0].srcdoc, /andrew@revolutionbjj.com/); assert.equal(frames[0].attributes.sandbox, '');
+    assert.match(frames[0].srcdoc, /<body inert>/); assert.match(frames[0].attributes.csp, /script-src 'none'/);
+    const shown = messages.find(message => message.gym === gym);
+    const lines = h.nodes.filter(node => h.root.contains(node) && node.tag === 'p').map(node => node.textContent);
+    assert.ok(lines.includes('To: ' + shown.to[0])); assert.ok(lines.includes('CC: none'));
+    assert.ok(lines.some(line => line.startsWith('Private delivery configuration: hidden BCC copy')));
+    assert.deepEqual(h.nodes.filter(node => h.root.contains(node) && node.tag === 'a').map(node => node.href), [shown.adminUrl]);
+    assert.equal(h.control('html'), undefined, 'selected proposal cannot download the other historical combined email');
+    assert.equal(JSON.parse(h.storage.get(REHEARSAL_KEY)).rehearsalId, ID);
+  }
+  const h = harness({ href: gymLink('rev').replace('&digestGym=rev', '') });
+  await open(h, rehearsalResponse(null, { proposedMessages: proposedMessages() }));
+  assert.equal(h.nodes.filter(node => node.tag === 'iframe' && h.root.contains(node)).length, 2);
+});
+
+test('partial, malformed, stale and foreign proposal evidence never enables a current correction link', async () => {
+  const changes = [messages => messages.pop(), messages => { messages[1] = { ...messages[0] }; },
+    messages => { messages[0].messageId = 'm1-test-scheduled-rev-2026-09-24'; },
+    messages => { messages[0].hash = 'x'.repeat(64); }, messages => { messages[0].bcc = []; },
+    messages => { messages[0].to = ['info@richmondbjj.com']; }, messages => { messages[0].cc = ['andrew@revolutionbjj.com']; },
+    messages => { messages[0].adminUrl = 'https://gib-live.netlify.app/m1/admin/'; },
+    messages => { messages[0].synthetic = false; }, messages => { messages[0].state = 'sent'; },
+    messages => { messages[0].html = '<p>andrew@revolutionbjj.com</p>'; }, messages => { messages[0].text = 'andrew@revolutionbjj.com'; },
+    messages => { messages[0].html = 'x'.repeat(200001); }, messages => { messages[0].unexpected = true; }];
+  for (const change of changes) {
+    const h = harness({ href: gymLink('rev') }), messages = proposedMessages(); change(messages);
+    await open(h, rehearsalResponse(syntheticPreview(), { proposedMessages: messages }));
+    assert.match(visibleStatus(h).textContent, /not confirmed/);
+    assert.equal(h.nodes.some(node => h.root.contains(node) && ['iframe', 'a'].includes(node.tag)), false);
+    assert.equal(h.storage.has(REHEARSAL_KEY), true); assert.equal(h.calls.length, 1);
+  }
+  const h = harness({ href: gymLink('rev') });
+  await open(h, rehearsalResponse(null, { proposedMessages: [] }));
+  assert.match(h.root.textContent, /requested gym preview is not yet confirmed/);
+  assert.equal(h.nodes.some(node => h.root.contains(node) && node.tag === 'a'), false);
+  h.click('refresh'); h.calls[1].resolve(rehearsalResponse(null, { proposedMessages: proposedMessages() })); await flush();
+  h.click('refresh'); h.calls[2].reject(new Error('offline')); await flush();
+  assert.match(h.root.textContent, /previously loaded proposals/);
+  assert.equal(h.nodes.some(node => h.root.contains(node) && node.tag === 'a'), false);
+});
+
+test('unsafe gym links and conflicting rehearsal identities fail closed without replacing original storage', async () => {
+  const saved = JSON.stringify({ rehearsalId: ID, startedAt: 100000 });
+  for (const query of [`digestGym=rev`, `digestRehearsal=${ID}&digestGym=other`, `digestRehearsal=${ID}&digestGym=rev&digestGym=richmond`,
+    'digestRehearsal=00000000-0000-4000-8000-000000000002&digestGym=rev']) {
+    const h = harness({ storage: new Map([[REHEARSAL_KEY, saved]]), href: `https://deploy-preview-89--gib-live.netlify.app/m1/admin/?${query}#attendanceDigest` });
+    await open(h, rehearsalResponse(null, { proposedMessages: proposedMessages() }));
+    assert.equal(h.storage.get(REHEARSAL_KEY), saved); assert.equal(h.control('capture').disabled, true);
+    assert.equal(h.nodes.some(node => h.root.contains(node) && ['iframe', 'a'].includes(node.tag)), false);
+    assert.equal(h.calls.filter(call => call.args[1]).length, 0);
+  }
+});
+
+test('late proposed messages cannot cross a reviewer change and failed reload preserves the original rehearsal', async () => {
+  const h = harness({ href: gymLink('rev') }), opening = h.ui.open();
+  h.setAdmin('Stuart Turner'); h.calls[0].resolve(rehearsalResponse(null, { proposedMessages: proposedMessages() })); await opening;
+  assert.equal(h.nodes.some(node => h.root.contains(node) && node.tag === 'iframe'), false);
+  const reopened = h.ui.open(); h.calls[1].reject(new Error('offline')); await reopened;
+  assert.equal(JSON.parse(h.storage.get(REHEARSAL_KEY)).rehearsalId, ID);
+  assert.equal(h.calls.length, 2); assert.equal(h.calls[1].args[2].method, 'GET');
+  assert.match(visibleStatus(h).textContent, /not confirmed/);
+});
 
 test('explicit rehearsal arm preserves the original UUID before its only POST and never changes the real cutoff', async () => {
   const h = harness(); await open(h, response(preview()));
