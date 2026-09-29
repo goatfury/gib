@@ -9,6 +9,6 @@ export function managerReviewScope(request, dependencies = {}) {
   if (!enabled || !['test', 'production'].includes(target)) return null;
   const url = new URL(request.url);
   const scope = addedClassesScope(new Request(new URL('/api/m1-added-classes', url), { headers: request.headers }), dependencies);
-  if (!scope || scope.target !== target || (target === 'production' && scope.profile.installationId !== 'rev')) return null;
+  if (!scope || scope.target !== target) return null;
   return scope;
 }

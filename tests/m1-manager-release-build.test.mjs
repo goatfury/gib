@@ -41,7 +41,8 @@ test('real build requires a separate explicit production flag and keeps generate
     [{ CONTEXT: 'production', GIB_M1_MANAGER_REVIEW_LIVE_PILOT: 'TRUE' }, { enabled: false, target: 'disabled' }],
     [{ CONTEXT: 'deploy-preview', GIB_M1_MANAGER_REVIEW_PILOT: 'true' }, { enabled: true, target: 'test' }],
     [{ CONTEXT: 'deploy-preview', GIB_M1_INSTALLATION: 'richmond', GIB_M1_ENVIRONMENT: 'test', GIB_M1_MANAGER_REVIEW_PILOT: 'true' }, { enabled: true, target: 'test' }],
-    [{ CONTEXT: 'production', GIB_M1_INSTALLATION: 'rev', GIB_M1_MANAGER_REVIEW_LIVE_PILOT: 'true' }, { enabled: true, target: 'production' }]
+    [{ CONTEXT: 'production', GIB_M1_INSTALLATION: 'rev', GIB_M1_MANAGER_REVIEW_LIVE_PILOT: 'true' }, { enabled: true, target: 'production' }],
+    [{ CONTEXT: 'production', GIB_M1_INSTALLATION: 'richmond', GIB_M1_ENVIRONMENT: 'production', GIB_RICHMOND_PRODUCTION_ACTIVATION: 'active', GIB_RICHMOND_PRODUCTION_WRITE_ENABLED: 'true', GIB_M1_MANAGER_REVIEW_LIVE_PILOT: 'true' }, { enabled: true, target: 'production' }]
   ]) {
     const result = await build(env);
     assert.equal(result.error, undefined);
@@ -66,7 +67,7 @@ test('actual production build enables only exact independent live controls on th
   assert.match((await build({ CONTEXT: 'production', GIB_M1_INSTALLATION: 'richmond', GIB_M1_ENVIRONMENT: 'production', ...controls })).error, /Live features require/);
 });
 
-test('real build rejects mixed flags, preview live activation and either Richmond live environment', async () => {
+test('real build rejects mixed flags, preview live activation and inactive or TEST Richmond live profiles', async () => {
   for (const env of [
     { CONTEXT: 'production', GIB_M1_MANAGER_REVIEW_PILOT: 'true' },
     { CONTEXT: 'production', GIB_M1_MANAGER_REVIEW_PILOT: 'true', GIB_M1_MANAGER_REVIEW_LIVE_PILOT: 'true' },

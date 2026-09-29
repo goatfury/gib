@@ -29,8 +29,9 @@ if (managerReviewTestEnabled && managerReviewLiveEnabled) {
 if (managerReviewTestEnabled && (!['deploy-preview', 'branch-deploy', 'dev'].includes(process.env.CONTEXT || '') || (profile.installationId === 'richmond' && profile.environment !== 'test'))) {
   throw new Error('Manager day review requires an explicit TEST preview build.');
 }
-if (managerReviewLiveEnabled && (profile.installationId !== 'rev' || process.env.CONTEXT !== 'production')) {
-  throw new Error('The live manager day review pilot requires an explicit Revolution production build.');
+if (managerReviewLiveEnabled && (process.env.CONTEXT !== 'production'
+  || profile.installationId === 'richmond' && (profile.environment !== 'production' || profile.activation !== 'active'))) {
+  throw new Error('The live manager day review pilot requires an explicit active production build.');
 }
 const controls = liveControls(process.env, profile.installationId);
 if (Object.values(controls).some(Boolean) && (process.env.CONTEXT !== 'production' || profile.installationId === 'richmond' && (profile.environment !== 'production' || profile.activation !== 'active'))) throw new Error('Live features require the explicit production installation build.');

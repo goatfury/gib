@@ -32,8 +32,9 @@ async function filesAt(root, prefix) {
   }
   return files.sort();
 }
-export async function packageDisabledRelease({ source, output, cliRoot, root = ROOT }) {
+export async function packageDisabledRelease({ source, output, cliRoot, root = ROOT, preserveRevolutionPromotions = false }) {
   assert.match(source || '', /^[a-f0-9]{40}$/, 'Exact reviewed GitHub source required; local HEAD is not assumed.');
+  assert.equal(typeof preserveRevolutionPromotions, 'boolean', 'Explicit promotion preservation must be a boolean.');
   const destination = resolve(output), clientRoot = resolve(cliRoot);
   await mkdir(destination, { recursive: true });
   assert.equal((await readdir(destination)).length, 0, 'Never overwrite a retained release artifact.');
@@ -59,15 +60,18 @@ export async function packageDisabledRelease({ source, output, cliRoot, root = R
     for (const name of Object.keys(env)) if (/^(GIB_|CONTEXT$|DEPLOY_PRIME_URL$|URL$)/.test(name)) delete env[name];
     Object.assign(env, DISABLED_SETTINGS, { CONTEXT: 'production', GIB_M1_INSTALLATION: gym, GIB_M1_ENVIRONMENT: 'production',
       GIB_RICHMOND_PRODUCTION_ACTIVATION: 'active', GIB_RICHMOND_PRODUCTION_WRITE_ENABLED: 'true',
-      GIB_PROMOTIONS_TEST_ENABLED: 'false', GIB_PROMOTIONS_LIVE_ENABLED: 'false' });
+      GIB_PROMOTIONS_TEST_ENABLED: 'false', GIB_PROMOTIONS_LIVE_ENABLED: gym === 'rev' && preserveRevolutionPromotions ? 'true' : 'false' });
     execFileSync(process.execPath, ['tools/build-m1-installation-profile.mjs'], { cwd: stage, env, stdio: 'pipe', timeout: 20000 });
     await buildPublic({ root: stage });
     const globals = { document: { documentElement: { dataset: {} } } }; vm.createContext(globals);
     vm.runInContext(await readFile(resolve(stage, 'public/m1/installation-profile.generated.js'), 'utf8'), globals);
     vm.runInContext(await readFile(resolve(stage, 'public/m1/manager-review-config.generated.js'), 'utf8'), globals);
+    vm.runInContext(await readFile(resolve(stage, 'public/m1/promotions-config.generated.js'), 'utf8'), globals);
     assert.equal(globals.M1_INSTALLATION_PROFILE.installationId, gym);
     assert.equal(globals.M1_INSTALLATION_PROFILE.featureFlags.staffClock, gym === 'rev');
     assert.equal(JSON.stringify(globals.M1_MANAGER_REVIEW_CONFIG), JSON.stringify({ enabled: false, target: 'disabled', staffRecovery: false, richmondReviewer: false, reminders: false }));
+    assert.equal(globals.M1_PROMOTIONS_TEST_CONFIG.enabled, gym === 'rev' && preserveRevolutionPromotions);
+    if (gym === 'rev' && preserveRevolutionPromotions) assert.equal(globals.M1_PROMOTIONS_TEST_CONFIG.target, 'live');
     const artifact = resolve(destination, gym); await mkdir(artifact); await mkdir(resolve(artifact, 'public'));
     for (const path of PUBLIC_FILES) { await mkdir(dirname(resolve(artifact, 'public', path)), { recursive: true }); await copyFile(resolve(stage, 'public', path), resolve(artifact, 'public', path)); }
     await zipFunctions(resolve(stage, 'netlify/functions'), resolve(artifact, 'functions'), {
@@ -81,7 +85,8 @@ export async function packageDisabledRelease({ source, output, cliRoot, root = R
     assert.equal(manifest.functions.find(fn => fn.schedule)?.name, 'm1-tablet-pairing-cleanup');
     await writeFile(resolve(artifact, 'manifest.json'), JSON.stringify(manifest));
     const receipt = { source, installation: gym, environment: 'production', newFeaturesDisabled: true, packager: '14.5.4',
-      archiveHashes, manifestSha256: sha256(JSON.stringify(manifest)), sourceHashes, googleHashes: {}, publicHashes: {}, offSettings: DISABLED_SETTINGS };
+      archiveHashes, manifestSha256: sha256(JSON.stringify(manifest)), sourceHashes, googleHashes: {}, publicHashes: {}, offSettings: DISABLED_SETTINGS,
+      preservedFeatures: { promotionsLive: gym === 'rev' && preserveRevolutionPromotions } };
     for (const path of PUBLIC_FILES) receipt.publicHashes[path] = sha256(await readFile(resolve(artifact, 'public', path)));
     const google = resolve(artifact, 'google'); await mkdir(google);
     const wrapper = 'integrations/google-apps-script/' + (gym === 'rev' ? 'production' : 'richmond-production');
@@ -101,7 +106,7 @@ export async function packageDisabledRelease({ source, output, cliRoot, root = R
     assert.ok(!statuses.some(status => status.msg?.startsWith('Ignored invalid')));
     validateClientFunctions(result, scopedManifest, receipt);
     receipt.uploadClient = client.version; receipt.functions = manifest.functions.map(fn => ({ name: fn.name, routes: fn.routes, runtime: fn.runtimeVersion, invocationMode: fn.invocationMode }));
-    receipt.warning = 'Not deployed. Refresh the 120-second relocated client manifest at approved cutover; recheck unchanged live promotion flags before using this disabled baseline.';
+    receipt.warning = 'Not deployed. Refresh the 120-second relocated client manifest at approved cutover; confirm live promotion flags still match preservedFeatures.';
     await writeFile(resolve(artifact, 'build.json'), JSON.stringify(receipt, null, 2));
     await writeFile(resolve(artifact, 'netlify.toml'), '[build]\npublish = "public"\nfunctions = "functions"\n');
     receipts.push(receipt);
@@ -111,7 +116,8 @@ export async function packageDisabledRelease({ source, output, cliRoot, root = R
   return receipts;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const [source, output, cliRoot] = process.argv.slice(2); assert.ok(source && output && cliRoot, 'Usage: node tools/package-m1-disabled-release.mjs <reviewed-SHA> <empty-output> <existing-netlify-cli-root>');
-  const result = await packageDisabledRelease({ source, output, cliRoot });
+  const [source, output, cliRoot, preservation] = process.argv.slice(2); assert.ok(source && output && cliRoot, 'Usage: node tools/package-m1-disabled-release.mjs <reviewed-SHA> <empty-output> <existing-netlify-cli-root> [--preserve-revolution-promotions]');
+  assert.ok(preservation === undefined || preservation === '--preserve-revolution-promotions', 'Unknown preservation setting.');
+  const result = await packageDisabledRelease({ source, output, cliRoot, preserveRevolutionPromotions: preservation === '--preserve-revolution-promotions' });
   console.log(JSON.stringify({ source, gyms: result.map(receipt => ({ installation: receipt.installation, functions: receipt.functions.length, disabled: true })), deployed: false }));
 }

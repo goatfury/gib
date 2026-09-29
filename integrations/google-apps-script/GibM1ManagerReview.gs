@@ -9,13 +9,14 @@ function managerReviewTestEnabled_() {
     && GIB_M1_MANAGER_REVIEW_TEST_ENABLED === true && configuredDeploymentTarget_() === 'test';
 }
 function managerReviewEnabled_() {
-  return managerReviewTestEnabled_() || (
-    typeof GIB_M1_MANAGER_REVIEW_LIVE_ENABLED !== 'undefined'
-    && GIB_M1_MANAGER_REVIEW_LIVE_ENABLED === true
-    && configuredDeploymentTarget_() === 'production'
-    && typeof GIB_M1_RICHMOND_INSTALLATION_ === 'undefined'
-    && typeof GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ === 'undefined'
-  );
+  if (managerReviewTestEnabled_()) return true;
+  if (typeof GIB_M1_MANAGER_REVIEW_LIVE_ENABLED === 'undefined'
+    || GIB_M1_MANAGER_REVIEW_LIVE_ENABLED !== true
+    || configuredDeploymentTarget_() !== 'production'
+    || typeof GIB_M1_RICHMOND_INSTALLATION_ !== 'undefined') return false;
+  if (typeof GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ === 'undefined') return true;
+  var scope = typeof gibM1LiveInstallation_ === 'function' ? gibM1LiveInstallation_() : null;
+  return Boolean(scope && scope.gym === 'richmond' && gibM1RichmondProductionWritesEnabled_());
 }
 function managerHash_(value) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify(value), Utilities.Charset.UTF_8)

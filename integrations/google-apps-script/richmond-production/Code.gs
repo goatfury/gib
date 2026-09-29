@@ -32,6 +32,8 @@ var GIB_M1_RICHMOND_PRODUCTION_AUDIT_HEADERS_ = [
 ];
 
 var GIB_M1_RICHMOND_PRODUCTION_PROPERTIES_ = PropertiesService.getScriptProperties();
+var GIB_M1_MANAGER_REVIEW_LIVE_ENABLED = GIB_M1_RICHMOND_PRODUCTION_PROPERTIES_
+  .getProperty('GIB_M1_MANAGER_REVIEW_LIVE_PILOT') === 'active';
 var SPREADSHEET_ID = GIB_M1_RICHMOND_PRODUCTION_PROPERTIES_
   .getProperty(GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_PROPERTY_) || '';
 var EXPECTED_SPREADSHEET_NAME = GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_TITLE_;
@@ -107,12 +109,18 @@ function gibM1RichmondProductionObviousTestValue_(value) {
 
 function gibM1RichmondProductionActionValid_(body) {
   var action = cleanText_(body && body.action);
-  if (['kioskSignIn', 'dailyReview', 'instructorSearch', 'addMissedInstructor', 'voidInstructorSignin', 'ledgerStatus', 'managerReviewRead', 'attendanceDigestCapture', 'attendanceMailSend', 'attendanceMailStatus'].indexOf(action) === -1) {
+  if (['kioskSignIn', 'dailyReview', 'instructorSearch', 'addMissedInstructor', 'voidInstructorSignin', 'ledgerStatus', 'managerReviewRead', 'managerReviewSave', 'attendanceDigestCapture', 'attendanceMailSend', 'attendanceMailStatus'].indexOf(action) === -1) {
     return false;
   }
-  if (['managerReviewRead', 'attendanceDigestCapture', 'attendanceMailSend', 'attendanceMailStatus'].indexOf(action) >= 0) {
+  if (['managerReviewRead', 'managerReviewSave'].indexOf(action) >= 0) {
+    if (body.gym !== 'richmond') return false;
+    if (typeof managerReviewEnabled_ === 'function' && managerReviewEnabled_()) return true;
+    // A reminder assessment stays read-only and independent of review activation.
+    return action === 'managerReviewRead' && body.check === null
+      && typeof gibM1LiveReminderScope_ === 'function' && Boolean(gibM1LiveReminderScope_());
+  }
+  if (['attendanceDigestCapture', 'attendanceMailSend', 'attendanceMailStatus'].indexOf(action) >= 0) {
     if (typeof gibM1LiveReminderScope_ !== 'function' || !gibM1LiveReminderScope_() || body.gym !== 'richmond') return false;
-    if (action === 'managerReviewRead') return body.check === null;
     return true;
   }
   if (action === 'ledgerStatus') {
@@ -154,7 +162,8 @@ function gibM1RichmondProductionActionValid_(body) {
 function gibM1RichmondProductionMutation_(action) {
   return action === 'kioskSignIn'
     || action === 'addMissedInstructor'
-    || action === 'voidInstructorSignin';
+    || action === 'voidInstructorSignin'
+    || action === 'managerReviewSave';
 }
 
 function doPost(e) {

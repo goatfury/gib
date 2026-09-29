@@ -3,6 +3,10 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { handleManagerReview } from '../netlify/functions/m1-manager-review.mjs';
+import { handleAdminAdd } from '../netlify/functions/m1-admin-add.mjs';
+import { ADMIN_COOKIE, ADMIN_REQUEST_HEADER, createAdminSession, runtimeConfig } from '../netlify/functions/_lib/m1-common.mjs';
+import { buildAttendanceDigest, defaultDigestConfiguration } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 const wrapperSource = readFileSync(new URL(
@@ -133,7 +137,7 @@ function makeSheet(name, initialRows) {
   };
 }
 
-function createHarness({ provisioned = true, duplicateSheets = false, liveFeatures = false, optionalSheets = [] } = {}) {
+function createHarness({ provisioned = true, duplicateSheets = false, liveFeatures = false, optionalSheets = [], managerReview = false, managerReviewSetting = 'active', now = FIXED_RICHMOND_NOW } = {}) {
   const scriptId = 'richmond-production-unit-script-id';
   const signins = makeSheet('Signins', [SIGNIN_HEADERS]);
   const audit = makeSheet('Admin Audit', [AUDIT_HEADERS]);
@@ -141,7 +145,8 @@ function createHarness({ provisioned = true, duplicateSheets = false, liveFeatur
     getId: () => 'richmond-production-unit-sheet-id',
     getName: () => SHEET_TITLE,
     getSheetByName: name => [signins, audit, ...optionalSheets].find(sheet => sheet.getName() === name) || null,
-    getSheets: () => [signins, audit, ...optionalSheets]
+    getSheets: () => [signins, audit, ...optionalSheets],
+    insertSheet(name) { const sheet = makeSheet(name, []); optionalSheets.push(sheet); return sheet; }
   };
   const properties = new Map(provisioned ? [
     ['GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_ID', spreadsheet.getId()],
@@ -151,10 +156,14 @@ function createHarness({ provisioned = true, duplicateSheets = false, liveFeatur
     ['GIB_M1_RICHMOND_PRODUCTION_PROVISIONING_CLOSED', 'richmond-production-v1'],
     ['GIB_M1_RICHMOND_PRODUCTION_WRITES_ENABLED', 'false']
   ] : []);
+  if (managerReview && managerReviewSetting != null) properties.set('GIB_M1_MANAGER_REVIEW_LIVE_PILOT', managerReviewSetting);
   let spreadsheetOpens = 0;
   const context = vm.createContext({
     console,
-    Date: FixedReceiverDate,
+    Date: now === FIXED_RICHMOND_NOW ? FixedReceiverDate : class extends Date {
+      constructor(...args) { super(...(args.length ? args : [now])); }
+      static now() { return now; }
+    },
     ContentService: {
       MimeType: { JSON: 'application/json' },
       createTextOutput(text) { return { text, setMimeType() { return this; } }; }
@@ -216,6 +225,7 @@ function createHarness({ provisioned = true, duplicateSheets = false, liveFeatur
   vm.runInContext(wrapperSource, context, { filename: 'RichmondProductionCode.gs' });
   vm.runInContext(receiverSource, context, { filename: 'GibM1Receiver.gs' });
   if (liveFeatures) vm.runInContext(readFileSync(new URL('integrations/google-apps-script/GibM1LiveFeatures.gs', ROOT), 'utf8'), context);
+  if (managerReview) vm.runInContext(readFileSync(new URL('integrations/google-apps-script/GibM1ManagerReview.gs', ROOT), 'utf8'), context);
   return {
     context,
     properties,
@@ -256,6 +266,180 @@ function productionRequest(action, values = {}) {
     ...values
   };
 }
+
+// Exercise the enabled production entrypoints, but only with in-memory Sheets,
+// synthetic credentials and a fake transport. Nothing here reaches a real gym.
+function managerFixture() {
+  const now = Date.parse('2026-09-30T00:05:00Z'), date = '2026-09-29';
+  const origin = 'https://gib-richmond-live.netlify.app';
+  const page = 'isolated-manager-page-012345678901234567890123';
+  const journals = [], h = createHarness({ managerReview: true, liveFeatures: true, optionalSheets: journals, now });
+  h.properties.set('GIB_M1_RICHMOND_PRODUCTION_WRITES_ENABLED', 'true');
+  h.properties.set('GIB_RICHMOND_TREY_ADMIN_LIVE_ENABLED', 'true');
+  const env = {
+    GIB_M1_ENVIRONMENT: 'production', GIB_RICHMOND_TREY_ADMIN_LIVE_ENABLED: 'true',
+    GIB_RICHMOND_PRODUCTION_ACTIVATION: 'active', GIB_RICHMOND_PRODUCTION_WRITE_ENABLED: 'true',
+    GIB_RICHMOND_PRODUCTION_WEBHOOK_URL: 'https://script.google.com/macros/s/ISOLATED_RICHMOND/exec',
+    GIB_RICHMOND_PRODUCTION_WEBHOOK_TOKEN: derivedSecret('gib-m1-richmond-production'),
+    GIB_RICHMOND_PRODUCTION_ADMIN_ACTION_TOKEN: derivedSecret('gib-m1-richmond-production-admin'),
+    GIB_RICHMOND_PRODUCTION_ADMIN_PASSPHRASE: 'isolated silver mountain meadow',
+    GIB_RICHMOND_PRODUCTION_DEVICE_TOKEN: 'isolated-rich-device-01234567890123456789'
+  };
+  const runtime = runtimeConfig(env, { admin: true, requestUrl: origin + '/api/m1-manager-review', installationId: 'richmond', environment: 'production', activation: 'active' });
+  assert.ok(runtime);
+  const cookie = createAdminSession('Trey Martin', runtime.sessionSecret, now, page, runtime);
+  const labels = ['9:00 AM Fundamentals', '1:00 PM Open Mat', '5:00 PM Adult BJJ'];
+  const calls = [], fault = { lose: null, receipt: null };
+  const dependencies = { enabled: true, target: 'production', installationId: 'richmond', environment: 'production', activation: 'active',
+    env, now, dateNow: new Date(now), traceLog() {},
+    context: { site: { name: 'gib-richmond-live', id: '9b7757a9-70f4-4977-9ca2-270b41e34007' }, deploy: { context: 'production', published: true } },
+    schedule: { current: true, timezone: 'America/New_York', days: { Tuesday: labels } },
+    addedStore: { getWithMetadata: async () => null },
+    fetch: async (url, options) => {
+      assert.equal(url, runtime.webhookUrl);
+      const body = JSON.parse(options.body); calls.push(body);
+      const result = h.post(body);
+      if (fault.lose === body.action) { fault.lose = null; throw new TypeError('Isolated lost confirmation after central saving'); }
+      if (body.action === 'managerReviewRead' && result.receipt && fault.receipt) fault.receipt(result);
+      return new Response(JSON.stringify(result));
+    }
+  };
+  const request = (path, body, extra = {}) => new Request(origin + path, { method: body === undefined ? 'GET' : 'POST',
+    headers: { Host: new URL(origin).host, Origin: origin, 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json',
+      Cookie: ADMIN_COOKIE + '=' + cookie, [ADMIN_REQUEST_HEADER]: page, ...extra }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const run = (body, overrides = {}, headers = {}) => handleManagerReview(request('/api/m1-manager-review', body, headers), { ...dependencies, ...overrides });
+  const read = async () => { const response = await run({ action: 'read' }); assert.equal(response.status, 200, await response.clone().text()); return response.json(); };
+  const original = (day, suffix, decisions) => ({ action: 'partial', requestId: 'manager-richmond-' + suffix.padEnd(20, '0'), date,
+    revision: day.revision, attendanceHash: day.attendanceHash, scheduleHash: day.scheduleHash, decisions });
+  const ledger = () => h.post(productionRequest('managerReviewRead', { gym: 'richmond', from: '2026-09-07', to: date, check: null, adminName: 'Trey Martin' }));
+  const digest = () => {
+    const current = ledger(); assert.equal(current.ok, true);
+    const configuration = defaultDigestConfiguration({ target: 'production', liveFeatures: { reminders: true }, profile: { installationId: 'richmond', environment: 'production', activation: 'active', gymName: 'Richmond BJJ' } });
+    const schedules = [{ gym: 'richmond', timezone: 'America/New_York', days: current.days.map(day => ({ date: day.date,
+      status: 'complete', observedAt: day.date + 'T12:00:00.000Z', sourceVersion: 'isolated-known-schedule',
+      occurrences: day.date === date ? labels.map((label, i) => ({ label, startAt: date + 'T' + ['13', '17', '21'][i] + ':00:00.000Z',
+        endAt: date + 'T' + ['14', '18', '22'][i] + ':00:00.000Z', cancelled: false })) : [] })) }];
+    return buildAttendanceDigest({ jobDate: date, configuration, schedules, now,
+      snapshots: [{ gym: 'richmond', attendance: { ok: true, ledger: current }, staff: { ok: true, complete: true, items: [], notApplicable: true } }] });
+  };
+  return { h, now, date, journals, dependencies, calls, fault, labels, request, run, read, original, ledger, digest };
+}
+
+test('Richmond production class decisions and an instructor addition recover their original requests once and affect fresh reminders', async () => {
+  const f = managerFixture();
+  let day = (await f.read()).days.find(day => day.date === f.date);
+  const cancellation = f.original(day, 'cancel', [{ label: f.labels[0], outcome: 'not-held' }]);
+  f.fault.lose = 'managerReviewSave';
+  assert.equal((await f.run(cancellation)).status, 503);
+  assert.equal(f.journals[0].values.length, 2, 'lost reply does not erase the saved decision or its audit');
+  for (let reload = 0; reload < 2; reload++) {
+    const response = await f.run(structuredClone(cancellation));
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.deepEqual((await response.json()).receipt, { saved: true, requestId: cancellation.requestId, revision: 1 });
+  }
+  assert.equal(f.calls.filter(call => call.action === 'managerReviewSave').length, 1);
+  assert.equal(f.journals[0].values.length, 2);
+  assert.deepEqual(f.journals[0].values[1].slice(0, 5), [cancellation.requestId, 'richmond', f.date, 1, 'Trey Martin']);
+  assert.equal(f.digest().groups[0].items.some(item => item.summary.includes(f.labels[0])), false, 'saved cancellation is not missing attendance');
+
+  day = (await f.read()).days.find(day => day.date === f.date);
+  const unknown = f.original(day, 'unknown', [...cancellation.decisions, { label: f.labels[1], outcome: 'unknown' }]);
+  f.fault.lose = 'managerReviewSave';
+  assert.equal((await f.run(unknown)).status, 503);
+  assert.equal((await f.run(structuredClone(unknown))).status, 200);
+  assert.equal((await f.run(structuredClone(unknown))).status, 200);
+  assert.equal(f.journals[0].values.length, 3, 'one history row per original decision request');
+  day = (await f.read()).days.find(day => day.date === f.date);
+  assert.equal(day.complete, false);
+  assert.equal(day.classes.find(item => item.label === f.labels[1]).outcome, 'unknown');
+  assert.equal((await f.run({ ...f.original(day, 'complete', unknown.decisions), action: 'complete' })).status, 409);
+
+  const addition = { requestId: 'm1-' + f.date + '-' + '1'.repeat(24), date: f.date, classLabel: f.labels[2], duration: 1,
+    instructor: 'Alex Morgan', site: 'Richmond', notes: '', reason: 'Forgot to sign into this class' };
+  f.fault.lose = 'addMissedInstructor';
+  assert.equal((await handleAdminAdd(f.request('/api/m1-admin-add', addition), f.dependencies)).status, 504);
+  for (let reload = 0; reload < 2; reload++) assert.equal((await handleAdminAdd(f.request('/api/m1-admin-add', structuredClone(addition)), f.dependencies)).status, 200);
+  assert.equal(f.h.signins.values.length, 2); assert.equal(f.h.audit.values.length, 2);
+  assert.equal(f.h.audit.values[1][1], 'Trey Martin');
+  assert.equal(f.h.audit.values[1][10], f.h.signins.values[1][0], 'addition has its matching permanent-record audit');
+  const digest = f.digest();
+  assert.equal(digest.itemCount, 2, 'the unknown occurrence retains both its missing sign-in and its unresolved question');
+  assert.ok(digest.groups[0].items.some(item => item.kind === 'class-question'));
+  assert.ok(digest.groups[0].items.every(item => item.summary.includes(f.labels[1])));
+
+  const late = kioskRow({ Date: f.date, Timestamp: f.date + ' 09:05:00', 'Class Label': f.labels[0] });
+  assert.equal(f.h.post(productionRequest('kioskSignIn', { rows: [late] })).ok, true);
+  assert.ok(f.digest().groups[0].items.some(item => item.kind === 'attendance-conflict'), 'a cancellation never silently erases contradictory teaching');
+  assert.equal(f.h.signins.values.length, 3);
+  assert.equal(f.h.context.GIB_M1_STAFF_CLOCK_ENABLED, false);
+});
+
+test('Richmond review recovery rejects mismatched or incomplete evidence without dispatching another save', async () => {
+  const f = managerFixture(), day = (await f.read()).days.find(day => day.date === f.date);
+  const original = f.original(day, 'receipt', [{ label: f.labels[0], outcome: 'not-held' }]);
+  assert.equal((await f.run(original)).status, 200);
+  for (const corrupt of [result => { delete result.receipt.revision; }, result => { result.receipt.requestId += '-wrong'; }, result => { result.receipt.revision += 1; }]) {
+    f.fault.receipt = corrupt;
+    assert.equal((await f.run(structuredClone(original))).status, 503);
+  }
+  f.fault.receipt = null;
+  assert.equal((await f.run({ ...original, decisions: [{ label: f.labels[0], outcome: 'unknown' }] })).status, 503);
+  assert.equal((await f.run(original)).status, 200);
+  assert.equal(f.calls.filter(call => call.action === 'managerReviewSave').length, 1);
+  assert.equal(f.journals[0].values.length, 2);
+});
+
+test('overlapping Richmond decision requests retain one original audit and reject a stale competing change', async () => {
+  const f = managerFixture(), day = (await f.read()).days.find(day => day.date === f.date);
+  const original = f.original(day, 'overlap', [{ label: f.labels[0], outcome: 'not-held' }]);
+  const repeated = await Promise.all([f.run(original), f.run(structuredClone(original))]);
+  assert.ok(repeated.every(response => response.status === 200));
+  assert.equal(f.journals[0].values.length, 2);
+  assert.equal((await f.run({ ...original, requestId: original.requestId + '-other', decisions: [{ label: f.labels[0], outcome: 'unknown' }] })).status, 409);
+  assert.equal(f.journals[0].values.length, 2);
+});
+
+test('Richmond Google manager activation is exact and reminder-only reads never authorize decision recovery or writes', () => {
+  for (const value of [null, 'false', 'true', 'ACTIVE']) {
+    const h = createHarness({ managerReview: true, managerReviewSetting: value, liveFeatures: true });
+    h.properties.set('GIB_M1_RICHMOND_PRODUCTION_WRITES_ENABLED', 'true');
+    const read = productionRequest('managerReviewRead', { gym: 'richmond', from: '2026-09-07', to: '2026-08-21', check: null });
+    assert.equal(h.context.managerReviewEnabled_(), false);
+    assert.equal(h.post(read).ok, false); assert.equal(h.spreadsheetOpens, 0);
+    h.properties.set('GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED', 'true');
+    assert.equal(h.context.gibM1RichmondProductionActionValid_(read), true);
+    assert.equal(h.context.gibM1RichmondProductionActionValid_({ ...read, check: { requestId: 'manager-original0000000000' } }), false);
+    assert.equal(h.context.gibM1RichmondProductionActionValid_({ ...read, action: 'managerReviewSave' }), false);
+    assert.equal(h.context.managerReviewEnabled_(), false, 'reminders do not switch on manager edits');
+  }
+});
+
+test('enabled Richmond review keeps authenticated own-gym, write, publication and reviewer restrictions', async () => {
+  const f = managerFixture(), before = f.calls.length;
+  assert.equal((await f.run({ action: 'read' }, {}, { Cookie: '' })).status, 401);
+  assert.equal((await f.run({ action: 'read' }, {}, { [ADMIN_REQUEST_HEADER]: 'wrong' })).status, 403);
+  assert.equal((await f.run({ action: 'read' }, {}, { Origin: 'https://gib-live.netlify.app' })).status, 403);
+  assert.equal((await f.run({ action: 'read' }, { enabled: false })).status, 404);
+  for (const patch of [{ target: 'test' }, { installationId: 'rev' }, { activation: 'pending' },
+    { context: { ...f.dependencies.context, site: { name: 'gib-live', id: 'f748e737-11e3-4fab-8e8c-bf185eab29ff' } } },
+    { context: { ...f.dependencies.context, deploy: { context: 'production', published: false } } }]) {
+    assert.equal((await f.run({ action: 'read' }, patch)).status, 403);
+  }
+  assert.equal(f.calls.length, before, 'rejected app requests never reach Google');
+  const base = { gym: 'richmond', from: '2026-09-07', to: f.date, check: null, adminName: 'Trey Martin' };
+  for (const patch of [{ gym: 'rev' }, { installation: 'rev' }, { target: 'test' }, { environment: 'test' },
+    { token: 'wrong' }, { adminActionToken: 'wrong' }, { adminName: 'Unauthorized Reviewer' }]) {
+    assert.equal(f.h.post(productionRequest('managerReviewRead', { ...base, ...patch })).ok, false);
+  }
+  f.h.properties.set('GIB_RICHMOND_TREY_ADMIN_LIVE_ENABLED', 'false');
+  assert.equal(f.h.post(productionRequest('managerReviewRead', base)).ok, false);
+  assert.equal((await f.run({ action: 'read' }, { env: { ...f.dependencies.env, GIB_RICHMOND_TREY_ADMIN_LIVE_ENABLED: 'false' } })).status, 401);
+  f.h.properties.set('GIB_RICHMOND_TREY_ADMIN_LIVE_ENABLED', 'true');
+  const day = (await f.read()).days.find(day => day.date === f.date);
+  f.h.properties.set('GIB_M1_RICHMOND_PRODUCTION_WRITES_ENABLED', 'false');
+  assert.equal((await f.run(f.original(day, 'writesoff', [{ label: f.labels[0], outcome: 'not-held' }]))).status, 503);
+  assert.equal(f.journals.length, 0); assert.equal(f.h.signins.values.length, 1); assert.equal(f.h.audit.values.length, 1);
+});
 
 test('enabled Trey production correction remains Richmond-only, auditable after deactivation, and accepts only validated retained journals', () => {
   const journals = [makeSheet('Manager Reviews', [['Request ID', 'Gym', 'Date', 'Revision', 'Reviewer', 'Time', 'Action', 'Attendance hash', 'Schedule hash', 'Decisions', 'Reviewed data', 'Request hash']]),
