@@ -45,4 +45,3 @@ The current Richmond TEST project has its own locked receiver and manifest. It d
 6. Obtain explicit production release, required live access/consent and activation approval after material reliability blockers are resolved. Keep clear warnings and original-request recovery for Google response, missing-callback or storage failures; the Staff read response-path repair is bounded TEST evidence, not a reliability guarantee.
 
 No re-approval of the sender, addresses, BCC or 8 p.m. time is needed. Remaining approvals concern access, any new scopes and eventual live activation—not those settled choices.
-
