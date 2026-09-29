@@ -28,7 +28,7 @@ import {
 } from './_lib/m1-staff-clock-contracts.mjs';
 import { validExactProductionRequest } from './_lib/m1-production-runtime.mjs';
 import { staffClockEnabled } from './_lib/m1-installation.mjs';
-import { managerReviewScope } from './_lib/m1-manager-scope.mjs';
+import { releaseFeatureScope } from './_lib/m1-release-scope.mjs';
 import { safeStaffReadTraceId } from './_lib/m1-google-trace.mjs';
 import { loadStaffCallbackRead } from './_lib/m1-test-read-callback.mjs';
 
@@ -177,9 +177,9 @@ async function runAdminStaffTime(request, dependencies, diagnostics) {
   const operation = parsed.value.operation;
   const recoveryOperation = operation === 'recoveryReview' || operation === 'recoveryDecide';
   if (recoveryOperation) {
-    const scope = managerReviewScope(request, dependencies);
-    if (target !== 'test' || scope?.target !== 'test' || scope.profile.installationId !== 'rev'
-      || new URL(request.url).origin !== 'https://deploy-preview-89--gib-live.netlify.app') {
+    const scope = releaseFeatureScope(request, 'staffRecovery', dependencies);
+    if (!scope || scope.target !== target || scope.profile.installationId !== 'rev'
+      || new URL(request.url).origin !== (target === 'production' ? 'https://gib-live.netlify.app' : 'https://deploy-preview-89--gib-live.netlify.app')) {
       return jsonResponse(404, { ok: false, message: 'Staff recovery is disabled for this installation.' });
     }
   }

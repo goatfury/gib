@@ -14,7 +14,7 @@ export async function handleAttendanceDigestEmail(request, dependencies = {}) {
     return jsonResponse(404, { ok: false, message: 'TEST email unavailable.' });
   }
   const scope = attendanceDigestScope(request, dependencies);
-  if (!scope || (request.headers.get('Origin') && request.headers.get('Origin') !== DIGEST_ORIGIN)
+  if (!scope || scope.target !== 'test' || scope.profile.installationId !== 'rev' || (request.headers.get('Origin') && request.headers.get('Origin') !== DIGEST_ORIGIN)
     || (request.headers.get('Sec-Fetch-Site') && !['same-origin', 'none'].includes(request.headers.get('Sec-Fetch-Site')))) {
     return jsonResponse(403, { ok: false, message: 'Use Revolution TEST Admin.' });
   }

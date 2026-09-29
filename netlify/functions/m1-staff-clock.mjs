@@ -26,7 +26,7 @@ import {
   validExactProductionRequest
 } from './_lib/m1-production-runtime.mjs';
 import { staffClockEnabled } from './_lib/m1-installation.mjs';
-import { managerReviewScope } from './_lib/m1-manager-scope.mjs';
+import { releaseFeatureScope } from './_lib/m1-release-scope.mjs';
 
 export const STAFF_CLOCK_PATH = '/api/m1-staff-clock';
 
@@ -131,9 +131,9 @@ export async function handleStaffClock(request, dependencies = {}) {
   const operation = parsed.value.operation;
   const recoveryOperation = operation === 'recoveryRead' || operation === 'recover';
   if (recoveryOperation) {
-    const scope = managerReviewScope(request, dependencies);
-    if (target !== 'test' || scope?.target !== 'test' || scope.profile.installationId !== 'rev'
-      || new URL(request.url).origin !== 'https://deploy-preview-89--gib-live.netlify.app') {
+    const scope = releaseFeatureScope(request, 'staffRecovery', dependencies);
+    if (!scope || scope.target !== target || scope.profile.installationId !== 'rev'
+      || new URL(request.url).origin !== (target === 'production' ? 'https://gib-live.netlify.app' : 'https://deploy-preview-89--gib-live.netlify.app')) {
       return jsonResponse(404, { ok: false, message: 'Staff recovery is disabled for this installation.' });
     }
   }
@@ -172,7 +172,7 @@ export async function handleStaffClock(request, dependencies = {}) {
   }
 
   if (recoveryOperation) {
-    const options = { requireTestName: true, now: dependencies.dateNow || new Date() };
+    const options = { requireTestName: target === 'test', now: dependencies.dateNow || new Date() };
     const value = operation === 'recover' ? sanitizeStaffRecoveryRequest(parsed.value, options) : null;
     if (operation === 'recover' ? !value : !exactObjectKeys(parsed.value, ['operation'])) {
       return jsonResponse(400, { ok: false, message: 'Staff recovery request was rejected.' });

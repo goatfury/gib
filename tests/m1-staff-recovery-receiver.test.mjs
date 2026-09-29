@@ -22,9 +22,13 @@ const admin = (action, data = {}) => kiosk(action, { adminActionToken: 'syntheti
 const recovery = (overrides = {}) => ({ requestId: IDS.recovery, previousClockInPunchId: IDS.previous, punch: punch(), proposedFinishAt: null, ...overrides });
 const decision = (overrides = {}) => ({ requestId: IDS.decision, recoveryRequestId: IDS.recovery, revision: 0, decision: 'approve', finishAt: '2026-08-17T17:00:00-04:00', punchId: IDS.approved, reason: 'Confirmed TEST prior finish', ...overrides });
 
-function harness({ previousAt = '2026-08-17T09:00:00-04:00', now = NOW, includeRecovery = true } = {}) {
+function harness({ previousAt = '2026-08-17T09:00:00-04:00', now = NOW, includeRecovery = true, production = false } = {}) {
   const sheets = new Map(), cache = new Map(), operations = [];
   const properties = new Map([['GIB_M1_TEST_SPREADSHEET_ID', 'synthetic-sheet-id'], ['GIB_M1_RECEIVER_TRANSPORT_TOKEN', 'synthetic-receiver-token'], ['GIB_M1_LEGACY_KIOSK_TOKEN', 'synthetic-legacy-token'], ['GIB_M1_ADMIN_ACTION_TOKEN', 'synthetic-admin-token']]);
+  if (production) {
+    properties.delete('GIB_M1_TEST_SPREADSHEET_ID');
+    for (const [key, value] of Object.entries({ GIB_M1_DEPLOYMENT_TARGET_LOCK: 'production', GIB_M1_PROVISIONING_CLOSED: 'closed-v1', GIB_M1_PRODUCTION_SPREADSHEET_ID: 'synthetic-sheet-id', GIB_M1_STAFF_RECOVERY_LIVE_ENABLED: 'true' })) properties.set(key, value);
+  }
   let fault = null, locked = false, acquired = 0, released = 0;
   function write(event, work) {
     const matched = fault && fault.match(event);
@@ -53,7 +57,13 @@ function harness({ previousAt = '2026-08-17T09:00:00-04:00', now = NOW, includeR
   sheet('Staff Clock Staff', [['Staff ID', 'Staff Name', 'Active'], ['mandy-test', 'Mandy Test', true], ['other-test', 'Other Test', true]]);
   sheet('Staff Time', [TIME_HEADERS, ...(previousAt ? [timeRow(punch({ punchId: IDS.previous, timestamp: previousAt }))] : [])]);
   sheet('Staff Time Audit', [AUDIT_HEADERS]);
-  const spreadsheet = { getId: () => 'synthetic-sheet-id', getName: () => 'RBJJ M1 — TEST', getSheetByName: name => sheets.get(name) || null, insertSheet: name => sheet(name) };
+  if (production) for (const value of sheets.values()) for (const row of value.values) for (let col = 0; col < row.length; col++) {
+    if (row[col] === 'mandy-test') row[col] = 'fixture-employee';
+    if (row[col] === 'Mandy Test') row[col] = 'Fixture Employee';
+    if (row[col] === 'other-test') row[col] = 'fixture-other';
+    if (row[col] === 'Other Test') row[col] = 'Fixture Other';
+  }
+  const spreadsheet = { getId: () => 'synthetic-sheet-id', getName: () => production ? 'RBJJ M1 — PRODUCTION' : 'RBJJ M1 — TEST', getSheetByName: name => sheets.get(name) || null, insertSheet: name => sheet(name) };
   const formatDate = (date, timeZone, pattern) => {
     const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(date).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
     const day = `${parts.year}-${parts.month}-${parts.day}`, time = `${parts.hour}:${parts.minute}:${parts.second}`;
@@ -72,8 +82,8 @@ function harness({ previousAt = '2026-08-17T09:00:00-04:00', now = NOW, includeR
     SpreadsheetApp: { openById: () => spreadsheet, flush() {} },
     Utilities: { Charset: { UTF_8: 'UTF_8' }, DigestAlgorithm: { SHA_256: 'SHA_256' }, formatDate, computeDigest: (_, value) => [...createHash('sha256').update(String(value)).digest()], newBlob: value => ({ getBytes: () => Buffer.from(String(value), 'utf8') }), base64EncodeWebSafe: bytes => Buffer.from(bytes.map(value => value < 0 ? value + 256 : value)).toString('base64url'), base64DecodeWebSafe: value => [...Buffer.from(String(value), 'base64url')] }
   });
-  for (const file of ['Code.gs', 'GibM1Receiver.gs', 'GibM1ManagerReview.gs', ...(includeRecovery ? ['GibM1StaffRecovery.gs'] : [])]) vm.runInContext(readFileSync(new URL(`../integrations/google-apps-script/${file}`, import.meta.url), 'utf8'), ctx, { filename: file });
-  return { ctx, sheets, operations, properties, snapshot: () => JSON.stringify([...sheets].map(([name, value]) => [name, value.values])),
+  for (const file of [production ? 'production/Code.gs' : 'Code.gs', 'GibM1Receiver.gs', 'GibM1ManagerReview.gs', ...(includeRecovery ? ['GibM1StaffRecovery.gs'] : []), ...(production ? ['GibM1LiveFeatures.gs'] : [])]) vm.runInContext(readFileSync(new URL(`../integrations/google-apps-script/${file}`, import.meta.url), 'utf8'), ctx, { filename: file });
+  return { ctx, sheets, spreadsheet, operations, properties, snapshot: () => JSON.stringify([...sheets].map(([name, value]) => [name, value.values])),
     post: body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text),
     failOnce: (match, phase = 'before') => { fault = { match, phase }; }, locks: () => ({ acquired, released, locked }) };
 }
@@ -81,6 +91,60 @@ const start = (h, value = recovery()) => h.post(kiosk('staffRecoveryStart', { re
 const decide = (h, value = decision()) => h.post(admin('staffRecoveryDecide', { decision: value }));
 const readRecovery = h => h.post(kiosk('staffRecoveryRead'));
 const totals = review => review.periods.current.totals.find(item => item.staffId === 'mandy-test');
+
+test('enabled real Revolution production recovery preserves original punches and verifies a single approved correction and audit after interrupted storage', () => {
+  for (const interruption of ['none', 'proposal', 'approval-audit']) {
+    const h = harness({ production: true }), instructor = structuredClone(h.sheets.get('Signins').values);
+    const initial = structuredClone(h.sheets.get('Staff Time').values[1]);
+    const original = recovery({ punch: punch({ staffId: 'fixture-employee', staffName: 'Fixture Employee', device: 'Fixture device', build: 'isolated-build' }), proposedFinishAt: '2026-08-17T17:00:00-04:00' });
+    const body = (action, data = {}, adminName) => ({ action, target: 'production', token: h.ctx.configuredReceiverSecret_(), ...(adminName ? { adminActionToken: h.ctx.configuredAdminActionSecret_(), adminName } : {}), ...data });
+    if (interruption === 'proposal') h.failOnce(event => event.sheet === 'Staff Time', 'after');
+    const first = h.post(body('staffRecoveryStart', { recovery: original }));
+    if (interruption === 'proposal') assert.equal(first.ok, false); else assert.equal(first.target, 'production');
+    const saved = h.post(body('staffRecoveryStart', { recovery: original })); assert.equal(saved.ok, true, JSON.stringify(saved));
+    assert.equal(saved.receipt.requestId, original.requestId); assert.equal(saved.receipt.startedAt, original.punch.timestamp);
+    assert.equal(h.sheets.get('Staff Time').values.filter(row => row[0] === IDS.current).length, 1);
+    const newer = structuredClone(h.sheets.get('Staff Time').values.find(row => row[0] === IDS.current));
+    if (interruption === 'approval-audit') h.failOnce(event => event.sheet === 'Staff Time Audit', 'after');
+    const request = decision({ reason: 'Isolated approval fixture' });
+    const approval = h.post(body('staffRecoveryDecide', { decision: request }, 'Stuart Turner'));
+    if (interruption === 'approval-audit') assert.equal(approval.ok, false); else assert.equal(approval.ok, true, JSON.stringify(approval));
+    const recovered = h.post(body('staffRecoveryDecide', { decision: request }, 'Stuart Turner'));
+    assert.equal(recovered.ok, true, JSON.stringify(recovered)); assert.equal(recovered.receipt.requestId, request.requestId);
+    assert.equal(recovered.receipt.adminName, 'Stuart Turner'); assert.equal(recovered.recovery.items[0].status, 'approved');
+    assert.equal(h.sheets.get('Staff Time').values.filter(row => row[0] === IDS.approved).length, 1);
+    assert.equal(h.sheets.get('Staff Time Audit').values.filter(row => row[0] === IDS.decision).length, 1);
+    assert.deepEqual(h.sheets.get('Staff Time').values[1], initial);
+    assert.deepEqual(h.sheets.get('Staff Time').values.find(row => row[0] === IDS.current), newer);
+    assert.deepEqual(h.sheets.get('Signins').values, instructor);
+    const snapshot = h.snapshot(); assert.equal(h.post(body('staffRecoveryReview', {}, 'Stuart Turner')).ok, true); assert.equal(h.snapshot(), snapshot);
+    assert.throws(() => h.ctx.testRevolutionStaffRecoveryLostReply(), /TEST project required/);
+    assert.equal(h.ctx.staffRecoveryTestFault_('saved', { staffId: 'mandy-test' }), false);
+  }
+});
+
+test('production recovery requires its exact activation, original target, kiosk credentials and existing manager identity', () => {
+  for (const value of [null, 'TRUE', 'active', 'false']) {
+    const h = harness({ production: true }); value === null ? h.properties.delete('GIB_M1_STAFF_RECOVERY_LIVE_ENABLED') : h.properties.set('GIB_M1_STAFF_RECOVERY_LIVE_ENABLED', value);
+    const before = h.snapshot(); assert.equal(h.post({ action: 'staffRecoveryRead', target: 'production', token: h.ctx.configuredReceiverSecret_() }).ok, false); assert.equal(h.snapshot(), before);
+  }
+  const h = harness({ production: true }), before = h.snapshot();
+  for (const body of [{ action: 'staffRecoveryRead', target: 'test', token: h.ctx.configuredReceiverSecret_() },
+    { action: 'staffRecoveryRead', target: 'production', token: 'wrong' },
+    { action: 'staffRecoveryDecide', target: 'production', token: h.ctx.configuredReceiverSecret_(), adminActionToken: h.ctx.configuredAdminActionSecret_(), adminName: 'Trey Martin', decision: decision() }]) {
+    assert.equal(h.post(body).ok, false); assert.equal(h.snapshot(), before);
+  }
+});
+
+test('production reminder can read ordinary and retained Staff questions with new recovery entries off, without permitting mutations', () => {
+  const h = harness({ production: true }); h.properties.set('GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED', 'true');
+  h.properties.delete('GIB_M1_STAFF_RECOVERY_LIVE_ENABLED'); const before = h.snapshot();
+  const result = h.ctx.staffRecoveryOutstanding_(h.spreadsheet);
+  assert.equal(result.ok, true); assert.equal(result.complete, true); assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].kind, 'forgotten-clock-out'); assert.equal(h.snapshot(), before);
+  assert.equal(h.post({ action: 'staffRecoveryRead', target: 'production', token: h.ctx.configuredReceiverSecret_() }).ok, false);
+  h.properties.delete('GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED'); assert.throws(() => h.ctx.staffRecoveryOutstanding_(h.spreadsheet));
+});
 function paged(h, authenticated = false) {
   const body = authenticated ? admin : kiosk;
   const response = h.post(body(authenticated ? 'staffTimeReviewV2' : 'staffClockSnapshotV2'));

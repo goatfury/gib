@@ -1,4 +1,5 @@
-/* Separate, locked TEST projects only. Capture delivery; never sends email. */
+/* Own locked installation only. Captures authoritative reads; the separate
+ * MailApp worker requires its own explicit sending gate. Rehearsals are TEST-only. */
 var GIB_M1_DIGEST_SCHEMA_ = 'm1-attendance-digest-job/v1';
 var GIB_M1_DIGEST_URL_ = 'https://deploy-preview-89--gib-live.netlify.app/api/m1-attendance-digest-job';
 var GIB_M1_DIGEST_PENDING_ = 'M1_TEST_DIGEST_PENDING_';
@@ -29,6 +30,7 @@ function testRevolutionAttendanceDigestHmacVectors() {
 }
 
 function gibM1DigestScope_() {
+  if (typeof gibM1LiveReminderScope_ === 'function') return gibM1LiveReminderScope_();
   if (typeof gibM1RichmondTestScope_ === 'function') return gibM1RichmondTestScope_();
   return typeof gibM1TestReadCallbackEnabled_ === 'function' && gibM1TestReadCallbackEnabled_()
     && EXPECTED_SPREADSHEET_NAME === 'RBJJ M1 — TEST' ? { gym: 'rev', target: 'test', digestUrl: GIB_M1_DIGEST_URL_ } : null;
@@ -38,12 +40,12 @@ function gibM1DigestEnabled_() {
 }
 function gibM1RevolutionDigestEnabled_() {
   var scope = gibM1DigestScope_();
-  return Boolean(scope && scope.gym === 'rev');
+  return Boolean(scope && scope.target === 'test' && scope.gym === 'rev');
 }
 function gibM1DigestBinding_(binding, mode, now) {
   var keys = ['createdAt', 'expiresAt', 'jobDate', 'mode', 'requestId', 'schema', 'target'];
   if (!binding || Object.keys(binding).sort().join('|') !== keys.join('|')
-    || binding.schema !== GIB_M1_DIGEST_SCHEMA_ || binding.target !== 'test' || binding.mode !== mode
+    || binding.schema !== GIB_M1_DIGEST_SCHEMA_ || binding.target !== (gibM1DigestScope_() || {}).target || binding.mode !== mode
     || ['manual', 'scheduled'].indexOf(binding.mode) < 0
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(binding.requestId || '')
     || !Number.isSafeInteger(binding.createdAt) || binding.createdAt > now || binding.expiresAt !== binding.createdAt + 60000
@@ -55,7 +57,7 @@ function gibM1DigestBinding_(binding, mode, now) {
 function gibM1DigestCleanup_(properties, now) {
   // Independent receipt keys retain failures; bounded cleanup never touches Sheets.
   try {
-    var keys = properties.getKeys().filter(function(key) { return /^(M1_TEST_DIGEST_PENDING_|M1_TEST_DIGEST_RECEIPT_)\d{13}_[0-9a-f-]{36}$/.test(key); });
+    var keys = properties.getKeys().filter(function(key) { return /^(M1_(?:TEST|PRODUCTION)_DIGEST_PENDING_|M1_(?:TEST|PRODUCTION)_DIGEST_RECEIPT_)\d{13}_[0-9a-f-]{36}$/.test(key); });
     keys.filter(function(key) { return Number(key.match(/(\d{13})_/)[1]) <= now; }).slice(0, 32).forEach(function(key) { properties.deleteProperty(key); });
     return keys.length;
   } catch (_) { return 200; }
@@ -77,7 +79,7 @@ function gibM1DigestReceipt_(properties, binding, started, code, status, acknowl
   try {
     var now = Date.now();
     if (gibM1DigestCleanup_(properties, now) >= 160) return;
-    properties.setProperty(GIB_M1_DIGEST_RECEIPT_ + String(now + 86400000) + '_' + Utilities.getUuid(),
+    properties.setProperty((gibM1DigestScope_()?.target === 'production' ? 'M1_PRODUCTION_DIGEST_RECEIPT_' : GIB_M1_DIGEST_RECEIPT_) + String(now + 86400000) + '_' + Utilities.getUuid(),
       JSON.stringify({ requestId: binding.requestId, mode: binding.mode, code: code, status: status,
         acknowledged: acknowledged, state: state, elapsedMs: Math.max(0, now - started),
         responseCode: responseCode == null ? null : gibM1DigestResponseCode_(responseCode) }));
@@ -101,13 +103,13 @@ function gibM1DigestDispatch_(binding) {
   var started = Date.now(), properties = PropertiesService.getScriptProperties();
   gibM1DigestBinding_(binding, binding.mode, started);
   if (gibM1DigestCleanup_(properties, started) >= 160) throw new Error('DIGEST_RECEIPT_CAPACITY');
-  var pendingKey = GIB_M1_DIGEST_PENDING_ + String(binding.expiresAt + 3600000) + '_' + binding.requestId;
+  var pendingKey = (scope.target === 'production' ? 'M1_PRODUCTION_DIGEST_PENDING_' : GIB_M1_DIGEST_PENDING_) + String(binding.expiresAt + 3600000) + '_' + binding.requestId;
   var pending = JSON.stringify(binding), previous = properties.getProperty(pendingKey);
   if (previous && previous !== pending) throw new Error('DIGEST_REQUEST_CONFLICT');
   // A durable exact request exists before either read or the external dispatch.
   properties.setProperty(pendingKey, pending);
   if (properties.getProperty(pendingKey) !== pending) throw new Error('DIGEST_PENDING_UNCONFIRMED');
-  var body = { action: 'managerReviewRead', target: 'test', token: configuredReceiverSecret_(),
+  var body = { action: 'managerReviewRead', target: scope.target, token: configuredReceiverSecret_(),
     adminActionToken: configuredAdminActionSecret_(), gym: scope.gym, from: '2026-09-07', to: binding.jobDate, check: null };
   if (scope.gym === 'richmond') { body.installation = scope.installation; body.environment = scope.environment; }
   var attendance;
@@ -134,7 +136,7 @@ function gibM1DigestDispatch_(binding) {
     var result = JSON.parse(response.getContentText());
     responseCode = gibM1DigestResponseCode_(result && result.code);
     var gymSuffix = scope.gym === 'richmond' ? 'richmond-' : '';
-    var messageId = binding.mode === 'scheduled' ? 'm1-test-daily-' + gymSuffix + binding.jobDate : 'm1-test-manual-' + gymSuffix + binding.requestId;
+    var messageId = binding.mode === 'scheduled' ? 'm1-' + scope.target + '-daily-' + gymSuffix + binding.jobDate : 'm1-' + scope.target + '-manual-' + gymSuffix + binding.requestId;
     acknowledged = status >= 200 && status < 300 && result && result.ok === true && result.accepted === true
       && result.requestId === binding.requestId && ['not-due', 'awaiting-configuration', 'captured', 'suppressed', 'failed'].indexOf(result.state) >= 0
       && (['not-due', 'awaiting-configuration'].indexOf(result.state) >= 0 ? result.messageId === null : result.messageId === messageId);
@@ -148,7 +150,7 @@ function gibM1AttendanceDigestCapture_(body) {
   var scope = gibM1DigestScope_();
   var adminAllowed = typeof instructorAdminNameAllowed_ === 'function' ? instructorAdminNameAllowed_(body && body.adminName) : GIB_M1_ADMIN_NAMES_.indexOf(body && body.adminName) >= 0;
   if (!scope || !adminActionAuthorized_(body) || !adminAllowed
-    || (scope.gym === 'richmond' && (!gibM1RichmondEnvelopeValid_(body) || body.gym !== scope.gym))) {
+    || (scope.gym === 'richmond' && (!(scope.target === 'production' ? gibM1RichmondProductionEnvelopeValid_(body) : gibM1RichmondEnvelopeValid_(body)) || body.gym !== scope.gym))) {
     return jsonResult_({ ok: false, code: 'DIGEST_AUTHENTICATION_REQUIRED' });
   }
   try {
@@ -164,8 +166,10 @@ function testRevolutionAttendanceDigestTick() {
 }
 function gibM1AttendanceDigestTick_() {
   if (!gibM1DigestEnabled_()) { console.log('M1_TEST_DIGEST_DISABLED'); return; }
+  var scope = gibM1DigestScope_();
+  if (scope.target === 'production' && PropertiesService.getScriptProperties().getProperty('GIB_M1_ATTENDANCE_DIGEST_LIVE_SCHEDULE_ENABLED') !== 'true') return;
   var now = Date.now();
-  var binding = { schema: GIB_M1_DIGEST_SCHEMA_, target: 'test', requestId: Utilities.getUuid(), mode: 'scheduled',
+  var binding = { schema: GIB_M1_DIGEST_SCHEMA_, target: scope.target, requestId: Utilities.getUuid(), mode: 'scheduled',
     jobDate: Utilities.formatDate(new Date(now), 'America/New_York', 'yyyy-MM-dd'), createdAt: now, expiresAt: now + 60000 };
   var result;
   try { result = gibM1DigestDispatch_(binding); }

@@ -110,7 +110,8 @@ export async function handleAdminVoid(request, dependencies = {}) {
 
   const value = sanitizeInstructorSigninVoidRequest(
     parsed.value,
-    auth.session.adminName
+    auth.session.adminName,
+    runtime
   );
   if (!value) {
     return jsonResponse(400, {

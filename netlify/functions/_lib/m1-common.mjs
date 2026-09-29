@@ -1,3 +1,4 @@
+import { liveControls } from '../../../tools/m1-release-controls.mjs';
 import {
   createHash,
   createHmac,
@@ -14,9 +15,17 @@ import { nativeHttpsControl } from './m1-google-native-control.mjs';
 export const ADMIN_NAMES = Object.freeze(['Andrew Smith', 'Stuart Turner']);
 const RICHMOND_TEST_ADMIN_NAMES = Object.freeze([...ADMIN_NAMES, 'Trey Martin']);
 export function adminNamesForScope(config) {
-  return config?.installationId === 'richmond' && config.environment === 'test'
-    && config.target === 'test' && config.preview === true
+  return config?.installationId === 'richmond' && ((config.environment === 'test' && config.target === 'test' && config.preview === true)
+    || (config.environment === 'production' && config.target === 'production' && config.preview === false && config.writesEnabled === true && config.richmondReviewerEnabled === true))
     ? RICHMOND_TEST_ADMIN_NAMES : ADMIN_NAMES;
+}
+
+// Reading retained Richmond history does not grant a session or mutation rights.
+// Turning off Trey access must not turn his already-audited work unreadable.
+export function auditAdminNamesForScope(config) {
+  if (config?.installationId === 'richmond' && config.environment === 'production'
+    && config.target === 'production' && config.preview === false) return [...ADMIN_NAMES, 'Trey Martin'];
+  return adminNamesForScope(config);
 }
 export const ADMIN_COOKIE = 'gib_m1_admin_session';
 export const ADMIN_REQUEST_HEADER = 'X-GIB-M1-Admin-Request-Token';
@@ -255,6 +264,7 @@ function richmondRuntimeConfig(env, options, profile, target) {
     adminPassphrase,
     deviceToken,
     writesEnabled,
+    richmondReviewerEnabled: production && writesEnabled && liveControls(env, 'richmond').richmondReviewer,
     sessionSecret: options.admin === true
       ? production
         ? writesEnabled

@@ -110,3 +110,13 @@ jobs:
           include-hidden-files: true
           retention-days: 14
           if-no-files-found: error
+      - name: Prepare and validate both disabled live release artifacts (no deployment)
+        run: |
+          node tools/package-m1-disabled-release.mjs "$(git rev-parse HEAD)" .m1-disabled-release .m1-test-packager/node_modules/netlify-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m1-disabled-release-${{ github.event.pull_request.head.sha }}
+          path: .m1-disabled-release/
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: error

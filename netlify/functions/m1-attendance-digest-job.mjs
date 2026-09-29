@@ -27,8 +27,8 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
   if (!scope) return reject(403, 'DIGEST_SCOPE_REQUIRED');
   stage = 'job.runtime';
   const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url,
-    installationId: scope.profile.installationId, environment: scope.profile.environment });
-  if (runtime?.target !== 'test') return reject(503, 'DIGEST_RUNTIME_UNAVAILABLE');
+    installationId: scope.profile.installationId, environment: scope.profile.environment, activation: scope.profile.activation });
+  if (runtime?.target !== scope.target) return reject(503, 'DIGEST_RUNTIME_UNAVAILABLE');
   stage = 'job.envelope';
   const declared = request.headers.get('Content-Length');
   if (!/^application\/json(?:;|$)/i.test(request.headers.get('Content-Type') || '') || (declared && (!/^\d+$/.test(declared) || Number(declared) > 400000))) return reject(400, 'DIGEST_INVALID_ENVELOPE');
@@ -40,7 +40,7 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
     try { const hint = JSON.parse(raw)?.requestId; if (validId(hint)) requestId = hint; } catch {}
     stage = 'job.authentication';
     const job = authenticateDigestJob(raw, request.headers.get(DIGEST_SIGNATURE_HEADER), runtime, clock());
-    if (job.binding.mode === 'rehearsal' && digestGym(scope) !== 'rev') return reject(409, 'DIGEST_GYM_MISMATCH');
+    if (job.binding.mode === 'rehearsal' && (scope.target !== 'test' || digestGym(scope) !== 'rev')) return reject(409, 'DIGEST_GYM_MISMATCH');
     requestId = job.binding.requestId;
     stage = 'job.capture';
     // Await complete central capture before acknowledging the scheduler. No

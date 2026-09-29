@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { digestGym, digestHash } from './m1-attendance-digest.mjs';
+import { digestGym, digestHash, digestPrefix, digestStoreName } from './m1-attendance-digest.mjs';
 
 const SCHEMA = 'm1-mailapp-delivery/v1', RECEIPT = 'm1-mailapp-receipt/v1', HEAD = 'm1-mailapp-status/v1';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -24,8 +24,8 @@ const canonical = message => ({ messageId: message.messageId, from: message.from
 function validMessage(message, policy) {
   try {
     return exact(message, ['messageId', 'hash', 'from', 'to', 'cc', 'subject', 'html', 'text', 'synthetic', 'target', ...(Object.hasOwn(message || {}, 'bcc') ? ['bcc'] : [])])
-      && /^m1-test-scheduled-(?:rev|richmond)-\d{4}-\d{2}-\d{2}$/.test(message.messageId) && iso(message.messageId.slice(-10) + 'T00:00:00.000Z')
-      && message.from === 'revbjjops@gmail.com' && message.target === 'test' && typeof message.synthetic === 'boolean'
+      && /^m1-(?:test|production)-scheduled-(?:rev|richmond)-\d{4}-\d{2}-\d{2}$/.test(message.messageId) && iso(message.messageId.slice(-10) + 'T00:00:00.000Z')
+      && message.from === 'revbjjops@gmail.com' && ['test', 'production'].includes(message.target) && message.messageId.startsWith('m1-' + message.target + '-scheduled-') && (message.target !== 'production' || message.synthetic === false) && typeof message.synthetic === 'boolean'
       && Array.isArray(message.to) && Array.isArray(message.cc)
       && (!Object.hasOwn(message, 'bcc') || Array.isArray(message.bcc) && message.bcc.length <= 1
         && message.bcc.every(address => typeof address === 'string' && address.length <= 254 && /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(address))
@@ -43,15 +43,15 @@ function base(message, state, code, details = {}) {
 function validateInput(message, deps, policy) {
   const gym = digestGym(deps.scope);
   if (!gym) return base(message, 'blocked', 'TEST_INSTALLATION_REQUIRED');
-  if (!message?.messageId?.startsWith('m1-test-scheduled-' + gym + '-')) return base(message, 'blocked', 'MAILAPP_GYM_MISMATCH');
-  if (!validMessage(message, policy)) return base(message, 'blocked', 'INVALID_MAILAPP_MESSAGE');
+  if (!message?.messageId?.startsWith(digestPrefix(deps.scope))) return base(message, 'blocked', 'MAILAPP_GYM_MISMATCH');
+  if (message.target !== deps.scope.target || !validMessage(message, policy)) return base(message, 'blocked', 'INVALID_MAILAPP_MESSAGE');
   if (!stamp(clock(deps))) return base(message, 'blocked', 'CLOCK_UNAVAILABLE');
   return null;
 }
 async function storeFor(deps) {
   if (deps.deliveryStore) return deps.deliveryStore;
   const { getStore } = await import('@netlify/blobs');
-  return getStore({ name: 'gib-m1-digest-test-delivery-v1', consistency: 'strong' });
+  return getStore({ name: digestStoreName(deps.scope, 'delivery'), consistency: 'strong' });
 }
 async function readEntry(store, name) {
   const entry = await store.getWithMetadata(name, { type: 'json', consistency: 'strong' });
@@ -69,7 +69,7 @@ function validBinding(value) {
 }
 function validReply(reply, message) {
   if (!exact(reply, ['ok', 'target', 'gym', 'messageId', 'hash', 'state', 'code', 'attemptedAt', 'completedAt', 'retrySafe'])
-    || reply.target !== 'test' || !['rev', 'richmond'].includes(reply.gym) || !message.messageId.startsWith('m1-test-scheduled-' + reply.gym + '-') || reply.messageId !== message.messageId || reply.hash !== message.hash
+    || reply.target !== message.target || !['rev', 'richmond'].includes(reply.gym) || !message.messageId.startsWith('m1-' + message.target + '-scheduled-' + reply.gym + '-') || reply.messageId !== message.messageId || reply.hash !== message.hash
     || !GOOGLE_CODES.has(reply.code) || reply.ok !== ['MAILAPP_READY', 'MAILAPP_SUBMITTED'].includes(reply.code)
     || !['not-attempted', 'unknown', 'submitted'].includes(reply.state) || reply.retrySafe !== (reply.state === 'not-attempted')
     || reply.attemptedAt !== null && !iso(reply.attemptedAt) || reply.completedAt !== null && !iso(reply.completedAt)

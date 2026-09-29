@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { digestHash, digestDate } from './m1-attendance-digest.mjs';
 
 const PREFIX = 'workflow/history/', ROOT = PREFIX + 'root', SCHEMA = 'm1-workflow-history/v2';
-const ID = /^m1-test-scheduled-(rev|richmond)-(\d{4}-\d{2}-\d{2})$/;
+const ID = /^m1-(?:test|production)-scheduled-(rev|richmond)-(\d{4}-\d{2}-\d{2})$/;
 export const HISTORY_BATCH = 16, HISTORY_RECENT = 8, HISTORY_PAGE = 32;
 const zero = () => ({ failed: 0, unconfirmed: 0, pending: 0, configuration: 0 });
 const fail = () => { throw new Error('WORKFLOW_HISTORY_UNAVAILABLE'); };
@@ -261,7 +261,7 @@ export async function readHistoryOpportunity(store, gym) {
   const entry = await read(store, opportunityKey(gym));
   if (entry && (entry.data.schema !== 'm1-workflow-opportunity/v1' || entry.data.gym !== gym
     || !digestDate(entry.data.opportunityDate) || !digestDate(entry.data.assessmentDate) || entry.data.opportunityDate > entry.data.assessmentDate
-    || entry.data.messageId !== 'm1-test-scheduled-' + gym + '-' + entry.data.opportunityDate
+    || !['test', 'production'].some(target => entry.data.messageId === 'm1-' + target + '-scheduled-' + gym + '-' + entry.data.opportunityDate)
     || !['open', 'clean', 'message'].includes(entry.data.decision) || !Number.isSafeInteger(entry.data.assessedAt)
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(entry.data.requestId) || !/^[a-f0-9]{64}$/.test(entry.data.digestHash))) fail();
   return entry;

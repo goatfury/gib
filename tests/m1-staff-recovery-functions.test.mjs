@@ -5,6 +5,7 @@ import { sanitizeStaffClockPunch, sanitizeStaffRecoveryRequest, sanitizeStaffRec
   sanitizeStaffRecoveryResponse, sanitizeStaffViewPage } from '../netlify/functions/_lib/m1-staff-clock-contracts.mjs';
 import { STAFF_CLOCK_PATH, handleStaffClock } from '../netlify/functions/m1-staff-clock.mjs';
 import { ADMIN_STAFF_TIME_PATH, handleAdminStaffTime } from '../netlify/functions/m1-admin-staff-time.mjs';
+import { PRODUCTION_DEVICE_COOKIE, createProductionDeviceCredential } from '../netlify/functions/_lib/m1-production-runtime.mjs';
 
 const ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
 const NOW = new Date('2026-09-25T15:00:00Z');
@@ -37,6 +38,49 @@ function startResult(items) { const s = start(); return { ...readResult(items), 
 function decisionResult(request = decision()) { const receipt = decisionReceipt(request); return { ...readResult([item({
   status: request.decision === 'approve' ? 'approved' : 'rejected', revision: receipt.revision, decision: receipt })]), receipt }; }
 const options = expected => ({ now: NOW, expected });
+test('enabled production employee and manager recovery use existing device/Admin credentials, exact original IDs and complete confirmation', async () => {
+  const origin = 'https://gib-live.netlify.app', env = {
+    GIB_M1_STAFF_RECOVERY_LIVE_ENABLED: 'true', GIB_M1_PRODUCTION_SYNC_ENABLED: 'true', GIB_M1_PRODUCTION_ORIGIN: origin,
+    GIB_M1_PRODUCTION_WEBHOOK_URL: 'https://script.google.com/macros/s/SYNTHETIC_PRODUCTION_RECOVERY/exec',
+    GIB_M1_PRODUCTION_WEBHOOK_TOKEN: 'isolated-production-recovery-transport-012345',
+    GIB_M1_PRODUCTION_DEVICE_TOKEN: 'isolated-production-device-credential-012345',
+    GIB_M1_ADMIN_ACTION_TOKEN: 'isolated-production-admin-action-012345', GIB_M1_ADMIN_PASSPHRASE: 'isolated production violet meadow'
+  };
+  const runtime = runtimeConfig(env, { admin: true, requestUrl: origin + ADMIN_STAFF_TIME_PATH });
+  const device = createProductionDeviceCredential(env.GIB_M1_PRODUCTION_DEVICE_TOKEN, undefined, +NOW);
+  const convert = value => JSON.parse(JSON.stringify(value).replaceAll('TEST Staff', 'Fixture Employee').replaceAll('"target":"test"', '"target":"production"'));
+  const call = (body, admin = false, authenticated = true) => {
+    const headers = { Host: 'gib-live.netlify.app', Origin: origin, 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json' };
+    if (authenticated) {
+      headers.Cookie = admin ? ADMIN_COOKIE + '=' + createAdminSession('Andrew Smith', runtime.sessionSecret, +NOW, 'A'.repeat(43), runtime)
+        : PRODUCTION_DEVICE_COOKIE + '=' + device;
+      if (admin) headers[ADMIN_REQUEST_HEADER] = 'A'.repeat(43);
+    }
+    return new Request(origin + (admin ? ADMIN_STAFF_TIME_PATH : STAFF_CLOCK_PATH), { method: 'POST', headers, body: JSON.stringify(convert(body)) });
+  };
+  const cases = [[false, start(), startResult(), 'staffRecoveryStart'], [false, { operation: 'recoveryRead' }, readResult(), 'staffRecoveryRead'],
+    [true, decision(), decisionResult(), 'staffRecoveryDecide'], [true, { operation: 'recoveryReview' }, readResult(), 'staffRecoveryReview']];
+  for (const [admin, body, receipt, action] of cases) {
+    const handler = admin ? handleAdminStaffTime : handleStaffClock;
+    const dep = dependencies(convert(receipt), { env, context: { ...CONTEXT, deploy: { context: 'production', published: true } } });
+    const result = await handler(call(body, admin), dep); assert.equal(result.status, 200);
+    const wire = dep.calls[0].body; assert.equal(wire.target, 'production'); assert.equal(wire.action, action);
+    assert.equal(dep.calls[0].url, env.GIB_M1_PRODUCTION_WEBHOOK_URL); assert.equal(wire.token, env.GIB_M1_PRODUCTION_WEBHOOK_TOKEN);
+    if (body.requestId) assert.equal((await result.json()).receipt.requestId, body.requestId);
+    if (admin && body.operation === 'recoveryDecide') assert.equal(wire.adminName, 'Andrew Smith');
+    if (admin) assert.equal(wire.adminActionToken, env.GIB_M1_ADMIN_ACTION_TOKEN);
+    const before = dep.calls.length; assert.equal((await handler(call(body, admin, false), dep)).status, 401); assert.equal(dep.calls.length, before);
+    assert.equal((await handler(call(body, admin), { ...dep, env: { ...env, GIB_M1_STAFF_RECOVERY_LIVE_ENABLED: 'false' } })).status, 404);
+  }
+  const lost = dependencies(new Error('isolated lost confirmation'), { env, context: { ...CONTEXT, deploy: { context: 'production', published: true } } });
+  assert.equal((await handleAdminStaffTime(call(decision(), true), lost)).status, 504);
+  lost.fetch = async (_url, init) => { lost.calls.push({ body: JSON.parse(init.body) }); return new Response(JSON.stringify(convert(decisionResult()))); };
+  assert.equal((await handleAdminStaffTime(call(decision(), true), lost)).status, 200);
+  assert.deepEqual(lost.calls[0].body.decision, lost.calls[1].body.decision, 'reload/recovery retains the original decision');
+  const incomplete = convert(decisionResult()); incomplete.receipt.reason = 'Different evidence';
+  const invalid = dependencies(incomplete, { env, context: { ...CONTEXT, deploy: { context: 'production', published: true } } });
+  assert.equal((await handleAdminStaffTime(call(decision(), true), invalid)).status, 502);
+});
 function req(body, { admin = false, origin = ORIGIN, auth = true, headerToken = 'A'.repeat(43) } = {}) {
   const path = admin ? ADMIN_STAFF_TIME_PATH : STAFF_CLOCK_PATH;
   const headers = { 'Content-Type': 'application/json', Origin: origin, Host: new URL(origin).host, 'Sec-Fetch-Site': 'same-origin' };

@@ -770,6 +770,7 @@
       </header>
 
       <section id="attendanceWorkflow" class="panel section" aria-label="Automatic attendance workflow TEST examples" hidden></section>
+      <section id="attendanceLive" class="panel section" aria-label="Attendance reminder status" hidden></section>
       <section id="attendanceDigest" class="panel section" aria-label="Attendance reminder preview" hidden></section>
       <section id="attendanceEmail" class="panel section" aria-label="Proposed TEST email" hidden></section>
       <section id="attendanceGoogleEmail" class="panel section" aria-label="One approved Google TEST email" hidden></section>
@@ -1100,6 +1101,7 @@
   <script src="./attendance-google-email.js"></script>
   <script src="../attendance-warning.js"></script>
   <script src="./attendance-workflow.js"></script>
+  <script src="./attendance-live.js"></script>
   <script src="./read-callback-proof.js"></script>
   <script>
     (() => {
@@ -1117,7 +1119,15 @@
       const RICHMOND_TEST_ADMIN_ENABLED = IS_RICHMOND && INSTALLATION.environment === 'test'
         && location.protocol === 'https:' && !location.port
         && /^(?:gib-richmond-test|[0-9a-f]{24}--gib-richmond-test)\.netlify\.app$/.test(location.hostname);
-      if (RICHMOND_TEST_ADMIN_ENABLED) {
+      const RICHMOND_LIVE_ADMIN_ENABLED = IS_RICHMOND && INSTALLATION.environment === 'production'
+        && INSTALLATION.activation === 'active' && INSTALLATION.writesEnabled === true
+        && globalThis.M1_MANAGER_REVIEW_CONFIG?.richmondReviewer === true
+        && location.origin === INSTALLATION.allowedOrigin && location.origin === 'https://gib-richmond-live.netlify.app' && location.protocol === 'https:' && !location.port;
+      const RICHMOND_REVIEWER_ENABLED = RICHMOND_TEST_ADMIN_ENABLED || RICHMOND_LIVE_ADMIN_ENABLED;
+      const RICHMOND_REVIEW_HISTORY_ENABLED = RICHMOND_TEST_ADMIN_ENABLED || (IS_RICHMOND
+        && INSTALLATION.environment === 'production' && location.origin === 'https://gib-richmond-live.netlify.app'
+        && location.protocol === 'https:' && !location.port);
+      if (RICHMOND_REVIEWER_ENABLED) {
         const option = document.createElement('option');
         option.value = 'Trey Martin'; option.textContent = 'Trey Martin';
         document.getElementById('loginAdminName').append(option);
@@ -1145,12 +1155,11 @@
       const ADMIN_MUTATIONS_ENABLED = !IS_RICHMOND_PRODUCTION
         || (INSTALLATION.activation === 'active' && INSTALLATION.writesEnabled === true);
       const STAFF_CLOCK_ENABLED = INSTALLATION.featureFlags.staffClock === true;
-      const RECOVERY_PILOT_TARGET = globalThis.M1_MANAGER_REVIEW_CONFIG?.target;
+      const RECOVERY_PILOT_TARGET = globalThis.M1_MANAGER_REVIEW_CONFIG?.staffRecovery === true && location.origin === 'https://gib-live.netlify.app' ? 'production' : globalThis.M1_MANAGER_REVIEW_CONFIG?.target;
       const RECOVERY_PILOT_ENABLED = INSTALLATION.installationId === 'rev'
-        && globalThis.M1_MANAGER_REVIEW_CONFIG?.enabled === true
         && location.protocol === 'https:' && !location.port
-        && RECOVERY_PILOT_TARGET === 'test'
-        && location.origin === 'https://deploy-preview-89--gib-live.netlify.app';
+        && ((globalThis.M1_MANAGER_REVIEW_CONFIG?.enabled === true && RECOVERY_PILOT_TARGET === 'test' && location.origin === 'https://deploy-preview-89--gib-live.netlify.app')
+          || (globalThis.M1_MANAGER_REVIEW_CONFIG?.staffRecovery === true && RECOVERY_PILOT_TARGET === 'production' && location.origin === 'https://gib-live.netlify.app' && INSTALLATION.allowedOrigin === location.origin));
       const ATTENDANCE_REMINDER_TEST_ENABLED = globalThis.M1_MANAGER_REVIEW_CONFIG?.enabled === true
         && RECOVERY_PILOT_TARGET === 'test' && location.protocol === 'https:' && !location.port
         && ((INSTALLATION.installationId === 'rev' && location.origin === 'https://deploy-preview-89--gib-live.netlify.app')
@@ -1293,6 +1302,7 @@
       let staffRecoveryReview = null;
       let attendanceDigest = null;
       let attendanceWorkflow = null;
+      let attendanceLive = null;
       let attendanceEmail = null;
       let attendanceGoogleEmail = null;
       let currentDate = '';
@@ -1958,7 +1968,7 @@
           && value.actionTime !== ''
           && value.classDate === expectedDate
           && (['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
-            || (typeof RICHMOND_TEST_ADMIN_ENABLED !== 'undefined' && RICHMOND_TEST_ADMIN_ENABLED
+            || (typeof RICHMOND_REVIEW_HISTORY_ENABLED !== 'undefined' && RICHMOND_REVIEW_HISTORY_ENABLED
               && value.adminName === 'Trey Martin' && value.site === 'Richmond'))
           && typeof value.adminName === 'string'
           && value.adminName.length >= 1
@@ -2009,8 +2019,8 @@
           value.ok !== true
           || typeof value.test !== 'boolean'
           || !(['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
-            || (typeof RICHMOND_TEST_ADMIN_ENABLED !== 'undefined' && RICHMOND_TEST_ADMIN_ENABLED
-              && value.test === true && value.adminName === 'Trey Martin'))
+            || (typeof RICHMOND_REVIEWER_ENABLED !== 'undefined' && RICHMOND_REVIEWER_ENABLED
+              && value.test === testMode && value.adminName === 'Trey Martin'))
           || value.date !== expectedDate
           || !Array.isArray(value.records)
           || !Array.isArray(value.warnings)
@@ -2159,8 +2169,8 @@
           value.ok !== true
           || typeof value.test !== 'boolean'
           || !(['Andrew Smith', 'Stuart Turner'].includes(value.adminName)
-            || (typeof RICHMOND_TEST_ADMIN_ENABLED !== 'undefined' && RICHMOND_TEST_ADMIN_ENABLED
-              && value.test === true && value.adminName === 'Trey Martin'))
+            || (typeof RICHMOND_REVIEWER_ENABLED !== 'undefined' && RICHMOND_REVIEWER_ENABLED
+              && value.test === testMode && value.adminName === 'Trey Martin'))
           || value.instructor !== expectedInstructor
           || value.date !== expectedDate
           || !Array.isArray(value.selectedDateRecords)
@@ -3825,6 +3835,7 @@
         if (typeof staffRecoveryReview !== 'undefined' && staffRecoveryReview) staffRecoveryReview.clear();
         if (typeof attendanceDigest !== 'undefined' && attendanceDigest) attendanceDigest.clear();
         if (typeof attendanceWorkflow !== 'undefined' && attendanceWorkflow) attendanceWorkflow.clear();
+        if (typeof attendanceLive !== 'undefined' && attendanceLive) attendanceLive.clear();
         if (typeof attendanceEmail !== 'undefined' && attendanceEmail) attendanceEmail.clear();
         if (typeof attendanceGoogleEmail !== 'undefined' && attendanceGoogleEmail) attendanceGoogleEmail.clear();
         if (typeof closeRemovalForLogout === 'function') closeRemovalForLogout();
@@ -3946,6 +3957,7 @@
         if (typeof staffRecoveryReview !== 'undefined' && staffRecoveryReview) void staffRecoveryReview.open();
         if (typeof attendanceDigest !== 'undefined' && attendanceDigest) void attendanceDigest.open();
         if (typeof attendanceWorkflow !== 'undefined' && attendanceWorkflow) void attendanceWorkflow.open();
+        if (typeof attendanceLive !== 'undefined' && attendanceLive) void attendanceLive.open();
         if (attendanceEmail && location.hash === '#attendanceEmail') {
           void attendanceEmail.open().then(loaded => {
             if (loaded && location.hash === '#attendanceEmail') window.requestAnimationFrame(() => $('#attendanceEmail').scrollIntoView({ block: 'start' }));
@@ -6901,7 +6913,7 @@
         if (!deployPreviewHost) return false;
         $('#passphraseField').hidden = true;
         $('#loginButton').hidden = true;
-        $('#loginCopy').textContent = typeof RICHMOND_TEST_ADMIN_ENABLED !== 'undefined' && RICHMOND_TEST_ADMIN_ENABLED
+        $('#loginCopy').textContent = typeof RICHMOND_REVIEWER_ENABLED !== 'undefined' && RICHMOND_REVIEWER_ENABLED
           ? 'Choose Andrew Smith, Stuart Turner or Trey Martin, then enter the isolated Richmond TEST Admin. Production credentials are not used.'
           : 'Choose Andrew Smith or Stuart Turner, then enter the isolated TEST Admin. Production credentials are not used on this Deploy Preview.';
         $('#testEntryHeading').textContent = IS_RICHMOND
@@ -7283,6 +7295,10 @@
       attendanceWorkflow = globalThis.GIBM1AttendanceWorkflow?.create({
         root: $('#attendanceWorkflow'), request: requestJson, site: SITE, target: RECOVERY_PILOT_TARGET,
         enabled: ATTENDANCE_REMINDER_TEST_ENABLED, getAdmin: () => currentAdminName, getSession: () => adminRequestToken,
+        onUnauthorized: () => setLoggedOut('Admin login required.')
+      });
+      attendanceLive = globalThis.GIBM1AttendanceLive?.create({
+        root: $('#attendanceLive'), request: requestJson, getAdmin: () => currentAdminName, getSession: () => adminRequestToken,
         onUnauthorized: () => setLoggedOut('Admin login required.')
       });
       managerDayReview = globalThis.GIBM1ManagerReview?.create({

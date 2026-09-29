@@ -7,6 +7,8 @@ import { createHash } from 'node:crypto';
 const source = readFileSync(new URL('../integrations/google-apps-script/GibM1MailApp.gs', import.meta.url), 'utf8');
 const receiver = readFileSync(new URL('../integrations/google-apps-script/GibM1Receiver.gs', import.meta.url), 'utf8');
 const richmondWrapper = readFileSync(new URL('../integrations/google-apps-script/richmond-test/Code.gs', import.meta.url), 'utf8');
+const liveWrapper = gym => readFileSync(new URL('../integrations/google-apps-script/' + (gym === 'richmond' ? 'richmond-production' : 'production') + '/Code.gs', import.meta.url), 'utf8');
+const liveFeatures = readFileSync(new URL('../integrations/google-apps-script/GibM1LiveFeatures.gs', import.meta.url), 'utf8');
 const authorization = receiver.match(/^function adminActionAuthorized_\(body\) \{[\s\S]*?^\}/m)[0];
 const SENDER = 'revbjjops@gmail.com', ID = '00000000-0000-4000-8000-000000000001';
 const START = Date.parse('2026-09-28T01:00:00Z'), READY = 'GIB_M1_MAILAPP_TEST_LEDGER_READY';
@@ -18,6 +20,69 @@ function message(change = {}) {
     text: 'Synthetic café — second instructor needs review.', synthetic: true, target: 'test', ...change };
   return { ...value, hash: createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex') };
 }
+
+test('both real production wrappers can submit exactly once using fake MailApp, own recipients and hidden BCC', () => {
+  for (const richmond of [false, true]) {
+    const h = harness({ production: true, richmond });
+    const ready = h.request('attendanceMailStatus'); assert.equal(ready.code, 'MAILAPP_READY');
+    assert.equal(ready.target, 'production'); assert.equal(ready.gym, richmond ? 'richmond' : 'rev');
+    assert.equal(h.request().state, 'submitted');
+    const retained = plain(h.sheet.rows);
+    h.advance(86400000);
+    assert.equal(h.request().state, 'submitted', 'expired leases cannot resend an attempted day');
+    assert.deepEqual(h.sheet.rows, retained); assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0].to, richmond ? 'info@richmondbjj.com' : 'info@revolutionbjj.com');
+    assert.equal(h.calls[0].bcc, 'andrew@revolutionbjj.com');
+    assert.doesNotMatch(h.calls[0].body + h.calls[0].htmlBody, /andrew@|deploy-preview|gib-richmond-test/);
+    assert.equal(h.sheet.rows.length, 3);
+    assert.throws(() => h.context.authorizeRevolutionTestMailApp());
+    assert.throws(() => h.context.prepareRevolutionTestMailAppLedger());
+    assert.equal(h.context.authorizeProductionMailApp().senderVerified, true); assert.equal(h.calls.length, 1);
+  }
+});
+
+test('production gates reject wrong execution accounts, recipients, gyms, TEST identities, links and invalid controls before a call', () => {
+  for (const richmond of [false, true]) {
+    const actor = harness({ production: true, richmond, actor: 'someone@example.invalid' });
+    assert.equal(actor.request().code, 'MAILAPP_SENDER_UNVERIFIED'); assert.equal(actor.calls.length, 0);
+    assert.throws(() => actor.context.authorizeProductionMailApp(), /MAILAPP_SENDER_UNVERIFIED/);
+    for (const property of ['GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED', 'GIB_M1_MAILAPP_LIVE_SEND_ENABLED']) {
+      for (const value of [null, 'TRUE', 'active', 'false']) {
+        const h = harness({ production: true, richmond }); value === null ? h.properties.delete(property) : h.properties.set(property, value);
+        assert.notEqual(h.request().state, 'submitted'); assert.equal(h.calls.length, 0); assert.equal(h.sheet.rows.length, 1);
+      }
+    }
+    for (const patch of [{ target: 'test' }, { gym: richmond ? 'rev' : 'richmond' }, { token: 'wrong' }, { adminActionToken: 'wrong' }, ...(richmond ? [{ environment: 'test' }, { installation: 'rev' }] : [])]) {
+      const h = harness({ production: true, richmond }); assert.notEqual(h.request('attendanceMailSend', patch).state, 'submitted'); assert.equal(h.calls.length, 0);
+    }
+    for (const address of ['someone@example.invalid', richmond ? 'info@revolutionbjj.com' : 'info@richmondbjj.com']) {
+      const h = harness({ production: true, richmond }); h.properties.set('GIB_M1_MAILAPP_LIVE_RECIPIENTS_JSON', JSON.stringify({ to: [address], cc: [], bcc: ['andrew@revolutionbjj.com'] }));
+      assert.equal(h.request().code, 'MAILAPP_RECIPIENTS_UNAPPROVED'); assert.equal(h.calls.length, 0);
+    }
+    const links = harness({ production: true, richmond }), original = message({ target: 'production', synthetic: false, messageId: 'm1-production-scheduled-' + (richmond ? 'richmond' : 'rev') + '-2026-09-27', to: [richmond ? 'info@richmondbjj.com' : 'info@revolutionbjj.com'], bcc: ['andrew@revolutionbjj.com'] });
+    assert.equal(links.request('attendanceMailSend', { message: message({ ...original, html: '<a href="https://gib-richmond-test.netlify.app/m1/admin/">wrong environment</a>' }) }).code, 'MAILAPP_MESSAGE_INVALID'); assert.equal(links.calls.length, 0);
+    const testId = harness({ production: true, richmond }); assert.equal(testId.request('attendanceMailSend', { message: message() }).code, 'MAILAPP_MESSAGE_INVALID'); assert.equal(testId.events.length, 0);
+  }
+});
+
+test('production interrupted claims, overlapping requests and lost final writes retain original evidence without a second send', () => {
+  for (const richmond of [false, true]) {
+    for (const options of [{ markerWrite: 'throw-after' }, { sendThrows: true }, { resultWrite: 'throw-after' }, { resultWrite: 'throw-before' }]) {
+      const h = harness({ production: true, richmond, ...options }); const first = h.request();
+      assert.equal(first.state, 'unknown'); const count = h.calls.length, rows = plain(h.sheet.rows);
+      h.settings.markerWrite = null; h.settings.resultWrite = null; h.settings.sendThrows = false; h.advance(3 * 86400000);
+      assert.ok(['unknown', 'submitted'].includes(h.request('attendanceMailStatus').state));
+      assert.ok(['unknown', 'submitted'].includes(h.request().state));
+      assert.equal(h.calls.length, count); assert.deepEqual(h.sheet.rows, rows);
+    }
+    const h = harness({ production: true, richmond });
+    h.settings.onSend = () => { assert.equal(h.request().state, 'unknown'); };
+    assert.equal(h.request().state, 'submitted'); assert.equal(h.calls.length, 1); assert.equal(h.sheet.rows.length, 3);
+    const corrupt = harness({ production: true, richmond, markerWrite: 'partial' });
+    assert.equal(corrupt.request().state, 'unknown'); corrupt.settings.markerWrite = null;
+    assert.equal(corrupt.request().state, 'unknown'); assert.equal(corrupt.calls.length, 0);
+  }
+});
 
 test('Richmond MailApp is scoped and disabled even with an enabled Script Property', () => {
   const h = harness({ richmond: true });
@@ -68,6 +133,12 @@ function harness(options = {}) {
   if (settings.ready !== false) properties.set(READY, 'v1');
   if (settings.enabled !== false) properties.set(SEND, 'true');
   properties.set(RECIPIENTS, JSON.stringify({ to: ['qa@example.com'], cc: [] }));
+  if (settings.production) {
+    properties.delete('GIB_M1_RICHMOND_TEST_SPREADSHEET_ID');
+    const locks = settings.richmond ? { GIB_M1_DEPLOYMENT_TARGET_LOCK: 'production', GIB_M1_INSTALLATION_LOCK: 'richmond', GIB_M1_ENVIRONMENT_LOCK: 'production', GIB_M1_RICHMOND_PRODUCTION_PROVISIONING_CLOSED: 'richmond-production-v1', GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_ID: 'synthetic-richmond-live-sheet', GIB_M1_RICHMOND_PRODUCTION_WRITES_ENABLED: 'true' }
+      : { GIB_M1_DEPLOYMENT_TARGET_LOCK: 'production', GIB_M1_PROVISIONING_CLOSED: 'closed-v1', GIB_M1_PRODUCTION_SPREADSHEET_ID: 'synthetic-rev-live-sheet' };
+    for (const [key, value] of Object.entries({ ...locks, GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED: 'true', GIB_M1_MAILAPP_LIVE_LEDGER_READY: 'v1', GIB_M1_MAILAPP_LIVE_SEND_ENABLED: 'true', GIB_M1_MAILAPP_LIVE_RECIPIENTS_JSON: JSON.stringify({ to: [settings.richmond ? 'info@richmondbjj.com' : 'info@revolutionbjj.com'], cc: [], bcc: ['andrew@revolutionbjj.com'] }) })) properties.set(key, value);
+  }
   const propertyStore = { getProperty: key => properties.get(key) ?? null,
     setProperty(key, value) { if (settings.propertyWriteFails) throw new Error('private property error'); properties.set(key, value); events.push(['property', key]); } };
   const sheet = { rows: [], getLastRow() { return this.rows.length; }, getLastColumn() { return Math.max(0, ...this.rows.map(row => row.length)); },
@@ -122,18 +193,20 @@ function harness(options = {}) {
     Date: class extends Date { constructor(...args) { super(...(args.length ? args : [stamp])); } static now() { return stamp; } },
     EXPECTED_SPREADSHEET_NAME: settings.sheetName || 'RBJJ M1 — TEST',
     GIB_M1_TARGET_LOCK_PROPERTY_: 'GIB_M1_DEPLOYMENT_TARGET_LOCK',
-    configuredDeploymentTarget_: () => settings.target || 'test', deploymentTargetAllowed_: value => value === (settings.target || 'test') && settings.targetLock !== false,
+    configuredDeploymentTarget_: () => settings.target || (settings.production ? 'production' : 'test'), deploymentTargetAllowed_: value => value === (settings.target || (settings.production ? 'production' : 'test')) && settings.targetLock !== false,
     configuredReceiverSecret_: () => 'synthetic-transport', configuredAdminActionSecret_: () => 'synthetic-admin',
     cleanText_: value => typeof value === 'string' ? value.trim() : '', scriptProperty_: () => '',
+    exactText_: value => typeof value === 'string' ? value : '',
     GIB_M1_LEGACY_KIOSK_PROPERTY_: 'synthetic-legacy', GIB_M1_RECOVERY_PROPERTY_: 'synthetic-recovery',
     configuredSecretsArePairwiseDistinct_: values => { const configured = values.filter(Boolean); return new Set(configured).size === configured.length; },
     constantTimeTextEqual_: (a, b) => a === b,
     PropertiesService: { getScriptProperties: () => propertyStore }, LockService: { getScriptLock: () => lock },
     Session: { getEffectiveUser: () => ({ getEmail() { if (settings.actorThrows) throw new Error('private auth error'); return settings.actor ?? SENDER; } }) },
     Utilities: { DigestAlgorithm: { SHA_256: 'SHA_256' }, Charset: { UTF_8: 'UTF-8' },
+      formatDate(value, zone, format) { const fields = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(value); const parts = Object.fromEntries(fields.map(part => [part.type, part.value])); return format === 'HH:mm' ? parts.hour + ':' + parts.minute : parts.year + '-' + parts.month + '-' + parts.day; },
       computeDigest(algorithm, value, charset) { assert.equal(algorithm, 'SHA_256'); assert.equal(charset, 'UTF-8'); return [...createHash('sha256').update(value, 'utf8').digest()].map(byte => byte > 127 ? byte - 256 : byte); } },
     SpreadsheetApp: { flush() { if (settings.flushFailsAt === currentStage) throw new Error('private flush error'); events.push(['flush', currentStage]); } },
-    openExpectedSpreadsheet_(body) { assert.equal(body.target, 'test'); assert.equal(held, true); if (settings.openFails) throw new Error('private sheet error'); return book; },
+    openExpectedSpreadsheet_(body) { assert.equal(body.target, settings.production ? 'production' : 'test'); assert.equal(held, true); if (settings.openFails) throw new Error('private sheet error'); return book; },
     jsonResult_: value => ({ getContent: () => JSON.stringify(value) }),
     MailApp: {
       getRemainingDailyQuota() { assert.equal(held, false, 'remote quota read must not hold the shared attendance lock'); events.push(['quota']);
@@ -148,13 +221,16 @@ function harness(options = {}) {
     }
   });
   vm.runInContext(authorization + '\n' + source, context);
-  if (settings.richmond) vm.runInContext(richmondWrapper, context);
+  if (settings.production) vm.runInContext(liveWrapper(settings.richmond ? 'richmond' : 'rev') + '\n' + liveFeatures, context);
+  else if (settings.richmond) vm.runInContext(richmondWrapper, context);
   if (present && settings.emptySheet !== true) sheet.rows = [plain(context.GIB_M1_MAILAPP_HEADERS_)];
   function request(action = 'attendanceMailSend', patch = {}) {
-    return JSON.parse(context.gibM1MailAppAction_({ action, target: 'test', gym: settings.richmond ? 'richmond' : 'rev', token: 'synthetic-transport', adminActionToken: 'synthetic-admin',
+    const target = settings.production ? 'production' : 'test', gym = settings.richmond ? 'richmond' : 'rev';
+    const prepared = settings.production ? message({ messageId: 'm1-production-scheduled-' + gym + '-2026-09-27', target, synthetic: false, to: [gym === 'rev' ? 'info@revolutionbjj.com' : 'info@richmondbjj.com'], bcc: ['andrew@revolutionbjj.com'], subject: 'Isolated attendance fixture', html: '<p>Fixture <a href="' + (gym === 'rev' ? 'https://gib-live.netlify.app' : 'https://gib-richmond-live.netlify.app') + '/m1/admin/">Review</a></p>', text: 'Fixture ' + (gym === 'rev' ? 'https://gib-live.netlify.app' : 'https://gib-richmond-live.netlify.app') + '/m1/admin/' }) : message(settings.richmond ? { messageId: 'm1-test-scheduled-richmond-2026-09-27' } : {});
+    return JSON.parse(context.gibM1MailAppAction_({ action, target, gym, token: 'synthetic-transport', adminActionToken: 'synthetic-admin',
       binding: { schema: 'm1-mailapp-request/v1', requestId: ID, createdAt: stamp, expiresAt: stamp + 60000 },
-      message: message(settings.richmond ? { messageId: 'm1-test-scheduled-richmond-2026-09-27' } : {}),
-      ...(settings.richmond ? { installation: 'richmond', environment: 'test' } : {}), ...patch }).getContent());
+      message: prepared,
+      ...(settings.richmond ? { installation: 'richmond', environment: target } : {}), ...patch }).getContent());
   }
   return { context, settings, events, calls, properties, sheet, reads, logs, request, advance: ms => { stamp += ms; }, deleteSheet: () => { present = false; }, held: () => held };
 }

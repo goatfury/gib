@@ -14,7 +14,7 @@ async function build(environment) {
     await mkdir(join(root, 'tools'));
     await mkdir(join(root, 'm1'));
     await mkdir(join(root, 'netlify/functions/_lib'), { recursive: true });
-    for (const file of ['tools/build-m1-installation-profile.mjs', 'm1/installation-profile-core.mjs']) {
+    for (const file of ['tools/build-m1-installation-profile.mjs', 'm1/installation-profile-core.mjs', 'tools/m1-release-controls.mjs']) {
       await writeFile(join(root, file), await readFile(new URL('../' + file, import.meta.url)));
     }
     const env = { ...process.env };
@@ -45,10 +45,25 @@ test('real build requires a separate explicit production flag and keeps generate
   ]) {
     const result = await build(env);
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.config, expected);
+    assert.deepEqual(result.config, { ...expected, staffRecovery: false, richmondReviewer: false, reminders: false });
     assert.equal(result.frozen, true);
     assert.equal(result.server, `export const MANAGER_REVIEW_ENABLED = ${expected.enabled};\nexport const MANAGER_REVIEW_TARGET = ${JSON.stringify(expected.target)};\n`);
   }
+});
+
+test('actual production build enables only exact independent live controls on the correct active profile', async () => {
+  const controls = { GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED: 'true', GIB_M1_STAFF_RECOVERY_LIVE_ENABLED: 'true', GIB_RICHMOND_TREY_ADMIN_LIVE_ENABLED: 'true' };
+  for (const gym of ['rev', 'richmond']) {
+    const env = { CONTEXT: 'production', GIB_M1_INSTALLATION: gym, GIB_M1_ENVIRONMENT: 'production', GIB_RICHMOND_PRODUCTION_ACTIVATION: 'active', GIB_RICHMOND_PRODUCTION_WRITE_ENABLED: 'true', ...controls };
+    const enabled = await build(env); assert.equal(enabled.error, undefined);
+    assert.deepEqual(enabled.config, { enabled: false, target: 'disabled', reminders: true, staffRecovery: gym === 'rev', richmondReviewer: gym === 'richmond' });
+    for (const value of [undefined, 'FALSE', 'TRUE', 'active']) {
+      const invalid = await build({ ...env, GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED: value, GIB_M1_STAFF_RECOVERY_LIVE_ENABLED: value, GIB_RICHMOND_TREY_ADMIN_LIVE_ENABLED: value });
+      assert.deepEqual(invalid.config, { enabled: false, target: 'disabled', staffRecovery: false, richmondReviewer: false, reminders: false });
+    }
+    assert.match((await build({ ...env, CONTEXT: 'deploy-preview' })).error, /Live features require/);
+  }
+  assert.match((await build({ CONTEXT: 'production', GIB_M1_INSTALLATION: 'richmond', GIB_M1_ENVIRONMENT: 'production', ...controls })).error, /Live features require/);
 });
 
 test('real build rejects mixed flags, preview live activation and either Richmond live environment', async () => {

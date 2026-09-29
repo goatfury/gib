@@ -24,7 +24,7 @@ export async function handleAttendanceWarning(request, dependencies = {}) {
   if (!scope) return jsonResponse(403, { ok: false, message: 'An enabled TEST installation is required.' });
   try {
     const health = await (dependencies.readHealth || workflowHealth)(scope, { ...dependencies, scope });
-    if (!health || health.ok !== true || health.target !== 'test' || !Array.isArray(health.codes)
+    if (!health || health.ok !== true || health.target !== scope.target || !Array.isArray(health.codes)
       || !Object.hasOwn(STATE_WARNING, health.state)
       || ['pendingCount', 'failedCount', 'unconfirmedCount'].some(key => !Number.isSafeInteger(health[key]) || health[key] < 0)
       || health.codes.some(code => !Object.hasOwn(ATTENDANCE_WARNING_TEXT, code))
@@ -40,11 +40,11 @@ export async function handleAttendanceWarning(request, dependencies = {}) {
     // Construct the public response from fixed categories, never forward private
     // message bodies, names, recipients, permanent IDs or provider receipts.
     const warnings = codes.map(code => ({ code, message: ATTENDANCE_WARNING_TEXT[code] }));
-    return jsonResponse(200, { ok: true, target: 'test', gym: scope.profile.installationId,
+    return jsonResponse(200, { ok: true, target: scope.target, gym: scope.profile.installationId,
       status: codes.length ? (codes.every(code => code === 'CONFIGURATION_REQUIRED') ? 'not-configured' : 'attention') : 'clear',
       warnings, checkedAt: health.checkedAt });
   } catch {
-    return jsonResponse(503, { ok: false, target: 'test', gym: scope.profile.installationId, message: 'Attendance check status unavailable.' });
+    return jsonResponse(503, { ok: false, target: scope.target, gym: scope.profile.installationId, message: 'Attendance check status unavailable.' });
   }
 }
 export default (request, context) => handleAttendanceWarning(request, { context, env: process.env });

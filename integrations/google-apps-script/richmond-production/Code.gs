@@ -107,8 +107,13 @@ function gibM1RichmondProductionObviousTestValue_(value) {
 
 function gibM1RichmondProductionActionValid_(body) {
   var action = cleanText_(body && body.action);
-  if (['kioskSignIn', 'dailyReview', 'instructorSearch', 'addMissedInstructor', 'voidInstructorSignin', 'ledgerStatus'].indexOf(action) === -1) {
+  if (['kioskSignIn', 'dailyReview', 'instructorSearch', 'addMissedInstructor', 'voidInstructorSignin', 'ledgerStatus', 'managerReviewRead', 'attendanceDigestCapture', 'attendanceMailSend', 'attendanceMailStatus'].indexOf(action) === -1) {
     return false;
+  }
+  if (['managerReviewRead', 'attendanceDigestCapture', 'attendanceMailSend', 'attendanceMailStatus'].indexOf(action) >= 0) {
+    if (typeof gibM1LiveReminderScope_ !== 'function' || !gibM1LiveReminderScope_() || body.gym !== 'richmond') return false;
+    if (action === 'managerReviewRead') return body.check === null;
+    return true;
   }
   if (action === 'ledgerStatus') {
     return gibM1RichmondProductionExactKeys_(body, [
@@ -185,6 +190,22 @@ function gibM1RichmondProductionLedgerSheetRows_(spreadsheet, name, headers) {
   return Math.max(0, sheet.getLastRow() - 1);
 }
 
+// Optional journals are checked, not silently tolerated. They remain valid
+// retained history after their feature is switched off.
+function gibM1RichmondProductionSheetTabsValid_(spreadsheet) {
+  var names = spreadsheet.getSheets().map(function(sheet) { return sheet.getName(); }).sort();
+  if (names.indexOf('Admin Audit') < 0 || names.indexOf('Signins') < 0 || new Set(names).size !== names.length) return false;
+  var optional = {
+    'Manager Reviews': ['Request ID', 'Gym', 'Date', 'Revision', 'Reviewer', 'Time', 'Action', 'Attendance hash', 'Schedule hash', 'Decisions', 'Reviewed data', 'Request hash'],
+    'MailApp Attempts': ['Message ID', 'Event', 'Payload Hash', 'Gym', 'Opportunity Date', 'Request ID', 'Attempted At', 'Completed At', 'Code', 'Sender']
+  };
+  return names.every(function(name) {
+    if (name === 'Admin Audit' || name === 'Signins') return true;
+    if (!Object.prototype.hasOwnProperty.call(optional, name)) return false;
+    try { gibM1RichmondProductionLedgerSheetRows_(spreadsheet, name, optional[name]); return true; } catch (_) { return false; }
+  });
+}
+
 function gibM1RichmondProductionLedgerStatus_() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return rejectedAuthResult_();
@@ -200,7 +221,7 @@ function gibM1RichmondProductionLedgerStatus_() {
     var sheetNames = spreadsheet.getSheets().map(function(sheet) {
       return sheet.getName();
     }).sort();
-    if (sheetNames.join('|') !== 'Admin Audit|Signins') {
+    if (!gibM1RichmondProductionSheetTabsValid_(spreadsheet)) {
       throw new Error('Richmond production Sheet tabs are invalid.');
     }
     var signinsRows = gibM1RichmondProductionLedgerSheetRows_(

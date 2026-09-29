@@ -163,7 +163,7 @@ test('client exposes Trey only on the actual Richmond TEST profile and hosts', (
 test('actual client Daily Review validators recognize scoped Trey history without relaxing retained audits', () => {
   const source = html.slice(html.indexOf('function exactObjectKeys('), html.indexOf('function validAdminAdditionResponse('));
   for (const enabled of [false, true]) {
-    const context = vm.createContext({ REVIEW_NOTES_MAX_LENGTH: 800, RICHMOND_TEST_ADMIN_ENABLED: enabled });
+    const context = vm.createContext({ REVIEW_NOTES_MAX_LENGTH: 800, RICHMOND_REVIEWER_ENABLED: enabled, RICHMOND_REVIEW_HISTORY_ENABLED: enabled, testMode: true });
     vm.runInContext(source + '\nthis.validate = validDailyReviewResponse;', context);
     const response = { ...daily(), test: true, adminName: 'Trey Martin' };
     assert.equal(context.validate(response, audit.classDate), enabled);

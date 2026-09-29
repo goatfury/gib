@@ -34,7 +34,11 @@ var GIB_M1_ADMIN_NAMES_ = ['Andrew Smith', 'Stuart Turner'];
 
 // The shared list remains the Revolution/Staff contract. Richmond's additional
 // instructor reviewer exists only inside its permanently provisioned TEST scope.
-function instructorAdminNameAllowed_(name, site) {
+function instructorAdminNameAllowed_(name, site, history) {
+  if (name === 'Trey Martin' && (site === undefined || site === 'Richmond') && typeof gibM1LiveInstallation_ === 'function') {
+    var live = gibM1LiveInstallation_();
+    return Boolean(live && live.gym === 'richmond' && (history === true || gibM1LiveTreyEnabled_()));
+  }
   if (GIB_M1_ADMIN_NAMES_.indexOf(name) >= 0) return true;
   if (name !== 'Trey Martin' || (site !== undefined && site !== 'Richmond')
     || configuredDeploymentTarget_() !== 'test'
@@ -974,7 +978,7 @@ function adminAttribution_(record) {
   var match = notes.match(
     /^Admin-added \| Admin: ([^|]+) \| Reason: ([^|]+)(?: \| Notes: ([\s\S]*))?$/
   );
-  if (!match || !instructorAdminNameAllowed_(cleanText_(match[1]), exactText_(record && record.site))) return null;
+  if (!match || !instructorAdminNameAllowed_(cleanText_(match[1]), exactText_(record && record.site), true)) return null;
   return {
     adminName: cleanText_(match[1]),
     reason: cleanText_(match[2]),
@@ -1938,7 +1942,7 @@ function readAdminAuditHistory_(spreadsheet, date, options) {
         || actionNumber < 1
         || Math.floor(actionNumber) !== actionNumber
         || actionNumber > GIB_M1_MAX_SAFE_INTEGER_
-        || !instructorAdminNameAllowed_(cleanText_(row[1]), exactText_(row[6]))
+        || !instructorAdminNameAllowed_(cleanText_(row[1]), exactText_(row[6]), true)
         || !actionTime
         || !exactText_(row[3])
         || exactText_(row[3]).length > GIB_M1_INSTRUCTOR_MAX_
@@ -2376,7 +2380,8 @@ function validateRichmondInstructorVoid_(body, spreadsheet) {
     || value.reason !== body.reason
     || !GIB_M1_PRODUCTION_ROW_ID_PATTERN_.test(value.rowId)
     || value.requestId !== 'gib-m1-admin-void-' + value.rowId
-    || GIB_M1_ADMIN_NAMES_.indexOf(value.adminName) === -1
+    || !(GIB_M1_ADMIN_NAMES_.indexOf(value.adminName) >= 0 || value.adminName === 'Trey Martin'
+      && typeof gibM1LiveTreyEnabled_ === 'function' && gibM1LiveTreyEnabled_())
     || value.reason.length < 3
     || spreadsheet.getName() !== GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_TITLE_
   ) return null;
@@ -2525,7 +2530,7 @@ function voidInstructorSigninAction_(body) {
     var sheetNames = spreadsheet.getSheets().map(function(candidateSheet) {
       return candidateSheet.getName();
     }).sort();
-    if (sheetNames.join('|') !== 'Admin Audit|Signins') {
+    if (!gibM1RichmondProductionSheetTabsValid_(spreadsheet)) {
       throw new Error('Richmond production Sheet tabs are invalid.');
     }
 

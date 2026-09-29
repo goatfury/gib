@@ -26,7 +26,7 @@ async function fixture(t) {
     assert.ok(path.basename(resolved).startsWith(TEMP_PREFIX));
     await rm(resolved, { recursive: true, force: true });
   });
-  const sources = [...PUBLIC_FILES, 'package.json', 'tools/build-public.mjs', 'tools/build-m1-installation-profile.mjs'];
+  const sources = [...PUBLIC_FILES, 'tools/m1-release-controls.mjs', 'package.json', 'tools/build-public.mjs', 'tools/build-m1-installation-profile.mjs'];
   for (const file of sources) {
     const destination = path.join(root, ...file.split('/'));
     await mkdir(path.dirname(destination), { recursive: true });

@@ -10,7 +10,7 @@ const TIMEZONE = 'America/New_York';
 const MAX_DATES = 3661;
 const MAX_BYTES = 40000;
 const LAST_DATE = datePlus(REVIEW_START, MAX_DATES - 1);
-const keyFor = (gym, date) => `schedules/test/${gym}/${date}`;
+const keyFor = (gym, date, target) => `schedules/${target}/${gym}/${date}`;
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const iso = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 const identity = label => label.normalize('NFKC').replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase();
@@ -61,48 +61,48 @@ function normalizeBase(date, base) {
     return { label: object.label, startAt: object.startAt, endAt: object.endAt, cancelled: object.cancelled };
   }).sort((a, b) => a.startAt.localeCompare(b.startAt) || a.label.localeCompare(b.label));
 }
-function observation(gym, date, base, observedAt, sourceVersion, now) {
+function observation(gym, date, base, observedAt, sourceVersion, now, target) {
   if (!iso(observedAt) || Date.parse(observedAt) > now || localNow(new Date(observedAt)).date < date
     || typeof sourceVersion !== 'string' || !sourceVersion || sourceVersion.length > 160) fail('DATED_SCHEDULE_INVALID');
-  const value = { schema: SCHEMA, target: 'test', gym, timezone: TIMEZONE, date, observedAt, sourceVersion, base: normalizeBase(date, base) };
+  const value = { schema: SCHEMA, target, gym, timezone: TIMEZONE, date, observedAt, sourceVersion, base: normalizeBase(date, base) };
   if (Buffer.byteLength(JSON.stringify(value)) > MAX_BYTES) fail('DATED_SCHEDULE_INVALID');
   return value;
 }
-function validateStored(value, gym, date, now) {
+function validateStored(value, gym, date, now, target) {
   if (!value || Object.keys(value).sort().join('|') !== ['schema', 'target', 'gym', 'timezone', 'date', 'observedAt', 'sourceVersion', 'base'].sort().join('|')
-    || value.schema !== SCHEMA || value.target !== 'test' || value.gym !== gym || value.timezone !== TIMEZONE || value.date !== date) fail('SCHEDULE_STORAGE_UNAVAILABLE');
-  const validated = observation(gym, date, value.base, value.observedAt, value.sourceVersion, now);
+    || value.schema !== SCHEMA || value.target !== target || value.gym !== gym || value.timezone !== TIMEZONE || value.date !== date) fail('SCHEDULE_STORAGE_UNAVAILABLE');
+  const validated = observation(gym, date, value.base, value.observedAt, value.sourceVersion, now, target);
   if (JSON.stringify(validated) !== JSON.stringify(value)) fail('SCHEDULE_STORAGE_UNAVAILABLE');
   return validated;
 }
-async function readStored(store, gym, date, now) {
-  const result = await store.getWithMetadata(keyFor(gym, date), { type: 'json', consistency: 'strong' });
+async function readStored(store, gym, date, now, target) {
+  const result = await store.getWithMetadata(keyFor(gym, date, target), { type: 'json', consistency: 'strong' });
   if (!result) return null;
   if (!result.etag || !result.data) fail('SCHEDULE_STORAGE_UNAVAILABLE');
-  return { etag: result.etag, data: validateStored(result.data, gym, date, now) };
+  return { etag: result.etag, data: validateStored(result.data, gym, date, now, target) };
 }
-async function persist(store, gym, date, candidate, previous, now) {
+async function persist(store, gym, date, candidate, previous, now, target) {
   if (previous && previous.data.observedAt > candidate.observedAt) return previous.data;
   if (previous && previous.data.observedAt === candidate.observedAt) {
     if (digest(previous.data) !== digest(candidate)) fail('DATED_SCHEDULE_CONFLICT');
     return previous.data;
   }
-  const saved = await store.set(keyFor(gym, date), JSON.stringify(candidate), previous ? { onlyIfMatch: previous.etag } : { onlyIfNew: true });
+  const saved = await store.set(keyFor(gym, date, target), JSON.stringify(candidate), previous ? { onlyIfMatch: previous.etag } : { onlyIfNew: true });
   if (![true, false].includes(saved?.modified)) fail('SCHEDULE_STORAGE_UNAVAILABLE');
-  const confirmed = await readStored(store, gym, date, now);
+  const confirmed = await readStored(store, gym, date, now, target);
   if (!confirmed || (saved.modified && digest(confirmed.data) !== digest(candidate))) fail('SCHEDULE_STORAGE_UNAVAILABLE');
   if (!saved.modified && (confirmed.data.observedAt < candidate.observedAt || (confirmed.data.observedAt === candidate.observedAt && digest(confirmed.data) !== digest(candidate)))) fail('DATED_SCHEDULE_CONFLICT');
   return confirmed.data;
 }
-async function currentSchedule(gym, now, dependencies) {
+async function currentSchedule(gym, now, dependencies, target) {
   let value;
   if (dependencies.loadCurrentSchedule) value = await dependencies.loadCurrentSchedule({ gym, now });
   else if (Object.hasOwn(dependencies, 'currentSchedule')) value = dependencies.currentSchedule;
   else {
-    const origin = gym === 'rev' ? 'https://deploy-preview-89--gib-live.netlify.app' : 'https://gib-richmond-test.netlify.app';
+    const origin = target === 'production' ? (gym === 'rev' ? 'https://gib-live.netlify.app' : 'https://gib-richmond-live.netlify.app') : (gym === 'rev' ? 'https://deploy-preview-89--gib-live.netlify.app' : 'https://gib-richmond-test.netlify.app');
     const response = await handleM1Schedule(new Request(origin + '/api/m1-schedule'), {
-      ...dependencies.scheduleDependencies, deployContext: 'deploy-preview', published: false,
-      installationId: gym, ...(gym === 'richmond' ? { environment: 'test' } : {}), now
+      ...dependencies.scheduleDependencies, deployContext: target === 'production' ? 'production' : 'deploy-preview', published: target === 'production',
+      installationId: gym, ...(gym === 'richmond' ? { environment: target, activation: target === 'production' ? 'active' : undefined } : {}), now
     });
     if (!response.ok) fail('CURRENT_SCHEDULE_UNAVAILABLE');
     value = await response.json();
@@ -115,11 +115,11 @@ async function currentSchedule(gym, now, dependencies) {
     || (value.status && (value.status.current !== true || value.status.fallback !== 'none'))) fail('CURRENT_SCHEDULE_UNAVAILABLE');
   return value;
 }
-async function additions(gym, now, dependencies) {
-  const store = dependencies.addedStore || await defaultAddedClassesStore('test');
-  const read = await readAddedClasses(store, gym, now, 'test');
+async function additions(gym, now, dependencies, target) {
+  const store = dependencies.addedStore || await defaultAddedClassesStore(target);
+  const read = await readAddedClasses(store, gym, now, target);
   const value = publicAddedClasses(read.value, now);
-  if (!temporary.validateDocument(value, gym, 'test') || value.current !== true || (value.updatedAt && Date.parse(value.updatedAt) > now)) fail('ADDED_CLASSES_UNAVAILABLE');
+  if (!temporary.validateDocument(value, gym, target) || value.current !== true || (value.updatedAt && Date.parse(value.updatedAt) > now)) fail('ADDED_CLASSES_UNAVAILABLE');
   return value;
 }
 function occurrences(observed, added, closingTime, cutoffConfirmed) {
@@ -150,37 +150,37 @@ function occurrences(observed, added, closingTime, cutoffConfirmed) {
 // One <=40KB observation per date/gym in the existing bounded manager cleanup
 // domain (3661 dates). No rolling deletion can lose an unresolved historical
 // date. Current additions always come from their separate authoritative store.
-export async function loadDigestScheduleSnapshots({ gym, dates, now = Date.now(), store, closingTime = '22:00', cutoffConfirmed = false, classFinishCutoffConfirmed = cutoffConfirmed, reviewSnapshots = [] }, dependencies = {}) {
+export async function loadDigestScheduleSnapshots({ target = 'test', gym, dates, now = Date.now(), store, closingTime = '22:00', cutoffConfirmed = false, classFinishCutoffConfirmed = cutoffConfirmed, reviewSnapshots = [] }, dependencies = {}) {
   now = now instanceof Date ? now.getTime() : now;
-  if (!['rev', 'richmond'].includes(gym) || !Number.isFinite(now) || !store?.getWithMetadata || !store?.set
+  if (!['test', 'production'].includes(target) || !['rev', 'richmond'].includes(gym) || !Number.isFinite(now) || !store?.getWithMetadata || !store?.set
     || !Array.isArray(dates) || dates.length > MAX_DATES || new Set(dates).size !== dates.length
     || dates.some(date => !temporary.validDate(date) || date < REVIEW_START || date > LAST_DATE)
     || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(closingTime) || typeof cutoffConfirmed !== 'boolean' || typeof classFinishCutoffConfirmed !== 'boolean'
     || !Array.isArray(reviewSnapshots) || reviewSnapshots.length > MAX_DATES) throw new Error('Invalid TEST digest schedule scope.');
   const today = localNow(new Date(now)).date;
   const [current, added] = await Promise.allSettled([
-    dates.includes(today) ? currentSchedule(gym, now, dependencies) : Promise.resolve(null),
-    additions(gym, now, dependencies)
+    dates.includes(today) ? currentSchedule(gym, now, dependencies, target) : Promise.resolve(null),
+    additions(gym, now, dependencies, target)
   ]);
   const days = [];
   async function load(date) {
     try {
       if (date > today) fail('FUTURE_SCHEDULE_UNAVAILABLE');
-      const previous = await readStored(store, gym, date, now);
+      const previous = await readStored(store, gym, date, now, target);
       let candidate;
       if (date === today) {
         if (current.status !== 'fulfilled') fail('CURRENT_SCHEDULE_UNAVAILABLE');
         const value = current.value;
-        candidate = observation(gym, date, value.days[temporary.dayNameForDate(date)], value.fetchedAt, 'observed-current:' + digest([value.version, value.days]), now);
+        candidate = observation(gym, date, value.days[temporary.dayNameForDate(date)], value.fetchedAt, 'observed-current:' + digest([value.version, value.days]), now, target);
       } else {
         const reviews = reviewSnapshots.filter(item => item?.date === date);
         if (reviews.length > 1) fail('DATED_SCHEDULE_CONFLICT');
         if (reviews.length) {
           const review = reviews[0];
-          candidate = observation(gym, date, review.base, review.reviewedAt, 'reviewed-date:' + digest([date, review.base, review.reviewedAt]), now);
+          candidate = observation(gym, date, review.base, review.reviewedAt, 'reviewed-date:' + digest([date, review.base, review.reviewedAt]), now, target);
         }
       }
-      const observed = candidate ? await persist(store, gym, date, candidate, previous, now) : previous?.data;
+      const observed = candidate ? await persist(store, gym, date, candidate, previous, now, target) : previous?.data;
       if (!observed) fail('MISSING_DATED_SCHEDULE');
       if (added.status !== 'fulfilled') fail('ADDED_CLASSES_UNAVAILABLE');
       return { date, status: 'complete', observedAt: observed.observedAt,

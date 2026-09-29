@@ -10,8 +10,8 @@ export async function handleAttendanceDeliveryBackground(request, dependencies =
   if (request.method !== 'POST' || url.pathname !== WORKFLOW_DISPATCH_PATH || url.search || url.hash) return jsonResponse(404, { ok: false });
   const scope = attendanceDigestScope(request, dependencies);
   if (!scope) return jsonResponse(403, { ok: false, code: 'WORKFLOW_TEST_SCOPE_REQUIRED' });
-  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: digestGym(scope), environment: scope.profile.environment });
-  if (runtime?.target !== 'test') return jsonResponse(503, { ok: false, code: 'WORKFLOW_RUNTIME_UNAVAILABLE' });
+  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: digestGym(scope), environment: scope.profile.environment, activation: scope.profile.activation });
+  if (runtime?.target !== scope.target) return jsonResponse(503, { ok: false, code: 'WORKFLOW_RUNTIME_UNAVAILABLE' });
   try {
     const raw = await request.text(), signature = request.headers.get(WORKFLOW_DISPATCH_HEADER);
     if (Buffer.byteLength(raw, 'utf8') > 128 || !/^[a-f0-9]{64}$/.test(signature || '') || !constantTimeSecretEqual(signature, workflowDispatchSignature(raw, runtime.adminActionToken))) return jsonResponse(403, { ok: false, code: 'WORKFLOW_AUTHENTICATION_REQUIRED' });

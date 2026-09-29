@@ -699,13 +699,18 @@ test('Google proof refuses other actions, installations, expired bindings, bad a
   assert.doesNotMatch(read('integrations/google-apps-script/GibM1TestReadCallback.gs'), /appendRow|setValues|setValue\(|deleteRow|managerReviewSave|managerReviewVoid/);
 });
 
-test('callback scope is declared for isolated TEST packages and prepared Revolution production only', () => {
+test('external requests are prepared for own-gym live digests while TEST proof source is excluded from both live bundles', () => {
   const scope = 'https://www.googleapis.com/auth/script.external_request';
   assert.ok(JSON.parse(read('integrations/google-apps-script/appsscript.json')).oauthScopes.includes(scope));
   assert.ok(JSON.parse(read('integrations/google-apps-script/production/appsscript.json')).oauthScopes.includes(scope));
   assert.ok(JSON.parse(read('integrations/google-apps-script/richmond-test/appsscript.json')).oauthScopes.includes(scope));
-  assert.ok(!JSON.parse(read('integrations/google-apps-script/richmond-production/appsscript.json')).oauthScopes.includes(scope));
+  assert.ok(JSON.parse(read('integrations/google-apps-script/richmond-production/appsscript.json')).oauthScopes.includes(scope));
   assert.match(read('integrations/google-apps-script/.claspignore'), /!GibM1TestReadCallback\.gs/);
-  assert.match(read('integrations/google-apps-script/production/.claspignore'), /!GibM1TestReadCallback/);
+  for (const directory of ['production', 'richmond-production']) {
+    const source = read('integrations/google-apps-script/' + directory + '/.claspignore');
+    assert.doesNotMatch(source, /!GibM1TestReadCallback/);
+    assert.match(source, /!GibM1AttendanceDigest\.gs/);
+    assert.match(source, /!GibM1LiveFeatures\.gs/);
+  }
   const g = googleHarness(); g.ctx.authorizeRevolutionTestReadCallback(); assert.equal(g.sent.length, 0);
 });

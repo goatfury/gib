@@ -3,6 +3,7 @@
  * inferred finish time or paid hours for its unresolved predecessor. */
 var GIB_M1_STAFF_RECOVERY_HEADERS_ = ['Event ID', 'Recovery ID', 'Event', 'Time', 'Payload', 'Payload hash'];
 function staffRecoveryEnabled_() {
+  if (typeof gibM1LiveStaffRecoveryEnabled_ === 'function') return gibM1LiveStaffRecoveryEnabled_();
   return configuredDeploymentTarget_() === 'test'
     && typeof managerReviewTestEnabled_ === 'function' && managerReviewTestEnabled_()
     && typeof GIB_M1_RICHMOND_INSTALLATION_ === 'undefined';
@@ -10,12 +11,12 @@ function staffRecoveryEnabled_() {
 // Editor-only, two-minute TEST fault. It changes delivery, never a saved punch.
 // Consumption happens inside the operation's existing lock, with no extra lock.
 function testRevolutionStaffRecoveryLostReply() {
-  if (!staffRecoveryEnabled_()) throw new Error('Revolution TEST project required.');
+  if (configuredDeploymentTarget_() !== 'test' || !staffRecoveryEnabled_()) throw new Error('Revolution TEST project required.');
   PropertiesService.getScriptProperties().setProperty('M1_TEST_STAFF_RECOVERY_LOST_REPLY', JSON.stringify({ staffId: 'mandy-test', expiresAt: Date.now() + 120000 }));
   return { armed: true, expiresInSeconds: 120 };
 }
 function testRevolutionStaffRecoveryLostReplyReceipt() {
-  if (!staffRecoveryEnabled_()) throw new Error('Revolution TEST project required.');
+  if (configuredDeploymentTarget_() !== 'test' || !staffRecoveryEnabled_()) throw new Error('Revolution TEST project required.');
   var stored = JSON.parse(PropertiesService.getScriptProperties().getProperty('M1_TEST_STAFF_RECOVERY_RECEIPT') || 'null');
   var receipt = stored && GIB_M1_STAFF_REQUEST_ID_PATTERN_.test(stored.requestId) && stored.stage === 'saved-before-reply-loss'
     ? { requestId: stored.requestId, stage: stored.stage } : null;
@@ -23,6 +24,7 @@ function testRevolutionStaffRecoveryLostReplyReceipt() {
   return receipt;
 }
 function staffRecoveryTestFault_(stage, item) {
+  if (configuredDeploymentTarget_() !== 'test') return false;
   if (!staffRecoveryEnabled_()) return false;
   try {
     var properties = PropertiesService.getScriptProperties();
@@ -220,23 +222,23 @@ function staffRecoveryStartReceipt_(item) {
     startedAt: item.startedAt, proposedFinishAt: item.proposedFinishAt, status: 'pending' };
 }
 function staffRecoveryAction_(body) {
-  if (!staffRecoveryEnabled_() || requestTarget_(body) !== 'test') return rejectedAuthResult_();
+  if (!staffRecoveryEnabled_() || requestTarget_(body) !== configuredDeploymentTarget_()) return rejectedAuthResult_();
   var admin = body.action === 'staffRecoveryReview' || body.action === 'staffRecoveryDecide';
   if (!(admin ? adminActionAuthorized_(body) : receiverKioskAuthorized_(body))) return rejectedAuthResult_();
   return staffClockWithLock_('Staff recovery is busy. Retry the same request.', function() {
     var spreadsheet = openExpectedSpreadsheet_(body);
-    if (spreadsheet.getName() !== 'RBJJ M1 — TEST') return rejectedAuthResult_();
+    if (spreadsheet.getName() !== (configuredDeploymentTarget_() === 'production' ? 'RBJJ M1 — PRODUCTION' : 'RBJJ M1 — TEST')) return rejectedAuthResult_();
     if (body.action === 'staffRecoveryRead' || body.action === 'staffRecoveryReview') {
       var state = staffRecoveryState_(spreadsheet);
       if (body.action === 'staffRecoveryRead' && state.items.some(function(item) { return staffRecoveryTestFault_('read', item); })) return jsonResult_({ ok: false, result: 'failed', message: 'TEST Staff recovery confirmation is unavailable.' });
-      return jsonResult_({ ok: true, target: 'test', recovery: staffRecoveryPublic_(state) });
+      return jsonResult_({ ok: true, target: configuredDeploymentTarget_(), recovery: staffRecoveryPublic_(state) });
     }
     if (body.action === 'staffRecoveryStart') {
       var parsed = staffRecoveryStartInput_(body, staffClockStaffState_(spreadsheet));
       if (!parsed) return rejectedAuthResult_();
       var input = parsed.input, state = staffRecoveryState_(spreadsheet, { pendingStart: input.requestId }), existing = state.byId[input.requestId];
       if (existing && JSON.stringify(state.journal.byId[input.requestId].value.original) !== JSON.stringify(input)) return staffRecoveryConflict_('This request ID belongs to a different Staff start.');
-      if (existing && state.raw.byId[existing.newClockInPunchId]) return jsonResult_({ ok: true, target: 'test', recovery: staffRecoveryPublic_(state), receipt: staffRecoveryStartReceipt_(existing) });
+      if (existing && state.raw.byId[existing.newClockInPunchId]) return jsonResult_({ ok: true, target: configuredDeploymentTarget_(), recovery: staffRecoveryPublic_(state), receipt: staffRecoveryStartReceipt_(existing) });
       var adjustment = staffClockAdjustmentSheetState_(spreadsheet, state.staff, state.raw, false);
       var effective = staffClockApplyAdjustments_(state.raw, adjustment), current = staffClockAnalyze_(state.staff, effective).byStaff[parsed.candidate.staffId];
       var previous = current && current.open;
@@ -254,14 +256,14 @@ function staffRecoveryAction_(body) {
       staffClockAppendTime_(state.raw, parsed.candidate); SpreadsheetApp.flush();
       state = staffRecoveryState_(spreadsheet);
       if (staffRecoveryTestFault_('saved', state.byId[input.requestId])) return jsonResult_({ ok: false, result: 'failed', message: 'TEST Staff recovery confirmation is unavailable.' });
-      return jsonResult_({ ok: true, target: 'test', recovery: staffRecoveryPublic_(state), receipt: staffRecoveryStartReceipt_(state.byId[input.requestId]) });
+      return jsonResult_({ ok: true, target: configuredDeploymentTarget_(), recovery: staffRecoveryPublic_(state), receipt: staffRecoveryStartReceipt_(state.byId[input.requestId]) });
     }
     if (body.action !== 'staffRecoveryDecide' || GIB_M1_ADMIN_NAMES_.indexOf(body.adminName) < 0) return rejectedAuthResult_();
     var input = staffRecoveryDecisionInput_(body);
     if (!input) return rejectedAuthResult_();
     var state = staffRecoveryState_(spreadsheet, { pendingDecision: input.requestId }), existing = state.decisions[input.requestId], item = state.byId[input.recoveryRequestId];
     if (existing && (JSON.stringify(existing.value.original) !== JSON.stringify(input) || existing.value.adminName !== body.adminName)) return staffRecoveryConflict_('This request ID belongs to a different manager decision.');
-    if (existing && existing.receipt) return jsonResult_({ ok: true, target: 'test', recovery: staffRecoveryPublic_(state), receipt: existing.receipt });
+    if (existing && existing.receipt) return jsonResult_({ ok: true, target: configuredDeploymentTarget_(), recovery: staffRecoveryPublic_(state), receipt: existing.receipt });
     if (!item || item.revision !== input.revision || item.status === 'approved') return staffRecoveryConflict_();
     if (input.decision === 'approve') {
       if (item.conflicts.length) return staffRecoveryConflict_('A linked Staff punch is VOID. Review its existing correction history before approving a finish.');
@@ -279,17 +281,18 @@ function staffRecoveryAction_(body) {
     }
     if (input.decision === 'approve') {
       var correction = staffRecoveryCorrection_(item, input, body.adminName);
-      correction.target = 'test';
+      correction.target = configuredDeploymentTarget_();
       var result = JSON.parse(staffTimeCorrectUnlocked_(correction, { skipRecovery: true }).getContent());
       if (result.ok !== true || result.requestId !== input.requestId || result.linkedPunchId !== input.punchId) staffRecoveryFail_();
     }
     staffRecoveryAppend_(spreadsheet, input.requestId + '-confirmed', item.requestId, 'confirmed', staffClockNowTimestamp_(), { requestId: input.requestId });
     state = staffRecoveryState_(spreadsheet);
-    return jsonResult_({ ok: true, target: 'test', recovery: staffRecoveryPublic_(state), receipt: state.decisions[input.requestId].receipt });
+    return jsonResult_({ ok: true, target: configuredDeploymentTarget_(), recovery: staffRecoveryPublic_(state), receipt: state.decisions[input.requestId].receipt });
   });
 }
 function staffRecoveryOutstanding_(spreadsheet) {
-  if (!staffRecoveryEnabled_()) staffRecoveryFail_('Staff recovery read is not enabled.');
+  var reminderScope = typeof gibM1LiveReminderScope_ === 'function' ? gibM1LiveReminderScope_() : null;
+  if (!staffRecoveryEnabled_() && !(reminderScope && reminderScope.gym === 'rev')) staffRecoveryFail_('Staff recovery read is not enabled.');
   var state = staffRecoveryState_(spreadsheet), adjustment = staffClockAdjustmentSheetState_(spreadsheet, state.staff, state.raw, false);
   var analysis = staffClockAnalyze_(state.staff, staffClockApplyAdjustments_(state.raw, adjustment)), items = [];
   state.items.filter(function(item) {

@@ -9,8 +9,9 @@ const stamp = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d
   && Number.isFinite(Date.parse(value)) && formatter.format(new Date(value)).replace(' ', 'T') === value.slice(0, 19);
 
 export function staffRecoveryEnabled(profile, config, location) {
-  if (profile?.installationId !== 'rev' || config?.enabled !== true || location?.protocol !== 'https:' || location.port) return false;
-  return config.target === 'test' && location.origin === 'https://deploy-preview-89--gib-live.netlify.app';
+  if (profile?.installationId !== 'rev' || location?.protocol !== 'https:' || location.port) return false;
+  return (config?.enabled === true && config.target === 'test' && location.origin === 'https://deploy-preview-89--gib-live.netlify.app')
+    || (config?.staffRecovery === true && location.origin === 'https://gib-live.netlify.app' && profile.allowedOrigin === location.origin);
 }
 
 export function validRecoveryOriginal(value) {

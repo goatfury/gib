@@ -11,7 +11,7 @@ const source = readFileSync(new URL('../integrations/google-apps-script/GibM1Att
 const receiverSource = readFileSync(new URL('../integrations/google-apps-script/GibM1Receiver.gs', import.meta.url), 'utf8');
 const richmondWrapper = readFileSync(new URL('../integrations/google-apps-script/richmond-test/Code.gs', import.meta.url), 'utf8');
 const adminAuthorizationSource = receiverSource.match(/^function adminActionAuthorized_\(body\) \{[\s\S]*?^\}/m)?.[0];
-const instructorAdminSource = receiverSource.match(/^function instructorAdminNameAllowed_\(name, site\) \{[\s\S]*?^\}/m)?.[0];
+const instructorAdminSource = receiverSource.match(/^function instructorAdminNameAllowed_\(name, site(?:, history)?\) \{[\s\S]*?^\}/m)?.[0];
 assert.ok(adminAuthorizationSource, 'existing receiver authorization must be exercised');
 const now = Date.parse('2026-09-25T02:30:00Z'), date = '2026-09-24';
 const id = '00000000-0000-4000-8000-000000000001';
@@ -237,7 +237,7 @@ test('Google signature uses exact purpose and raw body; Netlify accepts it and r
   const wrongPurpose = createHmac('sha256', secret).update('m1-other-purpose/v1\n' + raw).digest('hex');
   for (const [body, signatureValue, target] of [[raw, wrongPurpose, 'test'], [raw + ' ', signature, 'test'], [raw, signature, 'production']]) {
     assert.throws(() => authenticateDigestJob(body, signatureValue, { target, adminActionToken: secret }, now),
-      target === 'production' ? /DIGEST_RUNTIME_UNAVAILABLE/ : /DIGEST_AUTHENTICATION_FAILED/);
+      target === 'production' ? /DIGEST_BINDING_MISMATCH/ : /DIGEST_AUTHENTICATION_FAILED/);
   }
   assert.throws(() => authenticateDigestJob(raw, signature, { target: 'test', adminActionToken: secret }, now + 60000), /DIGEST_REQUEST_EXPIRED/);
   assert.equal(request.body.gyms.length, 1); assert.equal(request.body.gyms[0].gym, 'rev');

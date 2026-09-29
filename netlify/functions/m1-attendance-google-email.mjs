@@ -8,7 +8,7 @@ export async function handleAttendanceGoogleEmail(request, dependencies = {}) {
   const url = new URL(request.url);
   if (url.pathname !== config.path || url.search || url.hash || !['GET', 'POST'].includes(request.method)) return jsonResponse(404, { ok: false });
   const scope = attendanceDigestScope(request, dependencies);
-  if (!scope || request.headers.get('Origin') && request.headers.get('Origin') !== DIGEST_ORIGIN
+  if (!scope || scope.target !== 'test' || scope.profile.installationId !== 'rev' || request.headers.get('Origin') && request.headers.get('Origin') !== DIGEST_ORIGIN
     || request.headers.get('Sec-Fetch-Site') && !['same-origin', 'none'].includes(request.headers.get('Sec-Fetch-Site'))) return jsonResponse(403, { ok: false });
   const env = dependencies.env || process.env, runtime = runtimeConfig(env, { admin: true, requestUrl: request.url, installationId: 'rev' });
   if (runtime?.target !== 'test') return jsonResponse(503, { ok: false });

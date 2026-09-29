@@ -125,22 +125,23 @@ function makeSheet(name, initialRows) {
           });
           return this;
         },
-        setNumberFormat() { return this; }
+        setNumberFormat() { return this; },
+        setValue(value) { return this.setValues([[value]]); }
       };
     },
     get frozenRows() { return frozenRows; }
   };
 }
 
-function createHarness({ provisioned = true, duplicateSheets = false } = {}) {
+function createHarness({ provisioned = true, duplicateSheets = false, liveFeatures = false, optionalSheets = [] } = {}) {
   const scriptId = 'richmond-production-unit-script-id';
   const signins = makeSheet('Signins', [SIGNIN_HEADERS]);
   const audit = makeSheet('Admin Audit', [AUDIT_HEADERS]);
   const spreadsheet = {
     getId: () => 'richmond-production-unit-sheet-id',
     getName: () => SHEET_TITLE,
-    getSheetByName: name => name === 'Signins' ? signins : name === 'Admin Audit' ? audit : null,
-    getSheets: () => [signins, audit]
+    getSheetByName: name => [signins, audit, ...optionalSheets].find(sheet => sheet.getName() === name) || null,
+    getSheets: () => [signins, audit, ...optionalSheets]
   };
   const properties = new Map(provisioned ? [
     ['GIB_M1_RICHMOND_PRODUCTION_SPREADSHEET_ID', spreadsheet.getId()],
@@ -214,6 +215,7 @@ function createHarness({ provisioned = true, duplicateSheets = false } = {}) {
   });
   vm.runInContext(wrapperSource, context, { filename: 'RichmondProductionCode.gs' });
   vm.runInContext(receiverSource, context, { filename: 'GibM1Receiver.gs' });
+  if (liveFeatures) vm.runInContext(readFileSync(new URL('integrations/google-apps-script/GibM1LiveFeatures.gs', ROOT), 'utf8'), context);
   return {
     context,
     properties,
@@ -254,6 +256,28 @@ function productionRequest(action, values = {}) {
     ...values
   };
 }
+
+test('enabled Trey production correction remains Richmond-only, auditable after deactivation, and accepts only validated retained journals', () => {
+  const journals = [makeSheet('Manager Reviews', [['Request ID', 'Gym', 'Date', 'Revision', 'Reviewer', 'Time', 'Action', 'Attendance hash', 'Schedule hash', 'Decisions', 'Reviewed data', 'Request hash']]),
+    makeSheet('MailApp Attempts', [['Message ID', 'Event', 'Payload Hash', 'Gym', 'Opportunity Date', 'Request ID', 'Attempted At', 'Completed At', 'Code', 'Sender']])];
+  const h = createHarness({ liveFeatures: true, optionalSheets: journals });
+  h.properties.set('GIB_M1_RICHMOND_PRODUCTION_WRITES_ENABLED', 'true');
+  const row = kioskRow(); assert.equal(h.post(productionRequest('kioskSignIn', { rows: [row] })).ok, true);
+  const correction = productionRequest('voidInstructorSignin', { adminName: 'Trey Martin', rowId: row.RowID,
+    requestId: 'gib-m1-admin-void-' + row.RowID, reason: 'Isolated correction fixture' });
+  assert.equal(h.post(correction).result, 'rejected'); assert.equal(h.audit.values.length, 1);
+  h.properties.set('GIB_RICHMOND_TREY_ADMIN_LIVE_ENABLED', 'true');
+  const saved = h.post(correction); assert.equal(saved.result, 'voided'); assert.equal(saved.confirmation.adminName, 'Trey Martin');
+  assert.equal(h.post(correction).result, 'already voided'); assert.equal(h.audit.values.length, 2);
+  h.properties.set('GIB_RICHMOND_TREY_ADMIN_LIVE_ENABLED', 'false');
+  const review = h.post(productionRequest('dailyReview', { date: row.Date })); assert.equal(review.ok, true);
+  assert.equal(review.auditHistory[0].adminName, 'Trey Martin'); assert.equal(review.records.length, 0, 'VOID records are preserved centrally and excluded from teaching');
+  assert.equal(h.post({ ...correction, installation: 'rev' }).result, 'rejected');
+  assert.equal(h.post(productionRequest('ledgerStatus')).ok, true);
+  journals[1].values[0][0] = 'Wrong schema';
+  assert.equal(h.post(productionRequest('ledgerStatus')).result, 'rejected');
+  assert.equal(h.context.GIB_M1_STAFF_CLOCK_ENABLED, false);
+});
 
 test('Richmond production Apps Script is isolated, Staff Clock off, and identifier-free', () => {
   assert.match(wrapperSource, /Richmond BJJ M1 — PRODUCTION/u);

@@ -11,7 +11,7 @@ export async function handleAttendanceWorkflowBackground(request, dependencies =
   if (request.method !== 'POST' || url.pathname !== config.path || url.search || url.hash)
     return jsonResponse(404, { ok: false });
   const scope = attendanceDigestScope(request, dependencies);
-  if (!scope || scope.profile.installationId !== 'rev' || request.headers.get('Origin') !== DIGEST_ORIGIN) return jsonResponse(403, { ok: false });
+  if (!scope || scope.target !== 'test' || scope.profile.installationId !== 'rev' || request.headers.get('Origin') !== DIGEST_ORIGIN) return jsonResponse(403, { ok: false });
   const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: 'rev' });
   if (runtime?.target !== 'test') return jsonResponse(503, { ok: false });
   const auth = requireAdmin(request, runtime, (dependencies.clock || Date.now)());

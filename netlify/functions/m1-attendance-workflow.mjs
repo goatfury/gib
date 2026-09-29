@@ -17,19 +17,19 @@ export async function handleAttendanceWorkflow(request, dependencies = {}) {
   if ((request.headers.get('Origin') && request.headers.get('Origin') !== digestOrigin(scope))
     || (request.headers.get('Sec-Fetch-Site') && !['same-origin', 'none'].includes(request.headers.get('Sec-Fetch-Site'))))
     return response(403, { ok: false, message: 'Use the authenticated Admin page.' });
-  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: digestGym(scope), environment: scope.profile.environment });
-  if (runtime?.target !== 'test') return response(503, { ok: false, message: 'TEST service unavailable.' });
+  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: digestGym(scope), environment: scope.profile.environment, activation: scope.profile.activation });
+  if (runtime?.target !== scope.target) return response(503, { ok: false, message: 'TEST service unavailable.' });
   const auth = requireAdmin(request, runtime, (dependencies.clock || Date.now)());
   if (auth.response) return auth.response;
   const deps = { ...dependencies, scope };
   try {
     let latestRun;
     const gym = digestGym(scope);
-    if (gym !== 'rev' && (request.method !== 'GET' || url.search)) return response(403, { ok: false, message: 'Synthetic examples are confined to Revolution TEST.' });
+    if ((scope.target !== 'test' || gym !== 'rev') && (request.method !== 'GET' || url.search)) return response(403, { ok: false, message: 'Synthetic examples are confined to Revolution TEST.' });
     if (request.method === 'GET') {
       const id = url.searchParams.get('runId');
       if (id !== null && !validId(id)) return response(400, { ok: false, message: 'Use the original TEST example request.' });
-      latestRun = gym === 'rev' ? await (dependencies.readExamples || readAttendanceWorkflowExamples)(id, deps) : null;
+      latestRun = scope.target === 'test' && gym === 'rev' ? await (dependencies.readExamples || readAttendanceWorkflowExamples)(id, deps) : null;
     } else {
       const parsed = await readJson(request, 4096);
       if (parsed.response) return parsed.response;
@@ -64,8 +64,10 @@ export async function handleAttendanceWorkflow(request, dependencies = {}) {
     }
     const health = await (dependencies.readHealth || workflowHealth)(scope, deps);
     const messages = await (dependencies.readMessages || workflowMessages)(scope, deps);
+    // Own-gym evidence only: this server cannot inspect Google timer activation.
+    if (scope.target === 'production') return response(200, { ok: true, target: 'production', latestRun: null, current: { health, messages } });
     const selected = defaultDigestConfiguration(scope, dependencies.env || process.env);
-    return response(200, { ok: true, target: 'test', sendingEnabled: false, recurringEnabled: false,
+    return response(200, { ok: true, target: scope.target, sendingEnabled: false, recurringEnabled: false,
       latestRun: latestRun || null, current: { health, messages },
       setup: { revolutionReviewer: 'Stu', richmondReviewer: 'Trey', senderAddress: selected.senderAddress,
         revolutionTo: selected.routing.rev.reviewer.address, richmondTo: selected.routing.richmond.reviewer.address,

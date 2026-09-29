@@ -1,4 +1,4 @@
-import { adminNamesForScope } from './m1-common.mjs';
+import { adminNamesForScope, auditAdminNamesForScope } from './m1-common.mjs';
 
 const DISPLAY_ID_PATTERN = /^sheet-row-[1-9][0-9]*$/u;
 const AUDIT_ID_PATTERN = /^audit-row-[1-9][0-9]*$/u;
@@ -219,7 +219,7 @@ export function sanitizeAuditRecord(input, expectedDate = '', options = {}) {
     || !Number.isSafeInteger(value.actionNumber)
     || value.actionNumber < 1
     || !(ADMIN_NAMES.has(value.adminName) || (value.site === 'Richmond'
-      && adminNamesForScope(options.adminScope).includes(value.adminName)))
+      && auditAdminNamesForScope(options.adminScope).includes(value.adminName)))
     || !validTimestamp(value.actionTime)
     || !validDate(value.classDate)
     || (expectedDate && value.classDate !== expectedDate)
@@ -388,7 +388,7 @@ export function sanitizeAdminAdditionPayload(input, expected) {
   });
 }
 
-export function sanitizeInstructorSigninVoidRequest(input, expectedAdminName) {
+export function sanitizeInstructorSigninVoidRequest(input, expectedAdminName, scope) {
   if (!exactKeys(input, ['requestId', 'rowId', 'adminName', 'reason'])) return null;
   const rowId = typeof input.rowId === 'string' && SIGNIN_ROW_ID_PATTERN.test(input.rowId)
     ? input.rowId
@@ -399,7 +399,7 @@ export function sanitizeInstructorSigninVoidRequest(input, expectedAdminName) {
   if (
     !rowId
     || requestId !== `gib-m1-admin-void-${rowId}`
-    || !ADMIN_NAMES.has(adminName)
+    || !adminNamesForScope(scope).includes(adminName)
     || adminName !== expectedAdminName
     || !reason
     || reason.length < 3

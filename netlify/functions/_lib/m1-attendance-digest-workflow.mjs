@@ -1,5 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto';
-import { digestHash, splitAttendanceDigest, digestGym, digestOrigin, latestEligibleOpportunity } from './m1-attendance-digest.mjs';
+import { digestHash, splitAttendanceDigest, digestGym, digestOrigin, digestPrefix, digestStoreName, latestEligibleOpportunity } from './m1-attendance-digest.mjs';
 export { latestEligibleOpportunity } from './m1-attendance-digest.mjs';
 import { validId } from './m1-test-read-callback.mjs';
 import { validateDigestBinding } from './m1-attendance-digest-outbox.mjs';
@@ -33,7 +33,7 @@ const canonical = message => ({ messageId: message?.messageId, from: message?.fr
 const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join('|') === [...fields].sort().join('|');
 const safeAddress = value => typeof value === 'string' && value.length <= 254 && /^[^\s<>@,]+@[^\s<>@,]+\.[^\s<>@,]+$/.test(value);
 const validMessage = message => exact(message, ['messageId', 'hash', 'from', 'to', 'cc', 'subject', 'html', 'text', 'synthetic', 'target', ...(Object.hasOwn(message || {}, 'bcc') ? ['bcc'] : [])])
-  && /^m1-test-scheduled-(rev|richmond)-\d{4}-\d{2}-\d{2}$/.test(message.messageId) && message.target === 'test' && typeof message.synthetic === 'boolean'
+  && /^m1-(?:test|production)-scheduled-(rev|richmond)-\d{4}-\d{2}-\d{2}$/.test(message.messageId) && ['test', 'production'].includes(message.target) && message.messageId.startsWith('m1-' + message.target + '-scheduled-') && (message.target !== 'production' || message.synthetic === false) && typeof message.synthetic === 'boolean'
   && typeof message.from === 'string' && message.from.length > 0 && message.from.length <= 300 && !/[\r\n]/.test(message.from)
   && Array.isArray(message.to) && message.to.length === 1 && message.to.every(safeAddress)
   && Array.isArray(message.cc) && message.cc.length <= 1 && message.cc.every(safeAddress) && new Set([...message.to, ...message.cc]).size === message.to.length + message.cc.length
@@ -59,15 +59,17 @@ function scopedRoutes(input, deps) {
   const isolatedCapture = captureOnlyRehearsal(deps) && input.digest.syntheticRehearsal === true
     && input.configuration.syntheticRehearsal === true && input.configuration.sendingEnabled === false;
   if (!isolatedSimulator && !isolatedCapture && (routes.length !== 1 || routes[0].gym !== gym)) throw new Error('WORKFLOW_TEST_SCOPE_REQUIRED');
+  if (input.digest.target !== deps.scope.target || routes.some(route => route.digest.target !== deps.scope.target)
+    || (deps.scope.target === 'production' && (input.digest.syntheticRehearsal === true || input.configuration.syntheticRehearsal === true))) throw new Error('WORKFLOW_TEST_SCOPE_REQUIRED');
   return routes;
 }
 const runtimeFor = deps => deps.mailappRuntime || runtimeConfig(deps.env || process.env, {
   admin: true, requestUrl: digestOrigin(deps.scope) + WORKFLOW_DISPATCH_PATH,
-  installationId: digestGym(deps.scope), environment: deps.scope.profile.environment
+  installationId: digestGym(deps.scope), environment: deps.scope.profile.environment, activation: deps.scope.profile.activation
 });
 async function storeFor(deps) {
   if (deps.workflowStore || deps.digestStore) return deps.workflowStore || deps.digestStore;
-  const { getStore } = await import('@netlify/blobs'); return getStore({ name: STORE, consistency: 'strong' });
+  const { getStore } = await import('@netlify/blobs'); return getStore({ name: digestStoreName(deps.scope, 'workflow'), consistency: 'strong' });
 }
 async function read(store, path) {
   const value = await store.getWithMetadata(path, { type: 'json', consistency: 'strong' });
@@ -109,29 +111,30 @@ function policyFor(configuration, deps) {
   const gate = message => {
     if (deps.processorLease && clock(deps) >= deps.processorLease.expiresAt) return { state: 'disabled', code: 'WORKFLOW_LEASE_EXPIRED' };
     if (!validMessage(message)) return { state: 'blocked', code: 'INVALID_SCHEDULED_MESSAGE' };
-    if (simulator) return message.synthetic === true && typeof simulator.identity === 'string' && simulator.identity.length <= 100 && typeof simulator.send === 'function'
+    if (simulator) return (message.synthetic === true || deps.scope.target === 'production' && message.synthetic === false) && typeof simulator.identity === 'string' && simulator.identity.length <= 100 && typeof simulator.send === 'function'
       ? null : { state: 'blocked', code: 'SYNTHETIC_PROVIDER_REQUIRED' };
+    if (deps.scope.target === 'production' && (env(deps, 'GIB_M1_MAILAPP_LIVE_SEND_ENABLED') !== 'true' || env(deps, 'GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED') !== 'true')) return { state: 'disabled', code: 'SCHEDULED_SENDING_DISABLED' };
     if (env(deps, 'GIB_M1_ATTENDANCE_DIGEST_SEND_ENABLED') !== 'true') return { state: 'disabled', code: 'SCHEDULED_SENDING_DISABLED' };
     const approved = String(env(deps, 'GIB_M1_ATTENDANCE_DIGEST_VERIFIED_RECIPIENTS') || '').split(',').map(value => value.trim());
     if (!configuration.cutoffConfirmed || env(deps, 'GIB_M1_ATTENDANCE_DIGEST_VERIFIED_SENDER') !== message.from
       || ![...message.to, ...message.cc, ...(message.bcc || [])].every(address => approved.includes(address))) return { state: 'blocked', code: 'SCHEDULED_CONFIGURATION_UNVERIFIED' };
-    if (message.from !== 'revbjjops@gmail.com' || !message.messageId.startsWith('m1-test-scheduled-' + digestGym(deps.scope) + '-')) return { state: 'blocked', code: 'MAILAPP_TEST_SCOPE_REQUIRED' };
+    if (message.from !== 'revbjjops@gmail.com' || !message.messageId.startsWith(digestPrefix(deps.scope))) return { state: 'blocked', code: 'MAILAPP_TEST_SCOPE_REQUIRED' };
     const runtime = runtimeFor(deps);
-    return runtime?.target === 'test' && (runtime.installationId || 'rev') === digestGym(deps.scope) ? null : { state: 'disabled', code: 'SCHEDULED_PROVIDER_UNAVAILABLE' };
+    return runtime?.target === deps.scope.target && (runtime.installationId || 'rev') === digestGym(deps.scope) ? null : { state: 'disabled', code: 'SCHEDULED_PROVIDER_UNAVAILABLE' };
   };
   return { canonical, validMessage, gate,
     beforeDispatch: async message => {
       const store = await storeFor(deps);
       await requireHistoryProcessor(store, deps.processorLease, () => clock(deps));
-      const head = await readHistoryOpportunity(store, message.messageId.startsWith('m1-test-scheduled-rev-') ? 'rev' : 'richmond');
+      const head = await readHistoryOpportunity(store, message.messageId.startsWith('m1-' + deps.scope.target + '-scheduled-rev-') ? 'rev' : 'richmond');
       if (head?.data.messageId !== message.messageId || await historyWakePending(store)) throw new Error('WORKFLOW_PROCESSOR_SUPERSEDED');
     },
     credentialFingerprint: () => digestHash(simulator ? 'm1-digest-simulator/v1\n' + simulator.identity : 'm1-mailapp-business/v1\nrevbjjops@gmail.com'),
     request: async (message, options, signal) => {
       if (simulator) return simulator.send(structuredClone(message), { ...options, signal });
       const runtime = runtimeFor(deps);
-      if (runtime?.target !== 'test' || (runtime.installationId || 'rev') !== digestGym(deps.scope)) throw new Error('MAILAPP_TEST_SCOPE_REQUIRED');
-      const response = await postGoogle(runtime, options.action, { gym: digestGym(deps.scope), ...(digestGym(deps.scope) === 'richmond' ? { installation: 'richmond', environment: 'test' } : {}), binding: options.binding, message }, deps.fetch || fetch);
+      if (runtime?.target !== deps.scope.target || (runtime.installationId || 'rev') !== digestGym(deps.scope)) throw new Error('MAILAPP_TEST_SCOPE_REQUIRED');
+      const response = await postGoogle(runtime, options.action, { gym: digestGym(deps.scope), ...(digestGym(deps.scope) === 'richmond' ? { installation: 'richmond', environment: deps.scope.target } : {}), binding: options.binding, message }, deps.fetch || fetch);
       if (!response.readable) throw new Error('MAILAPP_RESPONSE_UNAVAILABLE');
       return response.value;
     } };
@@ -175,7 +178,7 @@ const uncertainRouteGroup = (gym, message) => 'uncertain-route/' + gym + '/' + d
 function projector(store, deps) {
   return async entry => {
     const value = entry.data;
-    if (!value || value.schema !== SCHEMA || value.messageId !== 'm1-test-scheduled-' + value.gym + '-' + value.date
+    if (!value || value.schema !== SCHEMA || value.messageId !== 'm1-' + deps.scope.target + '-scheduled-' + value.gym + '-' + value.date
       || !['rev', 'richmond'].includes(value.gym) || value.message && !validMessage(value.message)) throw new Error('WORKFLOW_MESSAGE_UNAVAILABLE');
     const groups = [], options = deliveryDeps(store, deps), policy = { canonical, validMessage };
     let state = value.state;
@@ -211,14 +214,14 @@ async function writeMessage(store, value, before, deps, guardEpoch) {
     requiresNoWake: Boolean(value.firstAttemptAt && !before?.data.firstAttemptAt), ...(guardEpoch === undefined ? {} : { guardEpoch }) }, projector(store, deps), undefined, () => clock(deps));
 }
 export async function migrateWorkflowHistory(scope, deps = {}) {
-  requireScope(scope); const store = await storeFor(deps);
+  requireScope(scope); deps = { ...deps, scope }; const store = await storeFor(deps);
   return migrateHistory(store, projector(store, { ...deps, scope }));
 }
 // Read-only cross-namespace guard for a fixed, approved TEST message. It never
 // migrates, reprojects, clears or copies a retained delivery barrier.
 export async function readWorkflowDeliveryHold(message, scope, deps = {}) {
-  requireScope(scope);
-  if (!validMessage(message) || !message.messageId.startsWith('m1-test-scheduled-' + digestGym(scope) + '-')) throw new Error('WORKFLOW_MESSAGE_UNAVAILABLE');
+  requireScope(scope); deps = { ...deps, scope };
+  if (!validMessage(message) || !message.messageId.startsWith(digestPrefix(scope))) throw new Error('WORKFLOW_MESSAGE_UNAVAILABLE');
   const store = await storeFor(deps), initial = await historyRoot(store, { incomplete: true });
   if (initial && (!initial.data.migration.complete || initial.data.pending) || await historyWakePending(store)) return 'PRIOR_DELIVERY_HISTORY_PENDING';
   if (await provisionalRecipientBarrier(store, digestGym(scope), message.to, { ...deps, scope }, false)) return 'PRIOR_PERMANENT_RECIPIENT_PROOF_UNRESOLVED';
@@ -298,7 +301,7 @@ async function healthEvidence(store, input, now, deps) {
 // capture, to decide whether an unattempted message is still needed.
 async function processWorkflow(input, deps = {}) {
   requireScope(deps.scope);
-  const now = clock(deps); validateDigestBinding(input.binding, now);
+  const now = clock(deps); validateDigestBinding(input.binding, now, deps.scope.target);
   if (input.binding.mode !== 'scheduled' || !['due', 'not-due', 'awaiting-configuration'].includes(input.due)
     || input.digest.date !== input.binding.jobDate || Date.parse(input.digest.generatedAt) < input.binding.createdAt || Date.parse(input.digest.generatedAt) > now) throw new Error('WORKFLOW_FRESH_CHECK_REQUIRED');
   const routes = scopedRoutes(input, deps), store = await storeFor(deps);
@@ -318,7 +321,7 @@ async function processWorkflow(input, deps = {}) {
     const due = input.dueByGym?.[route.gym] ?? input.due;
     const eligible = Boolean(opportunity && (input.opportunityDueByGym ? input.opportunityDueByGym[route.gym] === 'due' : opportunity.beforeCutoff || due === 'due'));
     const head = eligible ? await claimHistoryOpportunity(store, { gym: route.gym, opportunityDate: opportunity.date,
-      messageId: 'm1-test-scheduled-' + route.gym + '-' + opportunity.date, assessmentDate: input.binding.jobDate,
+      messageId: 'm1-' + deps.scope.target + '-scheduled-' + route.gym + '-' + opportunity.date, assessmentDate: input.binding.jobDate,
       assessedAt: input.binding.createdAt, requestId: input.binding.requestId, digestHash: digestHash(route.digest) }, deps.processorLease, () => clock(deps)) : await readHistoryOpportunity(store, route.gym);
     opportunities.set(route.gym, { opportunity, head, eligible });
     if (!route.digest.readFailures.length) {
@@ -357,7 +360,7 @@ async function processWorkflow(input, deps = {}) {
   let attempts = 0;
   for (const route of routes) {
     const { opportunity, head, eligible } = opportunities.get(route.gym), date = opportunity?.date || input.binding.jobDate;
-    const messageId = 'm1-test-scheduled-' + route.gym + '-' + date;
+    const messageId = 'm1-' + deps.scope.target + '-scheduled-' + route.gym + '-' + date;
     let before = await read(store, key(messageId));
     if (head && (head.data.opportunityDate !== date || head.data.decision !== 'open' || head.data.requestId !== input.binding.requestId)) continue;
     if (before?.data.firstAttemptAt) {
@@ -372,7 +375,7 @@ async function processWorkflow(input, deps = {}) {
     const rendered = route.rendered && { subject: route.rendered.subject + ' · reminder ' + date,
       text: assessment + '\n\n' + route.rendered.text, html: route.rendered.html.replace('<h1 ', '<p>' + assessment + '</p><h1 ') };
     let message = canPrepare ? { messageId, from: senderFor(deps),
-      to: route.to, cc: route.cc, ...rendered, synthetic: input.digest.syntheticRehearsal === true, target: 'test',
+      to: route.to, cc: route.cc, ...rendered, synthetic: input.digest.syntheticRehearsal === true, target: deps.scope.target,
       ...(Object.hasOwn(route, 'bcc') ? { bcc: route.bcc } : {}) } : null;
     if (message && deps.transformMessage) {
       const transformed = deps.transformMessage(structuredClone(message));
@@ -453,7 +456,7 @@ export async function processAttendanceWorkflow(input, deps = {}) {
     try { return { ...(await workflowHealth(deps.scope, deps)), pending: true }; }
     catch (error) {
       if (!String(error?.message).startsWith('WORKFLOW_HISTORY_')) throw error;
-      return { ok: true, target: 'test', state: 'check-incomplete', codes: ['CHECK_INCOMPLETE'], checkedAt: null, expiresAt: null,
+      return { ok: true, target: deps.scope.target, state: 'check-incomplete', codes: ['CHECK_INCOMPLETE'], checkedAt: null, expiresAt: null,
         pendingCount: 0, failedCount: 0, unconfirmedCount: 0, pending: true };
     }
   };
@@ -469,7 +472,7 @@ export async function processAttendanceWorkflow(input, deps = {}) {
 }
 
 export async function workflowHealth(scope, deps = {}) {
-  requireScope(scope);
+  requireScope(scope); deps = { ...deps, scope };
   deps = { ...deps, scope };
   const store = await storeFor(deps), now = clock(deps), check = (await read(store, 'workflow/health'))?.data;
   const history = await historyRoot(store, { incomplete: true }), codes = [];
@@ -524,7 +527,7 @@ export async function workflowHealth(scope, deps = {}) {
   const state = codes.includes('CHECK_OVERDUE') ? 'check-overdue' : codes.includes('CHECK_INCOMPLETE') ? 'check-incomplete'
     : codes.includes('DELIVERY_FAILED') ? 'delivery-failed' : codes.includes('DELIVERY_UNCONFIRMED') ? 'delivery-unconfirmed'
     : codes.includes('CONFIGURATION_REQUIRED') ? 'not-configured' : own?.itemCount ? 'attention' : 'clear';
-  return { ok: true, target: 'test', state, codes, checkedAt: check ? new Date(check.checkedAt).toISOString() : null, expiresAt: check ? new Date(check.expiresAt).toISOString() : null,
+  return { ok: true, target: deps.scope.target, state, codes, checkedAt: check ? new Date(check.checkedAt).toISOString() : null, expiresAt: check ? new Date(check.expiresAt).toISOString() : null,
     pendingCount, failedCount, unconfirmedCount, historicalUnconfirmedCount, historicalFailedCount, opportunityDate: opportunity?.data.opportunityDate || null };
 }
 
@@ -542,8 +545,8 @@ async function jobHead(store, job) {
 // 202 acknowledgment. Provider work belongs to the supported background function.
 export async function enqueueAttendanceWorkflow(input, runtime, deps = {}) {
   requireScope(deps.scope);
-  validateDigestBinding(input.binding, clock(deps));
-  if (runtime?.target !== 'test' || (runtime.installationId || 'rev') !== digestGym(deps.scope) || input.binding.mode !== 'scheduled') throw new Error('WORKFLOW_TEST_SCOPE_REQUIRED');
+  validateDigestBinding(input.binding, clock(deps), deps.scope.target);
+  if (runtime?.target !== deps.scope.target || (runtime.installationId || 'rev') !== digestGym(deps.scope) || input.binding.mode !== 'scheduled') throw new Error('WORKFLOW_TEST_SCOPE_REQUIRED');
   scopedRoutes(input, deps);
   const store = await storeFor(deps), id = input.binding.requestId, path = 'workflow/jobs/' + id;
   const value = { schema: WORKFLOW_DISPATCH_SCHEMA, input: structuredClone(input), inputHash: digestHash(input), state: 'queued', createdAt: clock(deps), leaseUntil: null };
@@ -570,7 +573,7 @@ export async function enqueueAttendanceWorkflow(input, runtime, deps = {}) {
 }
 
 export async function executeAttendanceWorkflowJob(jobId, scope, deps = {}) {
-  requireScope(scope);
+  requireScope(scope); deps = { ...deps, scope };
   if (!validId(jobId)) throw new Error('WORKFLOW_JOB_INVALID');
   const store = await storeFor(deps), path = 'workflow/jobs/' + jobId, before = await read(store, path), now = clock(deps);
   if (!before || before.data.schema !== WORKFLOW_DISPATCH_SCHEMA || before.data.input?.binding.requestId !== jobId
@@ -762,7 +765,7 @@ export async function recordWorkflowDeliveryEvidence(event, deps = {}) {
     ? { ok: true, matched: true, state: actual.state } : { ok: true, matched: false, state: 'pending' };
 }
 export async function workflowMessages(scope, deps = {}) {
-  requireScope(scope);
+  requireScope(scope); deps = { ...deps, scope };
   const store = await storeFor(deps);
   const root = await historyRoot(store), page = await historyPage(store, deps.historyCursor);
   const opportunities = new Map(await Promise.all(['rev', 'richmond'].map(async gym => [gym, await readHistoryOpportunity(store, gym)])));
@@ -772,5 +775,5 @@ export async function workflowMessages(scope, deps = {}) {
     .map(entry => ({ ...structuredClone(entry.data), ...retirement(entry.data, opportunities.get(entry.data.gym)) }));
   for (const [gym, before] of opportunities) if ((await readHistoryOpportunity(store, gym))?.etag !== before?.etag) throw new Error('WORKFLOW_HISTORY_TRANSITION_PENDING');
   if ((await historyRoot(store))?.etag !== root?.etag || await historyWakePending(store)) throw new Error('WORKFLOW_HISTORY_TRANSITION_PENDING');
-  return { ok: true, target: 'test', messages, nextCursor: page.nextCursor, historyComplete: true };
+  return { ok: true, target: scope.target, messages, nextCursor: page.nextCursor, historyComplete: true };
 }

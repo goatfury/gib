@@ -1,5 +1,5 @@
 import { jsonResponse, readJson, requireAdmin, runtimeConfig } from './_lib/m1-common.mjs';
-import { managerReviewScope } from './_lib/m1-manager-scope.mjs';
+import { releaseFeatureScope } from './_lib/m1-release-scope.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
 import { digestGym, digestOrigin } from './_lib/m1-attendance-digest.mjs';
 import { defaultDigestStore, digestState, saveDigestConfiguration, startManualDigest } from './_lib/m1-attendance-digest-outbox.mjs';
@@ -7,7 +7,7 @@ import { armDigestRehearsal, digestRehearsalState } from './_lib/m1-attendance-d
 
 export const config = { path: '/api/m1-attendance-digest', rateLimit: { windowLimit: 40, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 export function attendanceDigestScope(request, dependencies = {}) {
-  const url = new URL(request.url), scope = managerReviewScope(request, dependencies);
+  const url = new URL(request.url), scope = releaseFeatureScope(request, 'reminders', dependencies);
   if (!digestGym(scope) || url.origin !== digestOrigin(scope)) return null;
   return scope;
 }
@@ -21,8 +21,8 @@ export async function handleAttendanceDigest(request, dependencies = {}) {
   if ((request.headers.get('Origin') && request.headers.get('Origin') !== digestOrigin(scope))
     || (request.headers.get('Sec-Fetch-Site') && !['same-origin', 'none'].includes(request.headers.get('Sec-Fetch-Site')))) return jsonResponse(403, { ok: false, message: 'Use the authenticated Admin page.' });
   const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url,
-    installationId: scope.profile.installationId, environment: scope.profile.environment });
-  if (runtime?.target !== 'test') return jsonResponse(503, { ok: false, message: 'TEST service unavailable.' });
+    installationId: scope.profile.installationId, environment: scope.profile.environment, activation: scope.profile.activation });
+  if (runtime?.target !== scope.target) return jsonResponse(503, { ok: false, message: 'TEST service unavailable.' });
   const auth = requireAdmin(request, runtime, (dependencies.clock || Date.now)());
   if (auth.response) return auth.response;
   try {
@@ -30,7 +30,7 @@ export async function handleAttendanceDigest(request, dependencies = {}) {
       const id = url.searchParams.get('requestId');
       if (id !== null && !validId(id)) return jsonResponse(400, { ok: false, message: 'Use the original capture request.' });
       const rehearsalId = url.searchParams.get('rehearsalId');
-      if (rehearsalId !== null && digestGym(scope) !== 'rev') return jsonResponse(403, { ok: false, message: 'Synthetic rehearsals require the Revolution TEST installation.' });
+      if (rehearsalId !== null && (scope.target !== 'test' || digestGym(scope) !== 'rev')) return jsonResponse(403, { ok: false, message: 'Synthetic rehearsals require the Revolution TEST installation.' });
       if (rehearsalId !== null) return jsonResponse(200, await digestRehearsalState(rehearsalId, id, scope, dependencies));
       return jsonResponse(200, await digestState(scope, id, dependencies));
     }
@@ -38,9 +38,9 @@ export async function handleAttendanceDigest(request, dependencies = {}) {
     if (parsed.response) return parsed.response;
     const input = parsed.value;
     if (input.action === 'armRehearsal' && Object.keys(input).sort().join('|') === 'action|rehearsalId') {
-      if (digestGym(scope) !== 'rev') return jsonResponse(403, { ok: false, message: 'Synthetic rehearsals require the Revolution TEST installation.' });
+      if ((scope.target !== 'test' || digestGym(scope) !== 'rev')) return jsonResponse(403, { ok: false, message: 'Synthetic rehearsals require the Revolution TEST installation.' });
       const rehearsal = await armDigestRehearsal(input.rehearsalId, auth.session.adminName, scope, dependencies);
-      return jsonResponse(200, { ok: true, target: 'test', sendingEnabled: false, rehearsal });
+      return jsonResponse(200, { ok: true, target: scope.target, sendingEnabled: false, rehearsal });
     }
     if (input.action === 'capture' && Object.keys(input).sort().join('|') === 'action|requestId' && validId(input.requestId)) {
       const result = await startManualDigest(input.requestId, auth.session.adminName, runtime, scope, dependencies);
@@ -48,9 +48,9 @@ export async function handleAttendanceDigest(request, dependencies = {}) {
         expiresAt: result.binding.expiresAt, messageId: result.messageId });
     }
     if (input.action === 'configure' && Object.keys(input).sort().join('|') === 'action|dailyLocalTime') {
-      const store = dependencies.digestStore || await defaultDigestStore();
+      const store = dependencies.digestStore || await defaultDigestStore(scope);
       const configuration = await saveDigestConfiguration(store, scope, input.dailyLocalTime, auth.session.adminName, dependencies);
-      return jsonResponse(200, { ok: true, target: 'test', sendingEnabled: false, configuration });
+      return jsonResponse(200, { ok: true, target: scope.target, sendingEnabled: false, configuration });
     }
     return jsonResponse(400, { ok: false, message: 'Choose a TEST capture or a daily closing time. Email sending remains disabled.' });
   } catch (error) {

@@ -1,8 +1,8 @@
 import { createHmac } from 'node:crypto';
-import { adminNamesForScope, constantTimeSecretEqual } from './m1-common.mjs';
+import { adminNamesForScope, auditAdminNamesForScope, constantTimeSecretEqual } from './m1-common.mjs';
 import { validId } from './m1-test-read-callback.mjs';
 import { localNow } from './m1-manager-review.mjs';
-import { DIGEST_SCHEMA, DIGEST_STORE, digestGym, digestHash, digestDate, datesThrough, defaultDigestConfiguration, buildAttendanceDigest, renderAttendanceDigest, digestDue, latestEligibleOpportunity } from './m1-attendance-digest.mjs';
+import { DIGEST_SCHEMA, DIGEST_STORE, digestGym, digestStoreName, digestHash, digestDate, datesThrough, defaultDigestConfiguration, buildAttendanceDigest, renderAttendanceDigest, digestDue, latestEligibleOpportunity } from './m1-attendance-digest.mjs';
 
 export const DIGEST_JOB_SCHEMA = 'm1-attendance-digest-job/v1';
 export const DIGEST_SIGNATURE_HEADER = 'X-GIB-M1-Digest-Signature';
@@ -14,9 +14,9 @@ const clock = dependencies => (dependencies.clock || Date.now)();
 const reqKey = id => 'requests/' + id;
 const outKey = id => 'outbox/' + id;
 const reviewersFor = scope => adminNamesForScope({ target: scope?.target, installationId: scope?.profile?.installationId,
-  environment: scope?.profile?.environment, preview: true });
-const runtimeGym = runtime => runtime?.target !== 'test' ? null : runtime.installationId === 'richmond'
-  ? runtime.environment === 'test' ? 'richmond' : null : !runtime.installationId || runtime.installationId === 'rev' ? 'rev' : null;
+  environment: scope?.profile?.environment, preview: scope?.target === 'test', writesEnabled: scope?.profile?.activation === 'active', richmondReviewerEnabled: scope?.liveFeatures?.richmondReviewer === true });
+const runtimeGym = runtime => !['test', 'production'].includes(runtime?.target) ? null : runtime.installationId === 'richmond'
+  ? runtime.environment === runtime.target ? 'richmond' : null : !runtime.installationId || runtime.installationId === 'rev' ? 'rev' : null;
 function validateOutbox(record, messageId) {
   if (!record || record.schema !== DIGEST_SCHEMA || record.messageId !== messageId || record.sendingEnabled !== false
     || !['prepared', 'captured', 'suppressed', 'failed'].includes(record.state) || !digestDate(record.date)
@@ -25,9 +25,9 @@ function validateOutbox(record, messageId) {
     || !Array.isArray(record.groups) || !Array.isArray(record.readFailures)) digestFail(503, 'DIGEST_OUTBOX_INCOMPLETE');
   return record;
 }
-export async function defaultDigestStore() {
+export async function defaultDigestStore(scope) {
   const { getStore } = await import('@netlify/blobs');
-  return getStore({ name: DIGEST_STORE, consistency: 'strong' });
+  return getStore({ name: scope ? digestStoreName(scope) : DIGEST_STORE, consistency: 'strong' });
 }
 export async function readDigestEntry(store, key) {
   const entry = await store.getWithMetadata(key, { type: 'json', consistency: 'strong' });
@@ -47,12 +47,12 @@ async function replaceConfirmed(store, key, previous, value) {
   return { ...saved, replaced: result.modified };
 }
 
-export function makeDigestBinding(requestId, mode, now) {
-  return { schema: DIGEST_JOB_SCHEMA, target: 'test', requestId, mode, jobDate: localNow(new Date(now)).date, createdAt: now, expiresAt: now + 60000 };
+export function makeDigestBinding(requestId, mode, now, target = 'test') {
+  return { schema: DIGEST_JOB_SCHEMA, target, requestId, mode, jobDate: localNow(new Date(now)).date, createdAt: now, expiresAt: now + 60000 };
 }
-export function validateDigestBinding(binding, now) {
+export function validateDigestBinding(binding, now, target = 'test') {
   const rehearsal = binding?.mode === 'rehearsal';
-  if (!exact(binding, rehearsal ? [...bindingKeys, 'rehearsalId'] : bindingKeys) || binding.schema !== DIGEST_JOB_SCHEMA || binding.target !== 'test' || !validId(binding.requestId)
+  if (!exact(binding, rehearsal ? [...bindingKeys, 'rehearsalId'] : bindingKeys) || binding.schema !== DIGEST_JOB_SCHEMA || binding.target !== target || !['test', 'production'].includes(target) || (target === 'production' && rehearsal) || !validId(binding.requestId)
     || !['manual', 'scheduled', 'rehearsal'].includes(binding.mode) || (rehearsal && !validId(binding.rehearsalId)) || !Number.isSafeInteger(binding.createdAt) || binding.createdAt > now
     || binding.expiresAt !== binding.createdAt + 60000 || !digestDate(binding.jobDate)
     || binding.jobDate !== localNow(new Date(binding.createdAt)).date) digestFail(409, 'DIGEST_BINDING_MISMATCH');
@@ -67,7 +67,7 @@ export function authenticateDigestJob(raw, header, runtime, now) {
   try { body = JSON.parse(raw); } catch { digestFail(400, 'DIGEST_INVALID_JSON'); }
   if (!exact(body, [...bindingKeys, 'gyms', ...(body?.mode === 'rehearsal' ? ['rehearsalId'] : [])])) digestFail(400, 'DIGEST_INVALID_ENVELOPE');
   const { gyms, ...binding } = body;
-  validateDigestBinding(binding, now);
+  validateDigestBinding(binding, now, runtime.target);
   if (!Array.isArray(gyms) || (binding.mode === 'rehearsal' ? gym !== 'rev' || gyms.length !== 0 : gyms.length !== 1 || gyms[0]?.gym !== gym)) digestFail(409, 'DIGEST_GYM_MISMATCH');
   if (gym === 'richmond' && (!exact(gyms[0].staff, ['ok', 'complete', 'items', 'notApplicable']) || gyms[0].staff.ok !== true
     || gyms[0].staff.complete !== true || gyms[0].staff.notApplicable !== true || !Array.isArray(gyms[0].staff.items) || gyms[0].staff.items.length)) digestFail(409, 'DIGEST_GYM_MISMATCH');
@@ -78,13 +78,16 @@ export async function loadDigestConfiguration(store, scope, dependencies = {}) {
   const base = defaultDigestConfiguration(scope, dependencies.env || process.env);
   const entry = await readDigestEntry(store, 'configuration');
   if (!entry) return base;
+  if (scope.target === 'production' && entry.data.dailyLocalTime !== '20:00') digestFail(503, 'DIGEST_CONFIGURATION_UNAVAILABLE');
   if (!exact(entry.data, ['schema', 'dailyLocalTime', 'cutoffConfirmed', 'updatedAt', 'reviewer']) || entry.data.schema !== DIGEST_SCHEMA
     || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(entry.data.dailyLocalTime) || entry.data.cutoffConfirmed !== true
-    || !reviewersFor(scope).includes(entry.data.reviewer) || !Number.isFinite(Date.parse(entry.data.updatedAt))) digestFail(503, 'DIGEST_CONFIGURATION_UNAVAILABLE');
+    || !auditAdminNamesForScope({ target: scope.target, installationId: scope.profile.installationId, environment: scope.profile.environment,
+      preview: scope.target === 'test' }).includes(entry.data.reviewer) || !Number.isFinite(Date.parse(entry.data.updatedAt))) digestFail(503, 'DIGEST_CONFIGURATION_UNAVAILABLE');
   return { ...base, dailyLocalTime: entry.data.dailyLocalTime, cutoffConfirmed: true };
 }
 export async function saveDigestConfiguration(store, scope, time, reviewer, dependencies = {}) {
   if (!digestGym(scope) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time || '') || !reviewersFor(scope).includes(reviewer)) digestFail(400, 'DIGEST_CONFIGURATION_INVALID');
+  if (scope.target === 'production' && time !== '20:00') digestFail(400, 'DIGEST_CONFIGURATION_INVALID');
   const value = { schema: DIGEST_SCHEMA, dailyLocalTime: time, cutoffConfirmed: true, reviewer, updatedAt: new Date(clock(dependencies)).toISOString() };
   const previous = await readDigestEntry(store, 'configuration');
   const saved = previous ? await replaceConfirmed(store, 'configuration', previous, value) : await createConfirmed(store, 'configuration', value);
@@ -140,8 +143,8 @@ export async function deliverDigestOutbox(store, record, requestId, dependencies
 }
 
 export async function processDigestJob({ binding, gyms }, scope, dependencies = {}) {
-  const now = clock(dependencies), store = dependencies.digestStore || await defaultDigestStore();
-  validateDigestBinding(binding, now);
+  const now = clock(dependencies), store = dependencies.digestStore || await defaultDigestStore(scope);
+  validateDigestBinding(binding, now, scope.target);
   if (binding.mode === 'rehearsal') digestFail(409, 'DIGEST_BINDING_MISMATCH'); // Only the isolated rehearsal adapter may translate this mode.
   const configuration = await loadDigestConfiguration(store, scope, dependencies);
   if (!Array.isArray(gyms) || gyms.length !== configuration.gyms.length || gyms.some(g => !configuration.gyms.some(c => c.id === g.gym))) digestFail(409, 'DIGEST_GYM_MISMATCH');
@@ -161,19 +164,19 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
       try {
         if (attendance?.ok === true) {
           const { validateRead } = await import('./m1-manager-review.mjs');
-          const ledger = validateRead(attendance.ledger, gym.id, binding.jobDate, 'test');
+          const ledger = validateRead(attendance.ledger, gym.id, binding.jobDate, scope.target);
           reviewSnapshots = ledger.days.filter(day => Array.isArray(day.review?.snapshot?.base))
             .map(day => ({ date: day.date, base: day.review.snapshot.base, reviewedAt: day.review.time }));
         }
       } catch {} // Unavailable attendance cannot invent historical schedule evidence.
-      return await loader({ gym: gym.id, dates: datesThrough(binding.jobDate), now, store,
+      return await loader({ target: scope.target, gym: gym.id, dates: datesThrough(binding.jobDate), now, store,
         closingTime: gym.dailyLocalTime ?? configuration.dailyLocalTime,
         cutoffConfirmed: gym.cutoffConfirmed ?? configuration.cutoffConfirmed,
         classFinishCutoffConfirmed: gym.classFinishCutoffConfirmed ?? configuration.classFinishCutoffConfirmed ?? gym.cutoffConfirmed ?? configuration.cutoffConfirmed, reviewSnapshots });
     } catch { return { gym: gym.id, timezone: configuration.timezone, days: [] }; }
   }));
   const digest = buildAttendanceDigest({ jobDate: binding.jobDate, snapshots: gyms, schedules, configuration, now });
-  validateDigestBinding(binding, clock(dependencies));
+  validateDigestBinding(binding, clock(dependencies), scope.target);
   if (binding.mode === 'scheduled') {
     const due = digestDue(binding.jobDate, now, configuration, schedules);
     const dueByGym = {}, opportunityDueByGym = {};
@@ -195,7 +198,7 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
   }
   const rendered = renderAttendanceDigest(digest);
   const gym = digestGym(scope), suffix = gym === 'richmond' ? 'richmond-' : '';
-  const messageId = binding.mode === 'scheduled' ? (dependencies.dailyMessagePrefix || 'm1-test-daily-' + suffix) + binding.jobDate : 'm1-test-manual-' + suffix + binding.requestId;
+  const messageId = binding.mode === 'scheduled' ? (dependencies.dailyMessagePrefix || 'm1-' + scope.target + '-daily-' + suffix) + binding.jobDate : 'm1-' + scope.target + '-manual-' + suffix + binding.requestId;
   const prepared = { schema: DIGEST_SCHEMA, messageId, date: binding.jobDate, mode: binding.mode, state: digest.shouldCapture ? 'prepared' : 'suppressed',
     requestId: binding.requestId, createdAt: new Date(now).toISOString(), capturedAt: null, sendingEnabled: false,
     ...rendered, groups: digest.groups, readFailures: digest.readFailures, itemCount: digest.itemCount, contentHash: digestHash(rendered), lastFailure: null };
@@ -210,9 +213,9 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
 
 export async function startManualDigest(requestId, reviewer, runtime, scope, dependencies = {}) {
   const gym = digestGym(scope);
-  if (!validId(requestId) || !gym || !reviewersFor(scope).includes(reviewer) || runtimeGym(runtime) !== gym) digestFail(400, 'DIGEST_REQUEST_INVALID');
+  if (!validId(requestId) || !gym || !reviewersFor(scope).includes(reviewer) || runtimeGym(runtime) !== gym || runtime.target !== scope.target) digestFail(400, 'DIGEST_REQUEST_INVALID');
   if (typeof dependencies.context?.waitUntil !== 'function') digestFail(503, 'DIGEST_LIFECYCLE_UNAVAILABLE');
-  const store = dependencies.digestStore || await defaultDigestStore(), now = clock(dependencies);
+  const store = dependencies.digestStore || await defaultDigestStore(scope), now = clock(dependencies);
   const existing = await readDigestEntry(store, reqKey(requestId));
   if (existing) {
     if (existing.data.binding.mode !== 'manual') digestFail(409, 'DIGEST_REQUEST_CONFLICT');
@@ -224,7 +227,7 @@ export async function startManualDigest(requestId, reviewer, runtime, scope, dep
     }
     return existing.data;
   }
-  const binding = makeDigestBinding(requestId, 'manual', now);
+  const binding = makeDigestBinding(requestId, 'manual', now, scope.target);
   const pending = await createConfirmed(store, reqKey(requestId), { binding, reviewer, state: 'pending', messageId: null });
   if (digestHash(pending.data.binding) !== digestHash(binding)) digestFail(409, 'DIGEST_REQUEST_CONFLICT');
   if (pending.created) {
@@ -232,8 +235,8 @@ export async function startManualDigest(requestId, reviewer, runtime, scope, dep
       let category = 'ordinary-reply-discarded';
       try {
         const response = await (dependencies.fetch || fetch)(runtime.webhookUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-          body: JSON.stringify({ token: runtime.webhookToken, adminActionToken: runtime.adminActionToken, target: 'test',
-            ...(gym === 'richmond' ? { installation: 'richmond', environment: 'test', gym: 'richmond' } : {}),
+          body: JSON.stringify({ token: runtime.webhookToken, adminActionToken: runtime.adminActionToken, target: scope.target,
+            ...(gym === 'richmond' ? { installation: 'richmond', environment: scope.target, gym: 'richmond' } : {}),
             action: 'attendanceDigestCapture', adminName: reviewer, binding }),
           redirect: 'manual', signal: AbortSignal.timeout(25000) });
         await response.body?.cancel();
@@ -245,7 +248,7 @@ export async function startManualDigest(requestId, reviewer, runtime, scope, dep
 }
 
 export async function digestState(scope, requestId, dependencies = {}) {
-  const store = dependencies.digestStore || await defaultDigestStore(), now = clock(dependencies);
+  const store = dependencies.digestStore || await defaultDigestStore(scope), now = clock(dependencies);
   const configuration = await loadDigestConfiguration(store, scope, dependencies);
   let request = requestId ? (await readDigestEntry(store, reqKey(requestId)))?.data : null;
   const latestPointer = await readDigestEntry(store, 'latest');
@@ -255,5 +258,5 @@ export async function digestState(scope, requestId, dependencies = {}) {
   if (latest) validateOutbox(latest, messageId);
   if (request) request = { requestId: request.binding.requestId, state: request.state === 'pending' && now >= request.binding.expiresAt ? 'expired' : request.state,
     expiresAt: request.binding.expiresAt, messageId: request.messageId };
-  return { ok: true, target: 'test', sendingEnabled: false, configuration, latest: latest || null, request: request || null };
+  return { ok: true, target: scope.target, sendingEnabled: false, configuration, latest: latest || null, request: request || null };
 }
