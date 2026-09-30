@@ -86,7 +86,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '24.18.0'
+          node-version: '22.23.3'
       - run: npm ci
       - name: Build existing Richmond TEST profile
         env:
@@ -113,10 +113,20 @@ jobs:
       - name: Prepare and validate both disabled live release artifacts (no deployment)
         run: |
           node tools/package-m1-disabled-release.mjs "$(git rev-parse HEAD)" .m1-disabled-release .m1-test-packager/node_modules/netlify-cli --preserve-revolution-promotions
+      - name: Validate both activation artifacts in isolated Node22 archives (no deployment or sending)
+        run: |
+          node tools/package-m1-disabled-release.mjs "$(git rev-parse HEAD)" .m1-activation-release .m1-test-packager/node_modules/netlify-cli --preserve-revolution-promotions --activation
       - uses: actions/upload-artifact@v4
         with:
           name: m1-disabled-release-${{ github.event.pull_request.head.sha }}
           path: .m1-disabled-release/
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m1-activation-release-${{ github.event.pull_request.head.sha }}
+          path: .m1-activation-release/
           include-hidden-files: true
           retention-days: 14
           if-no-files-found: error
