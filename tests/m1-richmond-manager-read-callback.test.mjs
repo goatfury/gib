@@ -25,7 +25,9 @@ function harness() {
     context: { site: { id: '42736c77-e3c8-40aa-ba97-4f935d0999ad', name: 'gib-richmond-test' }, deploy: { context: 'production', published: true }, waitUntil: p => tasks.push(p) },
     traceLog() {}, schedule: { current: true, timezone: 'America/New_York', days: {} }, addedStore: { getWithMetadata: async () => null },
     fetch: async (_, options) => { const body = JSON.parse(options.body); assert.ok(entries.has(scopedKey(body.binding.requestId, 'pending'))); assert.equal(options.redirect, 'manual'); calls.push(body); return new Response(null, {status:404}); } };
-  Object.defineProperty(deps,'now',{get:()=>stamp});
+  // Nested handlers spread the injected dependencies. Keep the synthetic clock
+  // enumerable so those handlers never mix this fixture date with today's date.
+  Object.defineProperty(deps,'now',{enumerable:true,get:()=>stamp});
   return { entries, tasks, calls, deps, advance: ms => { stamp = NOW + ms; } };
 }
 function request(operation='start', id=ID, name='Trey Martin', body) {
