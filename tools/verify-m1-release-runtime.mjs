@@ -28,9 +28,15 @@ export async function verifyReleaseRuntime({ artifact, cliRoot, runtime, install
       await extract(archive, { dir: directory });
       const probe = resolve(directory, 'runtime-probe.mjs');
       await copyFile(fileURLToPath(new URL('./m1-release-runtime-probe.mjs', import.meta.url)), probe);
-      const result = execFileSync(runtime, [probe, resolve(directory, '___netlify-entry-point.mjs'), fn.name, installation], {
-        cwd: directory, env, encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe']
-      });
+      let result;
+      try {
+        result = execFileSync(runtime, [probe, resolve(directory, '___netlify-entry-point.mjs'), fn.name, installation], {
+          cwd: directory, env, encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe']
+        });
+      } catch (error) {
+        const category = String(error.stderr || '').split('\n').find(line => /^(?:Error(?: \[[\w_]+\])?|ReferenceError|TypeError|AssertionError(?: \[[\w_]+\])?|SyntaxError):/.test(line));
+        throw new Error('Archive runtime failed: ' + fn.name + ': ' + (category || error.code || 'probe failed'));
+      }
       results.push(JSON.parse(result.trim()));
     }
     assert.ok(results.filter(value => value.storageImported).length > 0, 'Real storage-library import chain must be exercised.');

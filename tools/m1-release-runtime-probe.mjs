@@ -14,6 +14,9 @@ const relative = bootstrap.match(/getLambdaHandler\(['"]([^'"]+)['"]\)/)?.[1];
 assert.ok(relative, 'Unrecognized archive entry; review the packager change.');
 const main = resolve(root, relative);
 assert.ok(main.startsWith(root + sep), 'Archive entry escapes extraction.');
+// Lambda supplies this streaming wrapper in production. Reproduce only the
+// wrapper registration; do not replace application code or its storage SDK.
+globalThis.awslambda = { streamifyResponse: handler => handler };
 process.env.NETLIFY_BLOBS_CONTEXT = Buffer.from(JSON.stringify({ siteID: 'isolated-runtime-test', token: 'synthetic-not-a-credential',
   apiURL: 'https://archive-storage.invalid', edgeURL: 'https://archive-storage.invalid', uncachedEdgeURL: 'https://archive-storage.invalid' })).toString('base64');
 const calls = [];
