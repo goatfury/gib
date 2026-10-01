@@ -8,3 +8,7 @@
 /.clasprc.json
 /client_secret*.json
 /credentials.json
+/.m1-disabled-release-stage/
+/.m1-disabled-release/
+/.m1-email-first-release-stage/
+/.m1-email-first-release/

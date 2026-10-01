@@ -1,0 +1,211 @@
+(function (global) {
+  'use strict';
+  const API = '/api/m1-attendance-workflow', KEY = 'm1-attendance-workflow-test-rev-pending-v1';
+  const ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
+  const ADMIN_URLS = Object.freeze({ rev: ORIGIN + '/m1/admin/', richmond: 'https://gib-richmond-test.netlify.app/m1/admin/' });
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const runAction = value => value === 'runExamples' || value === 'runHistory' || value === 'runDaily' || value === 'runMailApp';
+  const CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'";
+  const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).sort().join('|') === [...fields].sort().join('|');
+  const text = (value, max = 500) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
+  const addresses = value => Array.isArray(value) && value.length <= 4 && value.every(address => typeof address === 'string'
+    && address.length <= 254 && /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(address));
+  function validSetup(value) {
+    if (!Object.hasOwn(value || {}, 'senderAddress')) return true; // Historical example metadata remains readable.
+    return exact(value, ['revolutionReviewer', 'richmondReviewer', 'senderAddress', 'revolutionTo', 'richmondTo', 'cc', 'bcc',
+      'dailyLocalTime', 'timezone', 'reminderTimeConfirmed', 'classFinishCutoffConfirmed', 'richmondReviewerAccessVerified'])
+      && value.revolutionReviewer === 'Stu' && value.richmondReviewer === 'Trey'
+      && addresses([value.senderAddress, value.revolutionTo, value.richmondTo]) && addresses(value.cc) && value.cc.length === 0
+      && addresses(value.bcc) && value.bcc.length <= 1 && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.dailyLocalTime)
+      && value.timezone === 'America/New_York' && typeof value.reminderTimeConfirmed === 'boolean'
+      && value.classFinishCutoffConfirmed === false && value.richmondReviewerAccessVerified === false;
+  }
+  function valid(value) {
+    const run = value?.latestRun;
+    const optional = ['request', 'current', 'setup'].filter(key => Object.hasOwn(value || {}, key));
+    return exact(value, ['ok', 'target', 'sendingEnabled', 'recurringEnabled', 'latestRun', ...optional]) && value.ok === true && value.target === 'test'
+      && (!Object.hasOwn(value, 'setup') || validSetup(value.setup))
+      && (!Object.hasOwn(value, 'request') || exact(value.request, ['runId', 'state', ...(Object.hasOwn(value.request || {}, 'action') ? ['action'] : [])])
+        && (!Object.hasOwn(value.request, 'action') || runAction(value.request.action)) && UUID.test(value.request.runId) && value.request.state === 'pending' && run === null)
+      && value.sendingEnabled === false && value.recurringEnabled === false && (run === null ||
+        exact(run, ['runId', 'complete', 'synthetic', 'scenarios']) && UUID.test(run.runId) && run.complete === true && run.synthetic === true
+        && Array.isArray(run.scenarios) && run.scenarios.length > 0 && run.scenarios.length <= 20
+        && new Set(run.scenarios.map(scenario => scenario?.key)).size === run.scenarios.length
+        && run.scenarios.every(scenario => exact(scenario, ['key', 'title', 'passed', 'summary', 'warnings', 'messages', 'checks'])
+          && /^[a-z0-9][a-z0-9_-]{0,79}$/.test(scenario.key) && text(scenario.title, 200) && typeof scenario.passed === 'boolean' && text(scenario.summary, 2000)
+          && Array.isArray(scenario.checks) && scenario.checks.length <= 30 && scenario.checks.every(check => text(check, 1000))
+          && Array.isArray(scenario.warnings) && scenario.warnings.length <= 12 && scenario.warnings.every(warning => exact(warning, ['code', 'message'])
+            && /^[A-Z][A-Z0-9_]{0,79}$/.test(warning.code) && text(warning.message))
+          && Array.isArray(scenario.messages) && scenario.messages.length <= 8 && scenario.messages.every(message =>
+            exact(message, ['gym', 'name', 'to', 'cc', 'subject', 'html', 'text', 'adminUrl']) && Object.hasOwn(ADMIN_URLS, message.gym)
+            && message.adminUrl === ADMIN_URLS[message.gym] && text(message.name, 120) && addresses(message.to) && message.to.length > 0
+            && addresses(message.cc) && text(message.subject, 300) && text(message.html, 100000) && text(message.text, 100000))));
+  }
+  function create({ root, request, enabled, target, site, getAdmin, getSession, onUnauthorized = () => {} }) {
+    const gym = global.M1_INSTALLATION_PROFILE?.installationId, richmond = gym === 'richmond';
+    if (!['rev', 'richmond'].includes(gym) || richmond && global.M1_INSTALLATION_PROFILE?.environment !== 'test') return null;
+    const journalKey = richmond ? 'm1-attendance-workflow-test-richmond-pending-v1' : KEY;
+    if (!root || enabled !== true || target !== 'test' || site !== (richmond ? 'Richmond' : 'Rev') || typeof request !== 'function' || typeof getAdmin !== 'function' || typeof getSession !== 'function'
+      || global.location?.origin !== (richmond ? 'https://gib-richmond-test.netlify.app' : ORIGIN) || global.location?.protocol !== 'https:' || global.location?.port
+      || global.M1_MANAGER_REVIEW_CONFIG?.enabled !== true || global.M1_MANAGER_REVIEW_CONFIG?.target !== 'test') return null;
+    const document = root.ownerDocument || global.document;
+    let active = false, generation = 0, owner = '', session = null, flight = null, data = null, current = false, pending = null, storageBlocked = false, note = '', pollTimer = null, pollUntil = 0, pollCount = 0;
+    const el = (tag, value = '', className = '') => { const node = document.createElement(tag); node.textContent = value; if (className) node.className = className; return node; };
+    const live = own => active && generation === own && owner === getAdmin() && session === getSession();
+    function retain(value) {
+      if (value) { const raw = JSON.stringify(value); global.sessionStorage.setItem(journalKey, raw); if (global.sessionStorage.getItem(journalKey) !== raw) throw new Error('Journal unavailable'); }
+      else { global.sessionStorage.removeItem(journalKey); if (global.sessionStorage.getItem(journalKey) !== null) throw new Error('Journal unavailable'); }
+      pending = value;
+    }
+    function restore() {
+      storageBlocked = false;
+      if (richmond) { pending = null; return; }
+      try { const raw = global.sessionStorage.getItem(journalKey); pending = raw ? JSON.parse(raw) : null;
+        if (pending && (!exact(pending, ['requestId', 'adminName', ...(Object.hasOwn(pending, 'action') ? ['action'] : [])])
+          || Object.hasOwn(pending, 'action') && !runAction(pending.action) || !UUID.test(pending.requestId) || !text(pending.adminName, 120))) throw new Error('Invalid retained run');
+      } catch { storageBlocked = true; }
+    }
+    function render() {
+      if (!live(generation)) return;
+      root.hidden = false; root.setAttribute('aria-busy', String(Boolean(flight))); root.replaceChildren(el('h2', 'Automatic attendance workflow · TEST'));
+      if (!richmond) root.append(el('p', 'Synthetic examples run through the workflow with a simulated email provider. No emails are sent and recurring sending is off.', 'manager-warning'));
+      if (!richmond) root.append(el('p', 'Google MailApp checks use simulated sending. A completed Google call means submitted to Google, not confirmed delivery to an inbox. Older Resend examples remain historical evidence for the previous provider policy.', 'manager-note'));
+      const setup = current && data?.setup?.senderAddress ? data.setup : null;
+      if (setup) {
+        root.append(el('p', richmond ? `Proposed sender: ${setup.senderAddress}. Richmond: Trey at ${setup.richmondTo}. CC: none. Hidden BCC copy: ${setup.bcc.length ? setup.bcc.join(', ') : 'off'}.` : `Proposed sender: ${setup.senderAddress}. Revolution: Stu at ${setup.revolutionTo}. Richmond: Trey at ${setup.richmondTo}. CC: none. Hidden BCC copy: ${setup.bcc.length ? setup.bcc.join(', ') : 'off'}.`, 'manager-note'));
+        root.append(el('p', `Daily reminder: ${setup.dailyLocalTime} ${setup.timezone}${setup.reminderTimeConfirmed ? ' (confirmed)' : ' (not confirmed)'}. This local time follows daylight saving time. The reminder does not confirm class finishing times.`, 'manager-note'));
+      } else root.append(el('p', 'Current reminder and recipient configuration has not been loaded.', 'manager-note'));
+      root.append(el('p', richmond ? 'Trey can use scoped Richmond TEST Admin access. Production reviewer access remains unverified. Sending remains off.' : 'Trey still needs existing Admin access. No access is granted here. Sending and recurring sending remain off in these examples.', 'manager-note'));
+      root.append(el('p', 'An unreviewed day does not prove a missing sign-in. Every instructor, including a second instructor, must remain covered. Staff Clock finish corrections remain separate.', 'manager-note'));
+      const health = data?.current?.health;
+      const hasHistory = ['historicalUnconfirmedCount', 'historicalFailedCount', 'opportunityDate'].some(key => Object.hasOwn(health || {}, key));
+      const validHistory = !hasHistory || [health.historicalUnconfirmedCount, health.historicalFailedCount].every(count => Number.isSafeInteger(count) && count >= 0)
+        && (health.opportunityDate === null || typeof health.opportunityDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(health.opportunityDate)
+          && Number.isFinite(Date.parse(health.opportunityDate)) && new Date(health.opportunityDate).toISOString().slice(0, 10) === health.opportunityDate);
+      const validHealth = health?.ok === true && health.target === 'test' && Array.isArray(health.codes) && health.codes.length <= 5
+        && ['check-overdue', 'check-incomplete', 'delivery-failed', 'delivery-unconfirmed', 'not-configured', 'attention', 'clear'].includes(health.state)
+        && health.codes.every(code => global.GIBM1AttendanceWarning?.label(code))
+        && [health.pendingCount, health.failedCount, health.unconfirmedCount].every(count => Number.isSafeInteger(count) && count >= 0)
+        && validHistory && (health.checkedAt === null || typeof health.checkedAt === 'string' && Number.isFinite(Date.parse(health.checkedAt)));
+      root.append(el('p', !current || !validHealth ? 'Current attendance check status unavailable.'
+        : health.codes.length ? 'Current status: ' + health.codes.map(code => global.GIBM1AttendanceWarning.label(code)).join(' ')
+          : health.state === 'attention' ? 'Attendance still needs review in the existing correction tools.'
+            : health.state === 'clear' && health.checkedAt && Date.now() - Date.parse(health.checkedAt) >= -5000
+              && Date.now() - Date.parse(health.checkedAt) <= 1800000 && Date.parse(health.expiresAt) > Date.now()
+              && health.pendingCount === 0 && health.failedCount === 0 && health.unconfirmedCount === 0
+              ? 'Current attendance check completed.' : 'Current attendance check status unavailable.', 'manager-note'));
+      if (hasHistory) {
+        if (!current || !validHealth) root.append(el('p', 'Past reminder history is currently unavailable.', 'manager-warning'));
+        else {
+          if (health.opportunityDate) root.append(el('p', 'Current reminder date: ' + health.opportunityDate + '.', 'manager-note'));
+          if (health.historicalUnconfirmedCount > 0) root.append(el('p', 'Past reminder history: ' + health.historicalUnconfirmedCount
+            + (health.historicalUnconfirmedCount === 1 ? ' earlier reminder still has' : ' earlier reminders still have')
+            + ' an unknown send result. This uncertainty is retained; a newer check does not mean those emails were delivered.', 'manager-warning'));
+          if (health.historicalFailedCount > 0) root.append(el('p', 'Past reminder history: ' + health.historicalFailedCount
+            + (health.historicalFailedCount === 1 ? ' earlier reminder has' : ' earlier reminders have')
+            + ' a recorded email failure. This failure history is retained.', 'manager-warning'));
+        }
+      }
+      if (richmond) {
+        root.append(el('p', 'Richmond TEST uses its own attendance and review history. Staff Clock is disabled. Sending remains off.', 'manager-note'));
+        const refresh = el('button', 'Refresh Richmond reminder status', 'btn'); refresh.type = 'button'; refresh.dataset.workflowAction = 'refresh'; refresh.disabled = Boolean(flight); root.append(refresh);
+        const status = el('p', note || 'Loading Richmond reminder status...', 'message'); status.style.display = 'block'; status.setAttribute('role', 'status'); root.append(status);
+        return;
+      }
+      const controls = el('div', '', 'manager-controls');
+      for (const [action, label] of [['refresh', pending ? 'Check original example run' : 'Refresh workflow examples'], ['mailapp', 'Run synthetic Google MailApp checks'], ['run', 'Run synthetic workflow examples'],
+        ['history', 'Run synthetic history checks'], ['daily', 'Run synthetic daily reminder checks'], ...(pending ? [['retry', 'Retry original example run']] : [])]) {
+        const button = el('button', label, 'btn'); button.type = 'button'; button.dataset.workflowAction = action;
+        button.disabled = Boolean(flight) || action !== 'refresh' && (storageBlocked || (action === 'retry' ? pending?.adminName !== owner : Boolean(pending))); controls.append(button);
+      }
+      root.append(controls);
+      const status = el('p', storageBlocked ? 'The original example request could not be retained safely. New example runs are blocked; existing requests are preserved.'
+        : pending && pending.adminName !== owner ? 'Another reviewer’s original example run still needs confirmation. Reopen as that reviewer to retry.'
+          : note || 'No confirmed workflow example run yet.', 'message');
+      status.style.display = 'block'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); root.append(status);
+      if (!data?.latestRun) return;
+      if (!current) root.append(el('p', 'Previously loaded examples are shown below. Current workflow status is unavailable.', 'manager-warning'));
+      root.append(el('p', 'Synthetic run: ' + data.latestRun.runId, 'manager-note'));
+      root.append(el('p', data.latestRun.scenarios.every(scenario => scenario.key.startsWith('mailapp-'))
+        ? 'This saved run checks the Google MailApp policy using isolated examples. It proves no real send or inbox delivery.'
+        : 'This saved run used the earlier simulated Resend policy. It does not verify Google MailApp behavior.', 'manager-note'));
+      for (const scenario of data.latestRun.scenarios) {
+        const article = el('details', '', 'manager-class'); article.open = scenario.key === 'routing' || scenario.key === 'mailapp-original-recovery';
+        article.append(el('summary', (scenario.passed ? 'Passed · ' : 'Needs attention · ') + scenario.title));
+        article.append(el('p', (scenario.passed ? 'Example passed: ' : 'Example needs attention: ') + scenario.summary, scenario.passed ? 'manager-success' : 'manager-warning'));
+        for (const warning of scenario.warnings) article.append(el('p', global.GIBM1AttendanceWarning?.label(warning.code) || warning.message, 'manager-warning'));
+        const checks = el('ul'); scenario.checks.forEach(check => checks.append(el('li', check))); article.append(checks);
+        for (const message of scenario.messages) {
+          const details = el('details'); details.open = true; details.append(el('summary', message.name + ' · simulated email'));
+          details.append(el('p', 'To: ' + message.to.join(', ') + (message.cc.length ? ' · CC: ' + message.cc.join(', ') : '')));
+          details.append(el('p', 'Subject: ' + message.subject));
+          const frame = el('iframe'); frame.title = scenario.title + ' — ' + message.name + ' simulated email';
+          frame.setAttribute('sandbox', ''); frame.setAttribute('referrerpolicy', 'no-referrer'); frame.setAttribute('csp', CSP);
+          frame.style.width = '100%'; frame.style.height = '360px'; frame.style.border = '1px solid #cbd5e1';
+          frame.srcdoc = '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + CSP + '"></head><body inert>' + message.html + '</body></html>';
+          details.append(frame, el('p', 'Links inside this synthetic preview are inactive.', 'manager-note'));
+          const plain = el('details'); plain.append(el('summary', 'Read plain text')); const pre = el('pre', message.text);
+          pre.style.whiteSpace = 'pre-wrap'; pre.style.overflowWrap = 'anywhere'; plain.append(pre); details.append(plain);
+          if (current) { const link = el('a', 'Open ' + message.name + ' TEST correction tools', 'btn'); link.href = message.adminUrl; details.append(link); }
+          article.append(details);
+        }
+        root.append(article);
+      }
+    }
+    async function run(action = null, polling = false) {
+      if (!live(generation)) return;
+      if (flight) return flight;
+      if (polling && Date.now() >= pollUntil) { note = 'The original example run is not yet confirmed. Use Check original example run to continue; its request ID is retained.'; render(); return; }
+      const send = action !== null;
+      if (richmond && send) return;
+      if (send && storageBlocked) return;
+      if (send && (action === 'retry' ? !pending || pending.adminName !== owner : !runAction(action) || Boolean(pending))) return;
+      if (send && !pending) {
+        try { const requestId = global.crypto.randomUUID(); if (!UUID.test(requestId)) throw new Error('Invalid identity'); retain({ requestId, adminName: owner, action }); }
+        catch { storageBlocked = true; render(); return; }
+      }
+      global.clearTimeout(pollTimer);
+      if (!polling) { pollUntil = Date.now() + 120000; pollCount = 0; }
+      const own = generation, original = pending?.requestId || null, originalAction = pending?.action || 'runExamples';
+      current = false; note = richmond ? 'Loading Richmond reminder status...' : send ? 'Running isolated synthetic examples…' : 'Loading confirmed workflow examples…';
+      const task = (async () => {
+        try {
+          const result = await Promise.resolve().then(() => send ? request(API, { action: originalAction, requestId: original }, { timeoutMs: 25000 })
+            : request(API + (original ? '?runId=' + encodeURIComponent(original) : ''), undefined, { method: 'GET', timeoutMs: 25000 }));
+          if (!live(own)) return;
+          if (!valid(result) || richmond && (result.latestRun !== null || result.request || result.current?.messages?.messages?.some(message => message.gym !== gym)) || original && result.latestRun && result.latestRun.runId !== original
+            || result.request && (result.request.runId !== original || result.request.action && result.request.action !== originalAction)
+            || send && !result.latestRun && !result.request) throw new Error('Unconfirmed workflow run');
+          data = result; current = true;
+          if (original && result.latestRun?.runId === original) { retain(null); note = 'The original synthetic run is confirmed centrally. No real email was sent.'; }
+          else note = richmond ? 'Richmond reminder status loaded. Sending remains off.' : original ? 'The original synthetic run is still waiting for confirmation. Checking it automatically; its request ID is retained.'
+            : result.latestRun ? 'Saved synthetic examples loaded. No real email was sent.' : 'No confirmed workflow example run yet.';
+        } catch (error) {
+          if (!live(own)) return;
+          current = false; note = pending ? 'The original example run is not confirmed. Check or retry that same run; its request ID is retained.' : 'Attendance workflow status unavailable. Unfinished days still need review.';
+          if (error?.status === 401 || error?.status === 403) onUnauthorized();
+        } finally {
+          if (flight === task) flight = null;
+          if (live(own)) {
+            if (pending && !storageBlocked && pending.adminName === owner && Date.now() < pollUntil && !document.hidden) {
+              pollTimer = global.setTimeout(() => { if (live(own)) void run(null, true); }, pollCount++ === 0 ? 1000 : 3000);
+            } else if (pending && Date.now() >= pollUntil) note = 'The original example run is not yet confirmed. Use Check original example run to continue; its request ID is retained.';
+            render();
+          }
+        }
+      })();
+      flight = task; render(); return task;
+    }
+    root.addEventListener('click', event => { const action = event.target.closest('[data-workflow-action]')?.dataset.workflowAction;
+      if (action === 'refresh') void run(); if (action === 'run') void run('runExamples');
+      if (action === 'mailapp') void run('runMailApp');
+      if (action === 'history') void run('runHistory'); if (action === 'daily') void run('runDaily'); if (action === 'retry') void run('retry'); });
+    function clear() { active = false; generation++; global.clearTimeout(pollTimer); owner = ''; session = null; flight = null; data = null; current = false; root.hidden = true; root.replaceChildren(); }
+    return Object.freeze({ open() {
+      if (active && owner === getAdmin() && session === getSession()) return run();
+      clear(); owner = getAdmin(); session = getSession(); active = text(owner, 120); if (!active) return Promise.resolve(); restore(); return run();
+    }, refresh: () => run(), clear });
+  }
+  global.GIBM1AttendanceWorkflow = Object.freeze({ create, valid });
+})(globalThis);

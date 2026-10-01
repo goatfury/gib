@@ -13,7 +13,9 @@ export const RICHMOND_SCHEDULE_TIME_ZONE = 'America/New_York';
 export const RICHMOND_SCHEDULE_SITE = 'Richmond';
 export const RICHMOND_PUBLIC_SCHEDULE_URL = 'https://www.richmondbjj.com/schedule';
 export const RICHMOND_SCHEDULE_BLOCK_ID = 'block-885f8d1ae3f423380aba';
-export const RICHMOND_MAX_UPSTREAM_BYTES = 1_500_000;
+// The verified official page is 2,268,972 decoded bytes (2026-09-29).
+// This bounds the whole page; the selected schedule block keeps its 100 KB cap.
+export const RICHMOND_MAX_UPSTREAM_BYTES = 3 * 1024 * 1024;
 
 export class RichmondScheduleSourceError extends Error {
   constructor(code) {

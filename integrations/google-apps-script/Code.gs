@@ -8,6 +8,7 @@
  * override for incident recovery without changing source.
  */
 var GIB_M1_ALLOWED_TARGET = 'test';
+var GIB_M1_MANAGER_REVIEW_TEST_ENABLED = true;
 var GIB_M1_REVOLUTION_REMOVAL_ENABLED = true;
 var GIB_M1_TEST_SPREADSHEET_PROPERTY_ = 'GIB_M1_TEST_SPREADSHEET_ID';
 var GIB_M1_TEST_SPREADSHEET_TITLE_ = 'RBJJ M1 — TEST';
@@ -88,6 +89,67 @@ var SHEET_NAME = GIB_M1_TEST_SIGNINS_SHEET_;
 
 function doPost(e) {
   return adReceiverV2_(e);
+}
+
+function gibM1RunStaffReadTrace_(e, callback) {
+  // Invocation-local, editor-armed diagnostics. Never add fields to a Staff reply.
+  var trace = gibM1BeginStaffReadTrace_(e), response;
+  GIB_M1_ACTIVE_STAFF_READ_TRACE_ = trace;
+  try {
+    response = callback();
+    return response;
+  } finally {
+    GIB_M1_ACTIVE_STAFF_READ_TRACE_ = null;
+    try { if (trace) trace.finish(response); } catch (_) {}
+  }
+}
+
+var GIB_M1_ACTIVE_STAFF_READ_TRACE_ = null;
+function gibM1BeginStaffReadTrace_(e) {
+  try {
+    var started = Date.now(), body = parseRequestBody_(e);
+    if (!body || typeof body.staffReadTraceId !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(body.staffReadTraceId)
+      || ['staffTimeReviewV2', 'staffTimeReviewPageV2', 'staffTimeHistoryPageV2', 'staffTimeShiftLookupV3', 'staffRecoveryReview'].indexOf(body.action) < 0
+      || GIB_M1_ALLOWED_TARGET !== 'test' || body.target !== 'test'
+      || GIB_M1_TEST_SPREADSHEET_TITLE_ !== 'RBJJ M1 — TEST' || EXPECTED_SPREADSHEET_NAME !== 'RBJJ M1 — TEST'
+      || typeof GIB_M1_RICHMOND_INSTALLATION_ !== 'undefined' || typeof GIB_M1_RICHMOND_PRODUCTION_INSTALLATION_ !== 'undefined'
+      || typeof gibM1ReadTraceReceipt_ !== 'function' || typeof gibM1TestReadCallbackEnabled_ !== 'function'
+      || !gibM1TestReadCallbackEnabled_()) return null;
+    // Unarmed requests never create a collector or inspect the final reply.
+    var until = Number(PropertiesService.getScriptProperties().getProperty(GIB_M1_READ_TRACE_WINDOW_));
+    if (!(until > started && until <= started + 20 * 60000) || !adminActionAuthorized_(body)) return null;
+    var receipt = gibM1ReadTraceReceipt_(body.staffReadTraceId, started);
+    var stage = 'google.request', failedStage = null, thrown = false, lockUnavailable = false;
+    receipt.event('google.request', 'accepted');
+    return {
+      event: function(nextStage, state, exception) {
+        try {
+          if (exception) { thrown = true; failedStage = failedStage || (nextStage === 'google.result' ? stage : nextStage); }
+          if (nextStage === 'google.lock' && state === 'unavailable') lockUnavailable = true;
+          stage = nextStage;
+          receipt.event(nextStage, state);
+        } catch (_) {}
+      },
+      finish: function(output) {
+        try {
+          // Inspect only the result flags in memory; retain no response content.
+          var value = output && JSON.parse(output.getContent());
+          var successful = Boolean(value && value.ok === true);
+          receipt.event('google.result', successful ? 'validated' : 'rejected');
+          receipt.finish(thrown ? failedStage : (lockUnavailable ? 'google.lock' : 'google.result'),
+            thrown ? 'thrown_exception' : (successful ? 'none' : 'read_rejected'), null, null);
+        } catch (_) {
+          try { receipt.finish('google.decode', 'ack_read_exception', null, null); } catch (_) {}
+        }
+      }
+    };
+  } catch (_) { return null; }
+}
+function gibM1StaffReadTraceEvent_(stage, state, exception) {
+  try {
+    if (GIB_M1_ACTIVE_STAFF_READ_TRACE_) GIB_M1_ACTIVE_STAFF_READ_TRACE_.event(stage, state, exception);
+  } catch (_) {}
 }
 
 function gibM1ExactTestSpreadsheetFiles_() {

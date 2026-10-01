@@ -1462,6 +1462,7 @@ test('TEST Admin entry preserves the direct Staff Clock hash and activates only 
     calls: [],
     events: [],
     addedClasses: null,
+    managerDayReview: null,
     openWorkspaceTask() {},
     window: { requestAnimationFrame(callback) { callback(); } }
   });
@@ -1593,7 +1594,7 @@ test('repeated Arrow, Home, and End navigation keeps focus on the manager mode t
 
 test('#staff-time starts Staff Clock loading without waiting for Daily sign-ins', async () => {
   const loginSource = sourceBetween(adminHtml, 'async function login(', 'async function logout(');
-  const context = vm.createContext({ events: [], releaseDaily: null, addedClasses: null, openWorkspaceTask() {} });
+  const context = vm.createContext({ events: [], releaseDaily: null, addedClasses: null, managerDayReview: null, openWorkspaceTask() {} });
   new vm.Script(`
     const API = { login: '/login' };
     const IS_RICHMOND_PRODUCTION = false;
@@ -2539,7 +2540,8 @@ test('recent completed shifts have explicit loading, success, failure, and retry
   assert.match(renderSource, /Recent completed shifts did not load\. Retry below/u);
   assert.match(renderSource, /lookup\.items\.slice\(0, staffRecentVisibleLimit\)/u);
   assert.match(retrySource, /fetchStaffTimeShiftLookup\([\s\S]*mode: 'recent'/u);
-  assert.match(retryOnlySource, /await loadStaffRecentShifts\(staffTimeLoadGeneration\)/u);
+  assert.match(retryOnlySource, /await loadStaffTime\(\{ quiet: true, readRecovery: true \}\)/u);
+  assert.doesNotMatch(retryOnlySource, /await loadStaffRecentShifts\(/u);
   assert.match(retrySource, /staffRecentVisibleLimit = Math\.min\([\s\S]*STAFF_RECENT_MAX_VISIBLE[\s\S]*STAFF_RECENT_INCREMENT/u);
   assert.doesNotMatch(adminHtml, /operation: 'historyPage'|Load older completed shifts/u);
 });

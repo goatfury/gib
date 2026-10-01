@@ -1,0 +1,235 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { handleAttendanceWorkflow } from '../netlify/functions/m1-attendance-workflow.mjs';
+import { handleAttendanceWorkflowBackground } from '../netlify/functions/m1-attendance-workflow-background.mjs';
+import { handleAttendanceWarning } from '../netlify/functions/m1-attendance-warning.mjs';
+import { ADMIN_COOKIE, ADMIN_REQUEST_HEADER, createAdminSession, runtimeConfig } from '../netlify/functions/_lib/m1-common.mjs';
+import { DIGEST_ORIGIN } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
+
+const now = Date.parse('2026-09-27T12:00:00Z'), id = 'ca1d0000-0000-4000-8000-000000000001';
+const env = { GIB_TEST_WEBHOOK_URL: 'https://script.google.com/macros/s/SYNTHETIC_TEST/exec',
+  GIB_TEST_WEBHOOK_TOKEN: 'synthetic-transport-secret-1234567890', GIB_TEST_ADMIN_ACTION_TOKEN: 'synthetic-admin-secret-12345678901234567890' };
+const health = () => ({ ok: true, target: 'test', state: 'not-configured', codes: ['CONFIGURATION_REQUIRED'], checkedAt: null, expiresAt: null,
+  pendingCount: 0, failedCount: 0, unconfirmedCount: 0 });
+const dependencies = () => ({ enabled: true, target: 'test', env, clock: () => now,
+  context: { site: { id: 'f748e737-11e3-4fab-8e8c-bf185eab29ff', name: 'gib-live' }, deploy: { context: 'deploy-preview', published: false } },
+  readExamples: async () => null, readHealth: async () => health(), readMessages: async () => [] });
+function request(path, body, options = {}) {
+  const runtime = runtimeConfig(env, { admin: true, requestUrl: DIGEST_ORIGIN });
+  const token = 'x'.repeat(43), session = createAdminSession('Andrew Smith', runtime.sessionSecret, now, token);
+  return new Request((options.origin || DIGEST_ORIGIN) + path, { method: body ? 'POST' : 'GET',
+    headers: { 'Content-Type': 'application/json', Origin: options.requestOrigin || options.origin || DIGEST_ORIGIN,
+      ...(options.cookie === false ? {} : { Cookie: `${ADMIN_COOKIE}=${encodeURIComponent(session)}` }),
+      ...(options.token === false ? {} : { [ADMIN_REQUEST_HEADER]: token }) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+}
+
+test('protected setup reports selected per-gym addresses and20:00 reminder without claiming class closure or access', async () => {
+  const deps = dependencies();
+  const res = await handleAttendanceWorkflow(request('/api/m1-attendance-workflow'), deps);
+  assert.equal(res.status, 200); const data = await res.json();
+  assert.deepEqual(data.setup, { revolutionReviewer: 'Stu', richmondReviewer: 'Trey', senderAddress: 'revbjjops@gmail.com',
+    revolutionTo: 'info@revolutionbjj.com', richmondTo: 'info@richmondbjj.com', cc: [], bcc: ['andrew@revolutionbjj.com'],
+    dailyLocalTime: '20:00', timezone: 'America/New_York', reminderTimeConfirmed: true, classFinishCutoffConfirmed: false, richmondReviewerAccessVerified: false });
+  assert.equal(data.sendingEnabled, false); assert.equal(data.recurringEnabled, false);
+  deps.env = { ...env, GIB_M1_ATTENDANCE_DIGEST_BCC_ANDREW: 'false' };
+  const copyOff = await (await handleAttendanceWorkflow(request('/api/m1-attendance-workflow'), deps)).json();
+  assert.deepEqual(copyOff.setup.bcc, []); assert.deepEqual(copyOff.setup.cc, []);
+  assert.equal(copyOff.setup.revolutionTo, 'info@revolutionbjj.com');
+});
+
+test('all full workflow data and simulation starts remain behind the existing Admin and exact TEST boundary', async () => {
+  const deps = dependencies(); let touched = 0;
+  deps.readExamples = deps.prepareExamples = deps.prepareHistory = deps.prepareDaily = deps.runExamples = deps.runHistory = deps.runDaily = async () => { touched++; };
+  for (const options of [{ cookie: false }, { token: false }, { origin: 'https://gib-live.netlify.app' },
+    { origin: 'https://gib-richmond-test.netlify.app' }, { requestOrigin: 'https://other.example' }]) {
+    for (const [path, handler] of [['/api/m1-attendance-workflow', handleAttendanceWorkflow],
+      ['/api/m1-attendance-workflow-background', handleAttendanceWorkflowBackground]]) {
+      for (const action of ['runExamples', 'runHistory', 'runDaily']) {
+        const res = await handler(request(path, { action, requestId: id }, options), deps);
+        assert.ok([401, 403].includes(res.status));
+      }
+    }
+  }
+  assert.equal(touched, 0);
+});
+
+test('original example identity is persisted before supported dispatch; 202 is pending, not a test pass', async () => {
+  const deps = dependencies(), order = [];
+  deps.prepareExamples = async runId => { assert.equal(runId, id); order.push('persist'); };
+  deps.readExamples = async () => { order.push('read'); return null; };
+  deps.dispatchExamples = async runId => { assert.equal(runId, id); order.push('dispatch'); };
+  const result = await handleAttendanceWorkflow(request('/api/m1-attendance-workflow', { action: 'runExamples', requestId: id }), deps);
+  assert.equal(result.status, 202);
+  const data = await result.json();
+  assert.deepEqual(order, ['persist', 'read', 'dispatch']);
+  assert.equal(data.latestRun, null); assert.equal(data.request.runId, id); assert.equal(data.request.state, 'pending');
+  assert.equal(data.sendingEnabled, false); assert.equal(data.recurringEnabled, false);
+  deps.prepareExamples = async () => { throw new Error('Lost storage'); };
+  const failed = await handleAttendanceWorkflow(request('/api/m1-attendance-workflow', { action: 'runExamples', requestId: id }), deps);
+  assert.equal(failed.status, 503); assert.equal(order.filter(x => x === 'dispatch').length, 1);
+});
+
+test('completed original run reopens without another dispatch and no client can select recipients or real delivery', async () => {
+  const deps = dependencies(); let dispatches = 0, starts = 0;
+  const run = { runId: id, complete: true, synthetic: true, scenarios: [] };
+  deps.readExamples = async runId => { assert.equal(runId, id); return run; };
+  deps.prepareExamples = async () => { starts++; };
+  deps.dispatchExamples = async () => { dispatches++; };
+  const reopened = await handleAttendanceWorkflow(request('/api/m1-attendance-workflow?runId=' + id), deps);
+  assert.equal(reopened.status, 200); assert.deepEqual((await reopened.json()).latestRun, run);
+  const repeat = await handleAttendanceWorkflow(request('/api/m1-attendance-workflow', { action: 'runExamples', requestId: id }), deps);
+  assert.equal(repeat.status, 200); assert.equal(dispatches, 0); assert.equal(starts, 1);
+  for (const input of [{ action: 'send', requestId: id }, { action: 'runExamples', requestId: id, recipient: 'private@example.test' },
+    { action: 'runExamples', requestId: id, realSending: true }, { action: 'runExamples', requestId: 'new-message' }]) {
+    assert.equal((await handleAttendanceWorkflow(request('/api/m1-attendance-workflow', input), deps)).status, 400);
+  }
+  assert.equal(starts, 1);
+});
+
+test('background execution awaits one fixed original run and does not call a user-selected provider', async () => {
+  const deps = dependencies(); let completed = false;
+  deps.runExamples = async (runId, received) => { assert.equal(runId, id); assert.equal(received.scope.target, 'test'); await Promise.resolve(); completed = true; };
+  const result = await handleAttendanceWorkflowBackground(request('/api/m1-attendance-workflow-background', { action: 'runExamples', requestId: id }), deps);
+  assert.equal(result.status, 200); assert.equal(completed, true);
+  deps.runExamples = async () => { throw Object.assign(new Error('Lease held'), { code: 'WORKFLOW_EXAMPLES_IN_PROGRESS' }); };
+  deps.traceLog = () => {};
+  const busy = await handleAttendanceWorkflowBackground(request('/api/m1-attendance-workflow-background', { action: 'runExamples', requestId: id }), deps);
+  assert.equal(busy.status, 409);
+});
+
+for (const [kind, action, prepare, runMethod] of [
+  ['history', 'runHistory', 'prepareHistory', 'runHistory'],
+  ['daily', 'runDaily', 'prepareDaily', 'runDaily'],
+]) {
+test(kind + ' preparation precedes awaited dispatch with the exact original action and ID', async t => {
+  const deps = dependencies(), order = [];
+  deps.prepareExamples = async () => assert.fail('History must not prepare or rerun the twelve examples');
+  deps[prepare] = async (runId, received) => { assert.equal(runId, id); assert.equal(received.scope.target, 'test'); order.push('persist'); };
+  deps.readExamples = async runId => { assert.equal(runId, id); order.push('read'); return null; };
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    order.push('dispatch');
+    assert.equal(url, DIGEST_ORIGIN + '/api/m1-attendance-workflow-background');
+    assert.equal(options.method, 'POST'); assert.equal(options.redirect, 'error');
+    assert.equal(options.headers.Origin, DIGEST_ORIGIN);
+    assert.ok(options.headers.Cookie); assert.ok(options.headers[ADMIN_REQUEST_HEADER]);
+    assert.deepEqual(JSON.parse(options.body), { action: action, requestId: id });
+    return new Response(null, { status: 202 });
+  });
+  const result = await handleAttendanceWorkflow(request('/api/m1-attendance-workflow', { action: action, requestId: id }), deps);
+  assert.equal(result.status, 202); const data = await result.json();
+  assert.deepEqual(order, ['persist', 'read', 'dispatch']);
+  assert.deepEqual(data.request, { runId: id, action: action, state: 'pending' });
+  assert.equal(data.latestRun, null); assert.equal(data.sendingEnabled, false); assert.equal(data.recurringEnabled, false);
+  deps[prepare] = async () => { throw new Error('Unconfirmed original'); };
+  assert.equal((await handleAttendanceWorkflow(request('/api/m1-attendance-workflow', { action: action, requestId: id }), deps)).status, 503);
+  assert.equal(order.filter(item => item === 'dispatch').length, 1);
+});
+
+test(kind + ' result restores by original ID and latest read; repeating it never dispatches another run', async () => {
+  const deps = dependencies(), reads = [], run = { runId: id, complete: true, synthetic: true,
+    scenarios: [{ key: 'history-saturation', title: 'History check', passed: true, summary: 'Saved', warnings: [], checks: [], messages: [] }] };
+  deps.readExamples = async runId => { reads.push(runId); return run; };
+  deps[prepare] = async runId => assert.equal(runId, id);
+  deps.prepareExamples = deps.dispatchExamples = async () => assert.fail('Saved history must not rerun or become the legacy examples');
+  for (const url of ['/api/m1-attendance-workflow?runId=' + id, '/api/m1-attendance-workflow']) {
+    const result = await handleAttendanceWorkflow(request(url), deps);
+    assert.equal(result.status, 200); assert.deepEqual((await result.json()).latestRun, run);
+  }
+  const repeat = await handleAttendanceWorkflow(request('/api/m1-attendance-workflow', { action: action, requestId: id }), deps);
+  assert.equal(repeat.status, 200); assert.deepEqual((await repeat.json()).latestRun, run);
+  assert.deepEqual(reads, [id, null, id]);
+});
+
+test(kind + ' background work remains awaited and requires the prepared original action', async () => {
+  const deps = dependencies(); let release, entered = false, completed = false;
+  deps.runExamples = async () => assert.fail('History action cannot select the legacy runner');
+  deps[runMethod] = async (runId, received) => {
+    assert.equal(runId, id); assert.equal(received.scope.target, 'test'); assert.equal(received.requirePrepared, true);
+    entered = true; await new Promise(resolve => { release = resolve; });
+  };
+  const pending = handleAttendanceWorkflowBackground(request('/api/m1-attendance-workflow-background', { action: action, requestId: id }), deps)
+    .then(value => { completed = true; return value; });
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(entered, true); assert.equal(completed, false);
+  release(); assert.equal((await pending).status, 200);
+  for (const input of [{ action: action, requestId: id, provider: 'real' }, { action: action, requestId: id, realSending: true },
+    { action: action, requestId: id, recipient: 'private@example.test' }, { action: action, requestId: 'replacement' }]) {
+    assert.equal((await handleAttendanceWorkflow(request('/api/m1-attendance-workflow', input), deps)).status, 400);
+    assert.equal((await handleAttendanceWorkflowBackground(request('/api/m1-attendance-workflow-background', input), deps)).status, 400);
+  }
+});
+
+test(kind + ' actual saved run identity rejects changing its action and a background run cannot invent its original', async () => {
+  const entries = new Map(); let serial = 0, dispatched = 0;
+  const store = { async getWithMetadata(key) { return entries.has(key) ? structuredClone(entries.get(key)) : null; },
+    async set(key, raw, options = {}) {
+      const prior = entries.get(key);
+      if ((options.onlyIfNew && prior) || (options.onlyIfMatch && prior?.etag !== options.onlyIfMatch)) return { modified: false };
+      entries.set(key, { data: JSON.parse(raw), etag: String(++serial) }); return { modified: true };
+    } };
+  const deps = { ...dependencies(), examplesStore: store, traceLog: () => {}, dispatchExamples: async () => { dispatched++; } };
+  delete deps.readExamples;
+  const body = { action: action, requestId: id };
+  const missing = await handleAttendanceWorkflowBackground(request('/api/m1-attendance-workflow-background', body), deps);
+  assert.equal(missing.status, 404); assert.equal((await missing.json()).code, 'WORKFLOW_EXAMPLES_ORIGINAL_REQUIRED');
+  assert.equal(entries.size, 0);
+  assert.equal((await handleAttendanceWorkflow(request('/api/m1-attendance-workflow', body), deps)).status, 202);
+  const original = structuredClone(entries.get('examples/' + id + '/original'));
+  assert.equal(original.data.kind, kind); assert.equal(dispatched, 1);
+  for (const [url, handler] of [['/api/m1-attendance-workflow', handleAttendanceWorkflow], ['/api/m1-attendance-workflow-background', handleAttendanceWorkflowBackground]]) {
+    const mismatch = await handler(request(url, { action: 'runExamples', requestId: id }), deps);
+    assert.equal(mismatch.status, 409); assert.equal((await mismatch.json()).code, 'WORKFLOW_EXAMPLES_KIND_MISMATCH');
+  }
+  assert.deepEqual(entries.get('examples/' + id + '/original'), original); assert.equal(dispatched, 1);
+  assert.equal([...entries.keys()].some(key => key.includes('/scenarios/')), false);
+});
+
+}
+
+test('public warning is fixed aggregate-only text even if private fields appear in underlying status', async () => {
+  const deps = dependencies();
+  deps.readHealth = async () => ({ ...health(), state: 'attention', codes: ['CHECK_INCOMPLETE', 'DELIVERY_UNCONFIRMED'],
+    checkedAt: new Date(now).toISOString(), privateNames: ['PRIVATE STAFF'], recipient: 'private@example.test', records: [{ id: 'record-secret' }] });
+  const result = await handleAttendanceWarning(request('/api/m1-attendance-warning', null, { cookie: false, token: false }), deps);
+  assert.equal(result.status, 200); const data = await result.json();
+  assert.deepEqual(Object.keys(data).sort(), ['checkedAt', 'gym', 'ok', 'status', 'target', 'warnings']);
+  assert.equal(data.status, 'attention'); assert.equal(data.gym, 'rev');
+  assert.doesNotMatch(JSON.stringify(data), /PRIVATE STAFF|private@example|record-secret/);
+  assert.match(data.warnings[0].message, /could not be fully checked/);
+});
+
+test('unavailable or malformed public status never becomes a clean check and stays absent outside Revolution TEST', async () => {
+  const deps = dependencies();
+  for (const read of [async () => { throw new Error('Storage'); }, async () => null,
+    async () => ({ ...health(), codes: ['PRIVATE ARBITRARY TEXT'] }), async () => ({ ...health(), checkedAt: 'invalid' })]) {
+    deps.readHealth = read;
+    const result = await handleAttendanceWarning(request('/api/m1-attendance-warning'), deps);
+    assert.equal(result.status, 503); assert.match((await result.json()).message, /unavailable/);
+  }
+  deps.readHealth = async () => health();
+  for (const origin of ['https://gib-live.netlify.app', 'https://gib-richmond-test.netlify.app', 'https://gib-richmond-live.netlify.app'])
+    assert.equal((await handleAttendanceWarning(request('/api/m1-attendance-warning', null, { origin }), deps)).status, 403);
+  assert.equal((await handleAttendanceWarning(request('/api/m1-attendance-warning?show=records'), deps)).status, 404);
+});
+
+test('public status cannot erase a warning using missing, future or stale clear evidence', async () => {
+  const deps = dependencies();
+  for (const checkedAt of [null, new Date(now + 60000).toISOString()]) {
+    deps.readHealth = async () => ({ ...health(), state: 'clear', codes: [], checkedAt });
+    assert.equal((await handleAttendanceWarning(request('/api/m1-attendance-warning'), deps)).status, 503);
+  }
+  deps.readHealth = async () => ({ ...health(), state: 'clear', codes: [], checkedAt: new Date(now - 30 * 60000).toISOString() });
+  const stale = await (await handleAttendanceWarning(request('/api/m1-attendance-warning'), deps)).json();
+  assert.equal(stale.status, 'attention'); assert.equal(stale.warnings[0].code, 'CHECK_OVERDUE');
+});
+
+test('incomplete or contradictory health never hides a tablet warning', async () => {
+  const deps = dependencies(), fresh = { ...health(), state: 'clear', codes: [], checkedAt: new Date(now).toISOString() };
+  for (const patch of [{ state: 'delivery-failed', failedCount: 1 }, { state: 'unknown' },
+    { failedCount: undefined, pendingCount: undefined, unconfirmedCount: undefined },
+    { unconfirmedCount: 1 }, { pendingCount: 1 }, { failedCount: -1 }]) {
+    deps.readHealth = async () => ({ ...fresh, ...patch });
+    const result = await handleAttendanceWarning(request('/api/m1-attendance-warning'), deps);
+    assert.equal(result.status, 503);
+    assert.match((await result.json()).message, /unavailable/);
+  }
+});

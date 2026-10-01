@@ -1,0 +1,510 @@
+import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { ADMIN_NAMES, adminNamesForScope, constantTimeSecretEqual, requireAdmin, runtimeConfig } from './m1-common.mjs';
+import { managerReviewScope } from './m1-manager-scope.mjs';
+import { REVIEW_START, localNow, validateRead } from './m1-manager-review.mjs';
+import { additionCheckHash, validateAdditionCheckCallback } from './m1-admin-add-check-proof.mjs';
+import { sanitizeStaffTimeReview, sanitizeStaffViewPageRequest, sanitizeStaffViewPage,
+  sanitizeStaffTimeHistoryPageRequest, sanitizeStaffTimeHistoryPage, sanitizeStaffShiftLookupRequest,
+  sanitizeStaffShiftLookup, sanitizeStaffRecoveryResponse } from './m1-staff-clock-contracts.mjs';
+
+// Fixed destinations are selected by trusted deployment scope, never request data.
+export const PROOF_ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
+export const RICHMOND_TEST_ORIGIN = 'https://gib-richmond-test.netlify.app';
+export const LIVE_ORIGIN = 'https://gib-live.netlify.app';
+export const PROOF_PATH = '/api/m1-test-read-proof';
+export const CALLBACK_PATH = '/api/m1-test-read-result';
+export const LIVE_CALLBACK_PATH = '/api/m1-manager-read-result';
+export const CALLBACK_URL = PROOF_ORIGIN + CALLBACK_PATH;
+export const PROOF_SCHEMA = 'm1-test-read-callback/v1';
+export const callbackSchema = target => target === 'production' ? 'm1-manager-read-callback/v1' : PROOF_SCHEMA;
+export const callbackURL = (target, gym = 'rev') => gym === 'richmond' && target === 'test' ? RICHMOND_TEST_ORIGIN + CALLBACK_PATH : target === 'production' ? LIVE_ORIGIN + LIVE_CALLBACK_PATH : CALLBACK_URL;
+export const PROOF_TTL_MS = 60_000;
+export const SIGNATURE_HEADER = 'X-GIB-M1-Read-Signature';
+export const READ_ID_HEADER = 'X-GIB-M1-Read-ID';
+export const READ_OPERATION_HEADER = 'X-GIB-M1-Read-Operation';
+export const READ_OBSERVATION_MS = 50_000;
+export const STAFF_READ_PATH = '/.netlify/functions/m1-admin-staff-time';
+export const STAFF_READ_BUDGET_MS = 25_000;
+const STAFF_READ_ACTIONS = new Set(['staffTimeReviewV2', 'staffTimeReviewPageV2', 'staffTimeHistoryPageV2', 'staffTimeShiftLookupV3', 'staffRecoveryReview']);
+export const validId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+export const hash = text => createHash('sha256').update(text, 'utf8').digest('hex');
+export const signature = (text, secret, target = 'test') => createHmac('sha256', secret).update(`${callbackSchema(target)}\n${text}`, 'utf8').digest('hex');
+const runtimeGym = runtime => runtime.installationId || 'rev';
+export const key = (id, part, target = 'test', gym = 'rev') => `${target}/${gym}/${id}/${part}`;
+export class ProofError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+export const fail = (status, message) => { throw new ProofError(status, message); };
+const exactKeys = (value, keys) => value && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+export function proofRuntime(request, path, dependencies) {
+  const runtime = callbackRuntime(request, path, dependencies);
+  return runtime?.target === 'test' && runtimeGym(runtime) === 'rev' ? runtime : null;
+}
+export function callbackRuntime(request, path, dependencies) {
+  const url = new URL(request.url);
+  if (url.pathname !== path || url.search || url.hash) return null;
+  const scope = managerReviewScope(request, dependencies);
+  if (!scope || !['rev', 'richmond'].includes(scope.profile.installationId)) return null;
+  const richmond = scope.profile.installationId === 'richmond';
+  if (richmond && (scope.target !== 'test' || scope.profile.environment !== 'test')) return null;
+  const origin = richmond ? RICHMOND_TEST_ORIGIN : scope.target === 'production' ? LIVE_ORIGIN : PROOF_ORIGIN;
+  const paths = richmond ? ['/api/m1-manager-review', CALLBACK_PATH] : scope.target === 'production' ? ['/api/m1-manager-review', '/api/m1-admin-add-check', LIVE_CALLBACK_PATH] : ['/api/m1-manager-review', '/api/m1-admin-add-check', CALLBACK_PATH, PROOF_PATH, STAFF_READ_PATH];
+  if (url.origin !== origin || !paths.includes(path)) return null;
+  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: scope.profile.installationId, environment: scope.profile.environment });
+  return runtime?.target === scope.target ? runtime : null;
+}
+export function createReadTrace(id, dependencies = {}, clientId) {
+  const clock = dependencies.clock || Date.now, started = clock();
+  const trace = (stage, state, status) => {
+    try { (dependencies.traceLog || console.info)('M1_TEST_READ_STAGE', JSON.stringify({
+      requestId: validId(id) ? id : null, clientId: validId(clientId) ? clientId : null,
+      invocation: /^[a-zA-Z0-9_-]{1,100}$/.test(dependencies.context?.requestId || '') ? dependencies.context.requestId : null,
+      stage, state, elapsedMs: Math.max(0, clock() - started), status: Number.isInteger(status) ? status : null
+    })); } catch {} // Observability must never become a read dependency.
+  };
+  trace.requestId = id;
+  return trace;
+}
+export async function traceReadStage(trace, stage, work) {
+  trace(stage, 'start');
+  try { const result = await work(); trace(stage, 'ok'); return result; }
+  catch (error) { trace(stage, 'failed', error?.status); throw error; }
+}
+export async function proofStore(options = {}, target = 'test') {
+  const { getStore } = await import('@netlify/blobs');
+  return getStore({ name: target === 'production' ? 'gib-m1-manager-read-callback-production-v1' : 'gib-m1-read-callback-proof-test-v1', consistency: 'strong', ...options });
+}
+export async function readEntry(store, id, part, target = 'test', gym = 'rev') {
+  const entry = await store.getWithMetadata(key(id, part, target, gym), { type: 'json', consistency: 'strong' });
+  if (entry && (!entry.etag || !entry.data)) fail(503, 'Temporary central storage is incomplete.');
+  return entry?.data || null;
+}
+export function makeBinding(id, now, action = 'managerReviewRead', target = 'test', gym = 'rev') {
+  return { schema: callbackSchema(target), requestId: id, target, gym, action, from: REVIEW_START, to: localNow(new Date(now)).date, createdAt: now, expiresAt: now + PROOF_TTL_MS };
+}
+export function validateBinding(binding, now, target = 'test', gym = 'rev') {
+  const addition = binding?.action === 'adminAdditionCheckRead';
+  const staff = binding?.action === 'staffClockRead';
+  if (!exactKeys(binding, ['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt', ...(addition ? ['originalHash', 'date'] : staff ? ['originalHash', 'staffAction'] : [])])
+    || !['test', 'production'].includes(target) || !validId(binding.requestId) || binding.schema !== callbackSchema(target) || binding.target !== target || binding.gym !== gym || !['rev', 'richmond'].includes(gym) || (gym === 'richmond' && (target !== 'test' || addition || staff)) || !['managerReviewRead', 'managerReviewBadgeRead', 'adminAdditionCheckRead', 'staffClockRead'].includes(binding.action)
+    || binding.from !== REVIEW_START || !Number.isSafeInteger(binding.createdAt) || binding.createdAt > now
+    || binding.expiresAt !== binding.createdAt + PROOF_TTL_MS || binding.to !== localNow(new Date(binding.createdAt)).date
+    || (addition && (!/^[0-9a-f]{64}$/.test(binding.originalHash) || !/^\d{4}-\d{2}-\d{2}$/.test(binding.date) || binding.date > binding.to))
+    || (staff && (target !== 'test' || !/^[0-9a-f]{64}$/.test(binding.originalHash) || !STAFF_READ_ACTIONS.has(binding.staffAction)))) fail(409, 'Read request does not match the proof.');
+  if (now >= binding.expiresAt || localNow(new Date(now)).date !== binding.to) fail(410, 'Read proof expired. Run a fresh read.');
+  return binding;
+}
+export function bindingText(binding) {
+  return JSON.stringify(['schema', 'requestId', 'target', 'gym', 'action', 'from', 'to', 'createdAt', 'expiresAt', ...(binding.action === 'adminAdditionCheckRead' ? ['originalHash', 'date'] : binding.action === 'staffClockRead' ? ['originalHash', 'staffAction'] : [])].map(field => binding[field]));
+}
+export const staffReadHash = (original, reviewer) => hash(JSON.stringify(['m1-staff-read/v1', 'test', 'rev', reviewer, original.action, original.data]));
+function staffReadRequest(original, now) {
+  if (!exactKeys(original, ['action', 'data']) || !STAFF_READ_ACTIONS.has(original.action)
+    || !original.data || typeof original.data !== 'object' || Array.isArray(original.data)) return null;
+  const data = original.data;
+  if (['staffTimeReviewV2', 'staffRecoveryReview'].includes(original.action)) return exactKeys(data, []) ? {} : null;
+  if (original.action === 'staffTimeReviewPageV2') return exactKeys(data, ['viewToken', 'stream', 'offset'])
+    ? sanitizeStaffViewPageRequest({ operation: 'reviewPage', ...data }, 'reviewPage', { includeAudit: true }) : null;
+  if (original.action === 'staffTimeHistoryPageV2') return exactKeys(data, ['viewToken', 'offset'])
+    ? sanitizeStaffTimeHistoryPageRequest({ operation: 'historyPage', ...data }) : null;
+  if (!exactKeys(data, ['viewToken', 'mode', 'staffId', 'date'])) return null;
+  // The original Google request retains these two blank fields; the existing
+  // browser request validator intentionally omits them for recent lookups.
+  const input = data.mode === 'recent' && data.staffId === '' && data.date === ''
+    ? { viewToken: data.viewToken, mode: data.mode } : data;
+  return sanitizeStaffShiftLookupRequest({ operation: 'shiftLookup', ...input }, 'shiftLookup', { now: new Date(now) });
+}
+function validateStaffResult(result, pending, readAt) {
+  if (!exactKeys(pending, ['binding', 'reviewer', 'original']) || !ADMIN_NAMES.includes(pending.reviewer)
+    || pending.binding.staffAction !== pending.original?.action
+    || pending.binding.originalHash !== staffReadHash(pending.original, pending.reviewer)) throw new Error('Staff read binding unavailable.');
+  const expected = staffReadRequest(pending.original, pending.binding.createdAt), action = pending.original.action;
+  if (!expected) throw new Error('Staff read request is invalid.');
+  if (exactKeys(result, ['ok', 'target', 'result']) && result.ok === false && result.target === 'test'
+    && ((result.result === 'stale' && ['staffTimeReviewPageV2', 'staffTimeHistoryPageV2', 'staffTimeShiftLookupV3'].includes(action))
+      || (result.result === 'too_large' && action === 'staffTimeShiftLookupV3'))) return;
+  const options = { now: new Date(readAt) };
+  const validated = action === 'staffTimeReviewV2' ? sanitizeStaffTimeReview(result, 'test', options)
+    : action === 'staffTimeReviewPageV2' ? sanitizeStaffViewPage(result, 'test', expected, options)
+    : action === 'staffTimeHistoryPageV2' ? sanitizeStaffTimeHistoryPage(result, 'test', expected, options)
+    : action === 'staffTimeShiftLookupV3' ? sanitizeStaffShiftLookup(result, 'test', expected, options)
+    : sanitizeStaffRecoveryResponse(result, 'test', options);
+  if (!validated) throw new Error('Staff read result is incomplete.');
+}
+export function validateResult(payload, binding, now, target = 'test', pending) {
+  if (!exactKeys(payload, ['binding', 'readAt', 'result'])) fail(422, 'Incomplete callback.');
+  validateBinding(payload.binding, now, target, binding.gym);
+  if (bindingText(payload.binding) !== bindingText(binding)) fail(409, 'Callback belongs to a different read request.');
+  if (!Number.isSafeInteger(payload.readAt) || payload.readAt < binding.createdAt || payload.readAt >= binding.expiresAt || payload.readAt > now) fail(422, 'Callback snapshot time is invalid.');
+  try {
+    if (binding.action === 'adminAdditionCheckRead') {
+      if (!pending?.original || pending.binding.originalHash !== additionCheckHash(pending.original, pending.reviewer, target)
+        || pending.binding.date !== pending.original.date) throw new Error('Original read binding unavailable.');
+      validateAdditionCheckCallback(payload.result, pending.original, pending.reviewer, target);
+      if (payload.result.ledger.from !== binding.from || payload.result.ledger.to !== binding.to) throw new Error('Callback read range did not match.');
+    } else if (binding.action === 'staffClockRead') validateStaffResult(payload.result, pending, payload.readAt);
+    else validateRead(payload.result, binding.gym, binding.to, target);
+  }
+  catch { fail(422, 'The complete authoritative read was not received.'); }
+  return payload;
+}
+export async function acceptResult(store, raw, suppliedSignature, runtime, now, trace = () => {}) {
+  const target = runtime.target, gym = runtimeGym(runtime);
+  if (!['test', 'production'].includes(target) || !/^[0-9a-f]{64}$/.test(suppliedSignature || '') || !constantTimeSecretEqual(suppliedSignature, signature(raw, runtime.adminActionToken, target))) { trace('callback.authentication', 'failed', 403); fail(403, 'Callback authentication failed.'); }
+  trace('callback.authentication', 'ok');
+  let payload;
+  try { payload = JSON.parse(raw); } catch { fail(400, 'Invalid callback JSON.'); }
+  if (!validId(payload?.binding?.requestId)) fail(400, 'Invalid read request identity.');
+  const id = payload.binding.requestId;
+  const pending = await traceReadStage(trace, 'callback.pending.read', () => readEntry(store, id, 'pending', target, gym));
+  if (!pending) fail(404, 'No pending read request.');
+  trace('callback.validation', 'start');
+  validateBinding(pending.binding, now, target, gym);
+  validateResult(payload, pending.binding, now, target, pending);
+  trace('callback.validation', 'ok');
+  const digest = hash(raw);
+  const receipt = { digest, receivedAt: now, payload };
+  // Immutable create-only result: concurrent callbacks cannot replace one another.
+  await traceReadStage(trace, 'callback.result.write', () => store.set(key(id, 'result', target, gym), JSON.stringify(receipt), { onlyIfNew: true }));
+  const saved = await traceReadStage(trace, 'callback.result.readback', () => readEntry(store, id, 'result', target, gym));
+  if (!saved) fail(503, 'Callback storage could not be confirmed.');
+  if (saved.digest !== digest) fail(409, 'Conflicting callback rejected.');
+  if (hash(JSON.stringify(saved.payload)) !== digest) fail(503, 'Callback storage is incomplete.');
+  trace('callback.acceptance', 'ok', 200);
+  return { ok: true, accepted: true, requestId: id };
+}
+export async function readProof(store, id, now, target = 'test', gym = 'rev') {
+  const pending = await readEntry(store, id, 'pending', target, gym);
+  if (!pending) fail(404, 'No pending read request.');
+  validateBinding(pending.binding, now, target, gym);
+  const [saved, dispatch] = await Promise.all([readEntry(store, id, 'result', target, gym), readEntry(store, id, 'dispatch', target, gym)]);
+  const common = { requestId: id, expiresAt: pending.binding.expiresAt, dispatch, ordinaryReplyUsed: false };
+  if (!saved) return { ok: true, state: 'pending', ...common };
+  if (hash(JSON.stringify(saved.payload)) !== saved.digest || !Number.isSafeInteger(saved.receivedAt) || saved.receivedAt < pending.binding.createdAt || saved.receivedAt >= pending.binding.expiresAt) fail(503, 'Stored callback is incomplete.');
+  validateResult(saved.payload, pending.binding, now, target, pending);
+  return { ok: true, state: 'received', ...common, readAt: saved.payload.readAt, receivedAt: saved.receivedAt, latencyMs: saved.receivedAt - pending.binding.createdAt, digest: saved.digest, result: saved.payload.result };
+}
+export async function dispatchProof(store, pending, runtime, dependencies = {}) {
+  const target = runtime.target, gym = runtimeGym(runtime);
+  const clock = dependencies.clock || Date.now;
+  const started = clock();
+  const trace = dependencies.readTrace || createReadTrace(pending.binding.requestId, dependencies);
+  const timing = { method: 'POST', host: 'script.google.com', status: null, elapsedMs: 0, outcome: 'unavailable', ordinaryReplyUsed: false };
+  const confirmed = dependencies.confirmedCallbackSignal;
+  const budget = AbortSignal.timeout(25_000);
+  const signal = AbortSignal.any([budget, confirmed, dependencies.dispatchSignal].filter(Boolean));
+  try {
+    validateBinding(pending.binding, started, target, gym);
+    trace('dispatch', 'start');
+    const response = await (dependencies.fetch || fetch)(runtime.webhookUrl, {
+      method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      body: JSON.stringify({ token: runtime.webhookToken, adminActionToken: runtime.adminActionToken, target, ...(gym === 'richmond' ? { installation: 'richmond', environment: 'test' } : {}), action: target === 'test' && gym === 'rev' ? 'managerReviewReadCallbackProof' : 'managerReviewReadCallback', gym, from: pending.binding.from, to: pending.binding.to, adminName: pending.reviewer, binding: pending.binding,
+        ...(['adminAdditionCheckRead', 'staffClockRead'].includes(pending.binding.action) ? { original: pending.original } : {}) }),
+      // This read uses only its authenticated persisted callback, not ContentService.
+      redirect: 'manual', signal
+    });
+    timing.status = response.status;
+    timing.outcome = 'ordinary-reply-discarded';
+    await response.body?.cancel();
+  } catch (error) {
+    // The winning abort reason is immutable: a later valid callback must not
+    // relabel an ordinary request whose original timeout already fired.
+    timing.outcome = confirmed?.aborted && signal.reason === confirmed.reason
+      ? 'callback-confirmed' : ['TimeoutError', 'AbortError'].includes(error?.name) ? 'timeout' : 'unavailable';
+  }
+  timing.elapsedMs = Math.max(0, clock() - started);
+  trace('dispatch', timing.outcome, timing.status);
+  // No credentials, redirect URL, response body, identity or raw error is logged.
+  console.info('M1_TEST_CALLBACK_DISPATCH', JSON.stringify({ requestId: pending.binding.requestId, ...timing }));
+  try {
+    if (clock() < pending.binding.expiresAt && await readEntry(store, pending.binding.requestId, 'pending', target, gym)) await store.set(key(pending.binding.requestId, 'dispatch', target, gym), JSON.stringify(timing), { onlyIfNew: true });
+  }
+  catch { console.warn('M1_TEST_CALLBACK_DISPATCH_RECEIPT_UNAVAILABLE'); }
+}
+
+// Activity-driven collection is bounded by the number of temporary requests in
+// this target-specific temporary store. Never attendance or audit storage.
+export async function cleanupExpiredReads(store, now, options = {}) {
+  const target = options.target || 'test', gym = options.gym || 'rev';
+  if (!['test', 'production'].includes(target) || !['rev', 'richmond'].includes(gym) || (gym === 'richmond' && target !== 'test')) return;
+  const clock = options.clock || Date.now, deadline = options.deadline ?? clock() + 5000;
+  const seen = new Set();
+  let pages = 0;
+  for await (const page of store.list({ prefix: `${target}/${gym}/`, paginate: true })) {
+    if (++pages > 2 || clock() >= deadline || options.signal?.aborted) break;
+    const pattern = new RegExp(`^${target}/${gym}/([0-9a-f-]{36})/(?:pending|result|dispatch)$`);
+    const ids = [...new Set(page.blobs.map(b => pattern.exec(b.key)?.[1]).filter(validId))];
+    for (const id of ids) {
+      if (clock() >= deadline || options.signal?.aborted || seen.size >= 30) return;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const pending = await readEntry(store, id, 'pending', target, gym);
+      if (pending && (!Number.isSafeInteger(pending.binding?.expiresAt) || pending.binding.expiresAt > now)) continue;
+      if (clock() >= deadline || options.signal?.aborted) return;
+      await Promise.all(['result', 'dispatch'].map(part => store.delete(key(id, part, target, gym))));
+      if (clock() >= deadline || options.signal?.aborted) return;
+      await store.delete(key(id, 'pending', target, gym));
+    }
+    if (pages >= 2 || seen.size >= 30) break;
+  }
+}
+
+export function scheduleReadCleanup(dependencies, trace, target = 'test', gym = 'rev') {
+  // Separate store/fetch budget: aborting cleanup cannot abort a fresh read.
+  // Register only after the read settles. Never await this on the response path.
+  try {
+    dependencies.context.waitUntil((async () => {
+      trace('cleanup', 'start');
+      try {
+        const signal = AbortSignal.timeout(5000);
+        const cleanupStore = dependencies.cleanupStore || dependencies.store || await proofStore({
+          fetch: (url, options = {}) => fetch(url, { ...options, signal: options.signal ? AbortSignal.any([signal, options.signal]) : signal })
+        }, target);
+        const started = Date.now();
+        await cleanupExpiredReads(cleanupStore, (dependencies.clock || Date.now)(), { signal, deadline: started + 5000, target, gym });
+        trace('cleanup', signal.aborted ? 'bounded' : 'ok');
+      } catch { trace('cleanup', 'unavailable'); }
+    })());
+  } catch { trace('cleanup', 'not-scheduled'); }
+}
+
+// A watcher belongs to the same supported invocation as its one dispatch. It
+// only cancels the unused ordinary reply after validating a persisted callback;
+// it never extends the dispatch budget or keeps polling after dispatch settles.
+function untilStopped(work, signal) {
+  if (signal.aborted) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const stopped = () => resolve(null);
+    signal.addEventListener('abort', stopped, { once: true });
+    Promise.resolve().then(work).then(resolve, reject).finally(() => signal.removeEventListener('abort', stopped));
+  });
+}
+export async function dispatchReadTicket(store, pending, runtime, dependencies = {}) {
+  const clock = dependencies.clock || Date.now;
+  const trace = dependencies.readTrace || createReadTrace(pending.binding.requestId, dependencies);
+  const confirmed = new AbortController(), settled = new AbortController();
+  const stop = AbortSignal.any([settled.signal, AbortSignal.timeout(25_000)]);
+  const dispatch = dispatchProof(store, pending, runtime, { ...dependencies, readTrace: trace, confirmedCallbackSignal: confirmed.signal })
+    .finally(() => settled.abort());
+  const watcher = (async () => {
+    try {
+      const watchStore = dependencies.watchStore || dependencies.store || await untilStopped(() => proofStore({
+        fetch: (url, options = {}) => fetch(url, { ...options, signal: options.signal ? AbortSignal.any([stop, options.signal]) : stop })
+      }, runtime.target), stop);
+      while (watchStore && !stop.aborted) {
+        const proof = await untilStopped(() => readProof(watchStore, pending.binding.requestId, clock(), runtime.target, runtimeGym(runtime)), stop);
+        if (!proof || stop.aborted) return;
+        if (proof.state === 'received') {
+          validateBinding(pending.binding, clock(), runtime.target, runtimeGym(runtime));
+          confirmed.abort(new DOMException('Authoritative callback confirmed', 'AbortError'));
+          trace('dispatch.watch', 'confirmed');
+          return;
+        }
+        if (dependencies.sleep) await untilStopped(() => dependencies.sleep(1000), stop);
+        else await new Promise(resolve => {
+          const finish = () => { clearTimeout(timer); stop.removeEventListener('abort', finish); resolve(); };
+          const timer = setTimeout(finish, 1000);
+          stop.addEventListener('abort', finish, { once: true });
+          if (stop.aborted) finish();
+        });
+      }
+    } catch { trace('dispatch.watch', 'unavailable'); }
+  })();
+  await Promise.all([dispatch, watcher]);
+}
+
+function ticketOwner(action, reviewer, original, target, gym = 'rev') {
+  return action === 'adminAdditionCheckRead' ? additionCheckHash(original, reviewer, target)
+    : hash(JSON.stringify([action, target, gym, reviewer || null]));
+}
+function validateTicketPending(pending, input, reviewer, now, target, gym) {
+  validateBinding(pending?.binding, now, target, gym);
+  if (!exactKeys(pending.ticket, ['ownerHash', 'deadlineAt'])
+    || pending.binding.requestId !== input.requestId || pending.binding.action !== input.action
+    || (pending.reviewer ?? null) !== (reviewer || null)
+    || pending.ticket.ownerHash !== ticketOwner(input.action, reviewer, input.original, target, gym)
+    || pending.ticket.deadlineAt !== pending.binding.createdAt + READ_OBSERVATION_MS
+    || (input.action === 'adminAdditionCheckRead'
+      ? pending.binding.originalHash !== pending.ticket.ownerHash || pending.binding.date !== input.original.date
+        || additionCheckHash(pending.original, reviewer, target) !== pending.ticket.ownerHash
+      : Object.hasOwn(pending, 'original'))) fail(409, 'Read ticket belongs to a different request.');
+  if (now >= pending.ticket.deadlineAt) fail(410, 'Read observation ended. No fresh result is confirmed.');
+  return pending;
+}
+
+// Short start/status reads share one immutable ticket. Status never dispatches,
+// and an ambiguous start cannot authorize a second Google request. The caller
+// retains its existing authentication and returns only its permitted response.
+export async function readCallbackTicket(request, runtime, reviewer, options, dependencies = {}) {
+  const path = new URL(request.url).pathname, scoped = callbackRuntime(request, path, dependencies);
+  if (!scoped || scoped.target !== runtime.target || runtimeGym(scoped) !== runtimeGym(runtime) || !['/api/m1-manager-review', '/api/m1-admin-add-check'].includes(path)) fail(403, 'An enabled gym-scoped read is required.');
+  const action = options?.action || (reviewer ? 'managerReviewRead' : 'managerReviewBadgeRead');
+  const addition = action === 'adminAdditionCheckRead', badge = action === 'managerReviewBadgeRead';
+  if (!['managerReviewRead', 'managerReviewBadgeRead', 'adminAdditionCheckRead'].includes(action)
+    || addition !== (path === '/api/m1-admin-add-check') || (badge ? reviewer != null || request.method !== 'GET' : !reviewer || request.method !== 'POST')
+    || (addition ? !options?.original || typeof options.original !== 'object' : options?.original !== undefined)
+    || !['start', 'status'].includes(options?.operation) || !validId(options?.requestId)) fail(400, 'An identified read ticket is required.');
+  if (reviewer && !adminNamesForScope(scoped).includes(reviewer)) fail(403, 'An authorized reviewer is required.');
+  if (options.operation === 'start' && typeof dependencies.context?.waitUntil !== 'function') fail(503, 'Review status unavailable.');
+  const target = runtime.target, gym = runtimeGym(runtime), clock = dependencies.clock || Date.now, started = clock();
+  const input = { ...options, action };
+  const trace = dependencies.readTrace || createReadTrace(input.requestId, dependencies, request.headers.get(READ_ID_HEADER));
+  try {
+    const store = await traceReadStage(trace, 'storage.open', () => dependencies.store || proofStore({}, target));
+    let pending;
+    if (input.operation === 'start') {
+      const ownerHash = ticketOwner(action, reviewer, input.original, target, gym);
+      const proposed = { binding: { ...makeBinding(input.requestId, started, action, target, gym), ...(addition ? { originalHash: ownerHash, date: input.original.date } : {}) },
+        ...(reviewer ? { reviewer } : {}), ...(addition ? { original: input.original } : {}),
+        ticket: { ownerHash, deadlineAt: started + READ_OBSERVATION_MS } };
+      validateTicketPending(proposed, input, reviewer, clock(), target, gym);
+      const created = await traceReadStage(trace, 'pending.write', () => store.set(key(input.requestId, 'pending', target, gym), JSON.stringify(proposed), { onlyIfNew: true }));
+      pending = await traceReadStage(trace, 'pending.readback', () => readEntry(store, input.requestId, 'pending', target, gym));
+      if (!pending || ![true, false].includes(created?.modified)) fail(503, 'Pending read was not confirmed centrally. Nothing was sent.');
+      validateTicketPending(pending, input, reviewer, clock(), target, gym);
+      if (created.modified) {
+        if (JSON.stringify(pending) !== JSON.stringify(proposed)) fail(503, 'Pending read did not match. Nothing was sent.');
+        dependencies.context.waitUntil(dispatchReadTicket(store, pending, runtime, { ...dependencies, readTrace: trace }));
+      }
+    } else {
+      pending = await traceReadStage(trace, 'pending.readback', () => readEntry(store, input.requestId, 'pending', target, gym));
+      if (!pending) throw Object.assign(new ProofError(404, 'No pending read request.'), { code: 'READ_TICKET_MISSING' });
+      validateTicketPending(pending, input, reviewer, clock(), target, gym);
+    }
+    const proof = await traceReadStage(trace, 'result.storage.read', () => readProof(store, input.requestId, clock(), target, gym));
+    validateTicketPending(pending, input, reviewer, clock(), target, gym);
+    return { state: proof.state, requestId: input.requestId, expiresAt: pending.binding.expiresAt, deadlineAt: pending.ticket.deadlineAt,
+      ...(proof.state === 'received' ? { result: proof.result } : {}) };
+  } finally { if (options.operation === 'start') scheduleReadCleanup(dependencies, trace, target, gym); }
+}
+
+// Only enabled gyms' normal initial read and public aggregate call this.
+// Saves and same-request reconciliation continue through their original path.
+export async function loadCallbackLedger(request, runtime, reviewer, dependencies = {}) {
+  const path = new URL(request.url).pathname;
+  const scoped = callbackRuntime(request, path, dependencies);
+  if (path !== '/api/m1-manager-review' || !scoped || scoped.target !== runtime.target || runtimeGym(scoped) !== runtimeGym(runtime)) fail(403, 'An enabled gym-scoped read is required.');
+  const target = runtime.target, gym = runtimeGym(runtime);
+  if (typeof dependencies.context?.waitUntil !== 'function') fail(503, 'Review status unavailable.');
+  const clock = dependencies.clock || Date.now;
+  const sleep = dependencies.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const started = clock();
+  const trace = dependencies.readTrace || createReadTrace(randomUUID(), dependencies, request.headers.get(READ_ID_HEADER));
+  const id = trace.requestId;
+  try {
+  const store = await traceReadStage(trace, 'storage.open', () => dependencies.store || proofStore({}, target));
+  const pending = { binding: makeBinding(id, clock(), reviewer ? 'managerReviewRead' : 'managerReviewBadgeRead', target, gym), ...(reviewer ? { reviewer } : {}) };
+  const saved = await traceReadStage(trace, 'pending.write', () => store.set(key(id, 'pending', target, gym), JSON.stringify(pending), { onlyIfNew: true }));
+  const confirmed = await traceReadStage(trace, 'pending.readback', () => readEntry(store, id, 'pending', target, gym));
+  if (saved?.modified !== true || JSON.stringify(confirmed) !== JSON.stringify(pending)) fail(503, 'Review status unavailable.');
+  const callbackConfirmed = new AbortController();
+  dependencies.context.waitUntil(dispatchProof(store, confirmed, runtime, { ...dependencies, readTrace: trace, confirmedCallbackSignal: callbackConfirmed.signal }));
+  // Leave headroom under the platform's 60-second synchronous limit. Delivery
+  // has its original 25-second budget and is never retried by this waiter.
+  const deadline = Math.min(started + 50_000, pending.binding.expiresAt);
+  trace('callback.wait', 'start');
+  while (clock() < deadline) {
+    let result;
+    trace('result.storage.read', 'start');
+    try { result = await readProof(store, id, clock(), target, gym); trace('result.storage.read', 'ok'); }
+    catch (error) { trace('result.storage.read', 'failed', error?.status); throw error; }
+    if (result.state === 'received') {
+      validateBinding(pending.binding, clock(), target, gym);
+      // readProof has validated the persisted authoritative result, digest,
+      // binding and snapshot time. Its unused ordinary reply can now stop.
+      callbackConfirmed.abort(new DOMException('Authoritative callback confirmed', 'AbortError'));
+      trace('callback.wait', 'received');
+      console.info('M1_TEST_MANAGER_CALLBACK_READ', JSON.stringify({ requestId: id, purpose: pending.binding.action, elapsedMs: clock() - started, callbackMs: result.latencyMs, state: 'received' }));
+      return result.result;
+    }
+    await sleep(Math.min(1000, deadline - clock()));
+  }
+  trace('callback.wait', 'unavailable', 503);
+  console.warn('M1_TEST_MANAGER_CALLBACK_READ', JSON.stringify({ requestId: id, purpose: pending.binding.action, elapsedMs: clock() - started, state: 'unavailable' }));
+  fail(503, 'Review status unavailable. No fresh central read was confirmed.');
+  } finally { scheduleReadCleanup(dependencies, trace, target, gym); }
+}
+
+// Staff reads retain their existing single 25-second request budget. The only
+// usable response is the authenticated, complete callback persisted centrally;
+// the discarded ContentService reply cannot supply a fallback or a false clear.
+export async function loadStaffCallbackRead(request, runtime, reviewer, action, data, dependencies = {}) {
+  const clock = dependencies.clock || Date.now, started = clock();
+  const scoped = callbackRuntime(request, STAFF_READ_PATH, dependencies);
+  if (request.method !== 'POST' || !scoped || scoped.target !== 'test' || runtime?.target !== 'test'
+    || request.headers.get('Origin') !== PROOF_ORIGIN) fail(403, 'Authenticated Revolution TEST Staff read required.');
+  const auth = requireAdmin(request, scoped, started);
+  if (auth.response || auth.session.adminName !== reviewer) fail(auth.response?.status || 403, 'Admin login required.');
+  const original = { action, data };
+  if (!staffReadRequest(original, started)) fail(400, 'A pure Staff read is required.');
+  if (typeof dependencies.context?.waitUntil !== 'function') fail(503, 'Staff Clock read unavailable.');
+  const suppliedId = request.headers.get(READ_ID_HEADER), id = validId(suppliedId) ? suppliedId : randomUUID();
+  const trace = createReadTrace(id, dependencies, suppliedId);
+  let deadline = started + STAFF_READ_BUDGET_MS;
+  const budget = new AbortController(), confirmed = new AbortController();
+  const unavailable = () => new ProofError(503, 'Staff Clock read unavailable. No fresh central read was confirmed.');
+  const timer = setTimeout(() => budget.abort(unavailable()), STAFF_READ_BUDGET_MS);
+  const checkBudget = () => { if (budget.signal.aborted || clock() >= deadline) throw unavailable(); };
+  // Real Blob requests share this abort signal. The guard also bounds injected
+  // adapters and module opening, and checks the clock after every awaited step.
+  const bounded = async work => {
+    checkBudget();
+    let stopped;
+    try {
+      const result = await Promise.race([
+        Promise.resolve().then(work),
+        new Promise((_, reject) => {
+          stopped = () => reject(unavailable());
+          budget.signal.addEventListener('abort', stopped, { once: true });
+          if (budget.signal.aborted) stopped();
+        })
+      ]);
+      checkBudget();
+      return result;
+    } finally { if (stopped) budget.signal.removeEventListener('abort', stopped); }
+  };
+  const stage = (name, work) => traceReadStage(trace, name, () => bounded(work));
+  try {
+    const store = await stage('storage.open', () => dependencies.store || proofStore({
+      fetch: (url, options = {}) => fetch(url, { ...options,
+        signal: options.signal ? AbortSignal.any([budget.signal, options.signal]) : budget.signal })
+    }, 'test'));
+    const proposed = { binding: { ...makeBinding(id, started, 'staffClockRead', 'test'),
+      originalHash: staffReadHash(original, reviewer), staffAction: action }, reviewer, original };
+    const created = await stage('pending.write', () => store.set(key(id, 'pending'), JSON.stringify(proposed), { onlyIfNew: true }));
+    const pending = await stage('pending.readback', () => readEntry(store, id, 'pending'));
+    if (!pending || ![true, false].includes(created?.modified)) fail(503, 'Pending Staff read was not confirmed. Nothing was sent.');
+    validateBinding(pending.binding, clock());
+    if (!exactKeys(pending, ['binding', 'reviewer', 'original']) || pending.binding.action !== 'staffClockRead'
+      || pending.binding.requestId !== id || pending.reviewer !== reviewer || pending.binding.staffAction !== action
+      || pending.binding.originalHash !== proposed.binding.originalHash
+      || staffReadHash(pending.original, pending.reviewer) !== proposed.binding.originalHash
+      || !staffReadRequest(pending.original, pending.binding.createdAt)) fail(409, 'Staff read belongs to a different request.');
+    deadline = Math.min(deadline, pending.binding.createdAt + STAFF_READ_BUDGET_MS);
+    checkBudget();
+    if (created.modified) {
+      if (JSON.stringify(pending) !== JSON.stringify(proposed)) fail(503, 'Pending Staff read did not match. Nothing was sent.');
+      dependencies.context.waitUntil(dispatchProof(store, pending, runtime, { ...dependencies, readTrace: trace,
+        dispatchSignal: budget.signal, confirmedCallbackSignal: confirmed.signal }));
+    }
+    trace('callback.wait', 'start');
+    while (clock() < deadline) {
+      const proof = await stage('result.storage.read', () => readProof(store, id, clock()));
+      if (proof.state === 'received') {
+        confirmed.abort(new DOMException('Authoritative callback confirmed', 'AbortError'));
+        trace('callback.wait', 'received');
+        return { readable: true, status: 200, value: proof.result };
+      }
+      const delay = Math.min(1000, deadline - clock());
+      await bounded(() => dependencies.sleep ? dependencies.sleep(delay) : new Promise(resolve => setTimeout(resolve, delay)));
+    }
+    throw unavailable();
+  } catch (error) {
+    trace('callback.wait', 'unavailable', error?.status);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    budget.abort(unavailable());
+    scheduleReadCleanup(dependencies, trace, 'test');
+  }
+}

@@ -314,14 +314,15 @@ test('another session changing pending storage cannot be overwritten or removed 
 });
 
 async function installationBuild(env) {
+  const { liveControls } = await import('../tools/m1-release-controls.mjs');
   const buildUrl = new URL('../tools/build-m1-installation-profile.mjs', import.meta.url).href;
   const buildSource = readFileSync(new URL(buildUrl), 'utf8')
     .replace(/^import[\s\S]*?;\r?\n/gmu, '')
     .replaceAll('import.meta.url', 'buildUrl');
   const writes = new Map();
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  const run = new AsyncFunction('process', 'writeFile', 'installationProfile', 'browserInstallationProfileSource', 'buildUrl', buildSource);
-  await run({ env }, async (url, contents) => writes.set(new URL(url).pathname.split('/').at(-1), contents), installationProfile, browserInstallationProfileSource, buildUrl);
+  const run = new AsyncFunction('process', 'writeFile', 'installationProfile', 'browserInstallationProfileSource', 'buildUrl', 'liveControls', buildSource);
+  await run({ env }, async (url, contents) => writes.set(new URL(url).pathname.split('/').at(-1), contents), installationProfile, browserInstallationProfileSource, buildUrl, liveControls);
   return writes;
 }
 

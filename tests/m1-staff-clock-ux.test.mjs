@@ -148,7 +148,7 @@ test('tablet pairing is enabled by the installation profile and remains absent f
   const pairingAvailabilitySource = between(
     clientSource,
     'const STAFF_CLOCK_PAIRING_ENABLED',
-    'if (\n'
+    'const PRODUCTION_ORIGIN'
   );
 
   assert.equal(

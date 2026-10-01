@@ -12,6 +12,7 @@ import {
   validNonFutureDate
 } from './_lib/m1-common.mjs';
 import { sanitizeAdminAdditionPayload } from './_lib/m1-admin-contracts.mjs';
+import { deploymentInstallationProfile } from './_lib/m1-installation.mjs';
 
 function additionFailureResponse(google) {
   const failureClass = googleFailureClass(google);
@@ -38,7 +39,7 @@ function exactKeys(value, expected) {
     && actual.every((key, index) => key === wanted[index]);
 }
 
-function validateAddition(input, config, now) {
+export function validateAddition(input, config, now) {
   if (
     !exactKeys(input, [
       'requestId', 'date', 'classLabel', 'duration', 'instructor', 'site', 'notes', 'reason'
@@ -128,8 +129,11 @@ export async function handleAdminAdd(request, dependencies = {}) {
     });
   }
 
+  const profile = deploymentInstallationProfile(dependencies.installationId, dependencies.environment, dependencies.activation);
   const google = await postGoogle(
-    config,
+    config.target === 'test' && profile?.installationId === 'rev'
+      ? { ...config, installationId: 'rev', testTrace: true }
+      : config,
     'addMissedInstructor',
     {
       adminName: auth.session.adminName,

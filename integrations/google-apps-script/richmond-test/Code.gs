@@ -1,9 +1,12 @@
 /* Richmond BJJ M1 isolated TEST receiver entrypoint. */
 var GIB_M1_ALLOWED_TARGET = 'test';
+var GIB_M1_MANAGER_REVIEW_TEST_ENABLED = true;
 var GIB_M1_REQUIRE_PERSISTED_TARGET_LOCK = true;
 var GIB_M1_ALLOW_RECEIVER_TOKEN_OVERRIDE = false;
 var GIB_M1_REQUIRE_EXACT_SIGNINS_SCHEMA = true;
 var GIB_M1_STAFF_CLOCK_ENABLED = false;
+// Preparation only. A Script Property cannot enable Richmond TEST delivery.
+var GIB_M1_RICHMOND_MAILAPP_SEND_ENABLED = false;
 var GIB_M1_RICHMOND_INSTALLATION_ = 'richmond';
 var GIB_M1_RICHMOND_ENVIRONMENT_ = 'test';
 var GIB_M1_RICHMOND_SPREADSHEET_TITLE_ = 'Richmond BJJ M1 — TEST';
@@ -78,14 +81,45 @@ function gibM1RichmondEnvelopeValid_(body) {
     && constantTimeTextEqual_(body && body.environment, GIB_M1_RICHMOND_ENVIRONMENT_);
 }
 
+// Trusted project scope, never selected by a request field or a display label.
+function gibM1RichmondTestScope_() {
+  if (!gibM1RichmondLocksValid_() || GIB_M1_ALLOWED_TARGET !== 'test'
+    || GIB_M1_RICHMOND_INSTALLATION_ !== 'richmond' || GIB_M1_RICHMOND_ENVIRONMENT_ !== 'test'
+    || EXPECTED_SPREADSHEET_NAME !== 'Richmond BJJ M1 — TEST'
+    || GIB_M1_RICHMOND_SPREADSHEET_TITLE_ !== 'Richmond BJJ M1 — TEST'
+    || GIB_M1_STAFF_CLOCK_ENABLED !== false || !TEST_SPREADSHEET_ID
+    || TEST_SPREADSHEET_ID !== PropertiesService.getScriptProperties().getProperty(GIB_M1_RICHMOND_SPREADSHEET_PROPERTY_)
+    || configuredDeploymentTarget_() !== 'test' || !deploymentTargetAllowed_('test')) return null;
+  return { installation: 'richmond', environment: 'test', gym: 'richmond', target: 'test',
+    digestUrl: 'https://gib-richmond-test.netlify.app/api/m1-attendance-digest-job' };
+}
+
+function testRichmondAttendanceDigestTick() {
+  if (!gibM1RichmondTestScope_()) return;
+  return gibM1AttendanceDigestTick_();
+}
+
+function authorizeRichmondTestMailApp() {
+  if (!gibM1RichmondTestScope_()) throw new Error('MAILAPP_SENDER_UNVERIFIED');
+  return gibM1AuthorizeTestMailApp_();
+}
+
+function prepareRichmondTestMailAppLedger() {
+  if (!gibM1RichmondTestScope_()) throw new Error('MAILAPP_SENDER_UNVERIFIED');
+  return gibM1PrepareTestMailAppLedger_();
+}
+
 function gibM1RichmondObviousTestValue_(value) {
   return /\b(?:qa|test|fake|demo)\b/i.test(cleanText_(value));
 }
 
 function gibM1RichmondActionValid_(body) {
   var action = cleanText_(body && body.action);
-  if (['kioskSignIn', 'dailyReview', 'instructorSearch', 'addMissedInstructor'].indexOf(action) === -1) {
+  if (['kioskSignIn', 'dailyReview', 'instructorSearch', 'addMissedInstructor', 'managerReviewRead', 'managerReviewReadCallback', 'managerReviewSave', 'managerReviewVoid', 'attendanceDigestCapture', 'attendanceMailSend', 'attendanceMailStatus'].indexOf(action) === -1) {
     return false;
+  }
+  if (['managerReviewReadCallback', 'attendanceDigestCapture', 'attendanceMailSend', 'attendanceMailStatus'].indexOf(action) >= 0) {
+    return Boolean(gibM1RichmondTestScope_()) && cleanText_(body.gym) === 'richmond';
   }
   if (action === 'kioskSignIn') {
     return Array.isArray(body.rows) && body.rows.every(function(row) {

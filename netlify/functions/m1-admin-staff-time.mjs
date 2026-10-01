@@ -18,6 +18,8 @@ import {
   sanitizeStaffTimeHistoryPageRequest,
   sanitizeStaffShiftLookup,
   sanitizeStaffShiftLookupRequest,
+  sanitizeStaffRecoveryDecisionRequest,
+  sanitizeStaffRecoveryResponse,
   sanitizeStaffTimeReview,
   sanitizeStaffViewPage,
   sanitizeStaffViewPageRequest,
@@ -26,6 +28,9 @@ import {
 } from './_lib/m1-staff-clock-contracts.mjs';
 import { validExactProductionRequest } from './_lib/m1-production-runtime.mjs';
 import { staffClockEnabled } from './_lib/m1-installation.mjs';
+import { releaseFeatureScope } from './_lib/m1-release-scope.mjs';
+import { safeStaffReadTraceId } from './_lib/m1-google-trace.mjs';
+import { loadStaffCallbackRead } from './_lib/m1-test-read-callback.mjs';
 
 export const ADMIN_STAFF_TIME_PATH = '/.netlify/functions/m1-admin-staff-time';
 export const ADMIN_STAFF_TIME_SITE = 'Rev';
@@ -42,6 +47,40 @@ export const config = {
 
 const MAX_REQUEST_BYTES = 16_384;
 const DEPLOY_PREVIEW_HOST = /^(?:deploy-preview-\d+|[0-9a-f]{24})--gib-live\.netlify\.app$/u;
+const STAFF_READ_TRACE_ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
+const STAFF_READ_OPERATIONS = new Set(['review', 'reviewPage', 'historyPage', 'shiftLookup', 'recoveryReview']);
+const STAFF_READ_TRACE_CATEGORIES = new Set(['ACCEPTED', 'REQUEST_REJECTED', 'OK', 'STALE', 'TOO_LARGE',
+  'VALIDATED', 'NOT_VALIDATED', 'CONTRACT_MISMATCH', 'UNREACHABLE', 'READ_FAILED', 'HTTP_FAILURE',
+  'EMPTY', 'OVERSIZE', 'HTML', 'UNSUPPORTED_JSON', 'MALFORMED_JSON', 'UNREADABLE', 'REJECTED', 'FAILED',
+  'EXCEPTION', 'HTTP_SUCCESS', 'HTTP_ERROR', 'CALLBACK_UNAVAILABLE']);
+
+// Called only after the existing authentication and scope checks. Diagnostics
+// contain no business values and can never change a read or its validation.
+function createStaffReadTrace(request, runtime, operation) {
+  const requestId = safeStaffReadTraceId(request.headers.get('X-GIB-M1-Read-ID'));
+  if (!requestId || runtime.target !== 'test' || runtime.installationId === 'richmond'
+    || new URL(request.url).origin !== STAFF_READ_TRACE_ORIGIN || !STAFF_READ_OPERATIONS.has(operation)) return null;
+  const started = Date.now();
+  let validated = false;
+  const emit = (stage, category, status) => {
+    try {
+      console.info('M1_TEST_STAFF_READ', JSON.stringify({ requestId, operation, stage,
+        category: STAFF_READ_TRACE_CATEGORIES.has(category) ? category : 'FAILED',
+        status: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null,
+        elapsedMs: Math.max(0, Date.now() - started) }));
+    } catch { /* Passive diagnostics must never affect a request. */ }
+  };
+  return {
+    requestId, emit,
+    validation(category) { validated = true; emit('netlify.validation', category); },
+    finish(response) {
+      if (!validated) emit('netlify.validation', response.status === 400 ? 'REQUEST_REJECTED' : 'NOT_VALIDATED');
+      emit('netlify.delivery', response.ok ? 'HTTP_SUCCESS' : 'HTTP_ERROR', response.status);
+      try { response.headers.set('X-GIB-M1-Read-ID', requestId); } catch { /* Header diagnostics are optional. */ }
+      return response;
+    }
+  };
+}
 
 function validPreviewSameOriginRequest(request) {
   let url;
@@ -111,6 +150,17 @@ function adminMutationFailureResponse(google, operation) {
 }
 
 export async function handleAdminStaffTime(request, dependencies = {}) {
+  const diagnostics = { trace: null };
+  try {
+    const response = await runAdminStaffTime(request, dependencies, diagnostics);
+    return diagnostics.trace ? diagnostics.trace.finish(response) : response;
+  } catch (error) {
+    diagnostics.trace?.emit('netlify.exception', 'EXCEPTION');
+    throw error;
+  }
+}
+
+async function runAdminStaffTime(request, dependencies, diagnostics) {
   if (!staffClockEnabled(dependencies.installationId)) {
     return jsonResponse(404, { ok: false, message: 'Staff Clock is disabled for this installation.' });
   }
@@ -124,6 +174,15 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
   }
   const parsed = await readJson(request, MAX_REQUEST_BYTES);
   if (parsed.response) return parsed.response;
+  const operation = parsed.value.operation;
+  const recoveryOperation = operation === 'recoveryReview' || operation === 'recoveryDecide';
+  if (recoveryOperation) {
+    const scope = releaseFeatureScope(request, 'staffRecovery', dependencies);
+    if (!scope || scope.target !== target || scope.profile.installationId !== 'rev'
+      || new URL(request.url).origin !== (target === 'production' ? 'https://gib-live.netlify.app' : 'https://deploy-preview-89--gib-live.netlify.app')) {
+      return jsonResponse(404, { ok: false, message: 'Staff recovery is disabled for this installation.' });
+    }
+  }
 
   const runtime = runtimeConfig(dependencies.env || process.env, {
     admin: true,
@@ -136,7 +195,6 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
   const auth = requireAdmin(request, runtime, dependencies.now ?? Date.now());
   if (auth.response) return auth.response;
 
-  const operation = parsed.value.operation;
   if (
     operation !== 'review'
     && operation !== 'reviewPage'
@@ -145,20 +203,77 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
     && operation !== 'correct'
     && operation !== 'adjust'
     && operation !== 'void'
+    && !recoveryOperation
   ) {
     return jsonResponse(400, { ok: false, message: 'Staff time request was rejected.' });
   }
   const fetchImpl = dependencies.fetch || fetch;
   const dateNow = dependencies.dateNow || new Date();
+  const trace = createStaffReadTrace(request, runtime, operation);
+  diagnostics.trace = trace;
+  trace?.emit('netlify.accepted', 'ACCEPTED');
+  const readRuntime = trace ? { ...runtime, installationId: 'rev', staffReadTraceOrigin: STAFF_READ_TRACE_ORIGIN,
+    staffReadTraceId: trace.requestId } : runtime;
+  const googleRead = async (action, data) => {
+    trace?.emit('google.transport', 'ACCEPTED');
+    const callbackRead = target === 'test' && runtime.installationId !== 'richmond'
+      && new URL(request.url).origin === STAFF_READ_TRACE_ORIGIN;
+    let google;
+    if (callbackRead) {
+      try {
+        google = await (dependencies.staffCallbackRead || loadStaffCallbackRead)(request, readRuntime,
+          auth.session.adminName, action, data, dependencies);
+      } catch {
+        // Do not fall back to another Google read or trust the ordinary reply.
+        google = { readable: false, status: 503, failureClass: 'CALLBACK_UNAVAILABLE' };
+      }
+    } else google = await postGoogle(readRuntime, action, data, fetchImpl);
+    trace?.emit('google.result', google.readable && google.value?.ok === true ? 'OK'
+      : google.readable && isStaffViewStale(google.value, target) ? 'STALE'
+        : googleFailureClass(google), google.status);
+    return google;
+  };
+  const traceValidation = (google, value) => trace?.validation(value ? 'VALIDATED'
+    : google.readable && google.value?.ok === true ? 'CONTRACT_MISMATCH' : 'NOT_VALIDATED');
+
+  if (recoveryOperation) {
+    const value = operation === 'recoveryDecide' ? sanitizeStaffRecoveryDecisionRequest(parsed.value, { now: dateNow }) : null;
+    if (operation === 'recoveryDecide' ? !value : !exactObjectKeys(parsed.value, ['operation'])) {
+      return jsonResponse(400, { ok: false, message: 'Staff recovery request was rejected.' });
+    }
+    const expected = value ? { ...value, adminName: auth.session.adminName } : null;
+    const data = value ? { decision: { ...value }, adminName: auth.session.adminName } : {};
+    if (data.decision) delete data.decision.operation;
+    const google = value ? await postGoogle(runtime, 'staffRecoveryDecide', data, fetchImpl)
+      : await googleRead('staffRecoveryReview', data);
+    if (value) {
+      const mutationFailure = adminMutationFailureResponse(google, operation);
+      if (mutationFailure) return mutationFailure;
+    }
+    // A central decision can be recorded after the request was validated.
+    const result = google.readable
+      ? sanitizeStaffRecoveryResponse(google.value, target, {
+        now: new Date((dependencies.clock || Date.now)()), expected
+      }) : null;
+    traceValidation(google, result);
+    if (!result) {
+      return jsonResponse(googleFailureClass(google) === 'UNREACHABLE' ? 504 : 502, {
+        ok: false, code: 'STAFF_RECOVERY_UNCONFIRMED',
+        message: 'Staff recovery could not be confirmed. Keep the original request; do not submit a different decision.'
+      });
+    }
+    return jsonResponse(200, { ok: true, test: runtime.preview, adminName: auth.session.adminName, ...result });
+  }
 
   if (operation === 'review') {
     if (!exactObjectKeys(parsed.value, ['operation'])) {
       return jsonResponse(400, { ok: false, message: 'Staff time review request was rejected.' });
     }
-    const google = await postGoogle(runtime, 'staffTimeReviewV2', {}, fetchImpl);
+    const google = await googleRead('staffTimeReviewV2', {});
     const review = google.readable
       ? sanitizeStaffTimeReview(google.value, target, { now: dateNow })
       : null;
+    traceValidation(google, review);
     if (!review) return adminFailureResponse(google, operation);
     return jsonResponse(200, {
       ok: true,
@@ -179,12 +294,13 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
     if (!pageRequest) {
       return jsonResponse(400, { ok: false, message: 'Staff time review page was rejected.' });
     }
-    const google = await postGoogle(runtime, 'staffTimeReviewPageV2', {
+    const google = await googleRead('staffTimeReviewPageV2', {
       viewToken: pageRequest.viewToken,
       stream: pageRequest.stream,
       offset: pageRequest.offset
-    }, fetchImpl);
+    });
     if (google.readable && isStaffViewStale(google.value, target)) {
+      trace?.validation('STALE');
       return jsonResponse(409, {
         ok: false,
         result: 'stale',
@@ -194,6 +310,7 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
     const page = google.readable
       ? sanitizeStaffViewPage(google.value, target, pageRequest, { now: dateNow })
       : null;
+    traceValidation(google, page);
     if (!page) return adminFailureResponse(google, operation);
     return jsonResponse(200, {
       ok: true,
@@ -212,11 +329,12 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
     if (!pageRequest) {
       return jsonResponse(400, { ok: false, message: 'Staff time history page was rejected.' });
     }
-    const google = await postGoogle(runtime, 'staffTimeHistoryPageV2', {
+    const google = await googleRead('staffTimeHistoryPageV2', {
       viewToken: pageRequest.viewToken,
       offset: pageRequest.offset
-    }, fetchImpl);
+    });
     if (google.readable && isStaffViewStale(google.value, target)) {
+      trace?.validation('STALE');
       return jsonResponse(409, {
         ok: false,
         result: 'stale',
@@ -226,6 +344,7 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
     const page = google.readable
       ? sanitizeStaffTimeHistoryPage(google.value, target, pageRequest, { now: dateNow })
       : null;
+    traceValidation(google, page);
     if (!page) return adminFailureResponse(google, operation);
     return jsonResponse(200, {
       ok: true,
@@ -246,13 +365,14 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
     if (!lookupRequest) {
       return jsonResponse(400, { ok: false, message: 'Completed-shift lookup was rejected.' });
     }
-    const google = await postGoogle(runtime, 'staffTimeShiftLookupV3', {
+    const google = await googleRead('staffTimeShiftLookupV3', {
       viewToken: lookupRequest.viewToken,
       mode: lookupRequest.mode,
       staffId: lookupRequest.staffId,
       date: lookupRequest.date
-    }, fetchImpl);
+    });
     if (google.readable && isStaffViewStale(google.value, target)) {
+      trace?.validation('STALE');
       return jsonResponse(409, {
         ok: false,
         result: 'stale',
@@ -266,6 +386,7 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
       && google.value.target === target
       && google.value.result === 'too_large'
     ) {
+      trace?.validation('TOO_LARGE');
       return jsonResponse(409, {
         ok: false,
         result: 'too_large',
@@ -276,6 +397,7 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
     const lookup = google.readable
       ? sanitizeStaffShiftLookup(google.value, target, lookupRequest, { now: dateNow })
       : null;
+    traceValidation(google, lookup);
     if (!lookup) return adminFailureResponse(google, operation);
     return jsonResponse(200, {
       ok: true,
@@ -427,4 +549,4 @@ export async function handleAdminStaffTime(request, dependencies = {}) {
   });
 }
 
-export default request => handleAdminStaffTime(request);
+export default (request, context) => handleAdminStaffTime(request, { context });

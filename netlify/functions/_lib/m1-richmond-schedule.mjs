@@ -147,11 +147,32 @@ async function readTextLimited(response) {
   if (Number.isFinite(declared) && declared > RICHMOND_MAX_UPSTREAM_BYTES) {
     throw new RichmondScheduleSourceError('oversized-response');
   }
-  const text = await response.text();
-  if (Buffer.byteLength(text, 'utf8') > RICHMOND_MAX_UPSTREAM_BYTES) {
-    throw new RichmondScheduleSourceError('oversized-response');
+  if (!response.body || typeof response.body.getReader !== 'function') {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > RICHMOND_MAX_UPSTREAM_BYTES) {
+      throw new RichmondScheduleSourceError('oversized-response');
+    }
+    return text;
   }
-  return text;
+  // Fetch exposes decoded bytes: a compressed Content-Length cannot establish
+  // the size of the HTML. Stop reading at the same fixed parser bound.
+  const reader = response.body.getReader(), decoder = new TextDecoder();
+  let bytes = 0, text = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > RICHMOND_MAX_UPSTREAM_BYTES) throw new RichmondScheduleSourceError('oversized-response');
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } catch (error) {
+    try { await reader.cancel(); } catch {} // Preserve the original failure.
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export async function fetchRichmondCurrentSchedule(fetchImpl, now, previous = null) {

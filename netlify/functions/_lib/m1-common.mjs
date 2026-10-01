@@ -1,3 +1,4 @@
+import { liveControls } from '../../../tools/m1-release-controls.mjs';
 import {
   createHash,
   createHmac,
@@ -8,8 +9,24 @@ import {
   deploymentInstallationProfile,
   remoteBackendEnabled
 } from './m1-installation.mjs';
+import { traceGoogle, safeAdditionTraceId, scopedStaffReadTraceId } from './m1-google-trace.mjs';
+import { nativeHttpsControl } from './m1-google-native-control.mjs';
 
 export const ADMIN_NAMES = Object.freeze(['Andrew Smith', 'Stuart Turner']);
+const RICHMOND_TEST_ADMIN_NAMES = Object.freeze([...ADMIN_NAMES, 'Trey Martin']);
+export function adminNamesForScope(config) {
+  return config?.installationId === 'richmond' && ((config.environment === 'test' && config.target === 'test' && config.preview === true)
+    || (config.environment === 'production' && config.target === 'production' && config.preview === false && config.writesEnabled === true && config.richmondReviewerEnabled === true))
+    ? RICHMOND_TEST_ADMIN_NAMES : ADMIN_NAMES;
+}
+
+// Reading retained Richmond history does not grant a session or mutation rights.
+// Turning off Trey access must not turn his already-audited work unreadable.
+export function auditAdminNamesForScope(config) {
+  if (config?.installationId === 'richmond' && config.environment === 'production'
+    && config.target === 'production' && config.preview === false) return [...ADMIN_NAMES, 'Trey Martin'];
+  return adminNamesForScope(config);
+}
 export const ADMIN_COOKIE = 'gib_m1_admin_session';
 export const ADMIN_REQUEST_HEADER = 'X-GIB-M1-Admin-Request-Token';
 export const ADMIN_SESSION_SECONDS = 30 * 60;
@@ -247,6 +264,7 @@ function richmondRuntimeConfig(env, options, profile, target) {
     adminPassphrase,
     deviceToken,
     writesEnabled,
+    richmondReviewerEnabled: production && writesEnabled && liveControls(env, 'richmond').richmondReviewer,
     sessionSecret: options.admin === true
       ? production
         ? writesEnabled
@@ -447,7 +465,62 @@ export function validNonFutureDate(value, now = new Date()) {
     && text <= nyDate(now);
 }
 
-export async function postGoogle(config, action, data, fetchImpl = fetch) {
+// TEST diagnostics deliberately exclude URLs, bodies, identities and error messages.
+// Both review paths use this boundary so their upstream timings can be compared.
+export async function postGoogle(config, action, data, fetchImpl = fetch, nativeHttpsImpl = nativeHttpsControl) {
+  const staffReadTraceId = scopedStaffReadTraceId({ target: config.target, gym: config.installationId,
+    origin: config.staffReadTraceOrigin, action, staffReadTraceId: config.staffReadTraceId });
+  // The paired deployed experiment supports this exact TEST read boundary only.
+  // Keep writes, Richmond and production on their existing transport.
+  const nativeRead = config.target === 'test' && config.installationId === 'rev'
+    && config.testNativeHttps === true && ['dailyReview', 'managerReviewRead'].includes(action);
+  const transport = nativeRead ? nativeHttpsImpl : fetchImpl;
+  const readRetry = !nativeRead && config.target === 'test' && config.testReadRetry === true
+    && ['dailyReview', 'managerReviewRead'].includes(action);
+  const additionTrace = config.target === 'test' && config.installationId === 'rev'
+    && config.testTrace === true && action === 'addMissedInstructor';
+  const requestId = staffReadTraceId || (additionTrace ? safeAdditionTraceId(data?.requestId) : undefined);
+  let result;
+  for (let attempt = 1; attempt <= (readRetry ? 2 : 1); attempt++) {
+    const started = Date.now();
+    let finalHost = 'unavailable', redirected = false;
+    result = await traceGoogle({ target: config.target, enabled: config.testTrace, action, gym: config.installationId, attempt, requestId,
+      origin: config.staffReadTraceOrigin, staffReadTraceId, variant: nativeRead ? 'native-https' : 'current' }, () => postGoogleRequest(config, action,
+      staffReadTraceId ? { ...data, staffReadTraceId } : data, async (...args) => {
+      const response = await transport(...args);
+      try {
+        const host = new URL(response.url).hostname;
+        finalHost = ['script.google.com', 'script.googleusercontent.com'].includes(host) ? host : 'other';
+      } catch { /* Test responses may not have a URL. */ }
+      redirected = response.redirected === true;
+      return response;
+    }));
+    if (config.target === 'test' && (staffReadTraceId || additionTrace || ['dailyReview', 'managerReviewRead', 'managerReviewSave', 'managerReviewVoid'].includes(action))) {
+      try { console.info('M1_TEST_GOOGLE', JSON.stringify({
+        action, gym: config.installationId === 'richmond' ? 'richmond' : 'rev', attempt,
+        ...(requestId ? { requestId } : {}),
+        elapsedMs: Date.now() - started, status: result.status, finalHost, redirected,
+        result: result.readable && result.value?.ok === true ? 'OK' : googleFailureClass(result),
+        ...(result.transportCode ? { transportCode: result.transportCode } : {})
+      })); } catch { /* Passive diagnostics must never affect a request. */ }
+    }
+    // Repeat only pure TEST reads after an unreadable transport response. Never
+    // repeat a write, rejection, stale-view conflict, or valid-but-invalid contract.
+    // Each attempt retains the existing 25-second deadline and full validation.
+    const transient = ['UNREACHABLE', 'READ_FAILED', 'EMPTY', 'HTML'].includes(result.failureClass)
+      || (result.failureClass === 'HTTP_FAILURE' && [404, 408, 429, 500, 502, 503, 504].includes(result.status));
+    if (!transient) break;
+  }
+  return result;
+}
+
+function safeTransportCode(error) {
+  const allowed = ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET'];
+  if (['TimeoutError', 'AbortError'].includes(error?.name)) return error.name;
+  return allowed.includes(error?.cause?.code) ? error.cause.code : 'OTHER';
+}
+
+async function postGoogleRequest(config, action, data, fetchImpl = fetch) {
   let response;
   try {
     const body = {
@@ -476,8 +549,8 @@ export async function postGoogle(config, action, data, fetchImpl = fetch) {
       redirect: 'follow',
       signal: AbortSignal.timeout(25_000)
     });
-  } catch {
-    return { readable: false, status: 0, failureClass: 'UNREACHABLE' };
+  } catch (error) {
+    return { readable: false, status: 0, failureClass: 'UNREACHABLE', transportCode: safeTransportCode(error) };
   }
 
   const declaredLength = response.headers.get('content-length');
@@ -560,9 +633,9 @@ function validRequestToken(value) {
     && /^[A-Za-z0-9_-]+$/u.test(token);
 }
 
-export function createAdminSession(adminName, secret, now = Date.now(), requestToken = '') {
+export function createAdminSession(adminName, secret, now = Date.now(), requestToken = '', scope) {
   if (
-    !ADMIN_NAMES.includes(adminName)
+    !adminNamesForScope(scope).includes(adminName)
     || !clean(secret)
     || !validRequestToken(requestToken)
   ) {
@@ -573,12 +646,13 @@ export function createAdminSession(adminName, secret, now = Date.now(), requestT
     n: adminName,
     r: requestToken,
     iat: Math.floor(now / 1000),
-    exp: Math.floor(now / 1000) + ADMIN_SESSION_SECONDS
+    exp: Math.floor(now / 1000) + ADMIN_SESSION_SECONDS,
+    ...(adminName === 'Trey Martin' ? { s: 'richmond:test' } : {})
   });
   return `${payload}.${signPayload(payload, secret)}`;
 }
 
-export function readAdminSession(value, secret, now = Date.now()) {
+export function readAdminSession(value, secret, now = Date.now(), scope) {
   const parts = clean(value).split('.');
   if (parts.length !== 2 || !clean(secret)) return null;
   const expected = Buffer.from(signPayload(parts[0], secret), 'utf8');
@@ -594,7 +668,8 @@ export function readAdminSession(value, secret, now = Date.now()) {
   if (
     !payload
     || payload.v !== 2
-    || !ADMIN_NAMES.includes(payload.n)
+    || !adminNamesForScope(scope).includes(payload.n)
+    || (payload.n === 'Trey Martin' ? payload.s !== 'richmond:test' : Object.hasOwn(payload, 's'))
     || !validRequestToken(payload.r)
     || !Number.isInteger(payload.exp)
     || payload.exp <= Math.floor(now / 1000)
@@ -654,7 +729,8 @@ export function requireAdmin(request, config, now = Date.now()) {
   const session = readAdminSession(
     cookieValue(request, ADMIN_COOKIE),
     config.sessionSecret,
-    now
+    now,
+    config
   );
   if (!session) {
     return { response: jsonResponse(401, { ok: false, message: 'Admin login required.' }) };

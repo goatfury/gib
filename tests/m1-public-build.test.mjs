@@ -26,7 +26,7 @@ async function fixture(t) {
     assert.ok(path.basename(resolved).startsWith(TEMP_PREFIX));
     await rm(resolved, { recursive: true, force: true });
   });
-  const sources = [...PUBLIC_FILES, 'package.json', 'tools/build-public.mjs', 'tools/build-m1-installation-profile.mjs'];
+  const sources = [...PUBLIC_FILES, 'tools/m1-release-controls.mjs', 'package.json', 'tools/build-public.mjs', 'tools/build-m1-installation-profile.mjs'];
   for (const file of sources) {
     const destination = path.join(root, ...file.split('/'));
     await mkdir(path.dirname(destination), { recursive: true });
@@ -49,7 +49,7 @@ async function inventory(root, prefix = '') {
 function buildEnvironment(overrides = {}) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (/^(?:GIB_PROMOTIONS_|GIB_M1_INSTALLATION$|GIB_M1_ENVIRONMENT$|GIB_RICHMOND_PRODUCTION_|CONTEXT$)/u.test(key)) delete env[key];
+    if (/^(?:GIB_PROMOTIONS_|GIB_M1_MANAGER_REVIEW_|GIB_M1_INSTALLATION$|GIB_M1_ENVIRONMENT$|GIB_RICHMOND_PRODUCTION_|CONTEXT$)/u.test(key)) delete env[key];
   }
   env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${env.PATH || ''}`;
   return { ...env, ...overrides };
@@ -77,13 +77,18 @@ for (const scenario of [
     const root = await fixture(t);
     await put(root, 'm1/installation-profile.generated.js', 'stale profile');
     await put(root, 'm1/promotions-config.generated.js', 'stale config');
-    execFileSync(process.execPath, ['--run', 'build'], { cwd: root, env: buildEnvironment(scenario.env), stdio: 'pipe', timeout: 20000 });
+    // Run the two actual build stages directly: Node --run crashes in restricted Windows processes.
+    for (const stage of ['tools/build-m1-installation-profile.mjs', 'tools/build-public.mjs']) {
+      execFileSync(process.execPath, [stage], { cwd: root, env: buildEnvironment(scenario.env), stdio: 'pipe', timeout: 20000 });
+    }
     const context = await assertGeneratedCopies(root);
     assert.equal(context.M1_INSTALLATION_PROFILE.installationId, scenario.installation);
     assert.equal(context.M1_INSTALLATION_PROFILE.backend.transportTarget, scenario.target);
     assert.equal(context.M1_INSTALLATION_PROFILE.featureFlags.staffClock, scenario.staffClock);
     assert.equal(context.M1_PROMOTIONS_TEST_CONFIG.enabled, scenario.promotions);
     assert.deepEqual(await inventory(path.join(root, 'public')), [...PUBLIC_FILES].sort());
+    assert.deepEqual(await readFile(path.join(root, 'public/m1/admin/attendance-google-email.js')),
+      await readFile(path.join(ROOT, 'm1/admin/attendance-google-email.js')), 'Admin Google email module must be published unchanged');
     for (const file of ['_headers', '_redirects', 'index.html', 'guests/index.html', 'redneck-racing/style.css', 'm1/index.html', 'm1/connection.html', 'm1/connection-check.mjs', 'm1/shared-schedule.json', 'm1/richmond-schedule.json', 'm1/assets/revolution-bjj-logo.webp', 'm1/assets/richmond-bjj-logo.webp']) {
       assert.deepEqual(await readFile(path.join(root, 'public', file)), await readFile(path.join(ROOT, file)), file);
     }

@@ -28,7 +28,7 @@ function bootstrapRuntime() {
   };
   $('#loginAdminName').value = 'Andrew Smith';
   const calls = { login: 0, loggedIn: 0, loggedOut: 0, review: 0, active: false, refresh: 0 };
-  const context = vm.createContext({ $, calls, document: {}, pendingSchedule });
+  const context = vm.createContext({ $, calls, document: {}, pendingSchedule, managerDayReview: null });
   new vm.Script(`
     const IS_RICHMOND = true;
     const IS_RICHMOND_PRODUCTION = false;

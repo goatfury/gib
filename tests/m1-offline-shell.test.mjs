@@ -180,6 +180,8 @@ test('kiosk import, worker registration, scope, and no-store header share one re
     staffClockClientSource,
     new RegExp(`from './staff-clock-core\\.mjs\\?v=${revision}';`, 'u')
   );
+  assert.ok(kioskHtml.includes(`<script src="./manager-review-config.generated.js?v=${revision}"></script>`));
+  assert.ok(staffClockClientSource.includes(`from './staff-recovery-client.mjs?v=${revision}';`));
   assert.match(
     kioskHtml,
     /navigator\.serviceWorker\.register\(\s*`\/m1\/service-worker\.js\?v=\$\{encodeURIComponent\(OFFLINE_SHELL_REVISION\)\}`,[\s\S]*?scope: '\/m1\/'[\s\S]*?updateViaCache: 'none'/u
@@ -209,6 +211,8 @@ test('install atomically precaches only the revision-matched shell and activatio
       `${ORIGIN}/m1/sync-core.mjs?v=${harness.revision}`,
       `${ORIGIN}/m1/staff-clock-core.mjs?v=${harness.revision}`,
       `${ORIGIN}/m1/staff-clock-client.mjs?v=${harness.revision}`,
+      `${ORIGIN}/m1/staff-recovery-client.mjs?v=${harness.revision}`,
+      `${ORIGIN}/m1/manager-review-config.generated.js?v=${harness.revision}`,
       `${ORIGIN}/m1/kiosk-enhancements.css?v=${harness.revision}`,
       `${ORIGIN}/m1/kiosk-enhancements.mjs?v=${harness.revision}`,
       `${ORIGIN}/m1/kiosk-enhancements-core.mjs`,
@@ -309,6 +313,10 @@ test('network wins online while current-revision navigation and module reload fr
   assert.equal(offlineProfile.url, `${ORIGIN}/m1/installation-profile.generated.js?v=${harness.revision}`);
   assert.equal(offlineStaffCore.url, `${ORIGIN}/m1/staff-clock-core.mjs?v=${harness.revision}`);
   assert.equal(offlineStaffClient.url, `${ORIGIN}/m1/staff-clock-client.mjs?v=${harness.revision}`);
+  for (const path of ['staff-recovery-client.mjs', 'manager-review-config.generated.js']) {
+    const url = `${ORIGIN}/m1/${path}?v=${harness.revision}`;
+    assert.equal((await harness.dispatchFetch(request(url))).url, url);
+  }
 
   const serverFailure = { kind: 'network', ok: false, status: 503 };
   harness.setFetch(async () => serverFailure);

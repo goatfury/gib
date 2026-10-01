@@ -1,0 +1,85 @@
+import { ADMIN_REQUEST_HEADER, jsonResponse, readJson, requireAdmin, runtimeConfig } from './_lib/m1-common.mjs';
+import { attendanceDigestScope } from './m1-attendance-digest.mjs';
+import { DIGEST_ORIGIN, digestGym, digestOrigin, defaultDigestConfiguration } from './_lib/m1-attendance-digest.mjs';
+import { validId } from './_lib/m1-test-read-callback.mjs';
+import { readAttendanceWorkflowExamples, prepareAttendanceWorkflowExamples, prepareAttendanceWorkflowHistoryExamples, prepareAttendanceWorkflowDailyExamples, prepareAttendanceWorkflowMailAppExamples } from './_lib/m1-attendance-workflow-examples.mjs';
+import { workflowHealth, workflowMessages } from './_lib/m1-attendance-digest-workflow.mjs';
+
+export const config = { path: '/api/m1-attendance-workflow', rateLimit: { windowLimit: 30, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
+const response = (status, value) => jsonResponse(status, value);
+export async function handleAttendanceWorkflow(request, dependencies = {}) {
+  const url = new URL(request.url);
+  if (url.pathname !== config.path || url.hash || !['GET', 'POST'].includes(request.method)
+    || [...url.searchParams.keys()].some(key => key !== 'runId') || url.searchParams.getAll('runId').length > 1
+    || (request.method === 'POST' && url.search)) return response(404, { ok: false, message: 'TEST workflow unavailable.' });
+  const scope = attendanceDigestScope(request, dependencies);
+  if (!scope) return response(403, { ok: false, message: 'An enabled TEST installation is required.' });
+  if ((request.headers.get('Origin') && request.headers.get('Origin') !== digestOrigin(scope))
+    || (request.headers.get('Sec-Fetch-Site') && !['same-origin', 'none'].includes(request.headers.get('Sec-Fetch-Site'))))
+    return response(403, { ok: false, message: 'Use the authenticated Admin page.' });
+  const runtime = runtimeConfig(dependencies.env || process.env, { admin: true, requestUrl: request.url, installationId: digestGym(scope), environment: scope.profile.environment, activation: scope.profile.activation });
+  if (runtime?.target !== scope.target) return response(503, { ok: false, message: 'TEST service unavailable.' });
+  const auth = requireAdmin(request, runtime, (dependencies.clock || Date.now)());
+  if (auth.response) return auth.response;
+  const deps = { ...dependencies, scope };
+  try {
+    let latestRun;
+    const gym = digestGym(scope);
+    if ((scope.target !== 'test' || gym !== 'rev') && (request.method !== 'GET' || url.search)) return response(403, { ok: false, message: 'Synthetic examples are confined to Revolution TEST.' });
+    if (request.method === 'GET') {
+      const id = url.searchParams.get('runId');
+      if (id !== null && !validId(id)) return response(400, { ok: false, message: 'Use the original TEST example request.' });
+      latestRun = scope.target === 'test' && gym === 'rev' ? await (dependencies.readExamples || readAttendanceWorkflowExamples)(id, deps) : null;
+    } else {
+      const parsed = await readJson(request, 4096);
+      if (parsed.response) return parsed.response;
+      const input = parsed.value;
+      if (!input || Object.keys(input).sort().join('|') !== 'action|requestId' || !['runExamples', 'runHistory', 'runDaily', 'runMailApp'].includes(input.action) || !validId(input.requestId))
+        return response(400, { ok: false, message: 'Choose the isolated TEST examples. Real sending is disabled.' });
+      // This adapter owns its fixed synthetic data and simulated provider. Client
+      // input cannot supply recipients, a provider URL, credentials or send flags.
+      const prepare = input.action === 'runMailApp' ? dependencies.prepareMailApp || prepareAttendanceWorkflowMailAppExamples
+        : input.action === 'runDaily' ? dependencies.prepareDaily || prepareAttendanceWorkflowDailyExamples
+        : input.action === 'runHistory' ? dependencies.prepareHistory || prepareAttendanceWorkflowHistoryExamples
+        : dependencies.prepareExamples || prepareAttendanceWorkflowExamples;
+      await prepare(input.requestId, deps);
+      latestRun = await (dependencies.readExamples || readAttendanceWorkflowExamples)(input.requestId, deps);
+      if (!latestRun) {
+        // The run is durably recorded before invoking the supported background
+        // function. Its 202 is dispatch acknowledgment, never a passed result.
+        const dispatch = dependencies.dispatchExamples || (async (runId, action) => {
+          const result = await fetch(DIGEST_ORIGIN + '/api/m1-attendance-workflow-background', {
+            method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
+            headers: { 'Content-Type': 'application/json', Origin: DIGEST_ORIGIN,
+              Cookie: request.headers.get('Cookie') || '', [ADMIN_REQUEST_HEADER]: request.headers.get(ADMIN_REQUEST_HEADER) || '' },
+            body: JSON.stringify({ action, requestId: runId })
+          });
+          await result.body?.cancel();
+          if (result.status !== 202) throw new Error('Dispatch unavailable');
+        });
+        await dispatch(input.requestId, input.action);
+        return response(202, { ok: true, target: 'test', sendingEnabled: false, recurringEnabled: false,
+          latestRun: null, request: { runId: input.requestId, action: input.action, state: 'pending' } });
+      }
+    }
+    const health = await (dependencies.readHealth || workflowHealth)(scope, deps);
+    const messages = await (dependencies.readMessages || workflowMessages)(scope, deps);
+    // Own-gym evidence only: this server cannot inspect Google timer activation.
+    if (scope.target === 'production') return response(200, { ok: true, target: 'production', latestRun: null, current: { health, messages } });
+    const selected = defaultDigestConfiguration(scope, dependencies.env || process.env);
+    return response(200, { ok: true, target: scope.target, sendingEnabled: false, recurringEnabled: false,
+      latestRun: latestRun || null, current: { health, messages },
+      setup: { revolutionReviewer: 'Stu', richmondReviewer: 'Trey', senderAddress: selected.senderAddress,
+        revolutionTo: selected.routing.rev.reviewer.address, richmondTo: selected.routing.richmond.reviewer.address,
+        cc: selected.routing[gym].cc.map(person => person.address), bcc: selected.routing[gym].bcc.map(person => person.address),
+        dailyLocalTime: selected.dailyLocalTime, timezone: selected.timezone, reminderTimeConfirmed: selected.cutoffConfirmed,
+        classFinishCutoffConfirmed: false, richmondReviewerAccessVerified: false } });
+  } catch (error) {
+    const code = ['WORKFLOW_EXAMPLES_IN_PROGRESS', 'WORKFLOW_EXAMPLES_KIND_MISMATCH'].includes(error?.code) ? error.code : 'WORKFLOW_UNAVAILABLE';
+    return response(code === 'WORKFLOW_UNAVAILABLE' ? 503 : 409, { ok: false, code,
+      message: code === 'WORKFLOW_EXAMPLES_IN_PROGRESS' ? 'The original TEST run is still in progress. Check that same run again.'
+        : code === 'WORKFLOW_EXAMPLES_KIND_MISMATCH' ? 'This request belongs to a different TEST check. Keep its original action and request.'
+        : 'Attendance workflow status unavailable. Keep the original request; this is not an all-clear.' });
+  }
+}
+export default (request, context) => handleAttendanceWorkflow(request, { context, env: process.env });
