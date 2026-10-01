@@ -97,27 +97,31 @@ function gibM1DigestStaffRead_(body) {
   } catch (_) { return { ok: false, code: 'STAFF_READ_UNAVAILABLE' }; }
   finally { if (held) lock.releaseLock(); }
 }
-function gibM1DigestDispatch_(binding) {
+function gibM1DigestDispatch_(binding, verifyOnly) {
   var scope = gibM1DigestScope_();
   if (!scope) throw new Error('Locked TEST project required.');
   var started = Date.now(), properties = PropertiesService.getScriptProperties();
   gibM1DigestBinding_(binding, binding.mode, started);
-  if (gibM1DigestCleanup_(properties, started) >= 160) throw new Error('DIGEST_RECEIPT_CAPACITY');
+  if (verifyOnly !== true && gibM1DigestCleanup_(properties, started) >= 160) throw new Error('DIGEST_RECEIPT_CAPACITY');
   var pendingKey = (scope.target === 'production' ? 'M1_PRODUCTION_DIGEST_PENDING_' : GIB_M1_DIGEST_PENDING_) + String(binding.expiresAt + 3600000) + '_' + binding.requestId;
   var pending = JSON.stringify(binding), previous = properties.getProperty(pendingKey);
   if (previous && previous !== pending) throw new Error('DIGEST_REQUEST_CONFLICT');
   // A durable exact request exists before either read or the external dispatch.
-  properties.setProperty(pendingKey, pending);
-  if (properties.getProperty(pendingKey) !== pending) throw new Error('DIGEST_PENDING_UNCONFIRMED');
+  if (verifyOnly !== true) {
+    properties.setProperty(pendingKey, pending);
+    if (properties.getProperty(pendingKey) !== pending) throw new Error('DIGEST_PENDING_UNCONFIRMED');
+  }
   var body = { action: 'managerReviewRead', target: scope.target, token: configuredReceiverSecret_(),
     adminActionToken: configuredAdminActionSecret_(), gym: scope.gym, from: '2026-09-07', to: binding.jobDate, check: null };
   if (scope.gym === 'richmond') { body.installation = scope.installation; body.environment = scope.environment; }
   var attendance;
   try {
-    var ledger = JSON.parse(managerReviewAction_(body).getContent());
+    var ledger = scope.target === 'production' && typeof gibM1EmailFirstEnabled_ === 'function' && gibM1EmailFirstEnabled_()
+      ? gibM1AttendanceBackgroundRead_(body) : JSON.parse(managerReviewAction_(body).getContent());
     attendance = ledger && ledger.ok === true ? { ok: true, ledger: ledger } : { ok: false, code: 'ATTENDANCE_READ_REJECTED' };
   } catch (_) { attendance = { ok: false, code: 'ATTENDANCE_READ_UNAVAILABLE' }; }
-  var staff = gibM1DigestStaffRead_(body);
+  var staff = scope.target === 'production' && typeof gibM1EmailFirstEnabled_ === 'function' && gibM1EmailFirstEnabled_()
+    ? { ok: true, complete: true, items: [], notApplicable: true } : gibM1DigestStaffRead_(body);
   var payload = {};
   Object.keys(binding).forEach(function(key) { payload[key] = binding[key]; });
   payload.gyms = [{ gym: scope.gym, attendance: attendance, staff: staff }];
@@ -130,7 +134,8 @@ function gibM1DigestDispatch_(binding) {
     // Both authoritative read locks have been released. Await this bounded single
     // delivery in the trigger/web invocation; never launch detached work.
     var response = UrlFetchApp.fetch(scope.digestUrl, { method: 'post', contentType: 'application/json',
-      payload: raw, headers: { 'X-GIB-M1-Digest-Signature': signature }, followRedirects: false, muteHttpExceptions: true });
+      payload: raw, headers: { 'X-GIB-M1-Digest-Signature': signature,
+        ...(verifyOnly === true && scope.target === 'production' ? { 'X-GIB-M1-Digest-Check': 'read-only-v1' } : {}) }, followRedirects: false, muteHttpExceptions: true });
     status = response.getResponseCode();
     responseCode = 'RESPONSE_NOT_JSON';
     var result = JSON.parse(response.getContentText());
@@ -143,8 +148,10 @@ function gibM1DigestDispatch_(binding) {
     if (acknowledged) { state = result.state; code = state === 'failed' ? 'CAPTURE_FAILED' : 'ACKNOWLEDGED'; responseCode = null; }
     else code = status >= 200 && status < 300 ? 'ACKNOWLEDGMENT_INVALID' : 'DELIVERY_HTTP_FAILURE';
   } catch (_) { code = code === 'PAYLOAD_TOO_LARGE' ? code : Date.now() >= binding.expiresAt ? 'REQUEST_EXPIRED' : 'DELIVERY_UNAVAILABLE'; }
-  gibM1DigestReceipt_(properties, binding, started, code, status, acknowledged, state, responseCode);
-  return { ok: acknowledged, requestId: binding.requestId, state: state, code: code };
+  if (verifyOnly !== true) gibM1DigestReceipt_(properties, binding, started, code, status, acknowledged, state, responseCode);
+  return { ok: acknowledged, requestId: binding.requestId, state: state, code: code,
+    ...(scope.target === 'production' && typeof gibM1EmailFirstEnabled_ === 'function' && gibM1EmailFirstEnabled_()
+      ? { dailyEmail: acknowledged ? result.dailyEmail : null, readOnly: result?.readOnly === true } : {}) };
 }
 function gibM1AttendanceDigestCapture_(body) {
   var scope = gibM1DigestScope_();

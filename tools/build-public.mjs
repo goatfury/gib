@@ -55,6 +55,7 @@ export const PUBLIC_FILES = Object.freeze([
   'm1/staff-recovery-client.mjs',
   'm1/staff-clock-core.mjs',
   'm1/sync-core.mjs',
+  'm1/upload-evidence.mjs',
   'm1/tablet-diagnostic.html',
   'm1/tablet-install.html',
   'm1/temporary-classes-core.js',

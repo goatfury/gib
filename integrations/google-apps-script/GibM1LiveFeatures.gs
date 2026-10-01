@@ -38,6 +38,7 @@ function attendanceProductionDigestTick() {
   var scope = gibM1LiveReminderScope_();
   if (!scope || PropertiesService.getScriptProperties().getProperty('GIB_M1_ATTENDANCE_DIGEST_LIVE_SCHEDULE_ENABLED') !== 'true') return;
   if (!gibM1MailAppActor_()) return; // no attendance read or attempt under another execution account
+  if (typeof gibM1EmailFirstEnabled_ === 'function' && gibM1EmailFirstEnabled_()) return gibM1AttendanceEmailFirstTick_();
   return gibM1AttendanceDigestTick_();
 }
 // These editor helpers are a later, approved production consent/setup handoff.

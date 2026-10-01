@@ -130,3 +130,13 @@ jobs:
           include-hidden-files: true
           retention-days: 14
           if-no-files-found: error
+      - name: Validate attendance-only release archives with correction/access/recovery off
+        run: |
+          node tools/package-m1-disabled-release.mjs "$(git rev-parse HEAD)" .m1-email-first-release .m1-test-packager/node_modules/netlify-cli --preserve-revolution-promotions --email-first
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m1-email-first-release-${{ github.event.pull_request.head.sha }}
+          path: .m1-email-first-release/
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: error

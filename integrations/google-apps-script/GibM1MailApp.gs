@@ -153,6 +153,9 @@ function gibM1MailAppAction_(body) {
     if (!gibM1MailAppExact_(body, requestKeys)
       || ['attendanceMailSend', 'attendanceMailStatus'].indexOf(body.action) < 0) throw new Error('MAILAPP_REQUEST_INVALID');
     gibM1MailAppMessage_(body.message); message = body.message;
+    if (typeof gibM1EmailFirstOwnsMessage_ === 'function') {
+      var owned = gibM1EmailFirstOwnsMessage_(message); if (owned) return jsonResult_(owned);
+    }
     if (scope.target === 'production') {
       var urls = (message.html + '\n' + message.text).match(/https?:\/\/[^\s<>"']+/g) || [];
       if (urls.some(function(url) { return url.indexOf(scope.origin + '/m1/admin/') !== 0; })) throw new Error('MAILAPP_MESSAGE_INVALID');
@@ -195,7 +198,8 @@ function gibM1MailAppAction_(body) {
   catch (_) { return jsonResult_(gibM1MailAppResult_(message, 'unknown', 'MAILAPP_BINDING_INVALID', row[6])); }
   var returned = false;
   try {
-    var options = { to: message.to.join(','), subject: message.subject, body: message.text, htmlBody: message.html };
+    var options = { to: message.to.join(','), subject: message.subject, body: message.text, htmlBody: message.html,
+      ...(message.target === 'production' ? { replyTo: 'andrew@revolutionbjj.com' } : {}) };
     if (message.cc.length) options.cc = message.cc.join(',');
     if (message.bcc && message.bcc.length) options.bcc = message.bcc.join(',');
     MailApp.sendEmail(options); returned = true;

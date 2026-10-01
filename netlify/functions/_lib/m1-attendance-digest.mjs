@@ -78,10 +78,12 @@ export function defaultDigestConfiguration(scope, env = {}) {
   if (scope.target === 'production' && (dailyLocalTime !== '20:00' || confirmed === 'false' || copy === 'true'
     || Object.entries(routing).some(([id, route]) => route.reviewer.address !== LIVE_RECIPIENTS[id] || route.cc.length || route.bcc.some(p => p.address !== INITIAL_BCC)))) throw new Error('Live digest configuration is not approved.');
   return { schema: DIGEST_SCHEMA, target: scope.target, sendingEnabled: false, senderAddress: DIGEST_CONFIRMED_SENDER, dailyLocalTime,
+    ...(env.GIB_M1_ATTENDANCE_EMAIL_FIRST_ENABLED === 'true' ? { emailFirst: true } : {}),
     ...(scope.syntheticRehearsal === true ? { syntheticRehearsal: true } : {}),
     cutoffConfirmed: confirmed === 'true' || (confirmed !== 'false' && dailyLocalTime === '20:00'), classFinishCutoffConfirmed: false, timezone: DIGEST_TIMEZONE,
     recipients: [routing[gym].reviewer, ...routing[gym].cc], routing,
-    gyms: [{ id: gym, name: scope.profile.gymName, timezone: DIGEST_TIMEZONE, staffClockEnabled: gym === 'rev', adminUrl: digestOrigin(scope) + '/m1/admin/' }] };
+    gyms: [{ id: gym, name: scope.profile.gymName, timezone: DIGEST_TIMEZONE,
+      staffClockEnabled: gym === 'rev' && env.GIB_M1_ATTENDANCE_EMAIL_FIRST_ENABLED !== 'true', adminUrl: digestOrigin(scope) + '/m1/admin/' }] };
 }
 
 function validateConfiguration(config) {
@@ -173,6 +175,9 @@ export function buildAttendanceDigest({ jobDate, snapshots, schedules, configura
       if (snapshot.attendance?.ok !== true) throw new Error();
       ledger = validateRead(snapshot.attendance.ledger, gym.id, jobDate, configuration.target);
     } catch { failure('attendance', 'ATTENDANCE_UNAVAILABLE', 'Instructor attendance could not be checked. This is not a missing-instructor count.'); }
+    if (configuration.emailFirst === true && (snapshot.uploads?.ok !== true || snapshot.uploads.complete !== true)) {
+      failure('uploads', 'UPLOAD_COMPLETENESS_UNCONFIRMED', 'Could not confirm that every saved instructor sign-in reached the spreadsheet. The tablet may be offline or silent, uploads may be incomplete, or complete upload evidence may be unavailable. Saved rows alone do not prove that its queue is empty.');
+    }
     if (ledger) {
       const recordIds = new Map();
       for (const day of ledger.days) for (const record of day.records) recordIds.set(record.recordId, (recordIds.get(record.recordId) || 0) + 1);
@@ -233,7 +238,8 @@ export function renderAttendanceDigest(digest) {
   if (production && synthetic) throw new Error('Live synthetic email prohibited.');
   const routed = ['rev', 'richmond'].includes(digest.routedGym) && digest.groups.length === 1 && digest.groups[0].gym === digest.routedGym;
   const subject = `${synthetic ? 'SYNTHETIC REHEARSAL · ' : ''}${production ? '' : 'TEST '}attendance attention · ${routed ? digest.groups[0].name + ' · ' : ''}${digest.date}${digest.readFailures.length ? ' · check incomplete' : ''}`;
-  const introduction = synthetic ? 'Controlled synthetic rehearsal. These are isolated fixtures, not real attendance or instructions to correct records. No real closing time has been confirmed.'
+  const introduction = production ? 'Please reply to this email with corrections: the date, class, instructor, and what should change (or whether the class did not happen). Your reply goes to Andrew at andrew@revolutionbjj.com. Andrew will update the spreadsheet during payroll, preserving the original records and correction history.'
+    : synthetic ? 'Controlled synthetic rehearsal. These are isolated fixtures, not real attendance or instructions to correct records. No real closing time has been confirmed.'
     : routed ? 'The designated gym reviewer can resolve these items in M1 using existing authorized access. These links contain only this gym’s review items.'
     : 'Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.';
   const to = digest.recipients.map(r => `${r.name}${r.address ? ' <' + r.address + '>' : ' (address not configured)'}`).join(', ');
@@ -248,19 +254,19 @@ export function renderAttendanceDigest(digest) {
     lines.push('', group.name); html += '<h2 style="font-size:20px;margin-top:28px">' + escape(group.name) + '</h2>';
     if (group.items.length) {
       html += '<ul style="padding-left:22px">';
-      for (const item of group.items) { lines.push(`${item.date} — ${item.summary}`, ...(synthetic && !routed ? [] : [item.url])); html += '<li style="margin:12px 0"><strong>' + escape(item.date) + '</strong> — ' + escape(item.summary) + (synthetic && !routed ? '' : '<br><a href="' + escape(item.url) + '">Open authenticated correction screen</a>') + '</li>'; }
+      for (const item of group.items) { lines.push(`${item.date} — ${item.summary}`, ...(production || synthetic && !routed ? [] : [item.url])); html += '<li style="margin:12px 0"><strong>' + escape(item.date) + '</strong> — ' + escape(item.summary) + (production || synthetic && !routed ? '' : '<br><a href="' + escape(item.url) + '">Open authenticated correction screen</a>') + '</li>'; }
       html += '</ul>';
     }
     if (failures.length) {
       lines.push('Checks that could not be completed:'); html += '<h3 style="font-size:16px;color:#9a4418">Checks that could not be completed</h3><ul>';
-      for (const item of failures) { lines.push(item.message, item.url); html += '<li style="margin:10px 0">' + escape(item.message) + '<br><a href="' + escape(item.url) + '">Check records in M1</a></li>'; }
+      for (const item of failures) { lines.push(item.message, ...(production ? [] : [item.url])); html += '<li style="margin:10px 0">' + escape(item.message) + (production ? '' : '<br><a href="' + escape(item.url) + '">Check records in M1</a>') + '</li>'; }
       html += '</ul>';
     }
   }
   if (!digest.shouldCapture) { lines.push('', 'No outstanding items were found in the complete checks. No daily email is needed.'); html += '<p>No outstanding items were found in the complete checks. No daily email is needed.</p>'; }
   lines.push('', 'Late uploads and corrections are checked again in the next digest. A day being unreviewed alone is not an email trigger.', production ? 'Email submission does not confirm delivery or resolve these questions.' : 'This is a capture preview; real delivery has not been tested.');
   html += '<hr style="border:0;border-top:1px solid #dce2e8;margin:28px 0"><p style="font-size:13px;color:#546171">Late uploads and corrections are checked again in the next digest. A day being unreviewed alone is not an email trigger.</p><p style="font-size:13px;color:#546171">' + (production ? 'Email submission does not confirm delivery or resolve these questions.' : 'This is a capture preview; real delivery has not been tested.') + '</p></main></body></html>';
-  if (synthetic || routed) html = html.replace('Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.', escape(introduction));
+  if (production || synthetic || routed) html = html.replace('Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.', escape(introduction));
   if (cc) html = html.replace('<p><strong>To:</strong> ' + escape(to) + '</p>', '<p><strong>To:</strong> ' + escape(to) + '</p><p><strong>Cc:</strong> ' + escape(cc) + '</p>');
   return { subject, html, text: lines.join('\n') };
 }
@@ -294,7 +300,7 @@ export function splitAttendanceDigest(digest, configuration) {
   for (const failure of digest.readFailures) {
     const gym = configuration.gyms.find(value => value.id === failure?.gym);
     if (!gym || !exact(failure, ['gym', 'component', 'code', 'message', 'url', ...(Object.hasOwn(failure, 'dates') ? ['dates'] : [])])
-      || !['attendance', 'schedule', 'staff'].includes(failure.component) || !/^[A-Z0-9_]{1,80}$/.test(failure.code)
+      || !['attendance', 'schedule', 'staff', 'uploads'].includes(failure.component) || !/^[A-Z0-9_]{1,80}$/.test(failure.code)
       || !safeText(failure.message, 1000) || failure.url !== link(gym, digest.date, failure.component === 'staff')
       || (Object.hasOwn(failure, 'dates') && (!Array.isArray(failure.dates) || !failure.dates.length
         || failure.dates.some(date => !digestDate(date) || date > digest.date)))) throw new Error('Digest failed-read coverage is incomplete.');

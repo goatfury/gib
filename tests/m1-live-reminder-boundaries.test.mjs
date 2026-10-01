@@ -109,8 +109,9 @@ test('actual enabled production workflow reaches fake Google once, survives lost
     assert.equal(h.sends.length, 1); const original = structuredClone(h.sends[0]);
     assert.equal(original.messageId, 'm1-production-scheduled-' + gym + '-' + DATE); assert.equal(original.synthetic, false);
     assert.deepEqual(original.to, [LIVE_RECIPIENTS[gym]]); assert.deepEqual(original.bcc, ['andrew@revolutionbjj.com']);
-    assert.doesNotMatch(original.html + original.text, /andrew@|TEST|deploy-preview|gib-richmond-test/);
-    assert.match(original.text, /older unresolved class/); assert.ok(original.html.includes(LIVE_ORIGINS[gym] + '/m1/admin/'));
+    assert.doesNotMatch(original.html + original.text, /Bcc:|TEST|deploy-preview|gib-richmond-test|correction screen/);
+    assert.match(original.text, /older unresolved class/); assert.match(original.text, /reply.*corrections/i);
+    assert.match(original.text, /andrew@revolutionbjj.com/);
     const reloaded = { ...h.dependencies }; h.settings.dropReply = false;
     await processAttendanceWorkflow(h.input(), reloaded); await h.read(); assert.equal(h.sends.length, 1);
     h.at(NOW + 86400000); await h.run(); assert.equal(h.sends.length, 2);

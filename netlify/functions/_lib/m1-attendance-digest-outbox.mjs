@@ -175,7 +175,13 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
         classFinishCutoffConfirmed: gym.classFinishCutoffConfirmed ?? configuration.classFinishCutoffConfirmed ?? gym.cutoffConfirmed ?? configuration.cutoffConfirmed, reviewSnapshots });
     } catch { return { gym: gym.id, timezone: configuration.timezone, days: [] }; }
   }));
-  const digest = buildAttendanceDigest({ jobDate: binding.jobDate, snapshots: gyms, schedules, configuration, now });
+  let snapshots = gyms;
+  if (configuration.emailFirst === true) {
+    const { assessUploadEvidence } = await import('./m1-upload-evidence.mjs');
+    snapshots = await Promise.all(gyms.map(async snapshot => ({ ...snapshot,
+      uploads: await assessUploadEvidence(scope, snapshot.attendance, binding.jobDate, now, dependencies) })));
+  }
+  const digest = buildAttendanceDigest({ jobDate: binding.jobDate, snapshots, schedules, configuration, now });
   validateDigestBinding(binding, clock(dependencies), scope.target);
   if (binding.mode === 'scheduled') {
     const due = digestDue(binding.jobDate, now, configuration, schedules);

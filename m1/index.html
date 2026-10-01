@@ -4858,6 +4858,12 @@ function refreshNameDatalist() {
   }
   loadSyncSettings();
   updateSyncStatus();
+  if (BACKEND_ENABLED && IS_PRODUCTION_SYNC_ORIGIN && globalThis.M1_MANAGER_REVIEW_CONFIG?.reminders === true) {
+    import('./upload-evidence.mjs?v=2026-10-01-email-first').then(({ startUploadEvidence }) => {
+      startUploadEvidence({ storage: localStorage, stateKey: LOCAL_STATE_KEY, installationKey: installationStorageKey,
+        getState: loadLocalState });
+    }).catch(() => {}); // An unavailable report makes the daily check warn; sign-ins continue.
+  }
   if (BACKEND_ENABLED && (!IS_RICHMOND_PRODUCTION || RICHMOND_WRITES_ENABLED)) {
     window.addEventListener('online', () => {
       if (

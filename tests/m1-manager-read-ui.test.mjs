@@ -4,7 +4,8 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 const source = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
-const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+// Response.json() can settle on the next event-loop turn in production Node 22.
+const flush = async () => { await new Promise(resolve => setImmediate(resolve)); };
 const result = (count, target = 'test') => ({ ok: true, test: target === 'test', target, pendingDays: count, period: { start: '2026-09-21', end: '2026-10-04' }, cleanupStart: '2026-09-07', days: [{ date: '2026-09-21', period: { start: '2026-09-21', end: '2026-10-04' }, complete: false, classes: [], blockers: [] }] });
 const additionReview = (original, receipt, target = 'test') => {
   const view = { ...result(2, target), gym: 'rev', site: 'Rev' };

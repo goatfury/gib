@@ -1,10 +1,10 @@
 import { jsonResponse, runtimeConfig } from './_lib/m1-common.mjs';
 import { attendanceDigestScope } from './m1-attendance-digest.mjs';
-import { DIGEST_SIGNATURE_HEADER, authenticateDigestJob, processDigestJob } from './_lib/m1-attendance-digest-outbox.mjs';
+import { DIGEST_SIGNATURE_HEADER, authenticateDigestJob, processDigestJob, defaultDigestStore } from './_lib/m1-attendance-digest-outbox.mjs';
 import { validId } from './_lib/m1-test-read-callback.mjs';
 import { processDigestRehearsal } from './_lib/m1-attendance-digest-rehearsal.mjs';
 import { enqueueAttendanceWorkflow } from './_lib/m1-attendance-digest-workflow.mjs';
-import { digestGym } from './_lib/m1-attendance-digest.mjs';
+import { digestGym, splitAttendanceDigest } from './_lib/m1-attendance-digest.mjs';
 
 export const config = { path: '/api/m1-attendance-digest-job', rateLimit: { windowLimit: 20, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 const responseCodes = new Set(['DIGEST_AUTHENTICATION_FAILED', 'DIGEST_RUNTIME_UNAVAILABLE', 'DIGEST_INVALID_JSON', 'DIGEST_INVALID_ENVELOPE',
@@ -12,6 +12,18 @@ const responseCodes = new Set(['DIGEST_AUTHENTICATION_FAILED', 'DIGEST_RUNTIME_U
   'DIGEST_STORAGE_INCOMPLETE', 'DIGEST_STORAGE_UNCONFIRMED', 'DIGEST_CONFIGURATION_UNAVAILABLE', 'DIGEST_REQUEST_MISSING',
   'DIGEST_OUTBOX_UNCONFIRMED', 'DIGEST_OUTBOX_INCOMPLETE', 'DIGEST_CAPTURE_CONFLICT', 'DIGEST_CAPTURE_UNCONFIRMED',
   'DIGEST_CAPTURE_STATUS_UNCONFIRMED', 'DIGEST_JOB_UNAVAILABLE', 'DIGEST_REHEARSAL_EXPIRED', 'DIGEST_REHEARSAL_MISSING', 'DIGEST_REHEARSAL_INVALID', 'DIGEST_REHEARSAL_UNAVAILABLE']);
+// Read deployed metadata but stage all check/capture/schedule writes in memory.
+// Authenticated live verification exercises the real pipeline without altering
+// production attendance, email opportunities, captures, or dated observations.
+export function readOnlyDigestOverlay(store) {
+  const staged = new Map(); let serial = 0;
+  return { async getWithMetadata(key, options) { return staged.has(key) ? structuredClone(staged.get(key)) : store.getWithMetadata(key, options); },
+    async set(key, raw, condition = {}) {
+      const before = await this.getWithMetadata(key, { type: 'json', consistency: 'strong' });
+      if (condition.onlyIfNew && before || condition.onlyIfMatch && before?.etag !== condition.onlyIfMatch) return { modified: false };
+      staged.set(key, { data: JSON.parse(raw), etag: 'read-only-' + (++serial) }); return { modified: true };
+    } };
+}
 export async function handleAttendanceDigestJob(request, dependencies = {}) {
   const url = new URL(request.url), clock = dependencies.clock || Date.now, started = clock();
   let requestId = null, stage = 'job.scope';
@@ -45,14 +57,26 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
     stage = 'job.capture';
     // Await complete central capture before acknowledging the scheduler. No
     // unowned dispatch, browser timer, real mail or Google response dependency.
-    const workflowDependencies = job.binding.mode === 'scheduled' ? { ...dependencies, onDigestCheck: async check => {
+    const emailFirst = scope.target === 'production' && (dependencies.env || process.env).GIB_M1_ATTENDANCE_EMAIL_FIRST_ENABLED === 'true';
+    const verifyOnly = emailFirst && job.binding.mode === 'scheduled' && request.headers.get('X-GIB-M1-Digest-Check') === 'read-only-v1';
+    const checkDependencies = verifyOnly ? { ...dependencies, digestStore: readOnlyDigestOverlay(dependencies.digestStore || await defaultDigestStore(scope)) } : dependencies;
+    let dailyEmail = null;
+    const workflowDependencies = job.binding.mode === 'scheduled' ? { ...checkDependencies, onDigestCheck: async check => {
+      if (emailFirst) {
+        const route = splitAttendanceDigest(check.digest, check.configuration)[0];
+        dailyEmail = { schema: 'm1-daily-email-check/v1', gym: digestGym(scope), date: job.binding.jobDate,
+          complete: true, shouldSend: route.digest.shouldCapture, rendered: route.rendered,
+          issueCount: route.digest.itemCount, unconfirmedChecks: route.digest.readFailures.length };
+        return; // Google owns the one send opportunity; no detached second sender.
+      }
       stage = 'job.workflow';
       await enqueueAttendanceWorkflow(check, runtime, { ...dependencies, scope });
       stage = 'job.capture';
-    } } : dependencies;
+    } } : checkDependencies;
     const result = await (job.binding.mode === 'rehearsal' ? processDigestRehearsal : processDigestJob)(job, scope, workflowDependencies);
     report(200, 'DIGEST_JOB_ACCEPTED');
-    return jsonResponse(200, { ok: true, accepted: true, requestId: job.binding.requestId, state: result.state, messageId: result.messageId || null });
+    return jsonResponse(200, { ok: true, accepted: true, requestId: job.binding.requestId, state: result.state, messageId: result.messageId || null,
+      ...(emailFirst ? { dailyEmail } : {}), ...(verifyOnly ? { readOnly: true } : {}) });
   } catch (error) {
     return reject(Number.isInteger(error.status) && error.status >= 400 && error.status < 600 ? error.status : 503,
       responseCodes.has(error.code) ? error.code : 'DIGEST_JOB_UNAVAILABLE');

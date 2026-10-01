@@ -14,7 +14,7 @@ export async function verifyReleaseRuntime({ artifact, cliRoot, runtime, install
   const cliRequire = createRequire(resolve(cliRoot, 'package.json'));
   const { default: extract } = await import(pathToFileURL(cliRequire.resolve('extract-zip')).href);
   const manifest = JSON.parse(await readFile(resolve(artifact, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.functions.length, 34);
+  assert.equal(manifest.functions.length, 35);
   const base = tmpdir(), isolated = await mkdtemp(join(base, 'gib-release-archives-'));
   // Do not inherit service credentials, NODE_PATH, NODE_OPTIONS or preloaders.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(PATH|SystemRoot|TEMP|TMP|HOME|USERPROFILE)$/i.test(key)));
