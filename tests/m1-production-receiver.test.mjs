@@ -1,3 +1,4 @@
+import {assertReconciledUpload, RECONCILIATION_NOW, RECONCILIATION_DATE} from './fixtures/m1-upload-reconciliation.mjs';
 import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -1423,4 +1424,13 @@ test('wrong headers and a nonempty first-time Sheet fail without persistent muta
   assert.equal(nonempty.propertyValues.get('GIB_M1_PRODUCTION_SPREADSHEET_ID'), '');
   assert.equal(nonempty.propertyValues.get('GIB_M1_DEPLOYMENT_TARGET_LOCK'), '');
   assert.equal(nonempty.propertyValues.get('GIB_M1_PROVISIONING_CLOSED'), '');
+});
+
+test('Revolution upload confirmation recognizes only audited same-gym reconciliation receipts', async () => {
+  const h=createHarness({nowIso:new Date(RECONCILIATION_NOW).toISOString(),
+    propertyValues:{GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED:'true'}});
+  const row=kioskRow({Site:'Rev',Date:RECONCILIATION_DATE,Timestamp:RECONCILIATION_DATE+' 17:30:00'});
+  const request=(action,values={})=>({token:h.derivedToken,adminActionToken:'production-admin-token',target:'production',action,...values});
+  await assertReconciledUpload({context:h.apps,request,post:h.post,gym:'rev',row,signins:h.signins,
+    audit:()=>h.sheets.get('Admin Audit')});
 });

@@ -156,6 +156,7 @@ test('background Sheet reader works with manager screen disabled and preserves o
   const context={Date,console:{log(){}},gibM1LiveReminderScope_:()=>({gym:'rev',target:'production'}),adminActionAuthorized_:body=>body.token==='isolated',todayNewYork_:()=>DATE,
     LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},openExpectedSpreadsheet_:()=>({}),signinsSheet_:()=>({}),readSignins_:()=>({records}),
     managerReviewAction_(){throw Error('Disabled correction screen must not be called');},managerJournal_:()=>({events:[history]}),
+    adminSyncAuditRows_:()=>[],adminSyncReceiptRecord_:()=>false,
     validCalendarDate_:value=>/^\d{4}-\d{2}-\d{2}$/.test(value),activeRecord_:row=>row.status!=='VOID',reviewRecordIssue_:()=>false,
     publicRecord_:row=>({recordId:row.rowId,date:row.date,classLabel:row.classLabel,instructor:row.instructor,duration:row.duration,reviewRequired:false}),
     managerAttendanceHash_:rows=>createHash('sha256').update(JSON.stringify(rows)).digest('hex')};

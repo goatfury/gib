@@ -46,8 +46,22 @@ function gibM1AttendanceBackgroundRead_(body) {
       days.push({ date: date, records: records, warnings: warnings, attendanceHash: managerAttendanceHash_(all), review: events[date] || null });
     }
     if (!days.length || days[days.length - 1].date !== body.to) throw new Error('ATTENDANCE_READ_UNAVAILABLE');
+    // A consumed offline ID remains a VOID audit receipt, never active teaching.
+    // Reuse the receiver's unique replacement/audit/chronology validation; a VOID
+    // marker alone cannot prove that this tablet record was safely reconciled.
+    var site = scope.gym === 'richmond' ? 'Richmond' : 'Rev';
+    var auditRows = adminSyncAuditRows_(spreadsheet), uploadReceipts = [];
+    state.records.forEach(function(receipt) {
+      if (!adminSyncReceiptRecord_(receipt, scope.target) || receipt.site !== site
+        || counts[receipt.rowId] !== 1 || receipt.date < body.from || receipt.date > body.to) return;
+      var linked = findAdminSyncReceipt_(state.records, receipt, auditRows, scope.target);
+      if (!linked || linked.conflict || linked.site !== site || counts[linked.rowId] !== 1
+        || reviewRecordIssue_(linked)) return;
+      uploadReceipts.push({ schema: 'm1-upload-reconciliation/v1', gym: scope.gym, target: scope.target,
+        date: receipt.date, rowId: receipt.rowId, linkedRecordId: linked.rowId });
+    });
     return { ok: true, schema: 'm1-manager-review/v1', complete: true, target: scope.target, gym: scope.gym,
-      from: body.from, to: body.to, days: days };
+      from: body.from, to: body.to, days: days, uploadReceipts: uploadReceipts };
   } finally { lock.releaseLock(); }
 }
 function gibM1EmailFirstRead_(properties, date) {

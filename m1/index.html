@@ -4859,10 +4859,16 @@ function refreshNameDatalist() {
   loadSyncSettings();
   updateSyncStatus();
   if (BACKEND_ENABLED && IS_PRODUCTION_SYNC_ORIGIN && globalThis.M1_MANAGER_REVIEW_CONFIG?.reminders === true) {
-    import('./upload-evidence.mjs?v=2026-10-01-email-first').then(({ startUploadEvidence }) => {
+    import('./upload-evidence.mjs?v=2026-10-03-upload-reliability').then(({ startUploadEvidence }) => {
       startUploadEvidence({ storage: localStorage, stateKey: LOCAL_STATE_KEY, installationKey: installationStorageKey,
         getState: loadLocalState });
-    }).catch(() => {}); // An unavailable report makes the daily check warn; sign-ins continue.
+    }).catch(() => {
+      try { console.warn('Upload confirmation could not start. Sign-ins remain saved.',
+        { schema: 'm1-upload-report-status/v1', stage: 'reporter-load-unavailable', status: null }); } catch {}
+    }); // An unavailable report makes the daily check warn; sign-ins continue.
+  } else if (BACKEND_ENABLED && globalThis.M1_MANAGER_REVIEW_CONFIG?.reminders === true && !IS_PRODUCTION_SYNC_ORIGIN) {
+    try { console.warn('Upload confirmation is unavailable at this address. Sign-ins remain saved.',
+      { schema: 'm1-upload-report-status/v1', stage: 'reporter-origin-unavailable', status: null }); } catch {}
   }
   if (BACKEND_ENABLED && (!IS_RICHMOND_PRODUCTION || RICHMOND_WRITES_ENABLED)) {
     window.addEventListener('online', () => {
