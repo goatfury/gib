@@ -4,6 +4,9 @@ import { datesThrough, localNow, datePlus, validateRead } from './m1-manager-rev
 import { revolutionReminderEligibility } from './m1-reminder-eligibility.mjs';
 
 export const DIGEST_SCHEMA = 'm1-attendance-digest/v1';
+// Both approved production workers began daily monitoring on this date.
+// Earlier absent dated schedules remain history; no schedule is backfilled.
+export const EMAIL_FIRST_MONITORING_START = '2026-10-01';
 export const DIGEST_ORIGIN = 'https://deploy-preview-89--gib-live.netlify.app';
 const DIGEST_ORIGINS = Object.freeze({ rev: DIGEST_ORIGIN, richmond: 'https://gib-richmond-test.netlify.app' });
 // Callers obtain this scope from the installation/site/context validator. A
@@ -176,7 +179,15 @@ export function buildAttendanceDigest({ jobDate, snapshots, schedules, configura
       ledger = validateRead(snapshot.attendance.ledger, gym.id, jobDate, configuration.target);
     } catch { failure('attendance', 'ATTENDANCE_UNAVAILABLE', 'Instructor attendance could not be checked. This is not a missing-instructor count.'); }
     if (configuration.emailFirst === true && (snapshot.uploads?.ok !== true || snapshot.uploads.complete !== true)) {
-      failure('uploads', 'UPLOAD_COMPLETENESS_UNCONFIRMED', 'Could not confirm that every saved instructor sign-in reached the spreadsheet. The tablet may be offline or silent, uploads may be incomplete, or complete upload evidence may be unavailable. Saved rows alone do not prove that its queue is empty.');
+      const reason = {
+        TABLET_REPORT_NOT_RECEIVED: 'No tablet upload report has been received. ',
+        TABLET_REPORT_STALE: 'The last tablet upload report is stale or belongs to another day. ',
+        TABLET_UPLOADS_PENDING: 'The tablet reports pending uploads or unconfirmed saved sign-ins. ',
+        TABLET_MANIFEST_INCOMPLETE: 'The tablet could not provide a complete saved-sign-in manifest. ',
+        SPREADSHEET_RECEIPTS_UNCONFIRMED: 'Some reported permanent row IDs could not be confirmed exactly once in the spreadsheet. ',
+        UPLOAD_EVIDENCE_READ_UNAVAILABLE: 'Upload monitoring evidence could not be read. '
+      }[snapshot.uploads?.reason] || '';
+      failure('uploads', 'UPLOAD_COMPLETENESS_UNCONFIRMED', reason + 'Could not confirm that every saved instructor sign-in reached the spreadsheet. The tablet may be offline or silent, uploads may be incomplete, or complete upload evidence may be unavailable. Saved rows alone do not prove that its queue is empty.');
     }
     if (ledger) {
       const recordIds = new Map();
@@ -191,29 +202,50 @@ export function buildAttendanceDigest({ jobDate, snapshots, schedules, configura
         else for (const occurrence of occurrences) {
           const matching = records.filter(r => labelKey(r.classLabel) === labelKey(occurrence.label));
           const decision = decisions.find(d => labelKey(d.label) === labelKey(occurrence.label));
-          if (occurrence.cancelled && matching.length) add('attendance-conflict', day.date, 'schedule-cancellation:' + labelKey(occurrence.label), occurrence.label + ' — recorded teaching conflicts with a canceled occurrence.');
+          if (occurrence.cancelled && matching.length) add('attendance-conflict', day.date, 'schedule-cancellation:' + labelKey(occurrence.label), occurrence.label + ' — instructor(s): ' + matching.map(r => r.instructor).join(', ') + '; recorded sign-in conflicts with a canceled occurrence.');
           const cancelled = occurrence.cancelled || (decision?.outcome === 'not-held' && !matching.length);
           if (cancelled || occurrence.finish > now) continue;
           if (!matching.some(r => r.reviewRequired === false && recordIds.get(r.recordId) === 1 && safeText(r.instructor) && Number.isFinite(r.duration) && r.duration > 0)) {
-            add('missing-instructor', day.date, labelKey(occurrence.label), occurrence.label + ' — no valid instructor sign-in.');
+            if (configuration.emailFirst === true && matching.length) {
+              // A present, flagged sign-in is an existing record problem, not
+              // a missing sign-in. Its review/ID problem is listed below.
+              for (const record of matching.filter(r => r.duration <= 0)) add('attendance-conflict', day.date, 'duration:' + record.recordId, record.classLabel + ' — instructor: ' + record.instructor + '; the saved sign-in has a non-positive duration.');
+            } else if (configuration.emailFirst !== true || !day.warnings.length) {
+              // Excluded unreadable rows could contain this class's sign-in.
+              // An incomplete day read cannot establish its absence.
+              add('missing-instructor', day.date, labelKey(occurrence.label), occurrence.label + ' — instructor: ' + (matching.length ? matching.map(r => r.instructor).join(', ') : 'not identified') + '; no valid instructor sign-in recorded in the spreadsheet.');
+            }
           }
         }
         for (const [index, warning] of day.warnings.entries()) {
           const identity = [warning?.code || 'ATTENDANCE_WARNING', safeText(warning?.displayId, 200) ? warning.displayId : 'warning-' + index];
-          add('attendance-conflict', day.date, identity, safeText(warning?.message, 500) ? warning.message : 'An existing attendance warning needs review.');
+          const message = safeText(warning?.message, 500) ? warning.message : 'An existing attendance warning could not be verified.';
+          if (configuration.emailFirst === true) failure('attendance', 'ATTENDANCE_RECORD_UNCONFIRMED', message + ' No specific sign-in correction was established.', [day.date]);
+          else add('attendance-conflict', day.date, identity, message);
         }
-        for (const record of records.filter(r => r.reviewRequired)) add('attendance-conflict', day.date, record.recordId, record.classLabel + ' — ' + record.instructor + ': recorded attendance needs review.');
-        for (const record of records.filter(r => recordIds.get(r.recordId) !== 1)) add('attendance-conflict', day.date, 'ambiguous-id:' + record.recordId, record.classLabel + ' — the permanent attendance ID is ambiguous.');
+        for (const record of records.filter(r => r.reviewRequired)) add('attendance-conflict', day.date, record.recordId, record.classLabel + ' — instructor: ' + record.instructor + '; the saved sign-in is flagged for review.');
+        for (const record of records.filter(r => recordIds.get(r.recordId) !== 1)) add('attendance-conflict', day.date, 'ambiguous-id:' + record.recordId, record.classLabel + ' — instructor: ' + record.instructor + '; the saved sign-in has a duplicate permanent attendance ID.');
         for (const decision of decisions) {
           if (!safeText(decision?.label)) continue;
           const occurrence = occurrences?.find(o => labelKey(o.label) === labelKey(decision.label));
           if (occurrence && occurrence.finish > now) continue;
           const matching = records.filter(r => labelKey(r.classLabel) === labelKey(decision.label));
-          if (decision.outcome === 'not-held' && matching.length) add('attendance-conflict', day.date, 'cancellation:' + labelKey(decision.label), decision.label + ' — recorded teaching conflicts with “Didn’t happen.”');
-          else if (decision.outcome === 'unknown') add('class-question', day.date, labelKey(decision.label), decision.label + ' — class status is still “Don’t know.”');
+          if (decision.outcome === 'not-held' && matching.length) add('attendance-conflict', day.date, 'cancellation:' + labelKey(decision.label), decision.label + ' — instructor(s): ' + matching.map(r => r.instructor).join(', ') + '; recorded sign-in conflicts with “Didn’t happen.”');
+          else if (decision.outcome === 'unknown') {
+            const message = decision.label + ' — class status is still “Don’t know.”';
+            if (configuration.emailFirst === true) failure('schedule', 'CLASS_STATUS_UNCONFIRMED', message + ' No missing sign-in was established.', [day.date]);
+            else add('class-question', day.date, labelKey(decision.label), message);
+          }
         }
       }
-      if (unknownDates.length) failure('schedule', 'SCHEDULE_COVERAGE_UNAVAILABLE', 'The actual dated schedule or class finish times could not be confirmed for ' + unknownDates.length + ' date' + (unknownDates.length === 1 ? '' : 's') + '. No missing instructors were inferred for those dates.', unknownDates);
+      if (unknownDates.length) {
+        // The complete historical read is retained. Missing dated setup before
+        // monitoring began is coverage history, never a new attendance allegation.
+        const historical = configuration.emailFirst === true ? unknownDates.filter(date => date < EMAIL_FIRST_MONITORING_START) : [];
+        const current = unknownDates.filter(date => !historical.includes(date));
+        if (historical.length) failure('schedule', 'HISTORICAL_SCHEDULE_UNAVAILABLE', 'Historical schedule coverage remains unconfirmed for ' + historical.length + ' dates (' + historical[0] + ' through ' + historical.at(-1) + '), before daily monitoring began. This is a retained setup/history gap, not a new attendance problem or a request for manager corrections. No missing sign-ins were inferred.', historical);
+        if (current.length) failure('schedule', 'SCHEDULE_COVERAGE_UNAVAILABLE', 'The dated schedule or class finish times could not be confirmed for ' + current.length + ' date' + (current.length === 1 ? '' : 's') + ' (' + current[0] + ' through ' + current.at(-1) + '). This is an incomplete check, not evidence of missing sign-ins. No missing instructors were inferred for those dates.', current);
+      }
     }
     // Trusted installation capability, never inferred from a failed read.
     if (gym.staffClockEnabled !== false) try {
@@ -237,8 +269,14 @@ export function renderAttendanceDigest(digest) {
   const synthetic = digest.syntheticRehearsal === true, production = digest.target === 'production';
   if (production && synthetic) throw new Error('Live synthetic email prohibited.');
   const routed = ['rev', 'richmond'].includes(digest.routedGym) && digest.groups.length === 1 && digest.groups[0].gym === digest.routedGym;
-  const subject = `${synthetic ? 'SYNTHETIC REHEARSAL · ' : ''}${production ? '' : 'TEST '}attendance attention · ${routed ? digest.groups[0].name + ' · ' : ''}${digest.date}${digest.readFailures.length ? ' · check incomplete' : ''}`;
-  const introduction = production ? 'Please reply to this email with corrections: the date, class, instructor, and what should change (or whether the class did not happen). Your reply goes to Andrew at andrew@revolutionbjj.com. Andrew will update the spreadsheet during payroll, preserving the original records and correction history.'
+  const correctionCount = digest.groups.reduce((count, group) => count + group.items.filter(item => ['missing-instructor', 'attendance-conflict'].includes(item.kind)).length, 0);
+  const clean = !digest.shouldCapture;
+  const label = production && clean ? 'attendance check complete' : production && !correctionCount ? 'attendance check unconfirmed' : 'attendance attention';
+  const heading = production && clean ? 'Attendance check complete' : production && !correctionCount ? 'Attendance check could not be confirmed' : 'Attendance that needs attention';
+  const subject = `${synthetic ? 'SYNTHETIC REHEARSAL · ' : ''}${production ? '' : 'TEST '}${label} · ${routed ? digest.groups[0].name + ' · ' : ''}${digest.date}${digest.readFailures.length && (!production || correctionCount) ? ' · check incomplete' : ''}`;
+  const introduction = production ? (clean ? 'Complete checks found no attendance problems. No daily email is needed.' : correctionCount
+    ? 'Please reply with corrections only for the specific attendance problems listed below: the date, class, instructor, and what should change (or whether the class did not happen). The separate unconfirmed checks do not establish additional missing sign-ins. Your reply goes to Andrew at andrew@revolutionbjj.com. Andrew will update the spreadsheet during payroll, preserving the original records and correction history.'
+    : 'No specific attendance correction is listed. No correction reply is requested. The checks below could not be confirmed; they do not show that an instructor sign-in is missing. Andrew will investigate the monitoring and schedule evidence.')
     : synthetic ? 'Controlled synthetic rehearsal. These are isolated fixtures, not real attendance or instructions to correct records. No real closing time has been confirmed.'
     : routed ? 'The designated gym reviewer can resolve these items in M1 using existing authorized access. These links contain only this gym’s review items.'
     : 'Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.';
@@ -247,7 +285,7 @@ export function renderAttendanceDigest(digest) {
   const lines = [production ? 'GIB Attendance reminder' : 'TEST CAPTURE — actual email sending is disabled.', 'To: ' + to, 'Subject: ' + subject, '',
     introduction];
   if (cc) lines.splice(2, 0, 'Cc: ' + cc);
-  let html = '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + escape(subject) + '</title><body style="margin:0;background:#f3f5f7;color:#17212c;font:16px/1.55 Arial,sans-serif"><main style="max-width:680px;margin:24px auto;padding:28px;background:white;border:1px solid #dce2e8;border-radius:12px"><p style="font-size:13px;font-weight:bold;color:#795714">' + (production ? 'GIB Attendance' : 'TEST CAPTURE · sending disabled') + '</p><h1 style="font-size:25px;line-height:1.2">Attendance that needs attention</h1><p>' + escape(digest.date) + ' · Eastern time</p><p><strong>To:</strong> ' + escape(to) + '</p><p>Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.</p>';
+  let html = '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + escape(subject) + '</title><body style="margin:0;background:#f3f5f7;color:#17212c;font:16px/1.55 Arial,sans-serif"><main style="max-width:680px;margin:24px auto;padding:28px;background:white;border:1px solid #dce2e8;border-radius:12px"><p style="font-size:13px;font-weight:bold;color:#795714">' + (production ? 'GIB Attendance' : 'TEST CAPTURE · sending disabled') + '</p><h1 style="font-size:25px;line-height:1.2">' + escape(heading) + '</h1><p>' + escape(digest.date) + ' · Eastern time</p><p><strong>To:</strong> ' + escape(to) + '</p><p>Either authorized reviewer can resolve these items in M1. The links show the same centrally saved records.</p>';
   for (const group of digest.groups) {
     const failures = digest.readFailures.filter(f => f.gym === group.gym);
     if (!group.items.length && !failures.length) continue;

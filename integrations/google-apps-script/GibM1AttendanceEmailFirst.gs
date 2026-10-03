@@ -80,8 +80,7 @@ function gibM1EmailFirstFallback_(scope, date) {
   var text = name + ' — ' + date + ' attendance check could not confirm uploads.\n\n'
     + 'Could not confirm that every saved instructor sign-in reached the spreadsheet. The scheduled check could not complete. '
     + 'This is an unsuccessful check, not a count of missing instructor sign-ins. An offline or silent tablet can still have pending uploads.\n\n'
-    + 'Please reply with the date, class, instructor, and any correction (or whether a class did not happen). '
-    + 'Your reply goes to Andrew at andrew@revolutionbjj.com. Andrew will update the spreadsheet during payroll, preserving original records and correction history.\n\n'
+    + 'No specific attendance correction is listed. No correction reply is requested. Andrew will investigate the unavailable check and upload evidence.\n\n'
     + 'Earlier unresolved items and later classes will be checked at the next daily opportunity. No backlog emails are sent.';
   return { subject: name + ' attendance — ' + date + ' — could not confirm', text: text,
     html: '<!doctype html><html><body><h1>Attendance check could not confirm uploads</h1><p>' + text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>') + '</p></body></html>' };
@@ -149,7 +148,7 @@ function gibM1AttendanceEmailFirstTick_() {
   }
   if (report?.rendered) rendered = report.rendered;
   if (report && !report.shouldSend && missed.length) {
-    var cleanNote = 'Today’s complete attendance and upload check was clean. Earlier daily checks could not be confirmed. Please reply with any earlier corrections; Andrew will update the spreadsheet during payroll.';
+    var cleanNote = 'Today’s complete attendance and upload check was clean. Earlier daily checks could not be confirmed. No specific attendance correction is listed, so no correction reply is requested. Andrew will investigate the earlier check coverage; original records and correction history are preserved.';
     rendered = { subject: (scope.gym === 'rev' ? 'Revolution BJJ' : 'Richmond BJJ') + ' attendance — ' + date + ' — earlier checks unconfirmed',
       text: cleanNote, html: '<!doctype html><html><body><p>' + cleanNote + '</p></body></html>' };
   }

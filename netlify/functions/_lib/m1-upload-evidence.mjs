@@ -36,30 +36,33 @@ export async function recordUploadEvidence(store, manifest, now) {
   return { ok: true, schema: SCHEMA, sequence: manifest.sequence };
 }
 export async function assessUploadEvidence(scope, attendance, jobDate, now, dependencies = {}) {
-  const unavailable = { ok: false, code: 'UPLOAD_COMPLETENESS_UNCONFIRMED' };
+  const unavailable = reason => ({ ok: false, code: 'UPLOAD_COMPLETENESS_UNCONFIRMED', reason });
   try {
     const ledger = validateRead(attendance?.ledger, digestGym(scope), jobDate, scope.target);
-    if (attendance?.ok !== true) return unavailable;
+    if (attendance?.ok !== true) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
     const store = dependencies.uploadStore || await uploadEvidenceStore(scope);
     const listed = await store.list({ prefix: 'devices/' });
-    if (!listed?.blobs?.length || listed.blobs.length > 100) return unavailable;
+    if (!Array.isArray(listed?.blobs) || listed.blobs.length > 100) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
+    if (!listed.blobs.length) return unavailable('TABLET_REPORT_NOT_RECEIVED');
     const records = new Map();
     for (const day of ledger.days) for (const row of day.records) records.set(row.recordId, (records.get(row.recordId) || 0) + 1);
     const keys = listed.blobs.map(item => item.key).sort();
-    if (new Set(keys).size !== keys.length || keys.some(key => !key.startsWith('devices/') || !UUID.test(key.slice(8)))) return unavailable;
+    if (new Set(keys).size !== keys.length || keys.some(key => !key.startsWith('devices/') || !UUID.test(key.slice(8)))) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
     let checkedRows = 0;
     for (const key of keys) {
       const entry = await read(store, key), report = entry?.data, manifest = report?.manifest;
       if (!report || report.schema !== SCHEMA || !validUploadManifest(manifest) || key !== 'devices/' + manifest.deviceId
-        || !Number.isSafeInteger(report.receivedAt) || report.receivedAt > now || now - report.receivedAt > 5 * 60000
-        || manifest.date !== jobDate || !manifest.manifestComplete || manifest.pendingCount || manifest.unconfirmedCount
-        || manifest.rowIds.some(id => records.get(id) !== 1)) return unavailable;
+        || !Number.isSafeInteger(report.receivedAt) || report.receivedAt > now) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
+      if (now - report.receivedAt > 5 * 60000 || manifest.date !== jobDate) return unavailable('TABLET_REPORT_STALE');
+      if (!manifest.manifestComplete) return unavailable('TABLET_MANIFEST_INCOMPLETE');
+      if (manifest.pendingCount || manifest.unconfirmedCount) return unavailable('TABLET_UPLOADS_PENDING');
+      if (manifest.rowIds.some(id => records.get(id) !== 1)) return unavailable('SPREADSHEET_RECEIPTS_UNCONFIRMED');
       checkedRows += manifest.rowIds.length;
       // A partial upload or a newly queued row cannot be replaced with an older clean report.
-      if ((await read(store, key))?.etag !== entry.etag) return unavailable;
+      if ((await read(store, key))?.etag !== entry.etag) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
     }
     const after = await store.list({ prefix: 'devices/' });
-    if (JSON.stringify(after.blobs.map(item => item.key).sort()) !== JSON.stringify(keys)) return unavailable;
+    if (JSON.stringify(after.blobs.map(item => item.key).sort()) !== JSON.stringify(keys)) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
     return { ok: true, complete: true, deviceCount: keys.length, checkedRows };
-  } catch { return unavailable; }
+  } catch { return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE'); }
 }
