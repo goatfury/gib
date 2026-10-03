@@ -134,7 +134,9 @@ function namedFunctionSource(source, name) {
 
 function readUiCopy(source, functionName, enabled) {
   const functionSource = namedFunctionSource(source, functionName);
-  return Function(`"use strict"; return (${functionSource})(${JSON.stringify(enabled)});`)();
+  return Function("INSTALLATION", `"use strict"; return (${functionSource})(${JSON.stringify(enabled)});`)(
+    installationProfile("richmond", "production", enabled ? "active" : "pending")
+  );
 }
 
 test('Richmond production profile is fixed, pending, and storage-isolated from TEST and Rev', () => {
@@ -564,7 +566,7 @@ test('browser, service-worker, schedule, and build sources keep Richmond product
   assert.match(kioskHtml, /Activation pending — Instructor Sign-In and all production writes are unavailable/u);
   assert.match(kioskHtml, /if \(IS_RICHMOND_PRODUCTION && !RICHMOND_WRITES_ENABLED\)[\s\S]*return;/u);
   assert.match(kioskHtml, /profile\?\.installationId === 'richmond' && profile\?\.environment === 'production'[\s\S]*location\.href = '\/m1\/admin\/'/u);
-  assert.match(adminHtml, /Richmond Production — Read-only Daily Sign-in Review/u);
+  assert.match(adminHtml, /\$\{INSTALLATION\.gymName\} — Read-only Daily Sign-in Review/u);
   assert.match(adminHtml, /enter the Admin passphrase/u);
   assert.match(adminHtml, /Today’s production Daily Review is empty — no sign-ins or audit actions for today/u);
   assert.doesNotMatch(adminHtml, /readOnlyPending|no passphrase is required/u);
@@ -593,7 +595,8 @@ test('active Richmond production UI removes pending and disabled labels without 
   assert.doesNotMatch(JSON.stringify(activeKiosk), /pending|disabled|read-only/iu);
   assert.doesNotMatch(JSON.stringify(activeAdmin), /pending|disabled|read-only/iu);
   assert.match(activeKiosk.title, /Instructor Sign-In/u);
-  assert.match(activeAdmin.loginHeading, /Daily Sign-in Review/u);
+  assert.equal(activeAdmin.loginHeading, `${installationProfile("richmond", "production", "active").gymName} — Daily Sign-in Review`);
+  assert.equal(pendingAdmin.loginHeading, `${installationProfile("richmond", "production", "pending").gymName} — Read-only Daily Sign-in Review`);
   assert.match(JSON.stringify(pendingKiosk), /pending|disabled/iu);
   assert.match(JSON.stringify(pendingAdmin), /pending|disabled|read-only/iu);
 });

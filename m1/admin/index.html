@@ -1116,6 +1116,12 @@
         return;
       }
       const IS_RICHMOND = INSTALLATION.installationId === 'richmond';
+      // Identity comes only from the validated deployment profile, before any network read.
+      document.title = `${INSTALLATION.gymName} — Daily Sign-in Review`;
+      document.getElementById('loginEyebrow').textContent = INSTALLATION.gymName;
+      document.getElementById('loginHeading').textContent = `${INSTALLATION.gymName} — Daily Sign-in Review`;
+      document.getElementById('appEyebrow').textContent = INSTALLATION.gymName;
+      document.getElementById('appHeading').textContent = `${INSTALLATION.gymName} Admin`;
       const RICHMOND_TEST_ADMIN_ENABLED = IS_RICHMOND && INSTALLATION.environment === 'test'
         && location.protocol === 'https:' && !location.port
         && /^(?:gib-richmond-test|[0-9a-f]{24}--gib-richmond-test)\.netlify\.app$/.test(location.hostname);
@@ -1181,7 +1187,7 @@
           ? {
               title: 'Richmond BJJ — Production Daily Review',
               eyebrow: 'Richmond BJJ · PRODUCTION',
-              loginHeading: 'Richmond Production — Daily Sign-in Review',
+              loginHeading: `${INSTALLATION.gymName} — Daily Sign-in Review`,
               appEyebrow: 'Richmond BJJ · PRODUCTION',
               entryCopy: 'Production Daily Review is active for an authenticated Admin.',
               loginCopy: 'Choose who is reviewing, then sign in. Sessions close after 30 minutes.'
@@ -1189,7 +1195,7 @@
           : {
               title: 'Richmond BJJ — Production Daily Review · Activation Pending',
               eyebrow: 'Richmond BJJ · PRODUCTION · ACTIVATION PENDING',
-              loginHeading: 'Richmond Production — Read-only Daily Sign-in Review',
+              loginHeading: `${INSTALLATION.gymName} — Read-only Daily Sign-in Review`,
               appEyebrow: 'Richmond BJJ · PRODUCTION · WRITES DISABLED',
               entryCopy: 'The production ledger is read-only. All sign-in and Daily Review changes are disabled pending activation.',
               loginCopy: 'Choose who is reviewing, then enter the Admin passphrase. Production remains read-only until activation.'
@@ -6962,13 +6968,13 @@
             : 'Richmond BJJ · TEST';
           $('#loginHeading').textContent = IS_RICHMOND_PRODUCTION
             ? RICHMOND_PRODUCTION_ADMIN_COPY.loginHeading
-            : 'Richmond TEST — Daily Sign-in Review';
+            : `${INSTALLATION.gymName} — TEST Daily Sign-in Review`;
           $('#appEyebrow').textContent = IS_RICHMOND_PRODUCTION
             ? RICHMOND_PRODUCTION_ADMIN_COPY.appEyebrow
             : 'Richmond BJJ · TEST';
           $('#appHeading').textContent = IS_RICHMOND_PRODUCTION
-            ? 'Richmond M1 Admin'
-            : 'Richmond TEST Admin';
+            ? `${INSTALLATION.gymName} Admin`
+            : `${INSTALLATION.gymName} TEST Admin`;
           $('#scheduledClassesHeading').textContent = 'What needs attention';
           $('#scheduleLimitation').textContent = 'Daily Review uses the current regular weekly schedule from the Richmond BJJ website. Recorded sign-ins with older or special-event labels remain visible as unmatched.';
           $('#testEntryHeading').textContent = IS_RICHMOND_PRODUCTION
