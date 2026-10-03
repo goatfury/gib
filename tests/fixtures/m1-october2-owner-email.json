@@ -1,0 +1,21 @@
+{
+  "provenance": {
+    "kind": "owner-supplied copied email, not independent inbox access",
+    "source": "Andrew October 3 13:33 UTC paste in Review Pay Period Plan, relayed by the parent",
+    "managerFeedbackConveyedBy": "Andrew",
+    "reportedAt": "2026-10-03T13:50:14UTC",
+    "messageReference": "Full source message reference retained in the local release checkpoint."
+  },
+  "subject": "attendance attention · Revolution BJJ · 2026-10-02 · check incomplete",
+  "heading": "Attendance that needs attention",
+  "correction_request": "Please reply to this email with corrections: the date, class, instructor, and what should change (or whether the class did not happen). Your reply goes to Andrew at andrew@revolutionbjj.com. Andrew will update the spreadsheet during payroll, preserving the original records and correction history.",
+  "findings_heading": "Checks that could not be completed",
+  "findings": [
+    "Could not confirm that every saved instructor sign-in reached the spreadsheet. The tablet may be offline or silent, uploads may be incomplete, or complete upload evidence may be unavailable. Saved rows alone do not prove that its queue is empty.",
+    "The actual dated schedule or class finish times could not be confirmed for 24 dates. No missing instructors were inferred for those dates."
+  ],
+  "footer": "Late uploads and corrections are checked again in the next digest. A day being unreviewed alone is not an email trigger. Email submission does not confirm delivery or resolve these questions.",
+  "concrete_attendance_corrections_listed": 0,
+  "stu_reply": "Got this email, but there were not any corrections needed. The wording makes it sound like something is missing (maybe its something I can't see)",
+  "andrew_comment": "Kinda only works if we dont' cry wolf"
+}

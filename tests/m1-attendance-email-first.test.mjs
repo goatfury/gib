@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { uploadManifest } from '../m1/upload-evidence.mjs';
+import { CASES, renderFixture } from './fixtures/m1-email-repair-cases.mjs';
 import { recordUploadEvidence, assessUploadEvidence } from '../netlify/functions/_lib/m1-upload-evidence.mjs';
 import { buildAttendanceDigest, defaultDigestConfiguration, splitAttendanceDigest } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
 import { datesThrough, localNow } from '../netlify/functions/_lib/m1-manager-review.mjs';
@@ -90,7 +91,7 @@ test('missing attendance and unsuccessful upload check are separate, late classe
   const next=ledger('2026-10-02'); const nextSchedules=schedules('2026-10-02'); nextSchedules[0].days[nextSchedules[0].days.length-2]=dated[0].days.at(-1);
   assert.equal(buildAttendanceDigest({...input,jobDate:'2026-10-02',now:NOW+86400000,snapshots:[{...snapshot,attendance:{ok:true,ledger:next}}],schedules:nextSchedules}).itemCount,1);
   const rendered=splitAttendanceDigest(buildAttendanceDigest({...input,snapshots:[{...snapshot,uploads:{ok:false}}]}),config)[0].rendered;
-  assert.match(rendered.text,/reply.*corrections/i); assert.match(rendered.text,/payroll/); assert.doesNotMatch(rendered.html+rendered.text,/correction screen|\/m1\/admin\//);
+  assert.match(rendered.text,/No correction reply is requested/); assert.doesNotMatch(rendered.text,/Please reply.*corrections/i); assert.doesNotMatch(rendered.html+rendered.text,/correction screen|\/m1\/admin\//);
 });
 
 function timerHarness(gym='rev') {
@@ -122,11 +123,12 @@ for(const gym of ['rev','richmond'])test(gym+' unavailable records/website still
   const h=timerHarness(gym);h.failCheck(true);h.failSend();assert.equal(h.tick().state,'uncertain');
   assert.equal(h.sends.length,1);assert.equal(h.sends[0].to,gym==='rev'?'info@revolutionbjj.com':'info@richmondbjj.com');
   assert.equal(h.sends[0].bcc,'andrew@revolutionbjj.com');assert.equal(h.sends[0].replyTo,'andrew@revolutionbjj.com');assert.equal(h.sends[0].cc,undefined);
+  assert.doesNotMatch(h.sends[0].body+h.sends[0].htmlBody,/Please reply.*correction/i);
   assert.match(h.sends[0].body,/Could not confirm/);assert.match(h.sends[0].body,/not a count/);h.tick();h.tick();assert.equal(h.sends.length,1);
   h.at(NOW+86400000);h.tick();assert.equal(h.sends.length,2);assert.match(h.sends[1].body,/Earlier daily checks/);
 });
 test('missed checks produce one fresh warning, a later complete assessment retires check uncertainty, and prior claims remain',()=>{
-  const h=timerHarness();h.at(NOW+86400000);assert.equal(h.tick().state,'submitted');assert.equal(h.sends.length,1);assert.match(h.sends[0].body,/complete.*clean/);
+  const h=timerHarness();h.at(NOW+86400000);assert.equal(h.tick().state,'submitted');assert.equal(h.sends.length,1);assert.match(h.sends[0].body,/complete.*clean/);assert.doesNotMatch(h.sends[0].body+h.sends[0].htmlBody,/Please reply.*correction/i);
   h.at(NOW+2*86400000);assert.equal(h.tick().state,'suppressed');assert.equal(h.sends.length,1);assert.ok(h.values.has('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-02'));
 });
 test('failed durable claim cannot send; deployment settings leave corrections, access, recovery and real sending off',()=>{
@@ -161,4 +163,17 @@ test('background Sheet reader works with manager screen disabled and preserves o
   const read=context.gibM1AttendanceBackgroundRead_({token:'isolated',target:'production',gym:'rev',from:'2026-09-07',to:DATE});
   assert.equal(read.days.at(-1).records[0].recordId,ROW);assert.equal(read.days.at(-1).review.revision,1);assert.deepEqual(records,original);
   assert.throws(()=>context.gibM1AttendanceBackgroundRead_({token:'wrong',target:'production',gym:'rev',from:'2026-09-07',to:DATE}));
+});
+
+for (const gym of ['rev','richmond']) for (const kind of CASES) test(gym+' scheduled worker uses normal rendered '+kind+' email without a real send',()=>{
+  const fixture=renderFixture(kind,gym),h=timerHarness(gym);h.at(Date.parse('2026-10-03T00:06:00Z'));
+  h.values.set('GIB_M1_ATTENDANCE_EMAIL_FIRST_START_DATE','2026-10-02');
+  h.report({shouldSend:fixture.digest.shouldCapture,rendered:fixture.route.rendered,issueCount:fixture.digest.itemCount,unconfirmedChecks:fixture.digest.readFailures.length});
+  const result=h.tick();
+  if(kind==='clean'){assert.equal(result.state,'suppressed');assert.equal(h.sends.length,0);return;}
+  assert.equal(result.state,'submitted');assert.equal(h.sends.length,1);const captured=h.sends[0];
+  assert.equal(captured.subject,fixture.route.rendered.subject);assert.equal(captured.body,fixture.route.rendered.text);assert.equal(captured.htmlBody,fixture.route.rendered.html);
+  assert.equal(/Please reply[^\n<]*correction/i.test(captured.body+captured.htmlBody),['missing','mixed'].includes(kind));
+  assert.equal(captured.replyTo,'andrew@revolutionbjj.com');assert.equal(captured.bcc,'andrew@revolutionbjj.com');assert.equal(captured.cc,undefined);
+  h.tick();assert.equal(h.sends.length,1,'the permanent day claim survives the wording change');
 });
