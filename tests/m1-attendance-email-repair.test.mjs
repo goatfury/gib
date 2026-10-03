@@ -72,3 +72,34 @@ test('a present collision-review sign-in is listed once as a record problem, not
  const digest=buildAttendanceDigest(input),rendered=splitAttendanceDigest(digest,input.configuration)[0].rendered;
  assert.equal(digest.itemCount,1);assert.equal(asks(rendered),true);assert.match(rendered.text,/Isolated QA Instructor; the saved sign-in is flagged for review/);assert.doesNotMatch(rendered.text,/no valid instructor sign-in recorded/);
 });
+
+function readableIdConflictInput(gym='rev') {
+ const input=fixture('missing',gym),day=input.snapshots[0].attendance.ledger.days.at(-1),occurrences=input.schedules[0].days.at(-1).occurrences;
+ occurrences[0].label='6:00 PM Isolated QA Class A';
+ occurrences.push({label:'7:00 PM Isolated QA Class B',startAt:DATE+'T23:00:00.000Z',endAt:'2026-10-03T00:00:00.000Z',cancelled:false});
+ const record={recordId:'isolated-QA-shared',date:DATE,classLabel:occurrences[0].label,instructor:'Isolated QA Instructor A',duration:1,reviewRequired:false};
+ // The background Sheet reader retains both readable rows and warns on each.
+ for(let i=0;i<2;i++){day.records.push({...record});day.warnings.push({code:'RECORD_ID_CONFLICT',message:'An attendance record has an ambiguous permanent ID.'});}
+ return input;
+}
+for(const gym of ['rev','richmond'])test(gym+' readable ID conflicts retain a different finished class missing sign-in in the rendered email',()=>{
+ const input=readableIdConflictInput(gym),before=structuredClone(input),digest=buildAttendanceDigest(input),route=splitAttendanceDigest(digest,input.configuration)[0],rendered=route.rendered;
+ assert.deepEqual(input,before,'original rows, warnings, schedules and history must remain unchanged');
+ assert.deepEqual(digest.groups[0].items.map(item=>item.kind).sort(),['attendance-conflict','missing-instructor']);
+ const conflict=DATE+' — 6:00 PM Isolated QA Class A — instructor: Isolated QA Instructor A; the saved sign-in has a duplicate permanent attendance ID.';
+ const missing=DATE+' — 7:00 PM Isolated QA Class B — instructor: not identified; no valid instructor sign-in recorded in the spreadsheet.';
+ for(const body of [rendered.text,rendered.html.replace(/<[^>]+>/g,'')]){assert.ok(body.includes(conflict));assert.ok(body.includes(missing));}
+ assert.equal(asks(rendered),true);assert.match(rendered.text,/corrections only for the specific attendance problems listed below/);
+ assert.match(rendered.text,/separate unconfirmed checks do not establish additional missing sign-ins/);
+ assert.equal(digest.readFailures.length,2,'retained-row warnings are still reported');
+ assert.deepEqual(route.to,[gym==='rev'?'info@revolutionbjj.com':'info@richmondbjj.com']);assert.deepEqual(route.cc,[]);assert.deepEqual(route.bcc,['andrew@revolutionbjj.com']);
+});
+test('excluded or unknown warnings remain conservative even alongside readable ID conflicts',()=>{
+ for(const code of ['UNREADABLE_SIGNIN','UNREADABLE_SIGNIN_DATE','UNKNOWN_ATTENDANCE_WARNING']) {
+  const input=readableIdConflictInput();input.snapshots[0].attendance.ledger.days.at(-1).warnings.push({code,message:'An attendance row could not be read completely.'});
+  const digest=buildAttendanceDigest(input),rendered=splitAttendanceDigest(digest,input.configuration)[0].rendered;
+  assert.equal(digest.itemCount,1,code);assert.equal(digest.groups[0].items[0].kind,'attendance-conflict',code);
+  assert.match(rendered.text,/Class A.*duplicate permanent attendance ID/);assert.match(rendered.text,/attendance row could not be read completely/);
+  assert.doesNotMatch(rendered.text+rendered.html,/Class B|no valid instructor sign-in recorded/);
+ }
+});

@@ -210,9 +210,10 @@ export function buildAttendanceDigest({ jobDate, snapshots, schedules, configura
               // A present, flagged sign-in is an existing record problem, not
               // a missing sign-in. Its review/ID problem is listed below.
               for (const record of matching.filter(r => r.duration <= 0)) add('attendance-conflict', day.date, 'duration:' + record.recordId, record.classLabel + ' — instructor: ' + record.instructor + '; the saved sign-in has a non-positive duration.');
-            } else if (configuration.emailFirst !== true || !day.warnings.length) {
-              // Excluded unreadable rows could contain this class's sign-in.
-              // An incomplete day read cannot establish its absence.
+            } else if (configuration.emailFirst !== true || day.warnings.every(warning => warning?.code === 'RECORD_ID_CONFLICT')) {
+              // The background reader retains readable RECORD_ID_CONFLICT rows.
+              // Other or unknown warnings could conceal excluded sign-ins, so
+              // their incomplete day read cannot establish an absence.
               add('missing-instructor', day.date, labelKey(occurrence.label), occurrence.label + ' — instructor: ' + (matching.length ? matching.map(r => r.instructor).join(', ') : 'not identified') + '; no valid instructor sign-in recorded in the spreadsheet.');
             }
           }
