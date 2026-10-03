@@ -7,6 +7,8 @@ import {
   appendBatchToState,
   applyAcknowledgements,
   blankLocalState,
+  heldUploadRejection,
+  nextUploadBatch,
   removeBatchFromState
 } from '../m1/sync-core.mjs';
 import { evaluateStaffState, formatStaffElapsed, sameStaffRecord } from '../m1/staff-clock-core.mjs';
@@ -197,7 +199,7 @@ function instructorHarness({ richmond = false } = {}) {
   let identity = 1;
   const requests = [];
   Object.assign(harness.context, {
-    appendBatchToState, removeBatchFromState, applyAcknowledgements,
+    appendBatchToState, removeBatchFromState, applyAcknowledgements, heldUploadRejection, nextUploadBatch,
     loadLocalState: () => clone(state),
     loadSyncQueue: () => clone(state.queue),
     persistLocalState: next => { if (failure) throw new Error('disk full'); state = clone(next); },

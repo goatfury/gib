@@ -7,8 +7,8 @@ import {
   sameStaffRecord,
   validStaffMember,
   validStaffRecord
-} from './staff-clock-core.mjs?v=2026-09-25-recovery-a';
-import { createStaffRecovery, staffRecoveryEnabled, staffRecoveryFinish } from './staff-recovery-client.mjs?v=2026-09-25-recovery-a';
+} from './staff-clock-core.mjs?v=2026-10-03-upload-reliability';
+import { createStaffRecovery, staffRecoveryEnabled, staffRecoveryFinish } from './staff-recovery-client.mjs?v=2026-10-03-upload-reliability';
 
 const installationProfile = globalThis.M1_INSTALLATION_PROFILE;
 const STAFF_CLOCK_PAIRING_ENABLED = installationProfile?.featureFlags?.staffClockPairing === true;

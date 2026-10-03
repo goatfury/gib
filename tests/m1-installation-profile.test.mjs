@@ -299,7 +299,7 @@ test('Richmond client is fixed to its site, official schedule, remote Daily Revi
   assert.doesNotMatch(kioskHtml, /phase: 'disabled'/u);
   assert.match(kioskHtml, /if \(BACKEND_ENABLED && localStorage\.getItem\(SYNC_AUTO_KEY\) === 'true'\)/u);
   assert.match(kioskHtml, /if \(IS_RICHMOND && !IS_RICHMOND_PRODUCTION && localStorage\.getItem\(SYNC_AUTO_KEY\) === null\)[\s\S]*localStorage\.setItem\(SYNC_AUTO_KEY, 'true'\)/u);
-  assert.match(kioskHtml, /function resumeInstructorSync\(\)[\s\S]*navigator\.onLine === false[\s\S]*loadSyncQueue\(\)\.length[\s\S]*window\.setTimeout\(syncNow, 0\)/u);
+  assert.match(kioskHtml, /function resumeInstructorSync\(\)[\s\S]*navigator\.onLine === false[\s\S]*nextUploadBatch\(loadLocalState\(\), INSTRUCTOR_SYNC_BATCH_SIZE\)\.length[\s\S]*window\.setTimeout\(syncNow, 0\)/u);
   assert.match(kioskHtml, /if \(BACKEND_ENABLED && \(!IS_RICHMOND_PRODUCTION \|\| RICHMOND_WRITES_ENABLED\)\)[\s\S]*window\.addEventListener\('online',[\s\S]*resumeInstructorSync\(\)/u);
   assert.match(kioskHtml, /window\.setInterval\(resumeInstructorSync, INSTRUCTOR_SYNC_RETRY_INTERVAL_MS\)/u);
   assert.match(kioskHtml, /\$\('#dailyReviewLink'\)\.href = '\/m1\/admin\/'/u);

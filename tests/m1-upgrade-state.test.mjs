@@ -4,13 +4,17 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-import * as syncCore from '../m1/sync-core.mjs';
+import { pathToFileURL } from 'node:url';
+const queueContractRoot = process.env.M1_QUEUE_CONTRACT_BASELINE_ROOT
+  ? pathToFileURL(process.env.M1_QUEUE_CONTRACT_BASELINE_ROOT.replaceAll('\\', '/') + '/')
+  : new URL('../', import.meta.url);
+const syncCore = await import(new URL('m1/sync-core.mjs', queueContractRoot));
 import {
   installationProfile,
   scopedStorageKey
 } from '../m1/installation-profile-core.mjs';
 
-const kioskHtml = readFileSync(new URL('../m1/index.html', import.meta.url), 'utf8');
+const kioskHtml = readFileSync(new URL('m1/index.html', queueContractRoot), 'utf8');
 const sharedSchedule = JSON.parse(readFileSync(
   new URL('../m1/shared-schedule.json', import.meta.url),
   'utf8'
@@ -1307,4 +1311,167 @@ test('Richmond active profile uses the same Auto-sync OFF queue stop without ena
   assert.ok(finalState.ledger.every(row => row.__syncResult === 'added'));
   assert.equal(storageState.storage.getItem('gib_m1_local_state_v2'), 'rev-state-sentinel');
   assert.equal(storageState.storage.getItem('gib_m1_sync_queue_v1'), 'rev-queue-sentinel');
+});
+
+
+for (const gym of ['rev', 'richmond']) test(gym + ' rejected first 50 cannot strand valid saved rows across retries and reload', async () => {
+  const profile = installationProfile(gym, 'production', 'active');
+  const key = gym === 'rev' ? 'gib_m1_local_state_v2' : scopedStorageKey(profile, 'gib_m1_local_state_v2');
+  const storageState = createStorage(pendingQueueStorage(53, { profile }));
+  storageState.storage.setItem('other-gym-sentinel', 'preserve');
+  const original = JSON.parse(storageState.storage.getItem(key));
+  const rejectedIds = new Set(original.queue.slice(0, 50).map(row => row.RowID));
+  const acceptedCounts = new Map(), attempts = new Map();
+  const receiver = ({ init }) => ({ ok: true, production: true, results: JSON.parse(init.body).rows.map(row => {
+    attempts.set(row.RowID, (attempts.get(row.RowID) || 0) + 1);
+    if (rejectedIds.has(row.RowID)) return { rowId: row.RowID, result: 'rejected', linkedRecordId: '' };
+    acceptedCounts.set(row.RowID, (acceptedCounts.get(row.RowID) || 0) + 1);
+    return { rowId: row.RowID, result: 'added', linkedRecordId: row.RowID };
+  }) });
+  const boot = () => runCandidateBootstrap({ storageState, cookieState: { jar: new Map(), reads: 0, writes: [] },
+    schedulePayload: canonicalScheduleResponse(), profile, syncPayload: receiver });
+  const first = boot(); await settleBootstrap(first, false); await runZeroDelayTimers(first);
+  for (let retry = 0; retry < 3; retry++) {
+    first.intervals.find(item => item.delay === 30_000)?.callback();
+    first.window.dispatchEvent({ type: 'online' }); await runZeroDelayTimers(first);
+  }
+  const reloaded = boot(); await settleBootstrap(reloaded, false); await runZeroDelayTimers(reloaded);
+  const saved = JSON.parse(storageState.storage.getItem(key));
+  assert.equal(acceptedCounts.size, 3, 'the three valid rows behind 50 rejections must arrive');
+  assert.ok([...acceptedCounts.values()].every(count => count === 1), 'each valid row is submitted exactly once');
+  assert.ok([...rejectedIds].every(id => attempts.get(id) === 1), 'explicit rejection is held across timers and reload');
+  assert.deepEqual(saved.queue.map(row => row.RowID), original.queue.slice(0, 50).map(row => row.RowID));
+  assert.equal(saved.ledger.length, 53, 'no rejected row or original local history is deleted');
+  for (let index = 0; index < original.ledger.length; index++) {
+    for (const field of Object.keys(syncCore.transportRow(original.ledger[index]))) {
+      assert.deepEqual(saved.ledger[index][field], original.ledger[index][field], 'original attendance fields are preserved');
+    }
+  }
+  assert.match(reloaded.document.__elements.get('syncStatus').textContent, /50.*Andrew.*review/i);
+  assert.match(reloaded.document.__elements.get('kioskDeliveryText').textContent, /50.*review/i);
+  const section = reloaded.document.__elements.get('syncExceptionsSection');
+  assert.equal(section.hidden, false);
+  const list = reloaded.document.__elements.get('syncExceptionsList');
+  assert.equal(list.children.length, 50);
+  assert.match(list.children[0].children[0].textContent, /Queued Instructor 1/);
+  assert.ok(list.children[0].children[0].textContent.includes(original.queue[0].Date));
+  assert.ok(list.children[0].children[0].textContent.includes(original.queue[0]['Class Label']));
+  reloaded.document.__elements.get('btnSyncNow').click();
+  await new Promise(resolve => setImmediate(resolve)); await runZeroDelayTimers(reloaded);
+  assert.equal(reloaded.requests.filter(request => request.url === '/api/m1-kiosk-sync').length, 0,
+    'ordinary Sync now does not replay held rejections');
+  assert.equal(storageState.storage.getItem('other-gym-sentinel'), 'preserve');
+  if (gym === 'richmond') assert.equal(profile.featureFlags.staffClock, false);
+});
+
+
+test('held upload review retries only the selected original row once, preserves the rejection receipt and respects cancellation', async () => {
+  const storageState = createStorage(pendingQueueStorage(2));
+  let outcome = 'rejected', calls = 0, submitted = [];
+  const receiver = ({ init }) => {
+    calls++; const rows = JSON.parse(init.body).rows; submitted.push(rows);
+    return { ok: true, production: true, results: rows.map(row => ({ rowId: row.RowID,
+      result: outcome, linkedRecordId: outcome === 'already exists' ? row.RowID : '' })) };
+  };
+  const boot = confirmResponse => runCandidateBootstrap({ storageState, cookieState: { jar: new Map(), reads: 0, writes: [] },
+    schedulePayload: canonicalScheduleResponse(), syncPayload: receiver, confirmResponse });
+  const initial = boot(false); await settleBootstrap(initial, false); await runZeroDelayTimers(initial);
+  assert.equal(calls, 1);
+  const heldState = JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2'));
+  const receipt = structuredClone(heldState.queue[0].__uploadRejection), id = heldState.queue[0].RowID;
+  initial.document.__elements.get('syncExceptionsList').children[0].children[1].click();
+  await new Promise(resolve => setImmediate(resolve)); await runZeroDelayTimers(initial);
+  assert.equal(calls, 1, 'cancelled review retry sends nothing');
+  storageState.storage.setItem('gib_m1_sync_auto_v1', 'false');
+  const reviewed = boot(true); await settleBootstrap(reviewed, false); await runZeroDelayTimers(reviewed);
+  reviewed.document.__elements.get('syncExceptionsList').children[0].children[1].click();
+  await new Promise(resolve => setImmediate(resolve)); await runZeroDelayTimers(reviewed);
+  assert.equal(calls, 2); assert.deepEqual(submitted[1].map(row => row.RowID), [id]);
+  assert.equal(JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2')).queue.length, 2,
+    'a repeated rejection remains saved and does not spin');
+  reviewed.intervals.find(item => item.delay === 30_000)?.callback(); await runZeroDelayTimers(reviewed);
+  assert.equal(calls, 2);
+  outcome = 'already exists';
+  reviewed.document.__elements.get('syncExceptionsList').children[0].children[1].click();
+  await new Promise(resolve => setImmediate(resolve)); await runZeroDelayTimers(reviewed);
+  assert.equal(calls, 3); assert.deepEqual(submitted[2].map(row => row.RowID), [id]);
+  assert.ok(submitted[2].every(row => !Object.keys(row).some(key => key.startsWith('__'))),
+    'private local exception metadata is never forwarded');
+  const finalState = JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2'));
+  assert.equal(finalState.queue.length, 1); assert.equal(finalState.ledger.length, 2);
+  assert.equal(finalState.ledger[0].RowID, id); assert.equal(finalState.ledger[0].__syncResult, 'already exists');
+  for (const [field, value] of Object.entries(receipt)) assert.equal(finalState.ledger[0].__uploadRejection[field], value,
+    'original rejection receipt remains audit history');
+  assert.ok(Number.isFinite(Date.parse(finalState.ledger[0].__uploadRejection.resolvedAt)));
+  assert.equal(syncCore.heldUploadRejection(finalState.ledger[0]), false);
+  assert.deepEqual(finalState.queue[0], heldState.queue[1], 'the other held record is untouched');
+  assert.equal(storageState.storage.getItem('gib_m1_sync_auto_v1'), 'false');
+});
+
+test('failed rows retry normally while explicit rejections stay held and later valid rows are not stranded', async () => {
+  const storageState = createStorage(pendingQueueStorage(53)); let failedOnce = false;
+  const attempts = new Map();
+  const run = runCandidateBootstrap({ storageState, cookieState: { jar: new Map(), reads: 0, writes: [] },
+    schedulePayload: canonicalScheduleResponse(), syncPayload: ({ init }) => ({ ok: true, production: true,
+      results: JSON.parse(init.body).rows.map(row => {
+        attempts.set(row.RowID, (attempts.get(row.RowID) || 0) + 1);
+        const number = Number(row.RowID.slice(-12));
+        if (number < 50) return { rowId: row.RowID, result: 'rejected', linkedRecordId: '' };
+        if (number === 50 && !failedOnce) { failedOnce = true; return { rowId: row.RowID, result: 'failed', linkedRecordId: '' }; }
+        return { rowId: row.RowID, result: 'added', linkedRecordId: row.RowID };
+      }) }) });
+  await settleBootstrap(run, false); assert.equal(await runZeroDelayTimers(run), 2);
+  const state = JSON.parse(storageState.storage.getItem('gib_m1_local_state_v2'));
+  assert.equal(state.queue.length, 49); assert.equal(state.ledger.length, 53);
+  assert.equal(state.ledger[49].__syncResult, 'added'); assert.equal(state.ledger[49].__uploadRejection, undefined);
+  assert.equal(attempts.get(state.ledger[49].RowID), 2);
+  assert.ok(state.queue.every(row => syncCore.heldUploadRejection(row)));
+  run.intervals.find(item => item.delay === 30_000)?.callback(); await runZeroDelayTimers(run);
+  assert.equal(run.requests.filter(request => request.url === '/api/m1-kiosk-sync').length, 2);
+});
+
+test('unreadable or mismatched acknowledgments and stale-payload rejections never create a durable hold', () => {
+  const state = JSON.parse(pendingQueueStorage(1).gib_m1_local_state_v2), row = state.queue[0];
+  const at = '2026-10-03T18:00:00.000Z';
+  const rejection = { ok: true, production: true, results: [{ rowId: row.RowID, result: 'rejected', linkedRecordId: '' }] };
+  for (const payload of [null, { ok: false }, { ...rejection, production: false },
+    { ...rejection, results: [...rejection.results, ...rejection.results] },
+    { ...rejection, results: [{ ...rejection.results[0], rowId: ROW_IDS[2] }] },
+    { ...rejection, results: [{ ...rejection.results[0], result: 'failed' }] },
+    { ...rejection, results: [{ ...rejection.results[0], linkedRecordId: 'ambiguous-link' }] }]) {
+    const applied = syncCore.applyAcknowledgements(state, [row], payload, at, { productionOrigin: true });
+    assert.deepEqual(applied.state, state); assert.equal(syncCore.nextUploadBatch(applied.state).length, 1);
+  }
+  const changed = structuredClone(state); changed.queue[0].Notes = 'changed after request'; changed.ledger[0].Notes = changed.queue[0].Notes;
+  const applied = syncCore.applyAcknowledgements(changed, [row], rejection, at, { productionOrigin: true });
+  assert.deepEqual(applied.state, changed); assert.equal(syncCore.nextUploadBatch(applied.state).length, 1);
+  const before = structuredClone(state), held = syncCore.applyAcknowledgements(state, [row], rejection, at, { productionOrigin: true });
+  assert.deepEqual(state, before); assert.equal(syncCore.nextUploadBatch(held.state).length, 0);
+  assert.equal(syncCore.nextUploadBatch(held.state, 50, row.RowID).length, 1);
+  assert.equal(syncCore.nextUploadBatch(held.state, 50, ROW_IDS[2]).length, 0);
+  const edited = structuredClone(held.state); edited.queue[0].Notes = 'new payload';
+  assert.equal(syncCore.nextUploadBatch(edited).length, 1, 'an old receipt cannot hold different data');
+  const later = syncCore.applyAcknowledgements(edited, edited.queue, rejection, at, { productionOrigin: true });
+  assert.deepEqual(later.state.queue[0].__uploadRejectionHistory, [held.state.queue[0].__uploadRejection],
+    'a new rejected payload preserves the earlier receipt');
+});
+
+test('failed local persistence retains the original queue and cannot schedule a rejection-drain loop', async () => {
+  const storageState = createStorage(pendingQueueStorage(51)), underlying = storageState.storage;
+  const original = underlying.getItem('gib_m1_local_state_v2'); let calls = 0;
+  storageState.storage = { get length() { return underlying.length; }, getItem: key => underlying.getItem(key),
+    removeItem: key => underlying.removeItem(key), setItem(key, value) {
+      if (key === 'gib_m1_local_state_v2' && String(value).includes('__uploadRejection')) throw Error('isolated canonical storage failure');
+      underlying.setItem(key, value);
+    } };
+  const run = runCandidateBootstrap({ storageState, cookieState: { jar: new Map(), reads: 0, writes: [] },
+    schedulePayload: canonicalScheduleResponse(), syncPayload: ({ init }) => {
+      calls++; return { ok: true, production: true, results: JSON.parse(init.body).rows.map(row => ({ rowId: row.RowID,
+        result: 'rejected', linkedRecordId: '' })) };
+    } });
+  await settleBootstrap(run, false); assert.equal(await runZeroDelayTimers(run), 1);
+  assert.equal(calls, 1); assert.equal(underlying.getItem('gib_m1_local_state_v2'), original);
+  assert.match(underlying.getItem('gib_m1_sync_error'), /rows are still waiting/);
+  assert.equal(run.document.__elements.get('syncExceptionsSection').hidden, true,
+    'an unpersisted rejection is not presented as a durable review hold');
 });

@@ -947,10 +947,10 @@ body.admin-mode .container { max-width: 1120px; }
   .device-tools-menu[open] > button { position: absolute; right: 0; top: 100%; z-index: 8; min-width: 200px; box-shadow: 0 8px 24px #0008; }
   #managerWorkspaceLink { min-height: 44px; text-decoration: none; }
 </style>
-<script src="./installation-profile.generated.js?v=2026-09-25-recovery-a"></script>
-<script src="./temporary-classes-core.js?v=2026-09-25-recovery-a"></script>
-<script src="./added-classes-kiosk.js?v=2026-09-25-recovery-a"></script>
-<script src="./manager-review-config.generated.js?v=2026-09-25-recovery-a"></script>
+<script src="./installation-profile.generated.js?v=2026-10-03-upload-reliability"></script>
+<script src="./temporary-classes-core.js?v=2026-10-03-upload-reliability"></script>
+<script src="./added-classes-kiosk.js?v=2026-10-03-upload-reliability"></script>
+<script src="./manager-review-config.generated.js?v=2026-10-03-upload-reliability"></script>
 <script src="./manager-read-client.js?v=2026-09-26-manager-ticket-a"></script>
 <script src="./manager-review-badge.js?v=2026-09-22-manager-pilot-a"></script>
 <script src="./attendance-warning.js?v=2026-09-27-workflow-a"></script>
@@ -1137,6 +1137,15 @@ body.admin-mode .container { max-width: 1120px; }
         <div id="syncStatus" class="statusRow" role="status" aria-live="polite"></div>
       </section>
     </div>
+
+    <details id="syncExceptionsSection" class="admin-disclosure" hidden>
+      <summary>Saved sign-ins needing upload review</summary>
+      <div class="admin-disclosure-body">
+        <p class="subtle">The service did not accept these sign-ins. They remain saved on this tablet. Ask Andrew to review the date, class and instructor below. Other sign-ins can still upload. After that review, retry an individual saved row once.</p>
+        <div id="syncExceptionsList"></div>
+        <p id="syncExceptionsMore" class="subtle" hidden>Showing the first 50 held rows. The remaining rows stay saved and appear as these are resolved.</p>
+      </div>
+    </details>
 
     <details id="recentSignins" class="admin-disclosure">
       <summary>Recent sign-ins</summary>
@@ -1480,17 +1489,19 @@ import {
   createPermanentRowId,
   formatDateInTimeZone,
   formatTimestampInTimeZone,
+  heldUploadRejection,
   kioskDeliveryText,
+  nextUploadBatch,
   recordRichmondSyncEvent,
   removeBatchFromState,
   requestAcknowledgements,
   syncFailureCode,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-09-25-recovery-a';
+} from './sync-core.mjs?v=2026-10-03-upload-reliability';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-09-25-recovery-a';
+const OFFLINE_SHELL_REVISION = '2026-10-03-upload-reliability';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -4081,10 +4092,12 @@ function refreshNameDatalist() {
   }
   function updateSyncStatus() {
     const q = readAdminLocalStateSnapshot().queue;
+    const held = q.filter(heldUploadRejection);
     const last = localStorage.getItem(SYNC_LAST_KEY) || '';
     const err = localStorage.getItem(SYNC_ERROR_KEY) || '';
     const parts = [];
     parts.push(`${q.length} row${q.length === 1 ? '' : 's'} waiting to sync`);
+    if (held.length) parts.push(`${held.length} need Andrew's upload review; held rows do not retry automatically`);
     if (last) {
       const lastDate = new Date(last);
       parts.push(Number.isFinite(lastDate.getTime())
@@ -4098,10 +4111,25 @@ function refreshNameDatalist() {
       const automatic = BACKEND_ENABLED && localStorage.getItem(SYNC_AUTO_KEY) === 'true';
       delivery.hidden = !IS_RICHMOND_PRODUCTION_ORIGIN && q.length === 0;
       delivery.dataset.waiting = String(q.length > 0 || !automatic);
-      $('#kioskDeliveryText').textContent = kioskDeliveryText({ waiting: q.length, last, automatic, error: err, sending: syncInFlight });
+      $('#kioskDeliveryText').textContent = kioskDeliveryText({ waiting: q.length, held: held.length, last, automatic, error: err, sending: syncInFlight });
       const connectionLink = delivery.querySelector('a');
       if (connectionLink) connectionLink.hidden = !IS_RICHMOND_PRODUCTION_ORIGIN;
       $('#signinDeliveryNote').hidden = false;
+    }
+    const section = $('#syncExceptionsSection'), list = $('#syncExceptionsList');
+    section.hidden = held.length === 0; list.replaceChildren();
+    $('#syncExceptionsMore').hidden = held.length <= 50;
+    for (const row of held.slice(0, 50)) {
+      const item = document.createElement('div'), label = document.createElement('p');
+      label.textContent = `${row.Date} — ${row['Class Label']} — ${row.Instructor}. Upload was rejected; the saved sign-in has not been confirmed.`;
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'btn';
+      retry.textContent = 'Retry this saved row once'; retry.disabled = !BACKEND_ENABLED || syncInFlight;
+      retry.addEventListener('click', () => {
+        if (confirm('Retry this saved sign-in once after Andrew has reviewed it? Its original ID and saved records will be kept.')) {
+          syncNow({ type: 'retry-rejected', rowId: row.RowID });
+        }
+      });
+      item.append(label, retry); list.appendChild(item);
     }
     renderAdminSummary();
   }
@@ -4266,7 +4294,8 @@ function refreshNameDatalist() {
     // A button click is an explicit operator request and may drain the durable
     // queue even while Auto-sync is OFF. Calls from lifecycle wake-ups, timers,
     // and activation recovery remain automatic.
-    const manualDrain = trigger === 'manual-continuation'
+    const retryRowId = trigger?.type === 'retry-rejected' ? trigger.rowId : '';
+    const manualDrain = Boolean(retryRowId) || trigger === 'manual-continuation'
       || (trigger && trigger.type === 'click');
     // Close the scheduling-to-callback race too: a continuation queued while
     // Auto-sync was ON must become a no-op if the operator turns it OFF before
@@ -4287,9 +4316,9 @@ function refreshNameDatalist() {
       showToast('Sync waits until the undo window closes');
       return;
     }
-    const submittedRows = loadSyncQueue().slice(0, INSTRUCTOR_SYNC_BATCH_SIZE);
+    const submittedRows = nextUploadBatch(loadLocalState(), INSTRUCTOR_SYNC_BATCH_SIZE, retryRowId);
     if (!submittedRows.length) {
-      showToast('No rows to sync');
+      showToast(loadSyncQueue().some(heldUploadRejection) ? 'Saved sign-ins need Andrew’s upload review' : 'No rows to sync');
       updateSyncStatus();
       return;
     }
@@ -4341,7 +4370,8 @@ function refreshNameDatalist() {
       recordSyncEvent('upload', latestApplied.confirmedRowIds.length === submittedRows.length ? 'UPLOAD_CONFIRMED' : 'ROWS_UNCONFIRMED');
       updateSyncStatus();
       const waiting = loadSyncQueue().length;
-      continueDrain = latestApplied.confirmedRowIds.length > 0 && waiting > 0;
+      continueDrain = !retryRowId && (latestApplied.confirmedRowIds.length > 0 || latestApplied.newRejectedRowIds.length > 0)
+        && nextUploadBatch(loadLocalState(), INSTRUCTOR_SYNC_BATCH_SIZE).length > 0;
       showToast(waiting
         ? `${latestApplied.confirmedRowIds.length} confirmed; ${waiting} waiting`
         : `${latestApplied.confirmedRowIds.length} confirmed`);
@@ -4389,7 +4419,7 @@ function refreshNameDatalist() {
     }
     if (
       localStorage.getItem(SYNC_AUTO_KEY) !== 'true'
-      || !loadSyncQueue().length
+      || !nextUploadBatch(loadLocalState(), INSTRUCTOR_SYNC_BATCH_SIZE).length
     ) return false;
     window.setTimeout(syncNow, 0);
     return true;
@@ -4946,6 +4976,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-09-25-recovery-a"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-10-03-upload-reliability"></script>
 </body>
 </html>

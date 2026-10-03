@@ -5,6 +5,7 @@ import {applyAcknowledgements} from '../../m1/sync-core.mjs';
 import {uploadManifest} from '../../m1/upload-evidence.mjs';
 import {buildAttendanceDigest, defaultDigestConfiguration, splitAttendanceDigest} from '../../netlify/functions/_lib/m1-attendance-digest.mjs';
 import {pathToFileURL} from 'node:url';
+import {localNow} from '../../netlify/functions/_lib/m1-manager-review.mjs';
 const contractRoot=process.env.M1_UPLOAD_CONTRACT_BASELINE_ROOT
   ?pathToFileURL(process.env.M1_UPLOAD_CONTRACT_BASELINE_ROOT.replaceAll('\\','/')+'/')
   :new URL('../../',import.meta.url);
@@ -77,7 +78,36 @@ export async function assertReconciledUpload({context, request, post, gym, row, 
       cancelled:false}]:[]}))}];
   const input={scope,configuration,jobDate:RECONCILIATION_DATE,now:RECONCILIATION_NOW,schedules:scheduled,
     snapshots:[{gym,attendance:{ok:true,ledger},uploads:await assess(ledger)}]};
-  assert.equal(buildAttendanceDigest(input).shouldCapture,false,'complete clean reconciliation preserves no-email behavior');
+  const cleanDigest=buildAttendanceDigest(input);
+  assert.equal(cleanDigest.shouldCapture,false,'complete clean reconciliation preserves no-email behavior');
+  // Continue the same receipt/manifest/read chain through the normal Google
+  // daily worker. Only its external website response is a local fake carrying
+  // the real assessor/renderer result; no browser, tablet or real MailApp runs.
+  const timerProperties=context.PropertiesService.getScriptProperties();
+  for (const [key,value] of Object.entries({GIB_M1_ATTENDANCE_EMAIL_FIRST_ENABLED:'true',
+    GIB_M1_ATTENDANCE_EMAIL_FIRST_READY:'v1',GIB_M1_ATTENDANCE_EMAIL_FIRST_START_DATE:RECONCILIATION_DATE,
+    GIB_M1_ATTENDANCE_DIGEST_LIVE_SCHEDULE_ENABLED:'true',GIB_M1_MAILAPP_LIVE_SEND_ENABLED:'true'})) timerProperties.setProperty(key,value);
+  context.Session={getEffectiveUser:()=>({getEmail:()=> 'revbjjops@gmail.com'})};
+  context.MailApp={getRemainingDailyQuota:()=>100,sendEmail(){assert.fail('complete reconciled attendance must not send');}};
+  context.Utilities.getUuid=()=>RECONCILIATION_DEVICE;
+  const originalFormatDate=context.Utilities.formatDate;
+  context.Utilities.formatDate=(date,zone,format)=>{
+    const clock=localNow(date);
+    return format==='HH:mm'?String(Math.floor(clock.minutes/60)).padStart(2,'0')+':'+String(clock.minutes%60).padStart(2,'0')
+      :originalFormatDate(date,zone,format);
+  };
+  vm.runInContext(readFileSync(new URL('integrations/google-apps-script/GibM1MailApp.gs',contractRoot),'utf8'),context);
+  let dailyChecks=0;context.GIB_M1_DIGEST_SCHEMA_='m1-attendance-digest-job/v1';
+  context.gibM1DigestDispatch_=binding=>{dailyChecks++;assert.equal(binding.jobDate,RECONCILIATION_DATE);
+    return {ok:true,dailyEmail:{schema:'m1-daily-email-check/v1',gym,date:RECONCILIATION_DATE,complete:true,
+      shouldSend:cleanDigest.shouldCapture,rendered:splitAttendanceDigest(cleanDigest,configuration)[0].rendered,
+      issueCount:cleanDigest.itemCount,unconfirmedChecks:cleanDigest.readFailures.length}};};
+  assert.equal(context.gibM1AttendanceEmailFirstTick_()?.state,'suppressed');
+  context.gibM1AttendanceEmailFirstTick_();assert.equal(dailyChecks,1,'the completed daily claim prevents another check');
+  const claim=JSON.parse(timerProperties.getProperty('M1_ATTENDANCE_EMAIL_FIRST_DAY_'+RECONCILIATION_DATE));
+  assert.equal(claim.code,'COMPLETE_CLEAN_CHECK');
+  assert.deepEqual(signins.values,before);assert.deepEqual(audit.values,auditBefore);
+
   for (const [patch,age,reason] of [
     [{pendingCount:1},0,'TABLET_UPLOADS_PENDING'],[{unconfirmedCount:1},0,'TABLET_UPLOADS_PENDING'],
     [{manifestComplete:false},0,'TABLET_MANIFEST_INCOMPLETE'],[{},300001,'TABLET_REPORT_STALE']
