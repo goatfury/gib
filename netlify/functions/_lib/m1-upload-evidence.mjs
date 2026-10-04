@@ -78,19 +78,31 @@ export async function assessUploadEvidence(scope, attendance, jobDate, now, depe
     // Device-set identity is stable; time/age/sequence/date alone are not new.
     reporterSetHash = keys.length ? hash(keys) : null;
     if (!listed.blobs.length) return unavailable('TABLET_REPORT_NOT_RECEIVED');
+    // Inspect every retained reporter before classifying a repeatable fault.
+    // An earlier stale/unreadable device must not hide another device's newly
+    // reported pending rows or incomplete manifest. These are never repeat-held.
+    const reports = []; let readFailed = false;
+    for (const key of keys) {
+      let entry;
+      try { entry = await read(store, key); } catch { readFailed = true; continue; }
+      const report = entry?.data, manifest = report?.manifest;
+      if (!report || report.schema !== SCHEMA || !validUploadManifest(manifest) || key !== 'devices/' + manifest.deviceId
+        || !Number.isSafeInteger(report.receivedAt) || report.receivedAt > now) { readFailed = true; continue; }
+      reports.push({ key, entry, report, manifest });
+    }
+    if (reports.some(({manifest}) => manifest.pendingCount || manifest.unconfirmedCount)) return unavailable('TABLET_UPLOADS_PENDING');
+    if (reports.some(({manifest}) => !manifest.manifestComplete)) return unavailable('TABLET_MANIFEST_INCOMPLETE');
+    if (readFailed) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
     const ledger = validateRead(attendance?.ledger, digestGym(scope), jobDate, scope.target);
     if (attendance?.ok !== true) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
     const confirmedIds = confirmedUploadIds(ledger, digestGym(scope), scope.target);
     let checkedRows = 0;
-    for (const key of keys) {
-      const entry = await read(store, key), report = entry?.data, manifest = report?.manifest;
-      if (!report || report.schema !== SCHEMA || !validUploadManifest(manifest) || key !== 'devices/' + manifest.deviceId
-        || !Number.isSafeInteger(report.receivedAt) || report.receivedAt > now) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
-      if (now - report.receivedAt > 5 * 60000 || manifest.date !== jobDate) return unavailable('TABLET_REPORT_STALE');
-      if (!manifest.manifestComplete) return unavailable('TABLET_MANIFEST_INCOMPLETE');
-      if (manifest.pendingCount || manifest.unconfirmedCount) return unavailable('TABLET_UPLOADS_PENDING');
+    for (const { manifest } of reports) {
       if (manifest.rowIds.some(id => !confirmedIds.has(id))) return unavailable('SPREADSHEET_RECEIPTS_UNCONFIRMED');
       checkedRows += manifest.rowIds.length;
+    }
+    if (reports.some(({report,manifest}) => now - report.receivedAt > 5 * 60000 || manifest.date !== jobDate)) return unavailable('TABLET_REPORT_STALE');
+    for (const { key, entry } of reports) {
       // A partial upload or a newly queued row cannot be replaced with an older clean report.
       if ((await read(store, key))?.etag !== entry.etag) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
     }

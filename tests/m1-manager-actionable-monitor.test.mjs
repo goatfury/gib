@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CASES, runCase, worker, DATE, NOW, manifest, ID } from './fixtures/m1-manager-actionable-cases.mjs';
 import { managerAttendanceEmail } from '../netlify/functions/_lib/m1-manager-attendance-email.mjs';
-import { recordUploadEvidence } from '../netlify/functions/_lib/m1-upload-evidence.mjs';
+import { recordUploadEvidence, assessUploadEvidence } from '../netlify/functions/_lib/m1-upload-evidence.mjs';
 const PRIOR={date:DATE,startedAt:1791072321651,state:'submitted',requestId:'64272404-1e40-4514-819e-833f10a93e6d',attemptedAt:1791072329862,hash:'c03e2ead3982db006d1b296d7b1a0cbd1531f181b404a554a5169cc1f131bddd',checkConfirmed:true,completedAt:1791072331780,code:'GOOGLE_ACCEPTED_SEND'};
 function seed(h,patch={}) {h.values.set('GIB_M1_ATTENDANCE_EMAIL_FIRST_START_DATE','2026-10-01');h.values.set('M1_ATTENDANCE_EMAIL_FIRST_DAY_'+DATE,JSON.stringify({...PRIOR,...patch}));}
 async function day(h,kind,date,extra={}) {h.at(NOW+(Date.parse(date)-Date.parse(DATE)));const {report,capture}=await runCase(kind,'rev',date,NOW+(Date.parse(date)-Date.parse(DATE)));h.report({...report,...extra});return {result:h.tick(),report,capture};}
@@ -98,5 +98,38 @@ test('known stale reporter age is repeat noise; a different reporter set is a me
  const h=worker();await day(h,'known-stale',DATE);await day(h,'known-stale','2026-10-04');assert.equal(h.sends.length,1);assert.equal(h.checks.length,2);
  const date='2026-10-05',now=NOW+2*86400000;
  const {report}=await runCase('known-stale','rev',date,now,async f=>{await recordUploadEvidence(f.uploadStore,manifest(date,{deviceId:ID.slice(0,-1)+'5'}),now-300001);});
+ h.at(now);h.report(report);h.tick();assert.equal(h.sends.length,2);assert.equal(h.claim().coverageConfirmed,false);
+});
+
+for(const patch of [{pendingCount:1},{unconfirmedCount:1},{manifestComplete:false}])test('a stale reporter cannot conceal newly changed upload evidence '+JSON.stringify(patch),async()=>{
+ const h=worker();await day(h,'known-stale',DATE);
+ const date='2026-10-04',now=NOW+86400000;
+ const {report}=await runCase('known-stale','rev',date,now,async f=>{await recordUploadEvidence(f.uploadStore,manifest(date,{sequence:2,...patch}),now-300001);});
+ h.at(now);h.report(report);h.tick();assert.equal(h.sends.length,2,'new pending/incomplete upload evidence must not be suppressed as an unchanged stale fault');
+ assert.equal(h.claim().coverageConfirmed,false);assert.equal(report.monitorFaults[0].repeatable,false);
+});
+
+test('an earlier stale device cannot hide a later device with newly pending uploads',async()=>{
+ const h=worker(),addSecond=async(f,patch={})=>recordUploadEvidence(f.uploadStore,manifest(f.date,{deviceId:ID.slice(0,-1)+'5',...patch}),f.now);
+ const first=await runCase('known-stale','rev',DATE,NOW,f=>addSecond(f));h.report(first.report);h.tick();assert.equal(h.sends.length,1);
+ const date='2026-10-04',now=NOW+86400000;
+ const next=await runCase('known-stale','rev',date,now,f=>addSecond(f,{pendingCount:1}));h.at(now);h.report(next.report);h.tick();
+ assert.equal(h.sends.length,2);assert.equal(next.report.monitorFaults[0].reason,'TABLET_UPLOADS_PENDING');assert.equal(next.report.monitorFaults[0].repeatable,false);
+});
+
+test('known pending report remains visible when a sibling report or attendance read is unavailable',async()=>{
+ const {fixture}=await runCase('known-stale');
+ await recordUploadEvidence(fixture.uploadStore,manifest(DATE,{deviceId:ID.slice(0,-1)+'5',pendingCount:1}),NOW);
+ const get=fixture.uploadStore.getWithMetadata;
+ fixture.uploadStore.getWithMetadata=async key=>{if(key==='devices/'+ID)throw Error('Fake sibling read unavailable');return get(key);};
+ const result=await assessUploadEvidence({target:'production',profile:{installationId:'rev'}},{ok:false},DATE,NOW,{uploadStore:fixture.uploadStore});
+ assert.equal(result.ok,false);assert.equal(result.reason,'TABLET_UPLOADS_PENDING');
+});
+
+test('an unconfirmed authoritative row receipt is not concealed by a stale otherwise clean report',async()=>{
+ const h=worker();await day(h,'known-stale',DATE);
+ const date='2026-10-04',now=NOW+86400000;
+ const {report}=await runCase('known-stale','rev',date,now,f=>recordUploadEvidence(f.uploadStore,manifest(date,{sequence:2,rowIds:['gib-m1-'+ID],savedCount:1}),now-300001));
+ assert.equal(report.monitorFaults[0].reason,'SPREADSHEET_RECEIPTS_UNCONFIRMED');assert.equal(report.monitorFaults[0].repeatable,false);
  h.at(now);h.report(report);h.tick();assert.equal(h.sends.length,2);assert.equal(h.claim().coverageConfirmed,false);
 });
