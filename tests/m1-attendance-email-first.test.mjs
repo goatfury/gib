@@ -50,7 +50,8 @@ test('full canonical manifest and every durable row receipt prove normal uploads
   const s = store(), read = ledger(); read.days.at(-1).records.push({recordId:ROW,date:DATE,classLabel:'6:00 PM QA fixture',instructor:'QA fixture',duration:1,reviewRequired:false});
   const manifest = uploadManifest(state(),DEVICE,1,new Date(NOW));
   await recordUploadEvidence(s,manifest,NOW);
-  assert.deepEqual(await assessUploadEvidence(scope(),{ok:true,ledger:read},DATE,NOW,{uploadStore:s}), {ok:true,complete:true,deviceCount:1,checkedRows:1});
+  assert.deepEqual(await assessUploadEvidence(scope(),{ok:true,ledger:read},DATE,NOW,{uploadStore:s}), {ok:true,complete:true,deviceCount:1,checkedRows:1,
+    monitoring:{schema:'m1-reporting-evidence/v1',gym:'rev',target:'production',state:'observed',deviceCount:1}});
   for (const patch of [{pendingCount:1},{unconfirmedCount:1},{manifestComplete:false},{savedCount:2,manifestComplete:false}]) {
     const partial = store(); await recordUploadEvidence(partial,{...manifest,...patch},NOW);
     assert.equal((await assessUploadEvidence(scope(),{ok:true,ledger:read},DATE,NOW,{uploadStore:partial})).ok,false);
@@ -119,13 +120,16 @@ test('scheduled check runs with no browser/tablet/Admin, suppresses clean checks
   const h=timerHarness(); h.at(NOW-6*60000);h.tick();assert.equal(h.checks.length,0);
   h.at(NOW);assert.equal(h.tick().state,'suppressed');h.tick();h.at(NOW+15*60000);h.tick();assert.equal(h.checks.length,1);assert.equal(h.sends.length,0);
 });
-for(const gym of ['rev','richmond'])test(gym+' unavailable records/website still warn using approved To/BCC/Reply-To; uncertain send is never replayed and next day proceeds',()=>{
-  const h=timerHarness(gym);h.failCheck(true);h.failSend();assert.equal(h.tick().state,'uncertain');
+for(const gym of ['rev','richmond'])test(gym+' known reporting device with unavailable records/website still warns using approved To/BCC/Reply-To; uncertain send is never replayed and next day proceeds',()=>{
+  const h=timerHarness(gym);h.values.set('M1_ATTENDANCE_EMAIL_FIRST_DAY_'+DATE,JSON.stringify({date:DATE,startedAt:NOW,state:'suppressed',checkConfirmed:true,
+    reportingEvidence:{schema:'m1-reporting-evidence/v1',gym,target:'production',state:'observed',deviceCount:1}}));
+  h.at(NOW+86400000);h.failCheck(true);h.failSend();assert.equal(h.tick().state,'uncertain');
   assert.equal(h.sends.length,1);assert.equal(h.sends[0].to,gym==='rev'?'info@revolutionbjj.com':'info@richmondbjj.com');
   assert.equal(h.sends[0].bcc,'andrew@revolutionbjj.com');assert.equal(h.sends[0].replyTo,'andrew@revolutionbjj.com');assert.equal(h.sends[0].cc,undefined);
   assert.doesNotMatch(h.sends[0].body+h.sends[0].htmlBody,/Please reply.*correction/i);
   assert.match(h.sends[0].body,/Could not confirm/);assert.match(h.sends[0].body,/not a count/);h.tick();h.tick();assert.equal(h.sends.length,1);
-  h.at(NOW+86400000);h.tick();assert.equal(h.sends.length,2);assert.match(h.sends[1].body,/Earlier daily checks/);
+  h.at(NOW+2*86400000);h.tick();assert.equal(h.sends.length,2);assert.doesNotMatch(h.sends[1].body,/Earlier daily checks/);
+  assert.equal(JSON.parse(h.values.get('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-03')).missedChecks[0],'2026-10-02');
 });
 test('missed checks produce one fresh warning, a later complete assessment retires check uncertainty, and prior claims remain',()=>{
   const h=timerHarness();h.at(NOW+86400000);assert.equal(h.tick().state,'submitted');assert.equal(h.sends.length,1);assert.match(h.sends[0].body,/complete.*clean/);assert.doesNotMatch(h.sends[0].body+h.sends[0].htmlBody,/Please reply.*correction/i);
@@ -146,7 +150,8 @@ test('deployed signed email-first job can be verified read-only, without central
   const dependencies={env,installationId:'rev',clock:()=>NOW,context:{site:{name:'gib-live',id:'f748e737-11e3-4fab-8e8c-bf185eab29ff'},deploy:{context:'production',published:true}},
     digestStore,uploadStore,loadSchedules:async()=>schedules()[0],fetch:async()=>{throw Error('No other sender or network allowed in this isolated check');},traceLog(){}};
   const response=await handleAttendanceDigestJob(makeRequest(),dependencies);assert.equal(response.status,200);
-  const result=await response.json();assert.equal(result.readOnly,true);assert.equal(result.dailyEmail.unconfirmedChecks,1);assert.equal(result.dailyEmail.shouldSend,true);
+  const result=await response.json();assert.equal(result.readOnly,true);assert.equal(result.dailyEmail.unconfirmedChecks,1);assert.equal(result.dailyEmail.shouldSend,false);
+  assert.equal(result.dailyEmail.coverageConfirmed,false);assert.equal(result.dailyEmail.operatorFaultCount,1);assert.equal(result.dailyEmail.reportingEvidence.state,'none-observed');
   assert.equal(digestStore.entries.size,0);assert.equal(uploadStore.entries.size,0);
   assert.equal((await handleAttendanceDigestJob(makeRequest('0'.repeat(64)),dependencies)).status,403);assert.equal(digestStore.entries.size,0);
 });

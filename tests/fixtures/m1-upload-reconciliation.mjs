@@ -3,7 +3,8 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {applyAcknowledgements} from '../../m1/sync-core.mjs';
 import {uploadManifest} from '../../m1/upload-evidence.mjs';
-import {buildAttendanceDigest, defaultDigestConfiguration, splitAttendanceDigest} from '../../netlify/functions/_lib/m1-attendance-digest.mjs';
+import {buildAttendanceDigest, defaultDigestConfiguration} from '../../netlify/functions/_lib/m1-attendance-digest.mjs';
+import {managerAttendanceEmail} from '../../netlify/functions/_lib/m1-manager-attendance-email.mjs';
 import {pathToFileURL} from 'node:url';
 import {localNow} from '../../netlify/functions/_lib/m1-manager-review.mjs';
 const contractRoot=process.env.M1_UPLOAD_CONTRACT_BASELINE_ROOT
@@ -64,7 +65,8 @@ export async function assertReconciledUpload({context, request, post, gym, row, 
   assert.deepEqual(manifest.rowIds,[row.RowID],'the tablet retains its permanent original ID');
   await recordUploadEvidence(store,manifest,RECONCILIATION_NOW);
   const assess=central=>assessUploadEvidence(scope,{ok:true,ledger:central},RECONCILIATION_DATE,RECONCILIATION_NOW,{uploadStore:store});
-  assert.deepEqual(await assess(ledger),{ok:true,complete:true,deviceCount:1,checkedRows:1},
+  assert.deepEqual(await assess(ledger),{ok:true,complete:true,deviceCount:1,checkedRows:1,
+    monitoring:{schema:'m1-reporting-evidence/v1',gym,target:'production',state:'observed',deviceCount:1}},
     'an audited safe reconciliation confirms arrival of the original tablet record without making VOID payable');
   assert.deepEqual(signins.values,before,'background confirmation changes no original or audit record');
   assert.deepEqual(audit.values,auditBefore);
@@ -97,11 +99,10 @@ export async function assertReconciledUpload({context, request, post, gym, row, 
       :originalFormatDate(date,zone,format);
   };
   vm.runInContext(readFileSync(new URL('integrations/google-apps-script/GibM1MailApp.gs',contractRoot),'utf8'),context);
+  const dailyEmail=managerAttendanceEmail(cleanDigest,configuration,input.snapshots[0].uploads);
   let dailyChecks=0;context.GIB_M1_DIGEST_SCHEMA_='m1-attendance-digest-job/v1';
   context.gibM1DigestDispatch_=binding=>{dailyChecks++;assert.equal(binding.jobDate,RECONCILIATION_DATE);
-    return {ok:true,dailyEmail:{schema:'m1-daily-email-check/v1',gym,date:RECONCILIATION_DATE,complete:true,
-      shouldSend:cleanDigest.shouldCapture,rendered:splitAttendanceDigest(cleanDigest,configuration)[0].rendered,
-      issueCount:cleanDigest.itemCount,unconfirmedChecks:cleanDigest.readFailures.length}};};
+    return {ok:true,dailyEmail};};
   assert.equal(context.gibM1AttendanceEmailFirstTick_()?.state,'suppressed');
   context.gibM1AttendanceEmailFirstTick_();assert.equal(dailyChecks,1,'the completed daily claim prevents another check');
   const claim=JSON.parse(timerProperties.getProperty('M1_ATTENDANCE_EMAIL_FIRST_DAY_'+RECONCILIATION_DATE));

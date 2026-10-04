@@ -61,17 +61,24 @@ function confirmedUploadIds(ledger, gym, target) {
   return confirmed;
 }
 export async function assessUploadEvidence(scope, attendance, jobDate, now, dependencies = {}) {
-  const unavailable = reason => ({ ok: false, code: 'UPLOAD_COMPLETENESS_UNCONFIRMED', reason });
+  // An accepted-report entry is evidence of a reporting device, not an
+  // enrollment inventory. An empty/unreadable store cannot prove a tablet is
+  // offline, absent, or unauthorized. This classification never grants access.
+  let deviceCount = null;
+  const monitoring = () => ({ schema: 'm1-reporting-evidence/v1', gym: digestGym(scope), target: scope.target,
+    state: deviceCount === null ? 'unknown' : deviceCount === 0 ? 'none-observed' : 'observed', deviceCount });
+  const unavailable = reason => ({ ok: false, code: 'UPLOAD_COMPLETENESS_UNCONFIRMED', reason, monitoring: monitoring() });
   try {
-    const ledger = validateRead(attendance?.ledger, digestGym(scope), jobDate, scope.target);
-    if (attendance?.ok !== true) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
     const store = dependencies.uploadStore || await uploadEvidenceStore(scope);
     const listed = await store.list({ prefix: 'devices/' });
     if (!Array.isArray(listed?.blobs) || listed.blobs.length > 100) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
-    if (!listed.blobs.length) return unavailable('TABLET_REPORT_NOT_RECEIVED');
-    const confirmedIds = confirmedUploadIds(ledger, digestGym(scope), scope.target);
     const keys = listed.blobs.map(item => item.key).sort();
     if (new Set(keys).size !== keys.length || keys.some(key => !key.startsWith('devices/') || !UUID.test(key.slice(8)))) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
+    deviceCount = keys.length;
+    if (!listed.blobs.length) return unavailable('TABLET_REPORT_NOT_RECEIVED');
+    const ledger = validateRead(attendance?.ledger, digestGym(scope), jobDate, scope.target);
+    if (attendance?.ok !== true) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
+    const confirmedIds = confirmedUploadIds(ledger, digestGym(scope), scope.target);
     let checkedRows = 0;
     for (const key of keys) {
       const entry = await read(store, key), report = entry?.data, manifest = report?.manifest;
@@ -87,6 +94,6 @@ export async function assessUploadEvidence(scope, attendance, jobDate, now, depe
     }
     const after = await store.list({ prefix: 'devices/' });
     if (JSON.stringify(after.blobs.map(item => item.key).sort()) !== JSON.stringify(keys)) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
-    return { ok: true, complete: true, deviceCount: keys.length, checkedRows };
+    return { ok: true, complete: true, deviceCount: keys.length, checkedRows, monitoring: monitoring() };
   } catch { return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE'); }
 }

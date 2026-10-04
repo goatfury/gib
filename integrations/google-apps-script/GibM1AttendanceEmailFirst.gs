@@ -2,6 +2,7 @@
  * Permanent gym/day claims precede MailApp; uncertain calls are never repeated.
  * No correction, attendance, payroll, promotion, or queue record is changed. */
 var GIB_M1_EMAIL_FIRST_SCHEMA_ = 'm1-daily-email-check/v1';
+var GIB_M1_EMAIL_FIRST_MANAGER_SCHEMA_ = 'm1-daily-email-check/v2';
 var GIB_M1_EMAIL_FIRST_PREFIX_ = 'M1_ATTENDANCE_EMAIL_FIRST_DAY_';
 
 function gibM1EmailFirstEnabled_() {
@@ -68,7 +69,7 @@ function gibM1EmailFirstRead_(properties, date) {
   var raw = properties.getProperty(GIB_M1_EMAIL_FIRST_PREFIX_ + date);
   if (!raw) return null;
   var value = JSON.parse(raw);
-  if (!value || value.date !== date || ['checking', 'suppressed', 'call-pending', 'submitted', 'uncertain', 'not-sent'].indexOf(value.state) < 0
+  if (!value || value.date !== date || ['checking', 'suppressed', 'no-manager-action', 'call-pending', 'submitted', 'uncertain', 'not-sent'].indexOf(value.state) < 0
     || !Number.isSafeInteger(value.startedAt)) throw new Error('EMAIL_FIRST_CLAIM_UNAVAILABLE');
   return value;
 }
@@ -100,15 +101,45 @@ function gibM1EmailFirstFallback_(scope, date) {
     html: '<!doctype html><html><body><h1>Attendance check could not confirm uploads</h1><p>' + text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>') + '</p></body></html>' };
 }
 function gibM1EmailFirstReportValid_(report, scope, date) {
-  if (!gibM1MailAppExact_(report, ['schema', 'gym', 'date', 'complete', 'shouldSend', 'rendered', 'issueCount', 'unconfirmedChecks'])
-    || report.schema !== GIB_M1_EMAIL_FIRST_SCHEMA_ || report.gym !== scope.gym || report.date !== date || report.complete !== true
+  var manager = report?.schema === GIB_M1_EMAIL_FIRST_MANAGER_SCHEMA_;
+  var keys = ['schema', 'gym', 'date', 'complete', 'shouldSend', 'rendered', 'issueCount', 'unconfirmedChecks'];
+  if (manager) keys = keys.concat(['policy', 'managerWarningCount', 'operatorFaultCount', 'coverageConfirmed', 'reportingEvidence']);
+  if (!gibM1MailAppExact_(report, keys)
+    || (!manager && report.schema !== GIB_M1_EMAIL_FIRST_SCHEMA_) || report.gym !== scope.gym || report.date !== date || report.complete !== true
     || typeof report.shouldSend !== 'boolean' || !Number.isSafeInteger(report.issueCount) || report.issueCount < 0
-    || !Number.isSafeInteger(report.unconfirmedChecks) || report.unconfirmedChecks < 0
-    || report.shouldSend !== Boolean(report.issueCount || report.unconfirmedChecks)) return false;
+    || !Number.isSafeInteger(report.unconfirmedChecks) || report.unconfirmedChecks < 0) return false;
+  if (manager) {
+    if (report.policy !== 'manager-actionable/v1' || !gibM1EmailFirstReportingEvidenceValid_(report.reportingEvidence, scope)
+      || !Number.isSafeInteger(report.managerWarningCount) || report.managerWarningCount < 0
+      || !Number.isSafeInteger(report.operatorFaultCount) || report.operatorFaultCount < 0
+      || report.unconfirmedChecks !== report.managerWarningCount + report.operatorFaultCount
+      || report.coverageConfirmed !== (report.unconfirmedChecks === 0)
+      || report.coverageConfirmed && report.reportingEvidence.state !== 'observed'
+      || report.shouldSend !== Boolean(report.issueCount || report.managerWarningCount)) return false;
+  } else if (report.shouldSend !== Boolean(report.issueCount || report.unconfirmedChecks)) return false;
   if (!report.shouldSend) return report.rendered === null;
   return gibM1MailAppExact_(report.rendered, ['subject', 'html', 'text'])
     && typeof report.rendered.subject === 'string' && report.rendered.subject.length > 0 && report.rendered.subject.length <= 998 && !/[\r\n]/.test(report.rendered.subject)
     && ['html', 'text'].every(function(key) { return typeof report.rendered[key] === 'string' && report.rendered[key].length > 0 && report.rendered[key].length <= 200000; });
+}
+function gibM1EmailFirstReportingEvidenceValid_(value, scope) {
+  return gibM1MailAppExact_(value, ['schema', 'gym', 'target', 'state', 'deviceCount'])
+    && value.schema === 'm1-reporting-evidence/v1' && value.gym === scope.gym && value.target === 'production'
+    && (value.state === 'unknown' && value.deviceCount === null
+      || value.state === 'none-observed' && value.deviceCount === 0
+      || value.state === 'observed' && Number.isSafeInteger(value.deviceCount) && value.deviceCount > 0 && value.deviceCount <= 100);
+}
+// Retained own-gym day evidence is not an enrollment or retirement registry.
+// A later empty/unreadable store must not hide a previously known reporter.
+function gibM1EmailFirstKnownReporter_(properties, scope, date) {
+  var start = properties.getProperty('GIB_M1_ATTENDANCE_EMAIL_FIRST_START_DATE'), known = null;
+  if (!gibM1MailAppDate_(start) || start > date) throw new Error('EMAIL_FIRST_START_UNAVAILABLE');
+  for (var index = 0, stamp = Date.parse(start + 'T12:00:00Z'); index <= 3660; index++, stamp += 86400000) {
+    var earlier = new Date(stamp).toISOString().slice(0, 10); if (earlier >= date) break;
+    var evidence = gibM1EmailFirstRead_(properties, earlier)?.reportingEvidence;
+    if (gibM1EmailFirstReportingEvidenceValid_(evidence, scope) && evidence.state === 'observed') known = evidence;
+  }
+  return known;
 }
 function gibM1EmailFirstOwnsMessage_(message) {
   if (message?.target !== 'production') return null;
@@ -140,11 +171,12 @@ function gibM1AttendanceEmailFirstTick_() {
   var now = Date.now(), date = Utilities.formatDate(new Date(now), 'America/New_York', 'yyyy-MM-dd');
   var localTime = Utilities.formatDate(new Date(now), 'America/New_York', 'HH:mm');
   if (localTime < '20:00' || localTime >= '21:00') return; // One 8pm opportunity; no morning/backlog catch-up.
-  var lock = LockService.getScriptLock(), held = false, claimed, missed;
+  var lock = LockService.getScriptLock(), held = false, claimed, missed, knownReporter;
   try {
     held = lock.tryLock(10000); if (!held) return;
     if (gibM1EmailFirstRead_(properties, date)) return;
     missed = gibM1EmailFirstMissed_(properties, date);
+    knownReporter = gibM1EmailFirstKnownReporter_(properties, scope, date);
     claimed = { date: date, startedAt: now, state: 'checking', requestId: Utilities.getUuid() };
     gibM1EmailFirstWrite_(properties, claimed); // durable before any external check or possible send
   } finally { if (held) lock.releaseLock(); }
@@ -154,7 +186,42 @@ function gibM1AttendanceEmailFirstTick_() {
       jobDate: date, createdAt: now, expiresAt: now + 60000 };
     var checked = gibM1DigestDispatch_(binding);
     if (checked.ok === true && gibM1EmailFirstReportValid_(checked.dailyEmail, scope, date)) report = checked.dailyEmail;
-  } catch (_) { /* A failed website/record read still produces an honest warning. */ }
+  } catch (_) { /* Retain uncertainty below; a known reporter still needs a warning. */ }
+  var managerPolicy = !report || report.schema === GIB_M1_EMAIL_FIRST_MANAGER_SCHEMA_;
+  var currentEvidence = report?.reportingEvidence || null;
+  if (currentEvidence?.state === 'observed') knownReporter = currentEvidence;
+  if (managerPolicy && !report && !knownReporter) {
+    // An unavailable monitor with no retained reporting-device evidence is an
+    // operator fault, not evidence of an offline tablet or a manager correction.
+    gibM1EmailFirstWrite_(properties, { ...claimed, state: 'no-manager-action', completedAt: Date.now(),
+      code: 'MONITOR_CHECK_UNAVAILABLE', checkConfirmed: false, coverageConfirmed: false, dailyCoverageConfirmed: false,
+      managerWarningCount: 0, operatorFaultCount: 1, missedChecks: missed,
+      reportingEvidence: { schema: 'm1-reporting-evidence/v1', gym: scope.gym, target: 'production', state: 'unknown', deviceCount: null } });
+    return { ok: false, date: date, state: 'no-manager-action', realEmailAttempted: false };
+  }
+  if (managerPolicy && report && currentEvidence.state !== 'observed' && knownReporter) {
+    // Preserve a previously observed device through a later lost/empty/read-
+    // failed evidence store. This does not establish its current pending count.
+    var warning = 'A previously reporting tablet has no confirmed current upload evidence. Its saved sign-ins may still need uploading. Check the tablet\'s saved-upload warnings during normal use; contact Andrew if they do not clear. This does not establish a missing instructor sign-in.';
+    rendered = report.rendered || gibM1EmailFirstFallback_(scope, date);
+    report = { ...report, shouldSend: true, managerWarningCount: report.managerWarningCount + 1,
+      operatorFaultCount: Math.max(0, report.operatorFaultCount - 1),
+      rendered: { ...rendered, text: rendered.text + '\n\n' + warning,
+        html: rendered.html.replace('</body>', '<p>' + warning + '</p></body>') } };
+  }
+  var managerSummary = managerPolicy ? { policy: 'manager-actionable/v1',
+    coverageConfirmed: report?.coverageConfirmed === true, dailyCoverageConfirmed: report?.coverageConfirmed === true && !missed.length,
+    managerWarningCount: report?.managerWarningCount ?? 1, operatorFaultCount: report?.operatorFaultCount ?? 1,
+    missedChecks: missed, reportingEvidence: knownReporter || currentEvidence,
+    ...(currentEvidence ? { currentReportingEvidence: currentEvidence } : {}) } : {};
+  if (managerPolicy && report && !report.shouldSend) {
+    var clean = report.coverageConfirmed && !missed.length;
+    if (clean) properties.setProperty('GIB_M1_ATTENDANCE_EMAIL_FIRST_COVERAGE_THROUGH', date);
+    gibM1EmailFirstWrite_(properties, { ...claimed, ...managerSummary, state: clean ? 'suppressed' : 'no-manager-action',
+      completedAt: Date.now(), code: clean ? 'COMPLETE_CLEAN_CHECK' : 'NO_MANAGER_ACTION_CHECK_UNCONFIRMED',
+      checkConfirmed: true, issueCount: report.issueCount, unconfirmedChecks: report.unconfirmedChecks });
+    return { ok: true, date: date, state: clean ? 'suppressed' : 'no-manager-action', realEmailAttempted: false };
+  }
   if (report && !report.shouldSend && !missed.length) {
     properties.setProperty('GIB_M1_ATTENDANCE_EMAIL_FIRST_COVERAGE_THROUGH', date);
     gibM1EmailFirstWrite_(properties, { ...claimed, state: 'suppressed', completedAt: Date.now(), code: 'COMPLETE_CLEAN_CHECK' });
@@ -166,8 +233,8 @@ function gibM1AttendanceEmailFirstTick_() {
     rendered = { subject: (scope.gym === 'rev' ? 'Revolution BJJ' : 'Richmond BJJ') + ' attendance — ' + date + ' — earlier checks unconfirmed',
       text: cleanNote, html: '<!doctype html><html><body><p>' + cleanNote + '</p></body></html>' };
   }
-  if (report && report.unconfirmedChecks === 0) properties.setProperty('GIB_M1_ATTENDANCE_EMAIL_FIRST_COVERAGE_THROUGH', date);
-  if (missed.length) {
+  if (report && report.unconfirmedChecks === 0 && (!managerPolicy || !missed.length)) properties.setProperty('GIB_M1_ATTENDANCE_EMAIL_FIRST_COVERAGE_THROUGH', date);
+  if (missed.length && !managerPolicy) {
     var note = 'Earlier daily checks could not be confirmed for ' + missed.length + ' day(s), from ' + missed[0] + ' through ' + missed[missed.length - 1] + '. Earlier work remains unresolved; this is one fresh daily check, not a backlog send.';
     rendered = { subject: rendered.subject, text: note + '\n\n' + rendered.text, html: rendered.html.replace('<body', '<body').replace(/(<body[^>]*>)/, '$1<p>' + note + '</p>') };
   }
@@ -184,7 +251,7 @@ function gibM1AttendanceEmailFirstTick_() {
     || properties.getProperty('GIB_M1_ATTENDANCE_DIGEST_LIVE_SCHEDULE_ENABLED') !== 'true') return;
   // Do not depend on Spreadsheet availability for a warning about unavailable records.
   var hash = managerHash_({ ...rendered, from: GIB_M1_MAILAPP_SENDER_, ...expected, replyTo: 'andrew@revolutionbjj.com' });
-  var attempt = { ...claimed, state: 'call-pending', attemptedAt: Date.now(), hash: hash, checkConfirmed: Boolean(report) };
+  var attempt = { ...claimed, ...managerSummary, state: 'call-pending', attemptedAt: Date.now(), hash: hash, checkConfirmed: Boolean(report) };
   gibM1EmailFirstWrite_(properties, attempt);
   gibM1EmailFirstAudit_(scope, attempt, rendered, 'attempt');
   if (!gibM1EmailFirstEnabled_() || !gibM1MailAppActor_()

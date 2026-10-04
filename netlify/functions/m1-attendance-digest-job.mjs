@@ -4,7 +4,8 @@ import { DIGEST_SIGNATURE_HEADER, authenticateDigestJob, processDigestJob, defau
 import { validId } from './_lib/m1-test-read-callback.mjs';
 import { processDigestRehearsal } from './_lib/m1-attendance-digest-rehearsal.mjs';
 import { enqueueAttendanceWorkflow } from './_lib/m1-attendance-digest-workflow.mjs';
-import { digestGym, splitAttendanceDigest } from './_lib/m1-attendance-digest.mjs';
+import { digestGym } from './_lib/m1-attendance-digest.mjs';
+import { managerAttendanceEmail } from './_lib/m1-manager-attendance-email.mjs';
 
 export const config = { path: '/api/m1-attendance-digest-job', rateLimit: { windowLimit: 20, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 const responseCodes = new Set(['DIGEST_AUTHENTICATION_FAILED', 'DIGEST_RUNTIME_UNAVAILABLE', 'DIGEST_INVALID_JSON', 'DIGEST_INVALID_ENVELOPE',
@@ -63,10 +64,7 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
     let dailyEmail = null;
     const workflowDependencies = job.binding.mode === 'scheduled' ? { ...checkDependencies, onDigestCheck: async check => {
       if (emailFirst) {
-        const route = splitAttendanceDigest(check.digest, check.configuration)[0];
-        dailyEmail = { schema: 'm1-daily-email-check/v1', gym: digestGym(scope), date: job.binding.jobDate,
-          complete: true, shouldSend: route.digest.shouldCapture, rendered: route.rendered,
-          issueCount: route.digest.itemCount, unconfirmedChecks: route.digest.readFailures.length };
+        dailyEmail = managerAttendanceEmail(check.digest, check.configuration, check.uploadAssessment);
         return; // Google owns the one send opportunity; no detached second sender.
       }
       stage = 'job.workflow';
