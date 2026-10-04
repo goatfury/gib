@@ -1,6 +1,6 @@
-import { splitAttendanceDigest, renderAttendanceDigest } from './m1-attendance-digest.mjs';
+import { splitAttendanceDigest, renderAttendanceDigest, digestHash } from './m1-attendance-digest.mjs';
 
-export const MANAGER_ATTENDANCE_POLICY = 'manager-actionable/v1';
+export const MANAGER_ATTENDANCE_POLICY = 'rev-repeat-unchanged-monitor/v1';
 export function validReportingEvidence(value, gym, target) {
   return value && Object.keys(value).sort().join('|') === 'deviceCount|gym|schema|state|target'
     && value.schema === 'm1-reporting-evidence/v1' && value.gym === gym && value.target === target
@@ -9,30 +9,36 @@ export function validReportingEvidence(value, gym, target) {
       || value.state === 'observed' && Number.isSafeInteger(value.deviceCount) && value.deviceCount > 0 && value.deviceCount <= 100);
 }
 
-// Local release proposal: a manager message is a projection, never the source
-// of coverage truth. The immutable operator capture retains ALL raw failures,
-// historical dates and original attendance items. No registry/enrollment change.
 export function managerAttendanceEmail(digest, configuration, uploadAssessment) {
-  const route = splitAttendanceDigest(digest, configuration)[0];
+  const route = splitAttendanceDigest(digest, configuration)[0], own = route.digest;
   if (configuration.target !== 'production' || configuration.gyms.length !== 1 || configuration.emailFirst !== true)
     throw new Error('Manager email requires the own-gym production email scope.');
+  // No Richmond policy change: retain the released v1 decision/render exactly.
+  if (route.gym !== 'rev') return { schema:'m1-daily-email-check/v1', gym:route.gym, date:own.date,
+    complete:true, shouldSend:own.shouldCapture, rendered:route.rendered,
+    issueCount:own.itemCount, unconfirmedChecks:own.readFailures.length };
   const evidence = uploadAssessment?.monitoring;
-  if (!validReportingEvidence(evidence, route.gym, configuration.target)) throw new Error('Reporting evidence binding unavailable.');
-  const own = route.digest;
-  const managerFailures = own.readFailures.filter(failure => {
-    if (failure.code === 'HISTORICAL_SCHEDULE_UNAVAILABLE') return false;
-    if (failure.component === 'uploads') return evidence.state === 'observed';
-    // A recorded unresolved class-status decision remains distinct from a
-    // schedule API/setup failure. It never alleges an absent instructor.
-    return failure.code === 'CLASS_STATUS_UNCONFIRMED';
-  }).map(failure => failure.component === 'uploads' ? { ...failure,
-    message: failure.message + ' Check the tablet\'s saved-upload warnings during normal use; tell Andrew if they do not clear.' } : failure);
+  if (!validReportingEvidence(evidence, 'rev', 'production')) throw new Error('Reporting evidence binding unavailable.');
+  const managerFailures = own.readFailures.filter(f => f.code !== 'HISTORICAL_SCHEDULE_UNAVAILABLE');
+  // Pending rows, unknown records/class decisions and incomplete manifests
+  // always alert: the current schema cannot prove their rows unchanged.
+  const faults = managerFailures.map(f => {
+    const reason = f.component === 'uploads' ? uploadAssessment.reason : null;
+    const repeatable = f.component === 'uploads'
+      ? ['TABLET_REPORT_NOT_RECEIVED','TABLET_REPORT_STALE','UPLOAD_EVIDENCE_READ_UNAVAILABLE'].includes(reason)
+      : ['ATTENDANCE_UNAVAILABLE','SCHEDULE_COVERAGE_UNAVAILABLE','STAFF_UNAVAILABLE'].includes(f.code);
+    const key = [MANAGER_ATTENDANCE_POLICY, 'rev', 'production', f.component, f.code, reason,
+      f.component === 'uploads' ? evidence.state : null,
+      f.component === 'uploads' ? evidence.deviceCount : null,
+      f.component === 'uploads' ? uploadAssessment.reporterSetHash ?? null : null];
+    return { signature:digestHash(key), component:f.component, code:f.code, reason, repeatable };
+  }).sort((a,b) => a.signature.localeCompare(b.signature));
   const manager = { ...own, readFailures: managerFailures,
     shouldCapture: Boolean(own.itemCount || managerFailures.length) };
   const coverageConfirmed = own.readFailures.length === 0;
   let rendered = manager.shouldCapture ? renderAttendanceDigest(manager) : null;
-  if (rendered && !coverageConfirmed && own.readFailures.length !== managerFailures.length) {
-    const note = 'This message lists the attendance problems and device warnings that need attention. It is not a complete all-clear for every upload or check.';
+  if (rendered && own.readFailures.length !== managerFailures.length) {
+    const note = 'This message lists the attendance problems and current unconfirmed checks. It is not a complete all-clear for every upload or check.';
     rendered = { ...rendered, text: rendered.text + '\n\n' + note,
       html: rendered.html.replace('</main>', '<p>' + note + '</p></main>') };
   }
@@ -40,5 +46,5 @@ export function managerAttendanceEmail(digest, configuration, uploadAssessment) 
     complete: true, shouldSend: manager.shouldCapture, rendered, issueCount: own.itemCount,
     unconfirmedChecks: own.readFailures.length, managerWarningCount: managerFailures.length,
     operatorFaultCount: own.readFailures.length - managerFailures.length, coverageConfirmed,
-    reportingEvidence: structuredClone(evidence) };
+    reportingEvidence: structuredClone(evidence), monitorFaults: faults };
 }

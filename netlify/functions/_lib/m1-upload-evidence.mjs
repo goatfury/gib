@@ -64,10 +64,10 @@ export async function assessUploadEvidence(scope, attendance, jobDate, now, depe
   // An accepted-report entry is evidence of a reporting device, not an
   // enrollment inventory. An empty/unreadable store cannot prove a tablet is
   // offline, absent, or unauthorized. This classification never grants access.
-  let deviceCount = null;
+  let deviceCount = null, reporterSetHash = null;
   const monitoring = () => ({ schema: 'm1-reporting-evidence/v1', gym: digestGym(scope), target: scope.target,
     state: deviceCount === null ? 'unknown' : deviceCount === 0 ? 'none-observed' : 'observed', deviceCount });
-  const unavailable = reason => ({ ok: false, code: 'UPLOAD_COMPLETENESS_UNCONFIRMED', reason, monitoring: monitoring() });
+  const unavailable = reason => ({ ok: false, code: 'UPLOAD_COMPLETENESS_UNCONFIRMED', reason, monitoring: monitoring(), reporterSetHash });
   try {
     const store = dependencies.uploadStore || await uploadEvidenceStore(scope);
     const listed = await store.list({ prefix: 'devices/' });
@@ -75,6 +75,8 @@ export async function assessUploadEvidence(scope, attendance, jobDate, now, depe
     const keys = listed.blobs.map(item => item.key).sort();
     if (new Set(keys).size !== keys.length || keys.some(key => !key.startsWith('devices/') || !UUID.test(key.slice(8)))) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');
     deviceCount = keys.length;
+    // Device-set identity is stable; time/age/sequence/date alone are not new.
+    reporterSetHash = keys.length ? hash(keys) : null;
     if (!listed.blobs.length) return unavailable('TABLET_REPORT_NOT_RECEIVED');
     const ledger = validateRead(attendance?.ledger, digestGym(scope), jobDate, scope.target);
     if (attendance?.ok !== true) return unavailable('UPLOAD_EVIDENCE_READ_UNAVAILABLE');

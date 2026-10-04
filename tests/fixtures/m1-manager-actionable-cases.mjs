@@ -22,7 +22,7 @@ export function input(gym='rev',date=DATE,now=NOW) {
 }
 export function manifest(date=DATE,patch={}) {return {schema:'m1-upload-evidence/v1',deviceId:ID,sequence:1,date,coverageFrom:new Date(Date.parse(date+'T12:00Z')-86400000).toISOString().slice(0,10),manifestComplete:true,rowIds:[],savedCount:0,pendingCount:0,unconfirmedCount:0,...patch};}
 export const CASES=['history-only','no-reporter','known-pending','known-stale','integration-failed','known-read-failed','missing-plus-internal','incorrect-plus-internal','complete-clean','later-class'];
-export async function runCase(kind,gym='rev',date=DATE,now=NOW) {
+export async function runCase(kind,gym='rev',date=DATE,now=NOW,configure=()=>{}) {
  const f=input(gym,date,now);
  if(!['no-reporter','integration-failed','missing-plus-internal','incorrect-plus-internal'].includes(kind))await recordUploadEvidence(f.uploadStore,manifest(date,kind==='known-pending'?{pendingCount:1}:{}),kind==='known-stale'?now-300001:now);
  if(kind==='integration-failed')f.uploadStore.list=async()=>{throw Error('Fake unavailable report service');};
@@ -31,6 +31,7 @@ export async function runCase(kind,gym='rev',date=DATE,now=NOW) {
  if(kind==='missing-plus-internal')f.schedules.days.at(-1).occurrences.push({label:'6:00 PM Local QA class',startAt:date+'T22:00:00.000Z',endAt:date+'T23:00:00.000Z',cancelled:false});
  if(kind==='incorrect-plus-internal')f.ledger.days.at(-1).records.push({recordId:'gib-admin-fake-local-original',date,classLabel:'6:00 PM Local QA class',instructor:'Local QA Instructor',duration:1,reviewRequired:true});
  if(kind==='later-class')f.schedules.days.at(-1).occurrences.push({label:'8:00 PM Local QA late class',startAt:new Date(Date.parse(date+'T00:00Z')+86400000).toISOString(),endAt:new Date(Date.parse(date+'T01:00Z')+86400000).toISOString(),cancelled:false});
+ await configure(f);
  let report;
  await processDigestJob({binding:makeDigestBinding(ID,'scheduled',now,'production'),gyms:[{gym,attendance:{ok:true,ledger:f.ledger},staff:{ok:true,complete:true,items:[],notApplicable:true}}]},scope(gym),{
   env:{GIB_M1_ATTENDANCE_EMAIL_FIRST_ENABLED:'true'},clock:()=>now,digestStore:f.digestStore,uploadStore:f.uploadStore,loadSchedules:async()=>f.schedules,

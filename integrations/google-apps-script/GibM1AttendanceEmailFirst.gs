@@ -103,19 +103,26 @@ function gibM1EmailFirstFallback_(scope, date) {
 function gibM1EmailFirstReportValid_(report, scope, date) {
   var manager = report?.schema === GIB_M1_EMAIL_FIRST_MANAGER_SCHEMA_;
   var keys = ['schema', 'gym', 'date', 'complete', 'shouldSend', 'rendered', 'issueCount', 'unconfirmedChecks'];
-  if (manager) keys = keys.concat(['policy', 'managerWarningCount', 'operatorFaultCount', 'coverageConfirmed', 'reportingEvidence']);
+  if (manager) keys = keys.concat(['policy', 'managerWarningCount', 'operatorFaultCount', 'coverageConfirmed', 'reportingEvidence', 'monitorFaults']);
   if (!gibM1MailAppExact_(report, keys)
     || (!manager && report.schema !== GIB_M1_EMAIL_FIRST_SCHEMA_) || report.gym !== scope.gym || report.date !== date || report.complete !== true
     || typeof report.shouldSend !== 'boolean' || !Number.isSafeInteger(report.issueCount) || report.issueCount < 0
     || !Number.isSafeInteger(report.unconfirmedChecks) || report.unconfirmedChecks < 0) return false;
   if (manager) {
-    if (report.policy !== 'manager-actionable/v1' || !gibM1EmailFirstReportingEvidenceValid_(report.reportingEvidence, scope)
+    if (scope.gym !== 'rev' || report.policy !== 'rev-repeat-unchanged-monitor/v1' || !gibM1EmailFirstReportingEvidenceValid_(report.reportingEvidence, scope)
       || !Number.isSafeInteger(report.managerWarningCount) || report.managerWarningCount < 0
       || !Number.isSafeInteger(report.operatorFaultCount) || report.operatorFaultCount < 0
       || report.unconfirmedChecks !== report.managerWarningCount + report.operatorFaultCount
       || report.coverageConfirmed !== (report.unconfirmedChecks === 0)
       || report.coverageConfirmed && report.reportingEvidence.state !== 'observed'
-      || report.shouldSend !== Boolean(report.issueCount || report.managerWarningCount)) return false;
+      || report.shouldSend !== Boolean(report.issueCount || report.managerWarningCount)
+      || !Array.isArray(report.monitorFaults) || report.monitorFaults.length !== report.managerWarningCount
+      || report.monitorFaults.some(function(f) { return !gibM1MailAppExact_(f, ['signature','component','code','reason','repeatable'])
+        || !/^[0-9a-f]{64}$/.test(f.signature) || ['uploads','attendance','schedule','staff'].indexOf(f.component) < 0
+        || !/^[A-Z0-9_]{1,80}$/.test(f.code) || !(f.reason === null || /^[A-Z0-9_]{1,80}$/.test(f.reason))
+        || f.repeatable !== (f.component === 'uploads'
+          ? ['TABLET_REPORT_NOT_RECEIVED','TABLET_REPORT_STALE','UPLOAD_EVIDENCE_READ_UNAVAILABLE'].indexOf(f.reason) >= 0
+          : ['ATTENDANCE_UNAVAILABLE','SCHEDULE_COVERAGE_UNAVAILABLE','STAFF_UNAVAILABLE'].indexOf(f.code) >= 0); })) return false;
   } else if (report.shouldSend !== Boolean(report.issueCount || report.unconfirmedChecks)) return false;
   if (!report.shouldSend) return report.rendered === null;
   return gibM1MailAppExact_(report.rendered, ['subject', 'html', 'text'])
@@ -129,17 +136,49 @@ function gibM1EmailFirstReportingEvidenceValid_(value, scope) {
       || value.state === 'none-observed' && value.deviceCount === 0
       || value.state === 'observed' && Number.isSafeInteger(value.deviceCount) && value.deviceCount > 0 && value.deviceCount <= 100);
 }
-// Retained own-gym day evidence is not an enrollment or retirement registry.
-// A later empty/unreadable store must not hide a previously known reporter.
-function gibM1EmailFirstKnownReporter_(properties, scope, date) {
-  var start = properties.getProperty('GIB_M1_ATTENDANCE_EMAIL_FIRST_START_DATE'), known = null;
+// Seed only from the independently reconciled actual October3 own-gym claim.
+// The anchor is a hash, not a published private message/project/credential ID.
+function gibM1RevFaultHistory_(properties, scope, date) {
+  if (scope.gym !== 'rev' || scope.target !== 'production') throw new Error('REV_MONITOR_SCOPE_UNAVAILABLE');
+  var start = properties.getProperty('GIB_M1_ATTENDANCE_EMAIL_FIRST_START_DATE'), active = [];
   if (!gibM1MailAppDate_(start) || start > date) throw new Error('EMAIL_FIRST_START_UNAVAILABLE');
   for (var index = 0, stamp = Date.parse(start + 'T12:00:00Z'); index <= 3660; index++, stamp += 86400000) {
     var earlier = new Date(stamp).toISOString().slice(0, 10); if (earlier >= date) break;
-    var evidence = gibM1EmailFirstRead_(properties, earlier)?.reportingEvidence;
-    if (gibM1EmailFirstReportingEvidenceValid_(evidence, scope) && evidence.state === 'observed') known = evidence;
+    var past = gibM1EmailFirstRead_(properties, earlier); if (!past) continue;
+    if (earlier === '2026-10-03' && managerHash_(['rev',earlier,past.state,past.code,past.requestId,past.hash])
+      === 'd318b8bcb064354c184ba61f21a844353290bfe01d7597cacf910e921003b7c4') {
+      active = [{signature:managerHash_(['rev-repeat-unchanged-monitor/v1','rev','production','uploads',
+        'UPLOAD_COMPLETENESS_UNCONFIRMED','TABLET_REPORT_NOT_RECEIVED','none-observed',0,null]),
+        lastWarning:{date:earlier,requestId:past.requestId,payloadHash:past.hash,outcome:'submitted'}}];
+    }
+    var saved = past.monitorState;
+    if (saved) {
+      if (!gibM1MailAppExact_(saved,['schema','gym','target','assessmentDate','active','noLongerObserved'])
+        || saved.schema !== 'm1-rev-monitor-lineage/v1' || saved.gym !== 'rev' || saved.target !== 'production'
+        || saved.assessmentDate !== earlier || !Array.isArray(saved.active) || saved.active.length > 16
+        || !Array.isArray(saved.noLongerObserved)) throw new Error('REV_MONITOR_LINEAGE_UNAVAILABLE');
+      saved.active.forEach(function(f) {
+        if (!gibM1MailAppExact_(f,['signature','lastWarning']) || !/^[0-9a-f]{64}$/.test(f.signature)) throw new Error('REV_MONITOR_LINEAGE_UNAVAILABLE');
+        if (f.lastWarning) {
+          var w=f.lastWarning, original=gibM1EmailFirstRead_(properties,w.date);
+          if (!gibM1MailAppExact_(w,['date','requestId','payloadHash','outcome']) || !original || w.date > earlier
+            || original.requestId !== w.requestId || original.hash !== w.payloadHash
+            || ['call-pending','submitted','uncertain'].indexOf(original.state) < 0
+            || ['call-pending','submitted','uncertain'].indexOf(w.outcome) < 0) throw new Error('REV_MONITOR_LINEAGE_UNAVAILABLE');
+        }
+      });
+      active = saved.active;
+    }
   }
-  return known;
+  return active;
+}
+function gibM1RevMonitorState_(date, faults, prior, report, warning) {
+  var active=faults.filter(function(f){return f.repeatable;}).map(function(f) { return {signature:f.signature,lastWarning:warning || prior.find(function(p) {return p.signature===f.signature;})?.lastWarning || null}; });
+  // A whole failed check cannot establish that other prior faults recovered.
+  if (!report) prior.forEach(function(p) {if(!active.some(function(a){return a.signature===p.signature;}))active.push(p);});
+  if (active.length > 16) throw new Error('REV_MONITOR_LINEAGE_UNAVAILABLE');
+  return {schema:'m1-rev-monitor-lineage/v1',gym:'rev',target:'production',assessmentDate:date,active:active,
+    noLongerObserved:report ? prior.filter(function(p){return !active.some(function(a){return a.signature===p.signature;});}).map(function(p){return p.signature;}) : []};
 }
 function gibM1EmailFirstOwnsMessage_(message) {
   if (message?.target !== 'production') return null;
@@ -171,12 +210,12 @@ function gibM1AttendanceEmailFirstTick_() {
   var now = Date.now(), date = Utilities.formatDate(new Date(now), 'America/New_York', 'yyyy-MM-dd');
   var localTime = Utilities.formatDate(new Date(now), 'America/New_York', 'HH:mm');
   if (localTime < '20:00' || localTime >= '21:00') return; // One 8pm opportunity; no morning/backlog catch-up.
-  var lock = LockService.getScriptLock(), held = false, claimed, missed, knownReporter;
+  var lock = LockService.getScriptLock(), held = false, claimed, missed, priorFaults=[];
   try {
     held = lock.tryLock(10000); if (!held) return;
     if (gibM1EmailFirstRead_(properties, date)) return;
     missed = gibM1EmailFirstMissed_(properties, date);
-    knownReporter = gibM1EmailFirstKnownReporter_(properties, scope, date);
+    if (scope.gym === 'rev') priorFaults = gibM1RevFaultHistory_(properties, scope, date);
     claimed = { date: date, startedAt: now, state: 'checking', requestId: Utilities.getUuid() };
     gibM1EmailFirstWrite_(properties, claimed); // durable before any external check or possible send
   } finally { if (held) lock.releaseLock(); }
@@ -186,40 +225,22 @@ function gibM1AttendanceEmailFirstTick_() {
       jobDate: date, createdAt: now, expiresAt: now + 60000 };
     var checked = gibM1DigestDispatch_(binding);
     if (checked.ok === true && gibM1EmailFirstReportValid_(checked.dailyEmail, scope, date)) report = checked.dailyEmail;
-  } catch (_) { /* Retain uncertainty below; a known reporter still needs a warning. */ }
-  var managerPolicy = !report || report.schema === GIB_M1_EMAIL_FIRST_MANAGER_SCHEMA_;
-  var currentEvidence = report?.reportingEvidence || null;
-  if (currentEvidence?.state === 'observed') knownReporter = currentEvidence;
-  if (managerPolicy && !report && !knownReporter) {
-    // An unavailable monitor with no retained reporting-device evidence is an
-    // operator fault, not evidence of an offline tablet or a manager correction.
-    gibM1EmailFirstWrite_(properties, { ...claimed, state: 'no-manager-action', completedAt: Date.now(),
-      code: 'MONITOR_CHECK_UNAVAILABLE', checkConfirmed: false, coverageConfirmed: false, dailyCoverageConfirmed: false,
-      managerWarningCount: 0, operatorFaultCount: 1, missedChecks: missed,
-      reportingEvidence: { schema: 'm1-reporting-evidence/v1', gym: scope.gym, target: 'production', state: 'unknown', deviceCount: null } });
-    return { ok: false, date: date, state: 'no-manager-action', realEmailAttempted: false };
-  }
-  if (managerPolicy && report && currentEvidence.state !== 'observed' && knownReporter) {
-    // Preserve a previously observed device through a later lost/empty/read-
-    // failed evidence store. This does not establish its current pending count.
-    var warning = 'A previously reporting tablet has no confirmed current upload evidence. Its saved sign-ins may still need uploading. Check the tablet\'s saved-upload warnings during normal use; contact Andrew if they do not clear. This does not establish a missing instructor sign-in.';
-    rendered = report.rendered || gibM1EmailFirstFallback_(scope, date);
-    report = { ...report, shouldSend: true, managerWarningCount: report.managerWarningCount + 1,
-      operatorFaultCount: Math.max(0, report.operatorFaultCount - 1),
-      rendered: { ...rendered, text: rendered.text + '\n\n' + warning,
-        html: rendered.html.replace('</body>', '<p>' + warning + '</p></body>') } };
-  }
-  var managerSummary = managerPolicy ? { policy: 'manager-actionable/v1',
+  } catch (_) { /* A new unavailable check still follows the accepted warning policy. */ }
+  var managerPolicy = scope.gym === 'rev' && (!report || report.schema === GIB_M1_EMAIL_FIRST_MANAGER_SCHEMA_);
+  var faults = report?.monitorFaults || [{signature:managerHash_(['rev-repeat-unchanged-monitor/v1','rev','production','MONITOR_CHECK_UNAVAILABLE']),repeatable:true}];
+  var repeated = managerPolicy ? faults.filter(function(f){return f.repeatable && priorFaults.some(function(p){return p.signature===f.signature && p.lastWarning;});}) : [];
+  var managerSummary = managerPolicy ? { policy: 'rev-repeat-unchanged-monitor/v1',
     coverageConfirmed: report?.coverageConfirmed === true, dailyCoverageConfirmed: report?.coverageConfirmed === true && !missed.length,
     managerWarningCount: report?.managerWarningCount ?? 1, operatorFaultCount: report?.operatorFaultCount ?? 1,
-    missedChecks: missed, reportingEvidence: knownReporter || currentEvidence,
-    ...(currentEvidence ? { currentReportingEvidence: currentEvidence } : {}) } : {};
-  if (managerPolicy && report && !report.shouldSend) {
-    var clean = report.coverageConfirmed && !missed.length;
+    missedChecks: missed, repeatedFaults:repeated.map(function(f){return f.signature;}),
+    monitorState:gibM1RevMonitorState_(date,faults,priorFaults,report,null),
+    ...(report ? {reportingEvidence:report.reportingEvidence} : {}) } : {};
+  if (managerPolicy && !(report?.issueCount || faults.length-repeated.length)) {
+    var clean = report?.coverageConfirmed && !missed.length;
     if (clean) properties.setProperty('GIB_M1_ATTENDANCE_EMAIL_FIRST_COVERAGE_THROUGH', date);
     gibM1EmailFirstWrite_(properties, { ...claimed, ...managerSummary, state: clean ? 'suppressed' : 'no-manager-action',
-      completedAt: Date.now(), code: clean ? 'COMPLETE_CLEAN_CHECK' : 'NO_MANAGER_ACTION_CHECK_UNCONFIRMED',
-      checkConfirmed: true, issueCount: report.issueCount, unconfirmedChecks: report.unconfirmedChecks });
+      completedAt: Date.now(), code: clean ? 'COMPLETE_CLEAN_CHECK' : repeated.length ? 'UNCHANGED_MONITOR_FAULT_ALREADY_WARNED' : 'NO_MANAGER_ACTION_CHECK_UNCONFIRMED',
+      checkConfirmed:Boolean(report), issueCount:report?.issueCount ?? 0, unconfirmedChecks:report?.unconfirmedChecks ?? 1 });
     return { ok: true, date: date, state: clean ? 'suppressed' : 'no-manager-action', realEmailAttempted: false };
   }
   if (report && !report.shouldSend && !missed.length) {
@@ -252,6 +273,8 @@ function gibM1AttendanceEmailFirstTick_() {
   // Do not depend on Spreadsheet availability for a warning about unavailable records.
   var hash = managerHash_({ ...rendered, from: GIB_M1_MAILAPP_SENDER_, ...expected, replyTo: 'andrew@revolutionbjj.com' });
   var attempt = { ...claimed, ...managerSummary, state: 'call-pending', attemptedAt: Date.now(), hash: hash, checkConfirmed: Boolean(report) };
+  if (managerPolicy) attempt.monitorState=gibM1RevMonitorState_(date,faults,priorFaults,report,
+    {date:date,requestId:claimed.requestId,payloadHash:hash,outcome:'call-pending'});
   gibM1EmailFirstWrite_(properties, attempt);
   gibM1EmailFirstAudit_(scope, attempt, rendered, 'attempt');
   if (!gibM1EmailFirstEnabled_() || !gibM1MailAppActor_()
@@ -263,6 +286,8 @@ function gibM1AttendanceEmailFirstTick_() {
   catch (_) { /* Google may have accepted it; never resend this date. */ }
   var completed = { ...attempt, state: submitted ? 'submitted' : 'uncertain', completedAt: Date.now(),
     code: submitted ? 'GOOGLE_ACCEPTED_SEND' : 'SEND_OUTCOME_UNCERTAIN' };
+  if (managerPolicy) completed.monitorState=gibM1RevMonitorState_(date,faults,priorFaults,report,
+    {date:date,requestId:claimed.requestId,payloadHash:hash,outcome:completed.state});
   try { gibM1EmailFirstWrite_(properties, completed); } catch (_) {} // call-pending is also permanently non-retryable
   gibM1EmailFirstAudit_(scope, completed, rendered, submitted ? 'submitted' : 'exception');
   return { ok: submitted, date: date, state: completed.state, realEmailAttempted: true, inboxArrivalConfirmed: false };

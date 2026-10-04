@@ -128,8 +128,15 @@ for(const gym of ['rev','richmond'])test(gym+' known reporting device with unava
   assert.equal(h.sends[0].bcc,'andrew@revolutionbjj.com');assert.equal(h.sends[0].replyTo,'andrew@revolutionbjj.com');assert.equal(h.sends[0].cc,undefined);
   assert.doesNotMatch(h.sends[0].body+h.sends[0].htmlBody,/Please reply.*correction/i);
   assert.match(h.sends[0].body,/Could not confirm/);assert.match(h.sends[0].body,/not a count/);h.tick();h.tick();assert.equal(h.sends.length,1);
-  h.at(NOW+2*86400000);h.tick();assert.equal(h.sends.length,2);assert.doesNotMatch(h.sends[1].body,/Earlier daily checks/);
-  assert.equal(JSON.parse(h.values.get('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-03')).missedChecks[0],'2026-10-02');
+  h.at(NOW+2*86400000);h.tick();assert.equal(h.checks.length,2);
+  if(gym==='rev') {
+    assert.equal(h.sends.length,1);
+    assert.equal(JSON.parse(h.values.get('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-03')).code,'UNCHANGED_MONITOR_FAULT_ALREADY_WARNED');
+  } else {
+    assert.equal(h.sends.length,2);assert.match(h.sends[1].body,/Earlier daily checks/);
+  }
+  if(gym==='rev')assert.equal(JSON.parse(h.values.get('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-03')).missedChecks[0],'2026-10-02');
+  else assert.equal(JSON.parse(h.values.get('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-03')).monitorState,undefined);
 });
 test('missed checks produce one fresh warning, a later complete assessment retires check uncertainty, and prior claims remain',()=>{
   const h=timerHarness();h.at(NOW+86400000);assert.equal(h.tick().state,'submitted');assert.equal(h.sends.length,1);assert.match(h.sends[0].body,/complete.*clean/);assert.doesNotMatch(h.sends[0].body+h.sends[0].htmlBody,/Please reply.*correction/i);
@@ -150,8 +157,8 @@ test('deployed signed email-first job can be verified read-only, without central
   const dependencies={env,installationId:'rev',clock:()=>NOW,context:{site:{name:'gib-live',id:'f748e737-11e3-4fab-8e8c-bf185eab29ff'},deploy:{context:'production',published:true}},
     digestStore,uploadStore,loadSchedules:async()=>schedules()[0],fetch:async()=>{throw Error('No other sender or network allowed in this isolated check');},traceLog(){}};
   const response=await handleAttendanceDigestJob(makeRequest(),dependencies);assert.equal(response.status,200);
-  const result=await response.json();assert.equal(result.readOnly,true);assert.equal(result.dailyEmail.unconfirmedChecks,1);assert.equal(result.dailyEmail.shouldSend,false);
-  assert.equal(result.dailyEmail.coverageConfirmed,false);assert.equal(result.dailyEmail.operatorFaultCount,1);assert.equal(result.dailyEmail.reportingEvidence.state,'none-observed');
+  const result=await response.json();assert.equal(result.readOnly,true);assert.equal(result.dailyEmail.unconfirmedChecks,1);assert.equal(result.dailyEmail.shouldSend,true,'a first no-report warning still follows the accepted policy');
+  assert.equal(result.dailyEmail.coverageConfirmed,false);assert.equal(result.dailyEmail.operatorFaultCount,0);assert.equal(result.dailyEmail.managerWarningCount,1);assert.equal(result.dailyEmail.reportingEvidence.state,'none-observed');
   assert.equal(digestStore.entries.size,0);assert.equal(uploadStore.entries.size,0);
   assert.equal((await handleAttendanceDigestJob(makeRequest('0'.repeat(64)),dependencies)).status,403);assert.equal(digestStore.entries.size,0);
 });
