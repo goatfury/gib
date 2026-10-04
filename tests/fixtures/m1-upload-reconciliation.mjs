@@ -3,7 +3,7 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {applyAcknowledgements} from '../../m1/sync-core.mjs';
 import {uploadManifest} from '../../m1/upload-evidence.mjs';
-import {buildAttendanceDigest, defaultDigestConfiguration} from '../../netlify/functions/_lib/m1-attendance-digest.mjs';
+import {buildAttendanceDigest, defaultDigestConfiguration, splitAttendanceDigest} from '../../netlify/functions/_lib/m1-attendance-digest.mjs';
 import {managerAttendanceEmail} from '../../netlify/functions/_lib/m1-manager-attendance-email.mjs';
 import {pathToFileURL} from 'node:url';
 import {localNow} from '../../netlify/functions/_lib/m1-manager-review.mjs';
