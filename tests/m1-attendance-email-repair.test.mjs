@@ -45,10 +45,12 @@ function store(){const entries=new Map();let serial=0;return{entries,async list(
 test('upload investigation reasons distinguish never-received, stale, incomplete, pending, unavailable and row receipt failures',async()=>{
  const input=fixture('clean'),attendance=input.snapshots[0].attendance,s=store(),device='00000000-0000-4000-8000-000000000001',row='gib-m1-00000000-0000-4000-8000-000000000002';
  const state={version:2,ledger:[{RowID:row,Date:DATE,Status:'',__syncedAt:new Date(NOW).toISOString(),__syncResult:'added'}],queue:[]},manifest=uploadManifest(state,device,1,new Date(NOW));
+ const receivedAttendance=structuredClone(attendance);
+ receivedAttendance.ledger.days.at(-1).records.push({recordId:row,date:DATE,classLabel:'6:00 PM Isolated QA class',instructor:'Isolated QA Instructor',duration:1,reviewRequired:false});
  assert.equal((await assessUploadEvidence(scope(),attendance,DATE,NOW,{uploadStore:s})).reason,'TABLET_REPORT_NOT_RECEIVED');
  let sequence=0;
  for(const[patch,age,reason]of [[{},300001,'TABLET_REPORT_STALE'],[{manifestComplete:false},0,'TABLET_MANIFEST_INCOMPLETE'],[{pendingCount:1},0,'TABLET_UPLOADS_PENDING'],[{unconfirmedCount:1},0,'TABLET_UPLOADS_PENDING'],[{},0,'SPREADSHEET_RECEIPTS_UNCONFIRMED']]){
-  await recordUploadEvidence(s,{...manifest,...patch,sequence:++sequence},NOW-age);assert.equal((await assessUploadEvidence(scope(),attendance,DATE,NOW,{uploadStore:s})).reason,reason);
+  await recordUploadEvidence(s,{...manifest,...patch,sequence:++sequence},NOW-age);assert.equal((await assessUploadEvidence(scope(),age?receivedAttendance:attendance,DATE,NOW,{uploadStore:s})).reason,reason);
  }
  assert.equal((await assessUploadEvidence(scope(),{ok:false},DATE,NOW,{uploadStore:s})).reason,'UPLOAD_EVIDENCE_READ_UNAVAILABLE');
  attendance.ledger.days.at(-1).records.push({recordId:row,date:DATE,classLabel:'6:00 PM Isolated QA class',instructor:'Isolated QA Instructor',duration:1,reviewRequired:false});
