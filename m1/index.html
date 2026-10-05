@@ -946,11 +946,45 @@ body.admin-mode .container { max-width: 1120px; }
   .device-tools-menu > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; padding: 8px 12px; }
   .device-tools-menu[open] > button { position: absolute; right: 0; top: 100%; z-index: 8; min-width: 200px; box-shadow: 0 8px 24px #0008; }
   #managerWorkspaceLink { min-height: 44px; text-decoration: none; }
+
+  /* Keep daily sign-in controls prominent; maintenance details stay available. */
+  body:not(.admin-mode) .container > header {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center; gap: 8px 16px; padding: 12px 18px;
+  }
+  body:not(.admin-mode) .container > header nav { margin-top: 0; }
+  body:not(.admin-mode) .m1-kiosk-brand { min-height: 46px; margin: 0; }
+  body:not(.admin-mode) .m1-kiosk-brand img { max-height: 58px; }
+  #attendanceWarning { grid-column: 1 / -1; }
+  .device-tools-panel {
+    position: absolute; right: 0; top: calc(100% + 8px); z-index: 8;
+    width: min(420px, calc(100vw - 40px)); max-height: 65vh; overflow: auto;
+    padding: 16px; border: 1px solid var(--outline); border-radius: 14px;
+    background: var(--panel); box-shadow: var(--shadow); color: var(--muted);
+  }
+  .device-tools-panel > .inline { margin-top: 12px; }
+  header .device-tools-panel h1 { font-size: 18px; }
+  header .device-tools-panel #buildStampLarge { font-size: 13px !important; }
+  .optional-note { margin-top: 12px; }
+  .optional-note > summary {
+    cursor: pointer; min-height: 48px; padding: 10px 0; color: #cbd5e1; font-size: 18px;
+  }
+  .optional-note[open] > label { margin-top: 8px; }
+  .device-tools-menu > summary:focus-visible, .optional-note > summary:focus-visible {
+    outline: 3px solid var(--brand); outline-offset: 3px; border-radius: 8px;
+  }
+  @media (min-width: 900px) {
+    #classListWrap { max-height: clamp(180px, 26vh, 220px); }
+  }
+  @media (max-width: 560px) {
+    body:not(.admin-mode) .container > header { grid-template-columns: 1fr; }
+    body:not(.admin-mode) .container > header nav { justify-content: center; }
+  }
 </style>
-<script src="./installation-profile.generated.js?v=2026-09-25-recovery-a"></script>
-<script src="./temporary-classes-core.js?v=2026-09-25-recovery-a"></script>
-<script src="./added-classes-kiosk.js?v=2026-09-25-recovery-a"></script>
-<script src="./manager-review-config.generated.js?v=2026-09-25-recovery-a"></script>
+<script src="./installation-profile.generated.js?v=2026-10-03-kiosk-clarity"></script>
+<script src="./temporary-classes-core.js?v=2026-10-03-kiosk-clarity"></script>
+<script src="./added-classes-kiosk.js?v=2026-10-03-kiosk-clarity"></script>
+<script src="./manager-review-config.generated.js?v=2026-10-03-kiosk-clarity"></script>
 <script src="./manager-read-client.js?v=2026-09-26-manager-ticket-a"></script>
 <script src="./manager-review-badge.js?v=2026-09-22-manager-pilot-a"></script>
 <script src="./attendance-warning.js?v=2026-09-27-workflow-a"></script>
@@ -958,7 +992,12 @@ body.admin-mode .container { max-width: 1120px; }
 <body>
 <div class="container">
   <header>
-    <div class="inline kiosk-hide">
+    <nav>
+      <a id="managerWorkspaceLink" class="btn admin-link-button" href="/m1/admin/">Admin</a>
+      <details class="device-tools-menu"><summary>Device tools</summary>
+        <div class="device-tools-panel">
+          <button id="btnAdmin" class="btn" type="button">Open device maintenance</button>
+    <div class="inline device-detail">
       <div id="devicePill" class="pill gray"><span class="dot"></span><span id="pillText">Unconfigured device</span></div>
       <div class="pill"><span class="dot"></span><span>Module 1</span><span style="opacity:.8">·</span><span>Instructor Sign‑In → Payroll</span></div>
       <div class="pill" style="background: rgba(148,163,184,.10); border-color: rgba(148,163,184,.25); color:#e2e8f0;">
@@ -966,24 +1005,25 @@ body.admin-mode .container { max-width: 1120px; }
       </div>
     </div>
 
-    <h1 id="hdrGym" class="kiosk-hide">Gym in a Box — Module 1</h1>
-    <div class="subtitle kiosk-hide" id="hdrSub">
+    <h1 id="hdrGym" class="device-detail">Gym in a Box — Module 1</h1>
+    <div class="subtitle device-detail" id="hdrSub">
       <span id="hdrLoc">Set device location in Admin.</span>
       <span id="todayName"></span>
     </div>
 
     <!-- Large build stamp for easy verification -->
-    <div id="buildStampLarge" class="kiosk-hide" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
+    <div id="buildStampLarge" class="device-detail" style="margin-top: 10px; font-size: 20px; color: var(--brand);">
       Build 2026-09-13 M1 TEST kiosk-walk-away-c
     </div>
 
-    <div class="metaRow kiosk-hide">
+    <div class="metaRow device-detail">
       <span>Goal: tap‑fast sign‑in, clean export, no typos.</span>
     </div>
 
-    <nav>
-      <a id="managerWorkspaceLink" class="btn admin-link-button" href="/m1/admin/">Admin</a>
-      <details class="device-tools-menu"><summary>Device tools</summary><button id="btnAdmin" class="btn" type="button">Open device maintenance</button></details>
+          <div class="schedule-source-status" id="kioskScheduleStatus" role="status">Website schedule checking for updates</div>
+          <div class="schedule-source-status" id="addedClassesStatus" role="status" aria-live="polite">Checking added classes…</div>
+        </div>
+      </details>
     </nav>
     <p id="attendanceWarning" role="status" aria-live="polite" style="margin:10px 0 0;color:var(--warn);font-size:14px;line-height:1.4;overflow-wrap:anywhere" hidden></p>
   </header>
@@ -995,25 +1035,25 @@ body.admin-mode .container { max-width: 1120px; }
     <h2 class="kiosk-heading">Instructor Sign-In</h2>
     <div class="grid two" id="classesGrid">
       <div>
-        <label>Name</label>
+        <label for="nameInput">Name</label>
 <input type="text" id="nameInput" list="nameDatalist" placeholder="Enter your name" autocomplete="off" />
 <datalist id="nameDatalist"></datalist>
       </div>
 
       <div>
-        <label>Class(es) (Today)</label>
-        <button id="toggleClasses" class="btn" type="button" style="width:100%; margin-bottom:6px;">Select class(es)</button>
+        <label for="toggleClasses">Class(es) (Today)</label>
+        <button id="toggleClasses" class="btn" type="button" aria-expanded="false" aria-controls="classListWrap" style="width:100%; margin-bottom:6px;">Select class(es)</button>
         <div id="classListWrap" style="display:none;"></div>
         <div class="hint" id="classesHint">Select one or more classes.</div>
-        <div class="schedule-source-status" id="kioskScheduleStatus" role="status">Website schedule checking for updates</div>
-        <div class="schedule-source-status" id="addedClassesStatus" role="status" aria-live="polite">Checking added classes…</div>
+        <div class="schedule-source-status" id="kioskTaskStatus" role="status" aria-live="polite">Checking today’s classes…</div>
       </div>
     </div>
 
-    <div style="margin-top: 12px;">
-      <label>Notes (optional)</label>
+    <details id="optionalNote" class="optional-note">
+      <summary id="optionalNoteSummary">Notes (optional)</summary>
+      <label for="notesInput">Notes (optional)</label>
       <textarea id="notesInput" placeholder="Add a quick note if needed" autocomplete="off"></textarea>
-    </div>
+    </details>
 
     <div style="margin-top: 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
       <button id="btnSignIn" class="btn brand" type="button">Sign In</button>
@@ -1137,6 +1177,15 @@ body.admin-mode .container { max-width: 1120px; }
         <div id="syncStatus" class="statusRow" role="status" aria-live="polite"></div>
       </section>
     </div>
+
+    <details id="syncExceptionsSection" class="admin-disclosure" hidden>
+      <summary>Saved sign-ins needing upload review</summary>
+      <div class="admin-disclosure-body">
+        <p class="subtle">The service did not accept these sign-ins. They remain saved on this tablet. Ask Andrew to review the date, class and instructor below. Other sign-ins can still upload. After that review, retry an individual saved row once.</p>
+        <div id="syncExceptionsList"></div>
+        <p id="syncExceptionsMore" class="subtle" hidden>Showing the first 50 held rows. The remaining rows stay saved and appear as these are resolved.</p>
+      </div>
+    </details>
 
     <details id="recentSignins" class="admin-disclosure">
       <summary>Recent sign-ins</summary>
@@ -1480,17 +1529,19 @@ import {
   createPermanentRowId,
   formatDateInTimeZone,
   formatTimestampInTimeZone,
+  heldUploadRejection,
   kioskDeliveryText,
+  nextUploadBatch,
   recordRichmondSyncEvent,
   removeBatchFromState,
   requestAcknowledgements,
   syncFailureCode,
   validLocalState,
   validPermanentRowId
-} from './sync-core.mjs?v=2026-09-25-recovery-a';
+} from './sync-core.mjs?v=2026-10-03-kiosk-clarity';
 
 // Bump this revision whenever an offline shell asset changes.
-const OFFLINE_SHELL_REVISION = '2026-09-25-recovery-a';
+const OFFLINE_SHELL_REVISION = '2026-10-03-kiosk-clarity';
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register(
     `/m1/service-worker.js?v=${encodeURIComponent(OFFLINE_SHELL_REVISION)}`,
@@ -2111,6 +2162,7 @@ function refreshNameDatalist() {
       hdrLoc.textContent = 'Set device location in Admin.';
     }
 
+    hdrGym.textContent = INSTALLATION.gymName;
     updateDisplayedDay(dateKey);
   }
 
@@ -2533,7 +2585,56 @@ function refreshNameDatalist() {
     return 'Website schedule checking for updates · using the validated emergency schedule.';
   }
 
+  function kioskTaskState(schedule, added, phase) {
+    const messages = [];
+    let warning = false;
+    const canonical = schedule.canonical;
+    if (schedule.override) {
+      warning = true;
+      messages.push(schedule.mode === 'disabled'
+        ? 'Classes are unavailable on this tablet. Ask Andrew to check the schedule.'
+        : 'This tablet uses a local class schedule; website updates are paused.');
+    } else if (phase === 'error' || !canonical || canonical.current === false) {
+      warning = true;
+      messages.push('The current class schedule could not be checked. Showing a saved or backup schedule; confirm your class before signing in.');
+    } else if (phase === 'loading') {
+      messages.push('Checking today’s classes. You can use the saved schedule.');
+    }
+    if (canonical?.status?.storageWarning || (canonical?.status?.reason && canonical.current !== false && phase !== 'error')) {
+      warning = true;
+      messages.push(canonical.status.storageWarning === 'browser-cache-not-updated'
+        ? 'The schedule update could not be saved on this tablet for offline use.'
+        : canonical.status.storageWarning
+          ? 'The schedule backup could not be updated. Ask Andrew to check Device tools.'
+          : 'The class schedule needs review. Ask Andrew to check Device tools.');
+    }
+    if (added?.phase === 'failed' || added?.phase === 'cached') {
+      warning = true;
+      messages.push('Added classes could not be checked and may be out of date. Regular and locally saved classes are still shown.');
+    } else if (added?.phase === 'loading') {
+      messages.push('Checking added classes…');
+    }
+    if (added?.cacheFailed) {
+      warning = true;
+      messages.push('Added classes could not be saved for offline use.');
+    }
+    if (added?.localCount > 0) {
+      warning = true;
+      messages.push('Some added classes are saved only on this tablet. Ask Andrew to check Device tools.');
+    }
+    return { warning, text: messages.join(' ') || 'Choose your name and classes, then tap Sign In.' };
+  }
+
+  function renderKioskTaskStatus(schedule = loadSchedule(), added = addedClassesClient?.state()) {
+    const status = $('#kioskTaskStatus');
+    if (!status) return;
+    const result = kioskTaskState(schedule, added, canonicalScheduleRuntime.phase);
+    status.textContent = result.text;
+    status.classList.toggle('warn', result.warning);
+  }
+
   function renderScheduleStatuses(schedule = loadSchedule()) {
+    renderKioskTaskStatus(schedule);
     const message = scheduleStatusMessage(schedule);
     const warning = schedule.override
       || canonicalScheduleRuntime.phase === 'error'
@@ -3575,11 +3676,28 @@ function refreshNameDatalist() {
     }
   }
 
+  function refreshOptionalNote() {
+    $('#optionalNoteSummary').textContent = ($('#notesInput').value || '').trim()
+      ? 'Notes (optional) — note added' : 'Notes (optional)';
+  }
+
+  function updateSelectedClassContext() {
+    const classes = selectedClasses();
+    $('#toggleClasses').textContent = classes.length
+      ? `${classes.length} class${classes.length === 1 ? '' : 'es'} selected` : 'Select class(es)';
+    $('#toggleClasses').setAttribute('aria-expanded', String($('#classListWrap').style.display === 'block'));
+    if (classes.length) $('#classesHint').textContent = classes.join(' · ');
+    else if ($('#classListWrap').hasChildNodes()) $('#classesHint').textContent = 'Select one or more classes.';
+  }
+
   function resetKioskForm() {
     $('#nameInput').value = '';
     $('#notesInput').value = '';
+    $('#optionalNote').open = false;
+    refreshOptionalNote();
     document.querySelectorAll('#classListWrap input[type="checkbox"]').forEach(cb => cb.checked = false);
     $('#classListWrap').style.display = 'none';
+    updateSelectedClassContext();
     dayRolloverController?.checkNow();
     applyPendingScheduleViewIfSafe();
   }
@@ -3588,6 +3706,8 @@ function refreshNameDatalist() {
     if (!snapshot) return;
     $('#nameInput').value = snapshot.name || '';
     $('#notesInput').value = snapshot.notes || '';
+    $('#optionalNote').open = Boolean(snapshot.notes);
+    refreshOptionalNote();
     const wrap = $('#classListWrap');
     if (!wrap.hasChildNodes()) populateClassesForToday();
     const selected = new Set(snapshot.classes || []);
@@ -3595,6 +3715,7 @@ function refreshNameDatalist() {
       cb.checked = selected.has(cb.value);
     });
     wrap.style.display = 'block';
+    updateSelectedClassContext();
   }
 
   function openSignInModal({ name, classes, batchId, formSnapshot }) {
@@ -4081,10 +4202,12 @@ function refreshNameDatalist() {
   }
   function updateSyncStatus() {
     const q = readAdminLocalStateSnapshot().queue;
+    const held = q.filter(heldUploadRejection);
     const last = localStorage.getItem(SYNC_LAST_KEY) || '';
     const err = localStorage.getItem(SYNC_ERROR_KEY) || '';
     const parts = [];
     parts.push(`${q.length} row${q.length === 1 ? '' : 's'} waiting to sync`);
+    if (held.length) parts.push(`${held.length} need Andrew's upload review; held rows do not retry automatically`);
     if (last) {
       const lastDate = new Date(last);
       parts.push(Number.isFinite(lastDate.getTime())
@@ -4098,10 +4221,25 @@ function refreshNameDatalist() {
       const automatic = BACKEND_ENABLED && localStorage.getItem(SYNC_AUTO_KEY) === 'true';
       delivery.hidden = !IS_RICHMOND_PRODUCTION_ORIGIN && q.length === 0;
       delivery.dataset.waiting = String(q.length > 0 || !automatic);
-      $('#kioskDeliveryText').textContent = kioskDeliveryText({ waiting: q.length, last, automatic, error: err, sending: syncInFlight });
+      $('#kioskDeliveryText').textContent = kioskDeliveryText({ waiting: q.length, held: held.length, last, automatic, error: err, sending: syncInFlight });
       const connectionLink = delivery.querySelector('a');
       if (connectionLink) connectionLink.hidden = !IS_RICHMOND_PRODUCTION_ORIGIN;
       $('#signinDeliveryNote').hidden = false;
+    }
+    const section = $('#syncExceptionsSection'), list = $('#syncExceptionsList');
+    section.hidden = held.length === 0; list.replaceChildren();
+    $('#syncExceptionsMore').hidden = held.length <= 50;
+    for (const row of held.slice(0, 50)) {
+      const item = document.createElement('div'), label = document.createElement('p');
+      label.textContent = `${row.Date} — ${row['Class Label']} — ${row.Instructor}. Upload was rejected; the saved sign-in has not been confirmed.`;
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'btn';
+      retry.textContent = 'Retry this saved row once'; retry.disabled = !BACKEND_ENABLED || syncInFlight;
+      retry.addEventListener('click', () => {
+        if (confirm('Retry this saved sign-in once after Andrew has reviewed it? Its original ID and saved records will be kept.')) {
+          syncNow({ type: 'retry-rejected', rowId: row.RowID });
+        }
+      });
+      item.append(label, retry); list.appendChild(item);
     }
     renderAdminSummary();
   }
@@ -4266,7 +4404,8 @@ function refreshNameDatalist() {
     // A button click is an explicit operator request and may drain the durable
     // queue even while Auto-sync is OFF. Calls from lifecycle wake-ups, timers,
     // and activation recovery remain automatic.
-    const manualDrain = trigger === 'manual-continuation'
+    const retryRowId = trigger?.type === 'retry-rejected' ? trigger.rowId : '';
+    const manualDrain = Boolean(retryRowId) || trigger === 'manual-continuation'
       || (trigger && trigger.type === 'click');
     // Close the scheduling-to-callback race too: a continuation queued while
     // Auto-sync was ON must become a no-op if the operator turns it OFF before
@@ -4287,9 +4426,9 @@ function refreshNameDatalist() {
       showToast('Sync waits until the undo window closes');
       return;
     }
-    const submittedRows = loadSyncQueue().slice(0, INSTRUCTOR_SYNC_BATCH_SIZE);
+    const submittedRows = nextUploadBatch(loadLocalState(), INSTRUCTOR_SYNC_BATCH_SIZE, retryRowId);
     if (!submittedRows.length) {
-      showToast('No rows to sync');
+      showToast(loadSyncQueue().some(heldUploadRejection) ? 'Saved sign-ins need Andrew’s upload review' : 'No rows to sync');
       updateSyncStatus();
       return;
     }
@@ -4341,7 +4480,8 @@ function refreshNameDatalist() {
       recordSyncEvent('upload', latestApplied.confirmedRowIds.length === submittedRows.length ? 'UPLOAD_CONFIRMED' : 'ROWS_UNCONFIRMED');
       updateSyncStatus();
       const waiting = loadSyncQueue().length;
-      continueDrain = latestApplied.confirmedRowIds.length > 0 && waiting > 0;
+      continueDrain = !retryRowId && (latestApplied.confirmedRowIds.length > 0 || latestApplied.newRejectedRowIds.length > 0)
+        && nextUploadBatch(loadLocalState(), INSTRUCTOR_SYNC_BATCH_SIZE).length > 0;
       showToast(waiting
         ? `${latestApplied.confirmedRowIds.length} confirmed; ${waiting} waiting`
         : `${latestApplied.confirmedRowIds.length} confirmed`);
@@ -4389,7 +4529,7 @@ function refreshNameDatalist() {
     }
     if (
       localStorage.getItem(SYNC_AUTO_KEY) !== 'true'
-      || !loadSyncQueue().length
+      || !nextUploadBatch(loadLocalState(), INSTRUCTOR_SYNC_BATCH_SIZE).length
     ) return false;
     window.setTimeout(syncNow, 0);
     return true;
@@ -4510,12 +4650,17 @@ function refreshNameDatalist() {
     // If list is empty, re-populate (fixes the “admin has schedule but kiosk empty” failure mode)
     if (!wrap.hasChildNodes()) populateClassesForToday();
     wrap.style.display = (wrap.style.display === 'none' || wrap.style.display === '') ? 'block' : 'none';
+    updateSelectedClassContext();
   });
   $('#classListWrap').addEventListener('change', () => {
+    updateSelectedClassContext();
     applyPendingScheduleViewIfSafe();
   });
   $('#nameInput').addEventListener('input', applyPendingScheduleViewIfSafe);
-  $('#notesInput').addEventListener('input', applyPendingScheduleViewIfSafe);
+  $('#notesInput').addEventListener('input', () => {
+    refreshOptionalNote();
+    applyPendingScheduleViewIfSafe();
+  });
 
   $('#btnKiosk').addEventListener('click', showKiosk);
   $('#btnAdmin').addEventListener('click', openAdminWithGate);
@@ -4859,10 +5004,16 @@ function refreshNameDatalist() {
   loadSyncSettings();
   updateSyncStatus();
   if (BACKEND_ENABLED && IS_PRODUCTION_SYNC_ORIGIN && globalThis.M1_MANAGER_REVIEW_CONFIG?.reminders === true) {
-    import('./upload-evidence.mjs?v=2026-10-01-email-first').then(({ startUploadEvidence }) => {
+    import('./upload-evidence.mjs?v=2026-10-03-kiosk-clarity').then(({ startUploadEvidence }) => {
       startUploadEvidence({ storage: localStorage, stateKey: LOCAL_STATE_KEY, installationKey: installationStorageKey,
         getState: loadLocalState });
-    }).catch(() => {}); // An unavailable report makes the daily check warn; sign-ins continue.
+    }).catch(() => {
+      try { console.warn('Upload confirmation could not start. Sign-ins remain saved.',
+        { schema: 'm1-upload-report-status/v1', stage: 'reporter-load-unavailable', status: null }); } catch {}
+    }); // An unavailable report makes the daily check warn; sign-ins continue.
+  } else if (BACKEND_ENABLED && globalThis.M1_MANAGER_REVIEW_CONFIG?.reminders === true && !IS_PRODUCTION_SYNC_ORIGIN) {
+    try { console.warn('Upload confirmation is unavailable at this address. Sign-ins remain saved.',
+      { schema: 'm1-upload-report-status/v1', stage: 'reporter-origin-unavailable', status: null }); } catch {}
   }
   if (BACKEND_ENABLED && (!IS_RICHMOND_PRODUCTION || RICHMOND_WRITES_ENABLED)) {
     window.addEventListener('online', () => {
@@ -4903,6 +5054,7 @@ function refreshNameDatalist() {
         status.textContent = state.message;
         status.classList.toggle('warn', state.phase !== 'ready' || state.localCount > 0);
       }
+      renderKioskTaskStatus(loadSchedule(), state);
       // The existing rollover controller preserves a sign-in already in progress.
       refreshScheduleViews();
     }
@@ -4940,6 +5092,6 @@ function refreshNameDatalist() {
 
 })();
 </script>
-<script type="module" src="./staff-clock-client.mjs?v=2026-09-25-recovery-a"></script>
+<script type="module" src="./staff-clock-client.mjs?v=2026-10-03-kiosk-clarity"></script>
 </body>
 </html>

@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { uploadManifest } from '../m1/upload-evidence.mjs';
+import { CASES, renderFixture } from './fixtures/m1-email-repair-cases.mjs';
 import { recordUploadEvidence, assessUploadEvidence } from '../netlify/functions/_lib/m1-upload-evidence.mjs';
 import { buildAttendanceDigest, defaultDigestConfiguration, splitAttendanceDigest } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
 import { datesThrough, localNow } from '../netlify/functions/_lib/m1-manager-review.mjs';
@@ -49,7 +50,8 @@ test('full canonical manifest and every durable row receipt prove normal uploads
   const s = store(), read = ledger(); read.days.at(-1).records.push({recordId:ROW,date:DATE,classLabel:'6:00 PM QA fixture',instructor:'QA fixture',duration:1,reviewRequired:false});
   const manifest = uploadManifest(state(),DEVICE,1,new Date(NOW));
   await recordUploadEvidence(s,manifest,NOW);
-  assert.deepEqual(await assessUploadEvidence(scope(),{ok:true,ledger:read},DATE,NOW,{uploadStore:s}), {ok:true,complete:true,deviceCount:1,checkedRows:1});
+  assert.deepEqual(await assessUploadEvidence(scope(),{ok:true,ledger:read},DATE,NOW,{uploadStore:s}), {ok:true,complete:true,deviceCount:1,checkedRows:1,
+    monitoring:{schema:'m1-reporting-evidence/v1',gym:'rev',target:'production',state:'observed',deviceCount:1}});
   for (const patch of [{pendingCount:1},{unconfirmedCount:1},{manifestComplete:false},{savedCount:2,manifestComplete:false}]) {
     const partial = store(); await recordUploadEvidence(partial,{...manifest,...patch},NOW);
     assert.equal((await assessUploadEvidence(scope(),{ok:true,ledger:read},DATE,NOW,{uploadStore:partial})).ok,false);
@@ -90,7 +92,7 @@ test('missing attendance and unsuccessful upload check are separate, late classe
   const next=ledger('2026-10-02'); const nextSchedules=schedules('2026-10-02'); nextSchedules[0].days[nextSchedules[0].days.length-2]=dated[0].days.at(-1);
   assert.equal(buildAttendanceDigest({...input,jobDate:'2026-10-02',now:NOW+86400000,snapshots:[{...snapshot,attendance:{ok:true,ledger:next}}],schedules:nextSchedules}).itemCount,1);
   const rendered=splitAttendanceDigest(buildAttendanceDigest({...input,snapshots:[{...snapshot,uploads:{ok:false}}]}),config)[0].rendered;
-  assert.match(rendered.text,/reply.*corrections/i); assert.match(rendered.text,/payroll/); assert.doesNotMatch(rendered.html+rendered.text,/correction screen|\/m1\/admin\//);
+  assert.match(rendered.text,/No correction reply is requested/); assert.doesNotMatch(rendered.text,/Please reply.*corrections/i); assert.doesNotMatch(rendered.html+rendered.text,/correction screen|\/m1\/admin\//);
 });
 
 function timerHarness(gym='rev') {
@@ -118,15 +120,26 @@ test('scheduled check runs with no browser/tablet/Admin, suppresses clean checks
   const h=timerHarness(); h.at(NOW-6*60000);h.tick();assert.equal(h.checks.length,0);
   h.at(NOW);assert.equal(h.tick().state,'suppressed');h.tick();h.at(NOW+15*60000);h.tick();assert.equal(h.checks.length,1);assert.equal(h.sends.length,0);
 });
-for(const gym of ['rev','richmond'])test(gym+' unavailable records/website still warn using approved To/BCC/Reply-To; uncertain send is never replayed and next day proceeds',()=>{
-  const h=timerHarness(gym);h.failCheck(true);h.failSend();assert.equal(h.tick().state,'uncertain');
+for(const gym of ['rev','richmond'])test(gym+' known reporting device with unavailable records/website still warns using approved To/BCC/Reply-To; uncertain send is never replayed and next day proceeds',()=>{
+  const h=timerHarness(gym);h.values.set('M1_ATTENDANCE_EMAIL_FIRST_DAY_'+DATE,JSON.stringify({date:DATE,startedAt:NOW,state:'suppressed',checkConfirmed:true,
+    reportingEvidence:{schema:'m1-reporting-evidence/v1',gym,target:'production',state:'observed',deviceCount:1}}));
+  h.at(NOW+86400000);h.failCheck(true);h.failSend();assert.equal(h.tick().state,'uncertain');
   assert.equal(h.sends.length,1);assert.equal(h.sends[0].to,gym==='rev'?'info@revolutionbjj.com':'info@richmondbjj.com');
   assert.equal(h.sends[0].bcc,'andrew@revolutionbjj.com');assert.equal(h.sends[0].replyTo,'andrew@revolutionbjj.com');assert.equal(h.sends[0].cc,undefined);
+  assert.doesNotMatch(h.sends[0].body+h.sends[0].htmlBody,/Please reply.*correction/i);
   assert.match(h.sends[0].body,/Could not confirm/);assert.match(h.sends[0].body,/not a count/);h.tick();h.tick();assert.equal(h.sends.length,1);
-  h.at(NOW+86400000);h.tick();assert.equal(h.sends.length,2);assert.match(h.sends[1].body,/Earlier daily checks/);
+  h.at(NOW+2*86400000);h.tick();assert.equal(h.checks.length,2);
+  if(gym==='rev') {
+    assert.equal(h.sends.length,1);
+    assert.equal(JSON.parse(h.values.get('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-03')).code,'UNCHANGED_MONITOR_FAULT_ALREADY_WARNED');
+  } else {
+    assert.equal(h.sends.length,2);assert.match(h.sends[1].body,/Earlier daily checks/);
+  }
+  if(gym==='rev')assert.equal(JSON.parse(h.values.get('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-03')).missedChecks[0],'2026-10-02');
+  else assert.equal(JSON.parse(h.values.get('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-03')).monitorState,undefined);
 });
 test('missed checks produce one fresh warning, a later complete assessment retires check uncertainty, and prior claims remain',()=>{
-  const h=timerHarness();h.at(NOW+86400000);assert.equal(h.tick().state,'submitted');assert.equal(h.sends.length,1);assert.match(h.sends[0].body,/complete.*clean/);
+  const h=timerHarness();h.at(NOW+86400000);assert.equal(h.tick().state,'submitted');assert.equal(h.sends.length,1);assert.match(h.sends[0].body,/complete.*clean/);assert.doesNotMatch(h.sends[0].body+h.sends[0].htmlBody,/Please reply.*correction/i);
   h.at(NOW+2*86400000);assert.equal(h.tick().state,'suppressed');assert.equal(h.sends.length,1);assert.ok(h.values.has('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-02'));
 });
 test('failed durable claim cannot send; deployment settings leave corrections, access, recovery and real sending off',()=>{
@@ -144,7 +157,8 @@ test('deployed signed email-first job can be verified read-only, without central
   const dependencies={env,installationId:'rev',clock:()=>NOW,context:{site:{name:'gib-live',id:'f748e737-11e3-4fab-8e8c-bf185eab29ff'},deploy:{context:'production',published:true}},
     digestStore,uploadStore,loadSchedules:async()=>schedules()[0],fetch:async()=>{throw Error('No other sender or network allowed in this isolated check');},traceLog(){}};
   const response=await handleAttendanceDigestJob(makeRequest(),dependencies);assert.equal(response.status,200);
-  const result=await response.json();assert.equal(result.readOnly,true);assert.equal(result.dailyEmail.unconfirmedChecks,1);assert.equal(result.dailyEmail.shouldSend,true);
+  const result=await response.json();assert.equal(result.readOnly,true);assert.equal(result.dailyEmail.unconfirmedChecks,1);assert.equal(result.dailyEmail.shouldSend,true,'a first no-report warning still follows the accepted policy');
+  assert.equal(result.dailyEmail.coverageConfirmed,false);assert.equal(result.dailyEmail.operatorFaultCount,0);assert.equal(result.dailyEmail.managerWarningCount,1);assert.equal(result.dailyEmail.reportingEvidence.state,'none-observed');
   assert.equal(digestStore.entries.size,0);assert.equal(uploadStore.entries.size,0);
   assert.equal((await handleAttendanceDigestJob(makeRequest('0'.repeat(64)),dependencies)).status,403);assert.equal(digestStore.entries.size,0);
 });
@@ -154,6 +168,7 @@ test('background Sheet reader works with manager screen disabled and preserves o
   const context={Date,console:{log(){}},gibM1LiveReminderScope_:()=>({gym:'rev',target:'production'}),adminActionAuthorized_:body=>body.token==='isolated',todayNewYork_:()=>DATE,
     LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},openExpectedSpreadsheet_:()=>({}),signinsSheet_:()=>({}),readSignins_:()=>({records}),
     managerReviewAction_(){throw Error('Disabled correction screen must not be called');},managerJournal_:()=>({events:[history]}),
+    adminSyncAuditRows_:()=>[],adminSyncReceiptRecord_:()=>false,
     validCalendarDate_:value=>/^\d{4}-\d{2}-\d{2}$/.test(value),activeRecord_:row=>row.status!=='VOID',reviewRecordIssue_:()=>false,
     publicRecord_:row=>({recordId:row.rowId,date:row.date,classLabel:row.classLabel,instructor:row.instructor,duration:row.duration,reviewRequired:false}),
     managerAttendanceHash_:rows=>createHash('sha256').update(JSON.stringify(rows)).digest('hex')};
@@ -161,4 +176,17 @@ test('background Sheet reader works with manager screen disabled and preserves o
   const read=context.gibM1AttendanceBackgroundRead_({token:'isolated',target:'production',gym:'rev',from:'2026-09-07',to:DATE});
   assert.equal(read.days.at(-1).records[0].recordId,ROW);assert.equal(read.days.at(-1).review.revision,1);assert.deepEqual(records,original);
   assert.throws(()=>context.gibM1AttendanceBackgroundRead_({token:'wrong',target:'production',gym:'rev',from:'2026-09-07',to:DATE}));
+});
+
+for (const gym of ['rev','richmond']) for (const kind of CASES) test(gym+' scheduled worker uses normal rendered '+kind+' email without a real send',()=>{
+  const fixture=renderFixture(kind,gym),h=timerHarness(gym);h.at(Date.parse('2026-10-03T00:06:00Z'));
+  h.values.set('GIB_M1_ATTENDANCE_EMAIL_FIRST_START_DATE','2026-10-02');
+  h.report({shouldSend:fixture.digest.shouldCapture,rendered:fixture.route.rendered,issueCount:fixture.digest.itemCount,unconfirmedChecks:fixture.digest.readFailures.length});
+  const result=h.tick();
+  if(kind==='clean'){assert.equal(result.state,'suppressed');assert.equal(h.sends.length,0);return;}
+  assert.equal(result.state,'submitted');assert.equal(h.sends.length,1);const captured=h.sends[0];
+  assert.equal(captured.subject,fixture.route.rendered.subject);assert.equal(captured.body,fixture.route.rendered.text);assert.equal(captured.htmlBody,fixture.route.rendered.html);
+  assert.equal(/Please reply[^\n<]*correction/i.test(captured.body+captured.htmlBody),['missing','mixed'].includes(kind));
+  assert.equal(captured.replyTo,'andrew@revolutionbjj.com');assert.equal(captured.bcc,'andrew@revolutionbjj.com');assert.equal(captured.cc,undefined);
+  h.tick();assert.equal(h.sends.length,1,'the permanent day claim survives the wording change');
 });

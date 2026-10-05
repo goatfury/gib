@@ -7,6 +7,8 @@ import {
   appendBatchToState,
   applyAcknowledgements,
   blankLocalState,
+  heldUploadRejection,
+  nextUploadBatch,
   removeBatchFromState
 } from '../m1/sync-core.mjs';
 import { evaluateStaffState, formatStaffElapsed, sameStaffRecord } from '../m1/staff-clock-core.mjs';
@@ -197,7 +199,7 @@ function instructorHarness({ richmond = false } = {}) {
   let identity = 1;
   const requests = [];
   Object.assign(harness.context, {
-    appendBatchToState, removeBatchFromState, applyAcknowledgements,
+    appendBatchToState, removeBatchFromState, applyAcknowledgements, heldUploadRejection, nextUploadBatch,
     loadLocalState: () => clone(state),
     loadSyncQueue: () => clone(state.queue),
     persistLocalState: next => { if (failure) throw new Error('disk full'); state = clone(next); },
@@ -226,6 +228,7 @@ function instructorHarness({ richmond = false } = {}) {
   harness.run(instructorSource.slice(stateStart, stateEnd));
   const functions = [
     'kioskFormInProgress', 'clearSignInCountdown', 'updateSignInUndoLabel', 'toggleSignInModal',
+    'refreshOptionalNote', 'updateSelectedClassContext',
     'resetKioskForm', 'restoreKioskForm', 'openSignInModal', 'closeSignInModal',
     'checkSignInConfirmationDeadline', 'undoLastSigninBatch', 'confirmSigninDone', 'selectedClasses',
     'signIn', 'syncNow'
@@ -248,6 +251,8 @@ function instructorHarness({ richmond = false } = {}) {
       assert.equal(harness.$('#signInModalClasses').children.length, 0);
       assert.equal(harness.$('#nameInput').value, '');
       assert.equal(harness.$('#notesInput').value, '');
+      assert.equal(harness.$('#optionalNote').open, false);
+      assert.equal(harness.$('#optionalNoteSummary').textContent, 'Notes (optional)');
       assert.ok(harness.checkboxes.every(checkbox => !checkbox.checked));
       assert.equal(harness.$('#btnSignIn').disabled, false);
       assert.equal(harness.run('lastSigninFormSnapshot'), null);
@@ -304,6 +309,10 @@ test('instructor Undo removes only its durable batch and restores its exact inpu
   assert.deepEqual(h.state(), prior);
   assert.equal(h.$('#nameInput').value, 'TEST Person A');
   assert.equal(h.$('#notesInput').value, 'Two classes, keep notes');
+  assert.equal(h.$('#optionalNote').open, true);
+  assert.equal(h.$('#optionalNoteSummary').textContent, 'Notes (optional) — note added');
+  assert.equal(h.$('#toggleClasses').textContent, '2 classes selected');
+  assert.match(h.$('#classesHint').textContent, /TEST Fundamentals.*TEST Judo/u);
   assert.ok(h.checkboxes.every(checkbox => checkbox.checked));
   h.clock.advance(30_000);
   assert.equal(h.$('#nameInput').value, 'TEST Person A', 'Undo restored an active form, not an expiring confirmation');

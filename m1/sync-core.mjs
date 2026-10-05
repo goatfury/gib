@@ -305,8 +305,11 @@ export function recordRichmondSyncEvent(storage, event, at = new Date().toISOStr
   } catch { return false; }
 }
 
-export function kioskDeliveryText({ waiting, last, automatic, error = '', sending = false }) {
-  if (!Number.isSafeInteger(waiting) || waiting < 0) return 'Sending status unavailable';
+export function kioskDeliveryText({ waiting, held = 0, last, automatic, error = '', sending = false }) {
+  if (!Number.isSafeInteger(waiting) || waiting < 0 || !Number.isSafeInteger(held) || held < 0 || held > waiting) return 'Sending status unavailable';
+  if (held) return `${waiting} sign-in${waiting === 1 ? '' : 's'} saved on this tablet · ${held} need Andrew's upload review`
+    + (waiting > held ? ` · ${waiting - held} ${sending ? 'sending' : 'waiting to send'}` : ' · held rows do not retry automatically')
+    + (!automatic ? ' · automatic sending is off' : '');
   if (waiting > 0) {
     const saved = `${waiting} sign-in${waiting === 1 ? '' : 's'} saved on this tablet`;
     if (!automatic) return `${saved} · automatic sending is off`;
@@ -445,30 +448,56 @@ export function evaluateAcknowledgements(submittedRows, payload, options = {}) {
   };
 }
 
+// A readable explicit row rejection is retained locally for deliberate review.
+// Transport failures and `failed` outcomes never create this hold. Binding the
+// receipt to the exact submitted payload prevents a stale response holding edits.
+export function heldUploadRejection(row) {
+  const receipt = row?.__uploadRejection;
+  return validPermanentRowId(row?.RowID)
+    && exactKeys(receipt, ['schema', 'rejectedAt', 'payload'])
+    && receipt.schema === 'm1-upload-rejection/v1'
+    && typeof receipt.rejectedAt === 'string' && Number.isFinite(Date.parse(receipt.rejectedAt))
+    && receipt.payload === JSON.stringify(transportRow(row));
+}
+
+export function nextUploadBatch(state, limit = 50, retryRowId = '') {
+  if (!validLocalState(state) || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) return [];
+  if (retryRowId) {
+    const row = state.queue.find(value => value?.RowID === retryRowId && heldUploadRejection(value));
+    return row ? [row] : [];
+  }
+  return state.queue.filter(row => !heldUploadRejection(row)).slice(0, limit);
+}
+
 export function applyAcknowledgements(state, submittedRows, payload, acknowledgedAt, options = {}) {
   if (!validLocalState(state)) throw new Error('The local sign-in state was not valid.');
   const evaluation = evaluateAcknowledgements(submittedRows, payload, options);
-  if (!evaluation.readable || evaluation.confirmedRowIds.length === 0) {
-    return { state, ...evaluation };
-  }
-
+  if (!evaluation.readable) return { state, ...evaluation, newRejectedRowIds: [] };
   const confirmed = new Set(evaluation.confirmedRowIds);
+  const rejected = new Set(evaluation.results.filter(result => result.result === 'rejected'
+    && result.linkedRecordId === '').map(result => result.rowId));
+  if (!confirmed.size && !rejected.size) return { state, ...evaluation, newRejectedRowIds: [] };
   const resultById = new Map(evaluation.results.map(result => [result.rowId, result.result]));
-  const nextState = {
-    version: 2,
-    ledger: state.ledger.map(row => {
-      if (!row || !confirmed.has(row.RowID)) return row;
-      const syncResult = resultById.get(row.RowID);
-      return {
-        ...row,
-        ...(syncResult === 'review required' ? { Status: 'REVIEW' } : {}),
-        __syncResult: syncResult,
-        __syncedAt: acknowledgedAt
-      };
-    }),
-    queue: state.queue.filter(row => row && !confirmed.has(row.RowID))
-  };
-  return { state: nextState, ...evaluation };
+  const submittedById = new Map(submittedRows.map(row => [row.RowID, JSON.stringify(transportRow(row))]));
+  const newRejectedRowIds = [];
+  function update(row, queued = false) {
+    if (!row) return row;
+    if (confirmed.has(row.RowID)) return { ...row,
+      ...(resultById.get(row.RowID) === 'review required' ? { Status: 'REVIEW' } : {}),
+      __syncResult: resultById.get(row.RowID), __syncedAt: acknowledgedAt,
+      ...(heldUploadRejection(row) ? { __uploadRejection: { ...row.__uploadRejection, resolvedAt: acknowledgedAt } } : {}) };
+    if (!rejected.has(row.RowID) || submittedById.get(row.RowID) !== JSON.stringify(transportRow(row))
+      || !Number.isFinite(Date.parse(acknowledgedAt))) return row;
+    const held = heldUploadRejection(row);
+    if (queued && !held) newRejectedRowIds.push(row.RowID);
+    return { ...row, ...(!held && row.__uploadRejection ? {
+      __uploadRejectionHistory: [...(Array.isArray(row.__uploadRejectionHistory) ? row.__uploadRejectionHistory : []), row.__uploadRejection] } : {}),
+      __uploadRejection: held ? row.__uploadRejection : {
+        schema: 'm1-upload-rejection/v1', rejectedAt: acknowledgedAt, payload: submittedById.get(row.RowID) } };
+  }
+  const nextState = { version: 2, ledger: state.ledger.map(row => update(row)),
+    queue: state.queue.filter(row => row && !confirmed.has(row.RowID)).map(row => update(row, true)) };
+  return { state: nextState, ...evaluation, newRejectedRowIds };
 }
 
 export const SYNC_ENDPOINT = '/api/m1-kiosk-sync';

@@ -6,6 +6,7 @@ import {
   RICHMOND_SYNC_HISTORY_KEY,
   activationFailureCode,
   kioskDeliveryText,
+  nextUploadBatch,
   readRichmondSyncHistory,
   recordRichmondSyncEvent,
   requestAcknowledgements
@@ -126,6 +127,7 @@ test('initial Richmond authorization is retried on normal wakeups while later ma
     navigator: { onLine: true }, localStorage: storage,
     RICHMOND_ACTIVATION_MIGRATION_KEY: 'activated', SYNC_AUTO_KEY: 'auto',
     runRichmondActivationMigration() { activations += 1; }, loadSyncQueue: () => [ROW],
+    loadLocalState: () => ({ version: 2, ledger: [ROW], queue: [ROW] }), nextUploadBatch, INSTRUCTOR_SYNC_BATCH_SIZE: 50,
     syncNow() {}, window: { setTimeout: (callback, delay) => scheduled.push({ callback, delay }) }
   });
   new vm.Script(sourceBetween('  function resumeInstructorSync()', '  function debugSnapshot()')

@@ -17,28 +17,45 @@ export function uploadManifest(state, deviceId, sequence, now = new Date()) {
 // A new metadata key never edits the canonical ledger, queue, or authorization.
 // A blank review browser does not enroll itself as a gym tablet.
 export function startUploadEvidence({ storage, stateKey, installationKey, getState, fetchImpl = fetch, cryptoApi = crypto,
-  now = () => new Date(), schedule = setInterval, windowTarget = window, documentTarget = document }) {
+  now = () => new Date(), schedule = setInterval, windowTarget = window, documentTarget = document,
+  onStatus = value => console.info('Attendance upload report', JSON.stringify(value)) }) {
   const key = installationKey('gib_m1_attendance_upload_evidence_v1');
-  let inFlight = false;
+  let inFlight = false, lastStatus = '';
+  function status(stage, responseStatus = null) {
+    const value = { schema: 'm1-upload-report-status/v1', stage,
+      status: Number.isInteger(responseStatus) && responseStatus >= 100 && responseStatus <= 599 ? responseStatus : null };
+    const key = JSON.stringify(value); if (key === lastStatus) return; lastStatus = key;
+    try { onStatus(value); } catch { /* Diagnostics never interfere with sign-ins or reporting. */ }
+  }
   async function report() {
-    if (inFlight || windowTarget.navigator?.onLine === false) return;
+    if (inFlight) return;
+    if (windowTarget.navigator?.onLine === false) { status('offline'); return; }
     inFlight = true;
     try {
       const raw = storage.getItem(stateKey);
-      if (!raw || !validLocalState(JSON.parse(raw))) return; // Never migrate/reset records to make evidence.
+      if (!raw || !validLocalState(JSON.parse(raw))) { status('local-records-unavailable'); return; } // Never migrate/reset records to make evidence.
       const state = getState();
       let identity = JSON.parse(storage.getItem(key) || 'null');
-      if (!identity && !state.ledger.length && !state.queue.length) return;
+      if (!identity && !state.ledger.length && !state.queue.length) { status('not-enrolled'); return; }
       if (!identity) identity = { deviceId: cryptoApi.randomUUID(), sequence: 0 };
-      if (!/^[0-9a-f-]{36}$/.test(identity.deviceId) || !Number.isSafeInteger(identity.sequence) || identity.sequence < 0) return;
+      if (!/^[0-9a-f-]{36}$/.test(identity.deviceId) || !Number.isSafeInteger(identity.sequence) || identity.sequence < 0) { status('report-metadata-unavailable'); return; }
       identity.sequence++;
       storage.setItem(key, JSON.stringify(identity));
-      if (storage.getItem(key) !== JSON.stringify(identity)) return;
+      if (storage.getItem(key) !== JSON.stringify(identity)) { status('report-metadata-unavailable'); return; }
       const manifest = uploadManifest(state, identity.deviceId, identity.sequence, now());
-      await fetchImpl('/api/m1-upload-evidence', { method: 'POST', credentials: 'same-origin', mode: 'same-origin',
+      const response = await fetchImpl('/api/m1-upload-evidence', { method: 'POST', credentials: 'same-origin', mode: 'same-origin',
         redirect: 'error', cache: 'no-store', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify(manifest), signal: AbortSignal.timeout(20000) });
-    } catch { /* Missing evidence becomes a warning; it never changes sign-ins. */ }
+      if (response.ok !== true) { status('report-rejected', response.status); return; }
+      const receipt = await response.json();
+      if (!receipt || Object.keys(receipt).sort().join('|') !== 'ok|schema|sequence'
+        || receipt.ok !== true || receipt.schema !== UPLOAD_EVIDENCE_SCHEMA || receipt.sequence !== manifest.sequence) {
+        status('report-unconfirmed', response.status); return;
+      }
+      // This proves only that the service stored this report, not that every
+      // sign-in reached the spreadsheet. The daily authoritative check proves that.
+      status('report-stored', response.status);
+    } catch { status('report-unconfirmed'); /* Missing evidence never changes sign-ins. */ }
     finally { inFlight = false; }
   }
   schedule(report, 60000);

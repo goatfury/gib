@@ -1,3 +1,4 @@
+import {assertReconciledUpload, RECONCILIATION_NOW, RECONCILIATION_DATE} from './fixtures/m1-upload-reconciliation.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -726,4 +727,12 @@ test('production provisioning rejects duplicate exact-title Sheets without persi
   });
   assert.equal(response.result, 'rejected');
   assert.equal(harness.properties.size, 0);
+});
+
+test('Richmond upload confirmation recognizes only audited same-gym reconciliation receipts', async () => {
+  const h=createHarness({now:RECONCILIATION_NOW});
+  h.properties.set('GIB_M1_RICHMOND_PRODUCTION_WRITES_ENABLED','true');
+  h.properties.set('GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED','true');
+  const row=kioskRow({Date:RECONCILIATION_DATE,Timestamp:RECONCILIATION_DATE+' 17:30:00'});
+  await assertReconciledUpload({context:h.context,request:productionRequest,post:h.post,gym:'richmond',row,signins:h.signins,audit:h.audit});
 });

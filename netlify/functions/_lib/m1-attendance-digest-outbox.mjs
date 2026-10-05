@@ -199,7 +199,8 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
     }
     // The workflow consumes this fresh authenticated check, never an earlier
     // immutable daily capture. Its one bounded attempt stays fully awaited.
-    if (dependencies.onDigestCheck) await dependencies.onDigestCheck({ digest, configuration, binding, due, dueByGym, opportunityDueByGym });
+    if (dependencies.onDigestCheck) await dependencies.onDigestCheck({ digest, configuration, binding, due, dueByGym, opportunityDueByGym,
+      ...(configuration.emailFirst === true ? { uploadAssessment: snapshots[0].uploads } : {}) });
     if (due !== 'due') return completeRequest(store, binding.requestId, { state: due });
   }
   const rendered = renderAttendanceDigest(digest);
@@ -207,7 +208,8 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
   const messageId = binding.mode === 'scheduled' ? (dependencies.dailyMessagePrefix || 'm1-' + scope.target + '-daily-' + suffix) + binding.jobDate : 'm1-' + scope.target + '-manual-' + suffix + binding.requestId;
   const prepared = { schema: DIGEST_SCHEMA, messageId, date: binding.jobDate, mode: binding.mode, state: digest.shouldCapture ? 'prepared' : 'suppressed',
     requestId: binding.requestId, createdAt: new Date(now).toISOString(), capturedAt: null, sendingEnabled: false,
-    ...rendered, groups: digest.groups, readFailures: digest.readFailures, itemCount: digest.itemCount, contentHash: digestHash(rendered), lastFailure: null };
+    ...rendered, groups: digest.groups, readFailures: digest.readFailures, itemCount: digest.itemCount, contentHash: digestHash(rendered), lastFailure: null,
+    ...(configuration.emailFirst === true ? { reportingEvidence: snapshots[0].uploads.monitoring } : {}) };
   const claimed = await createConfirmed(store, outKey(messageId), prepared);
   validateOutbox(claimed.data, messageId);
   // Daily outbox ownership wins once. Repeated ticks recover that exact message,
