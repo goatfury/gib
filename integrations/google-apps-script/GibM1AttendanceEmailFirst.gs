@@ -90,15 +90,20 @@ function gibM1EmailFirstMissed_(properties, date) {
   }
   return missing;
 }
+function gibM1EmailFirstCopy_(scope, subject, paragraphs) {
+  var greeting = 'Hi ' + (scope.gym === 'rev' ? 'Stu' : 'Trey') + ',';
+  var lines = [greeting].concat(paragraphs);
+  var escape = function(value) { return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); };
+  return { subject: subject, text: lines.join('\n\n'),
+    html: '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>' + escape(subject) + '</title></head><body><main>'
+      + lines.map(function(line) { return '<p>' + escape(line) + '</p>'; }).join('') + '</main></body></html>' };
+}
 function gibM1EmailFirstFallback_(scope, date) {
-  var name = scope.gym === 'rev' ? 'Revolution BJJ' : 'Richmond BJJ';
-  var text = name + ' — ' + date + ' attendance check could not confirm uploads.\n\n'
-    + 'Could not confirm that every saved instructor sign-in reached the spreadsheet. The scheduled check could not complete. '
-    + 'This is an unsuccessful check, not a count of missing instructor sign-ins. An offline or silent tablet can still have pending uploads.\n\n'
-    + 'No specific attendance correction is listed. No correction reply is requested. Andrew will investigate the unavailable check and upload evidence.\n\n'
-    + 'Earlier unresolved items and later classes will be checked at the next daily opportunity. No backlog emails are sent.';
-  return { subject: name + ' attendance — ' + date + ' — could not confirm', text: text,
-    html: '<!doctype html><html><body><h1>Attendance check could not confirm uploads</h1><p>' + text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>') + '</p></body></html>' };
+  return gibM1EmailFirstCopy_(scope, 'Today’s sign-in check couldn’t finish', [
+    'We couldn’t confirm that all the sign-ins reached the spreadsheet. We haven’t identified a specific missing sign-in, so no correction reply is needed.',
+    'The scheduled check for ' + date + ' couldn’t finish.',
+    'Andrew will look into the check.'
+  ]);
 }
 function gibM1EmailFirstReportValid_(report, scope, date) {
   var manager = report?.schema === GIB_M1_EMAIL_FIRST_MANAGER_SCHEMA_;
@@ -250,14 +255,13 @@ function gibM1AttendanceEmailFirstTick_() {
   }
   if (report?.rendered) rendered = report.rendered;
   if (report && !report.shouldSend && missed.length) {
-    var cleanNote = 'Today’s complete attendance and upload check was clean. Earlier daily checks could not be confirmed. No specific attendance correction is listed, so no correction reply is requested. Andrew will investigate the earlier check coverage; original records and correction history are preserved.';
-    rendered = { subject: (scope.gym === 'rev' ? 'Revolution BJJ' : 'Richmond BJJ') + ' attendance — ' + date + ' — earlier checks unconfirmed',
-      text: cleanNote, html: '<!doctype html><html><body><p>' + cleanNote + '</p></body></html>' };
+    var cleanNote = 'Today’s sign-in and upload check finished, and no problems were found. Earlier checks are still uncertain. We haven’t identified a specific missing sign-in, so no correction reply is needed.';
+    rendered = gibM1EmailFirstCopy_(scope, 'Earlier sign-in checks are still uncertain', [cleanNote, 'Andrew will look into the earlier checks.']);
   }
   if (report && report.unconfirmedChecks === 0 && (!managerPolicy || !missed.length)) properties.setProperty('GIB_M1_ATTENDANCE_EMAIL_FIRST_COVERAGE_THROUGH', date);
   if (missed.length && !managerPolicy) {
-    var note = 'Earlier daily checks could not be confirmed for ' + missed.length + ' day(s), from ' + missed[0] + ' through ' + missed[missed.length - 1] + '. Earlier work remains unresolved; this is one fresh daily check, not a backlog send.';
-    rendered = { subject: rendered.subject, text: note + '\n\n' + rendered.text, html: rendered.html.replace('<body', '<body').replace(/(<body[^>]*>)/, '$1<p>' + note + '</p>') };
+    var note = 'Earlier checks are still uncertain for ' + missed.length + ' day' + (missed.length === 1 ? '' : 's') + ': ' + missed[0] + (missed.length > 1 ? ' through ' + missed[missed.length - 1] : '') + '. Today’s email doesn’t resolve those older checks.';
+    rendered = { subject: rendered.subject, text: rendered.text + '\n\n' + note, html: rendered.html.includes('</main>') ? rendered.html.replace('</main>', '<p>' + note + '</p></main>') : rendered.html.replace('</body>', '<p>' + note + '</p></body>') };
   }
   var expected = { to: [scope.gym === 'rev' ? 'info@revolutionbjj.com' : 'info@richmondbjj.com'], cc: [], bcc: ['andrew@revolutionbjj.com'] };
   var ready = properties.getProperty('GIB_M1_MAILAPP_LIVE_RECIPIENTS_JSON') === JSON.stringify(expected)

@@ -92,7 +92,7 @@ test('missing attendance and unsuccessful upload check are separate, late classe
   const next=ledger('2026-10-02'); const nextSchedules=schedules('2026-10-02'); nextSchedules[0].days[nextSchedules[0].days.length-2]=dated[0].days.at(-1);
   assert.equal(buildAttendanceDigest({...input,jobDate:'2026-10-02',now:NOW+86400000,snapshots:[{...snapshot,attendance:{ok:true,ledger:next}}],schedules:nextSchedules}).itemCount,1);
   const rendered=splitAttendanceDigest(buildAttendanceDigest({...input,snapshots:[{...snapshot,uploads:{ok:false}}]}),config)[0].rendered;
-  assert.match(rendered.text,/No correction reply is requested/); assert.doesNotMatch(rendered.text,/Please reply.*corrections/i); assert.doesNotMatch(rendered.html+rendered.text,/correction screen|\/m1\/admin\//);
+  assert.match(rendered.text,/no correction reply is needed/); assert.doesNotMatch(rendered.text,/Please reply.*corrections/i); assert.doesNotMatch(rendered.html+rendered.text,/correction screen|\/m1\/admin\//);
 });
 
 function timerHarness(gym='rev') {
@@ -127,19 +127,19 @@ for(const gym of ['rev','richmond'])test(gym+' known reporting device with unava
   assert.equal(h.sends.length,1);assert.equal(h.sends[0].to,gym==='rev'?'info@revolutionbjj.com':'info@richmondbjj.com');
   assert.equal(h.sends[0].bcc,'andrew@revolutionbjj.com');assert.equal(h.sends[0].replyTo,'andrew@revolutionbjj.com');assert.equal(h.sends[0].cc,undefined);
   assert.doesNotMatch(h.sends[0].body+h.sends[0].htmlBody,/Please reply.*correction/i);
-  assert.match(h.sends[0].body,/Could not confirm/);assert.match(h.sends[0].body,/not a count/);h.tick();h.tick();assert.equal(h.sends.length,1);
+  assert.match(h.sends[0].body,/We couldn’t confirm/);assert.match(h.sends[0].body,/haven’t identified a specific missing sign-in/);h.tick();h.tick();assert.equal(h.sends.length,1);
   h.at(NOW+2*86400000);h.tick();assert.equal(h.checks.length,2);
   if(gym==='rev') {
     assert.equal(h.sends.length,1);
     assert.equal(JSON.parse(h.values.get('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-03')).code,'UNCHANGED_MONITOR_FAULT_ALREADY_WARNED');
   } else {
-    assert.equal(h.sends.length,2);assert.match(h.sends[1].body,/Earlier daily checks/);
+    assert.equal(h.sends.length,2);assert.match(h.sends[1].body,/Earlier checks are still uncertain/);
   }
   if(gym==='rev')assert.equal(JSON.parse(h.values.get('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-03')).missedChecks[0],'2026-10-02');
   else assert.equal(JSON.parse(h.values.get('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-03')).monitorState,undefined);
 });
 test('missed checks produce one fresh warning, a later complete assessment retires check uncertainty, and prior claims remain',()=>{
-  const h=timerHarness();h.at(NOW+86400000);assert.equal(h.tick().state,'submitted');assert.equal(h.sends.length,1);assert.match(h.sends[0].body,/complete.*clean/);assert.doesNotMatch(h.sends[0].body+h.sends[0].htmlBody,/Please reply.*correction/i);
+  const h=timerHarness();h.at(NOW+86400000);assert.equal(h.tick().state,'submitted');assert.equal(h.sends.length,1);assert.match(h.sends[0].body,/Today’s sign-in and upload check finished, and no problems were found/);assert.doesNotMatch(h.sends[0].body+h.sends[0].htmlBody,/Please reply.*correction/i);
   h.at(NOW+2*86400000);assert.equal(h.tick().state,'suppressed');assert.equal(h.sends.length,1);assert.ok(h.values.has('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-02'));
 });
 test('failed durable claim cannot send; deployment settings leave corrections, access, recovery and real sending off',()=>{
@@ -186,7 +186,28 @@ for (const gym of ['rev','richmond']) for (const kind of CASES) test(gym+' sched
   if(kind==='clean'){assert.equal(result.state,'suppressed');assert.equal(h.sends.length,0);return;}
   assert.equal(result.state,'submitted');assert.equal(h.sends.length,1);const captured=h.sends[0];
   assert.equal(captured.subject,fixture.route.rendered.subject);assert.equal(captured.body,fixture.route.rendered.text);assert.equal(captured.htmlBody,fixture.route.rendered.html);
-  assert.equal(/Please reply[^\n<]*correction/i.test(captured.body+captured.htmlBody),['missing','mixed'].includes(kind));
+  assert.equal(/Please reply[^\n<]*correction/i.test(captured.body+captured.htmlBody),['missing','conflict','multiple','mixed'].includes(kind));
   assert.equal(captured.replyTo,'andrew@revolutionbjj.com');assert.equal(captured.bcc,'andrew@revolutionbjj.com');assert.equal(captured.cc,undefined);
   h.tick();assert.equal(h.sends.length,1,'the permanent day claim survives the wording change');
 });
+
+for(const [gym,manager] of [['rev','Stu'],['richmond','Trey']]) {
+ test(gym+' failed-check fallback is natural and asks for no correction, with sender safeguards intact',()=>{
+  const h=timerHarness(gym);h.failCheck(true);assert.equal(h.tick().state,'submitted');
+  const email=h.sends[0];assert.equal(email.subject,'Today’s sign-in check couldn’t finish');
+  assert.match(email.body,new RegExp('^Hi '+manager+','));assert.match(email.body,/We couldn’t confirm that all the sign-ins reached the spreadsheet/);
+  assert.match(email.body,/no correction reply is needed/);assert.match(email.htmlBody,new RegExp('<p>Hi '+manager+','));
+  assert.doesNotMatch(email.body+email.htmlBody,/Please reply|Who taught|forgot to sign|count of missing|offline or silent/);
+  assert.equal(email.to,gym==='rev'?'info@revolutionbjj.com':'info@richmondbjj.com');assert.equal(email.cc,undefined);
+  h.tick();assert.equal(h.sends.length,1,'same-day failed-check fallback is never replayed');
+ });
+ test(gym+' earlier-check fallback says today finished while earlier coverage is still uncertain',()=>{
+  const h=timerHarness(gym);h.at(NOW+86400000);assert.equal(h.tick().state,'submitted');const email=h.sends[0];
+  assert.equal(email.subject,'Earlier sign-in checks are still uncertain');assert.match(email.body,new RegExp('^Hi '+manager+','));
+  assert.match(email.body,/Today’s sign-in and upload check finished, and no problems were found/);
+  assert.match(email.body,/Earlier checks are still uncertain/);assert.match(email.body,/no correction reply is needed/);
+  assert.doesNotMatch(email.body+email.htmlBody,/Please reply|Who taught|today.*couldn’t finish/i);
+  if(gym==='richmond')assert.match(email.body,/2026-10-01/);h.tick();assert.equal(h.sends.length,1);
+  h.at(NOW+2*86400000);h.tick();assert.equal(h.sends.length,1,'next complete clean day is suppressed');
+ });
+}

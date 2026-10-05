@@ -168,11 +168,11 @@ export function buildAttendanceDigest({ jobDate, snapshots, schedules, configura
   const groups = [], readFailures = [];
   for (const gym of configuration.gyms) {
     const snapshot = snapshots.find(s => s.gym === gym.id), items = [], seen = new Set();
-    const add = (kind, date, identity, summary, staff = false) => {
+    const add = (kind, date, identity, summary, staff = false, attendance = null) => {
       const id = digestHash([gym.id, kind, date, identity]).slice(0, 24);
-      if (!seen.has(id)) { seen.add(id); items.push({ id, kind, date, summary, url: link(gym, date, staff) }); }
+      if (!seen.has(id)) { seen.add(id); items.push({ id, kind, date, summary, url: link(gym, date, staff), ...(attendance ? { attendance: { ...attendance, classLabel: attendance.classLabel.replace(/\s+/g, ' ').trim(), instructor: attendance.instructor.replace(/\s+/g, ' ').trim() } } : {}) }); }
     };
-    const failure = (component, code, message, dates) => readFailures.push({ gym: gym.id, component, code, message, ...(dates?.length ? { dates } : {}), url: link(gym, jobDate, component === 'staff') });
+    const failure = (component, code, message, dates, uploadReason) => readFailures.push({ gym: gym.id, component, code, message, ...(dates?.length ? { dates } : {}), ...(uploadReason ? { uploadReason } : {}), url: link(gym, jobDate, component === 'staff') });
     let ledger;
     try {
       if (snapshot.attendance?.ok !== true) throw new Error();
@@ -187,7 +187,7 @@ export function buildAttendanceDigest({ jobDate, snapshots, schedules, configura
         SPREADSHEET_RECEIPTS_UNCONFIRMED: 'Some reported permanent row IDs could not be confirmed exactly once in the spreadsheet. ',
         UPLOAD_EVIDENCE_READ_UNAVAILABLE: 'Upload monitoring evidence could not be read. '
       }[snapshot.uploads?.reason] || '';
-      failure('uploads', 'UPLOAD_COMPLETENESS_UNCONFIRMED', reason + 'Could not confirm that every saved instructor sign-in reached the spreadsheet. The tablet may be offline or silent, uploads may be incomplete, or complete upload evidence may be unavailable. Saved rows alone do not prove that its queue is empty.');
+      failure('uploads', 'UPLOAD_COMPLETENESS_UNCONFIRMED', reason + 'Could not confirm that every saved instructor sign-in reached the spreadsheet. The tablet may be offline or silent, uploads may be incomplete, or complete upload evidence may be unavailable. Saved rows alone do not prove that its queue is empty.', null, ['TABLET_REPORT_NOT_RECEIVED', 'TABLET_REPORT_STALE', 'TABLET_UPLOADS_PENDING', 'TABLET_MANIFEST_INCOMPLETE', 'SPREADSHEET_RECEIPTS_UNCONFIRMED', 'UPLOAD_EVIDENCE_READ_UNAVAILABLE'].includes(snapshot.uploads?.reason) ? snapshot.uploads.reason : null);
     }
     if (ledger) {
       const recordIds = new Map();
@@ -202,19 +202,19 @@ export function buildAttendanceDigest({ jobDate, snapshots, schedules, configura
         else for (const occurrence of occurrences) {
           const matching = records.filter(r => labelKey(r.classLabel) === labelKey(occurrence.label));
           const decision = decisions.find(d => labelKey(d.label) === labelKey(occurrence.label));
-          if (occurrence.cancelled && matching.length) add('attendance-conflict', day.date, 'schedule-cancellation:' + labelKey(occurrence.label), occurrence.label + ' — instructor(s): ' + matching.map(r => r.instructor).join(', ') + '; recorded sign-in conflicts with a canceled occurrence.');
+          if (occurrence.cancelled && matching.length) add('attendance-conflict', day.date, 'schedule-cancellation:' + labelKey(occurrence.label), occurrence.label + ' — instructor(s): ' + matching.map(r => r.instructor).join(', ') + '; recorded sign-in conflicts with a canceled occurrence.', false, { classLabel: occurrence.label, instructor: matching.map(r => r.instructor).join(', '), problem: 'schedule-cancellation' });
           const cancelled = occurrence.cancelled || (decision?.outcome === 'not-held' && !matching.length);
           if (cancelled || occurrence.finish > now) continue;
           if (!matching.some(r => r.reviewRequired === false && recordIds.get(r.recordId) === 1 && safeText(r.instructor) && Number.isFinite(r.duration) && r.duration > 0)) {
             if (configuration.emailFirst === true && matching.length) {
               // A present, flagged sign-in is an existing record problem, not
               // a missing sign-in. Its review/ID problem is listed below.
-              for (const record of matching.filter(r => r.duration <= 0)) add('attendance-conflict', day.date, 'duration:' + record.recordId, record.classLabel + ' — instructor: ' + record.instructor + '; the saved sign-in has a non-positive duration.');
+              for (const record of matching.filter(r => r.duration <= 0)) add('attendance-conflict', day.date, 'duration:' + record.recordId, record.classLabel + ' — instructor: ' + record.instructor + '; the saved sign-in has a non-positive duration.', false, { classLabel: record.classLabel, instructor: record.instructor, problem: 'duration' });
             } else if (configuration.emailFirst !== true || day.warnings.every(warning => warning?.code === 'RECORD_ID_CONFLICT')) {
               // The background reader retains readable RECORD_ID_CONFLICT rows.
               // Other or unknown warnings could conceal excluded sign-ins, so
               // their incomplete day read cannot establish an absence.
-              add('missing-instructor', day.date, labelKey(occurrence.label), occurrence.label + ' — instructor: ' + (matching.length ? matching.map(r => r.instructor).join(', ') : 'not identified') + '; no valid instructor sign-in recorded in the spreadsheet.');
+              add('missing-instructor', day.date, labelKey(occurrence.label), occurrence.label + ' — instructor: ' + (matching.length ? matching.map(r => r.instructor).join(', ') : 'not identified') + '; no valid instructor sign-in recorded in the spreadsheet.', false, { classLabel: occurrence.label, instructor: matching.map(r => r.instructor).join(', '), problem: 'missing-sign-in' });
             }
           }
         }
@@ -224,14 +224,14 @@ export function buildAttendanceDigest({ jobDate, snapshots, schedules, configura
           if (configuration.emailFirst === true) failure('attendance', 'ATTENDANCE_RECORD_UNCONFIRMED', message + ' No specific sign-in correction was established.', [day.date]);
           else add('attendance-conflict', day.date, identity, message);
         }
-        for (const record of records.filter(r => r.reviewRequired)) add('attendance-conflict', day.date, record.recordId, record.classLabel + ' — instructor: ' + record.instructor + '; the saved sign-in is flagged for review.');
-        for (const record of records.filter(r => recordIds.get(r.recordId) !== 1)) add('attendance-conflict', day.date, 'ambiguous-id:' + record.recordId, record.classLabel + ' — instructor: ' + record.instructor + '; the saved sign-in has a duplicate permanent attendance ID.');
+        for (const record of records.filter(r => r.reviewRequired)) add('attendance-conflict', day.date, record.recordId, record.classLabel + ' — instructor: ' + record.instructor + '; the saved sign-in is flagged for review.', false, { classLabel: record.classLabel, instructor: record.instructor, problem: 'review-flag' });
+        for (const record of records.filter(r => recordIds.get(r.recordId) !== 1)) add('attendance-conflict', day.date, 'ambiguous-id:' + record.recordId, record.classLabel + ' — instructor: ' + record.instructor + '; the saved sign-in has a duplicate permanent attendance ID.', false, { classLabel: record.classLabel, instructor: record.instructor, problem: 'duplicate-id' });
         for (const decision of decisions) {
           if (!safeText(decision?.label)) continue;
           const occurrence = occurrences?.find(o => labelKey(o.label) === labelKey(decision.label));
           if (occurrence && occurrence.finish > now) continue;
           const matching = records.filter(r => labelKey(r.classLabel) === labelKey(decision.label));
-          if (decision.outcome === 'not-held' && matching.length) add('attendance-conflict', day.date, 'cancellation:' + labelKey(decision.label), decision.label + ' — instructor(s): ' + matching.map(r => r.instructor).join(', ') + '; recorded sign-in conflicts with “Didn’t happen.”');
+          if (decision.outcome === 'not-held' && matching.length) add('attendance-conflict', day.date, 'cancellation:' + labelKey(decision.label), decision.label + ' — instructor(s): ' + matching.map(r => r.instructor).join(', ') + '; recorded sign-in conflicts with “Didn’t happen.”', false, { classLabel: decision.label, instructor: matching.map(r => r.instructor).join(', '), problem: 'not-held' });
           else if (decision.outcome === 'unknown') {
             const message = decision.label + ' — class status is still “Don’t know.”';
             if (configuration.emailFirst === true) failure('schedule', 'CLASS_STATUS_UNCONFIRMED', message + ' No missing sign-in was established.', [day.date]);
@@ -266,9 +266,82 @@ export function buildAttendanceDigest({ jobDate, snapshots, schedules, configura
     recipients: configuration.recipients, groups, readFailures, itemCount, shouldCapture: itemCount > 0 || readFailures.length > 0 };
 }
 
+// Manager copy uses structured attendance fields. Original summaries/failures
+// remain in the digest for audit evidence and legacy captures remain readable.
+const attendanceProblems = new Set(['missing-sign-in', 'schedule-cancellation', 'duration', 'review-flag', 'duplicate-id', 'not-held']);
+function attendanceQuestion(item, jobDate) {
+  const detail = item.attendance;
+  if (!detail) return item.date + ' — ' + item.summary + ' What needs changing?';
+  const label = detail.classLabel, date = item.date;
+  if (item.kind === 'missing-instructor') return date === jobDate
+    ? `We don’t have an instructor sign-in for ${label} on ${date}. Who taught it, or was it canceled?`
+    : `For ${date}, we don’t have an instructor sign-in for ${label}. Who taught it, or was it canceled?`;
+  const recorded = `The sign-in for ${label} on ${date}` + (detail.instructor ? ` lists ${detail.instructor}` : '');
+  const questions = {
+    'review-flag': ' and is marked for review. What needs changing?',
+    'duplicate-id': ' and shares a record number with another sign-in. Can you tell us what needs changing?',
+    duration: ', but its recorded length is zero or less. How long was the class?',
+    'schedule-cancellation': ', but the schedule says the class was canceled. Did it happen, and what should change?',
+    'not-held': ', but the class is marked as not held. Did it happen, and what should change?'
+  };
+  return recorded + questions[detail.problem];
+}
+function managerCheckNote(failure) {
+  const dates = failure.dates, range = dates?.length ? dates[0] + (dates.length > 1 ? ' through ' + dates.at(-1) : '') : '';
+  if (failure.component === 'uploads') return {
+    TABLET_REPORT_NOT_RECEIVED: 'We haven’t received an upload report from the tablet.',
+    TABLET_REPORT_STALE: 'The last tablet report is too old to confirm today’s uploads.',
+    TABLET_UPLOADS_PENDING: 'The tablet reports saved sign-ins that are still waiting to upload or be confirmed.',
+    TABLET_MANIFEST_INCOMPLETE: 'The tablet couldn’t report all of its saved sign-ins.',
+    SPREADSHEET_RECEIPTS_UNCONFIRMED: 'Some sign-ins in the tablet’s report couldn’t be matched to spreadsheet records.',
+    UPLOAD_EVIDENCE_READ_UNAVAILABLE: 'The upload report couldn’t be read.'
+  }[failure.uploadReason] || '';
+  if (failure.code === 'HISTORICAL_SCHEDULE_UNAVAILABLE') return 'Older schedule checks' + (range ? ' for ' + range : '') + ' are still uncertain. These are older setup gaps, not new attendance problems.';
+  if (failure.code === 'SCHEDULE_COVERAGE_UNAVAILABLE') return 'We couldn’t check the class schedule or finish times' + (range ? ' for ' + range : '') + '. That doesn’t tell us whether a sign-in is missing.';
+  if (failure.code === 'ATTENDANCE_UNAVAILABLE') return 'The attendance records couldn’t be read for this check.';
+  // Specific record/class warnings retain their known detail without inventing
+  // a class identity or extracting one from old prose.
+  return failure.message;
+}
+function renderManagerAttendance(digest) {
+  const group = digest.groups[0], manager = reviewerFor[group?.gym]?.[1];
+  const items = digest.groups.flatMap(g => g.items);
+  const uploads = digest.readFailures.some(f => f.component === 'uploads');
+  const onlyHistory = digest.readFailures.length > 0 && digest.readFailures.every(f => f.code === 'HISTORICAL_SCHEDULE_UNAVAILABLE');
+  const clean = !digest.shouldCapture;
+  const subject = items.length === 1
+    ? 'Sign-in question for ' + (items[0].attendance?.classLabel || group.name) + ' on ' + items[0].date
+    : items.length ? 'Sign-in questions for ' + group.name + ' on ' + digest.date
+    : clean ? 'Today’s sign-in check is complete' : onlyHistory ? 'Earlier sign-in checks are still uncertain' : 'Today’s sign-in check couldn’t finish';
+  const paragraphs = ['Hi' + (manager ? ' ' + manager : '') + ','];
+  if (items.length > 1) paragraphs.push('Can you help with these sign-ins?');
+  for (const item of items) paragraphs.push(attendanceQuestion(item, digest.date));
+  if (items.length) paragraphs.push('Please reply here with any corrections and Andrew will update the record.');
+  if (digest.readFailures.length) {
+    if (items.length && uploads) paragraphs.push('Uploads not confirmed');
+    const check = uploads ? 'We couldn’t confirm that all the sign-ins reached the spreadsheet.'
+      : onlyHistory ? 'Today’s sign-in and upload check finished. Older schedule checks are still uncertain.'
+      : 'We couldn’t finish checking the sign-in records against the class schedule.';
+    paragraphs.push(check + (items.length ? ' This doesn’t identify another missing sign-in.'
+      : ' We haven’t identified a specific missing sign-in, so no correction reply is needed.'));
+    for (const failure of digest.readFailures) { const note = managerCheckNote(failure); if (note) paragraphs.push(note); }
+    paragraphs.push('Andrew will look into the check.');
+  } else if (clean) paragraphs.push('Today’s check finished, and no sign-in problems were found. No email is needed.');
+  const html = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>' + escape(subject)
+    + '</title></head><body style="font:16px/1.5 Arial,sans-serif;color:#17212c"><main>'
+    + paragraphs.map(p => '<p>' + escape(p) + '</p>').join('') + '</main></body></html>';
+  return { subject, html, text: paragraphs.join('\n\n') };
+}
+
 export function renderAttendanceDigest(digest) {
   const synthetic = digest.syntheticRehearsal === true, production = digest.target === 'production';
   if (production && synthetic) throw new Error('Live synthetic email prohibited.');
+  const ownManagerRoute = digest.groups.length === 1 && ['rev', 'richmond'].includes(digest.routedGym)
+    && digest.groups[0].gym === digest.routedGym && digest.recipients.length === 1
+    && digest.recipients[0].key === reviewerFor[digest.routedGym][0]
+    && digest.recipients[0].name === reviewerFor[digest.routedGym][1];
+  if (production && ownManagerRoute && digest.groups.every(g => g.items.every(i => ['missing-instructor', 'attendance-conflict'].includes(i.kind)))
+    && !digest.readFailures.some(f => f.component === 'staff')) return renderManagerAttendance(digest);
   const routed = ['rev', 'richmond'].includes(digest.routedGym) && digest.groups.length === 1 && digest.groups[0].gym === digest.routedGym;
   const correctionCount = digest.groups.reduce((count, group) => count + group.items.filter(item => ['missing-instructor', 'attendance-conflict'].includes(item.kind)).length, 0);
   const clean = !digest.shouldCapture;
@@ -330,16 +403,23 @@ export function splitAttendanceDigest(digest, configuration) {
     if (!gym || !exact(group, ['gym', 'name', 'items']) || group.name !== gym.name || !Array.isArray(group.items)
       || group.items.length > 5000) throw new Error('Digest gym data is incomplete.');
     for (const item of group.items) {
-      if (!exact(item, ['id', 'kind', 'date', 'summary', 'url']) || !/^[0-9a-f]{24}$/.test(item.id) || ids.has(item.id)
+      if (!exact(item, ['id', 'kind', 'date', 'summary', 'url', ...(Object.hasOwn(item, 'attendance') ? ['attendance'] : [])]) || !/^[0-9a-f]{24}$/.test(item.id) || ids.has(item.id)
         || !kinds.has(item.kind) || !digestDate(item.date) || item.date > digest.date || !safeText(item.summary, 1000)
-        || item.url !== link(gym, item.date, staffKinds.has(item.kind))) throw new Error('Digest item crosses its gym boundary.');
+        || item.url !== link(gym, item.date, staffKinds.has(item.kind))
+        || Object.hasOwn(item, 'attendance') && (!['missing-instructor', 'attendance-conflict'].includes(item.kind)
+          || !exact(item.attendance, ['classLabel', 'instructor', 'problem']) || !safeText(item.attendance.classLabel, 240)
+          || /[\r\n]/.test(item.attendance.classLabel) || typeof item.attendance.instructor !== 'string'
+          || item.attendance.instructor.length > 1000 || /[\r\n\u0000-\u001f]/.test(item.attendance.instructor)
+          || !attendanceProblems.has(item.attendance.problem)
+          || (item.kind === 'missing-instructor') !== (item.attendance.problem === 'missing-sign-in'))) throw new Error('Digest item crosses its gym boundary.');
       ids.add(item.id);
     }
   }
   for (const failure of digest.readFailures) {
     const gym = configuration.gyms.find(value => value.id === failure?.gym);
-    if (!gym || !exact(failure, ['gym', 'component', 'code', 'message', 'url', ...(Object.hasOwn(failure, 'dates') ? ['dates'] : [])])
+    if (!gym || !exact(failure, ['gym', 'component', 'code', 'message', 'url', ...(Object.hasOwn(failure, 'dates') ? ['dates'] : []), ...(Object.hasOwn(failure, 'uploadReason') ? ['uploadReason'] : [])])
       || !['attendance', 'schedule', 'staff', 'uploads'].includes(failure.component) || !/^[A-Z0-9_]{1,80}$/.test(failure.code)
+      || Object.hasOwn(failure, 'uploadReason') && (failure.component !== 'uploads' || !['TABLET_REPORT_NOT_RECEIVED', 'TABLET_REPORT_STALE', 'TABLET_UPLOADS_PENDING', 'TABLET_MANIFEST_INCOMPLETE', 'SPREADSHEET_RECEIPTS_UNCONFIRMED', 'UPLOAD_EVIDENCE_READ_UNAVAILABLE'].includes(failure.uploadReason))
       || !safeText(failure.message, 1000) || failure.url !== link(gym, digest.date, failure.component === 'staff')
       || (Object.hasOwn(failure, 'dates') && (!Array.isArray(failure.dates) || !failure.dates.length
         || failure.dates.some(date => !digestDate(date) || date > digest.date)))) throw new Error('Digest failed-read coverage is incomplete.');

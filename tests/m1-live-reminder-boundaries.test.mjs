@@ -111,7 +111,7 @@ test('actual enabled production workflow reaches fake Google once, survives lost
     assert.deepEqual(original.to, [LIVE_RECIPIENTS[gym]]); assert.deepEqual(original.bcc, ['andrew@revolutionbjj.com']);
     assert.doesNotMatch(original.html + original.text, /Bcc:|TEST|deploy-preview|gib-richmond-test|correction screen/);
     assert.match(original.text, /older unresolved class/); assert.match(original.text, /reply.*corrections/i);
-    assert.match(original.text, /andrew@revolutionbjj.com/);
+    assert.match(original.text, /Andrew will update the record/);
     const reloaded = { ...h.dependencies }; h.settings.dropReply = false;
     await processAttendanceWorkflow(h.input(), reloaded); await h.read(); assert.equal(h.sends.length, 1);
     h.at(NOW + 86400000); await h.run(); assert.equal(h.sends.length, 2);
@@ -125,7 +125,7 @@ test('production clean decisions and incomplete checks remain durable and concur
     const clean = fixture(gym); await clean.run('clean'); await clean.run('clean'); assert.equal(clean.calls.length, 0);
     assert.equal((await clean.read()).messages[0].state, 'suppressed'); assert.equal((await workflowHealth(clean.scope, clean.dependencies)).state, 'clear');
     const incomplete = fixture(gym); await incomplete.run('incomplete');
-    assert.equal(incomplete.sends.length, 1); assert.match(incomplete.sends[0].text, /could not be checked/); assert.doesNotMatch(incomplete.sends[0].text, /No instructor sign-in/);
+    assert.equal(incomplete.sends.length, 1); assert.match(incomplete.sends[0].text, /attendance records couldn’t be read/); assert.doesNotMatch(incomplete.sends[0].text, /No instructor sign-in/);
     assert.ok((await workflowHealth(incomplete.scope, incomplete.dependencies)).codes.includes('CHECK_INCOMPLETE'));
     const concurrent = fixture(gym); const results = await Promise.allSettled([concurrent.run(), concurrent.run()]);
     assert.ok(results.some(result => result.status === 'fulfilled')); await concurrent.run(); assert.equal(concurrent.sends.length, 1);

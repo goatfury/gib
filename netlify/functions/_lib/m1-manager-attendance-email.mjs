@@ -13,7 +13,7 @@ export function managerAttendanceEmail(digest, configuration, uploadAssessment) 
   const route = splitAttendanceDigest(digest, configuration)[0], own = route.digest;
   if (configuration.target !== 'production' || configuration.gyms.length !== 1 || configuration.emailFirst !== true)
     throw new Error('Manager email requires the own-gym production email scope.');
-  // No Richmond policy change: retain the released v1 decision/render exactly.
+  // No Richmond policy change: retain the released v1 send decision; shared copy only.
   if (route.gym !== 'rev') return { schema:'m1-daily-email-check/v1', gym:route.gym, date:own.date,
     complete:true, shouldSend:own.shouldCapture, rendered:route.rendered,
     issueCount:own.itemCount, unconfirmedChecks:own.readFailures.length };
@@ -38,7 +38,7 @@ export function managerAttendanceEmail(digest, configuration, uploadAssessment) 
   const coverageConfirmed = own.readFailures.length === 0;
   let rendered = manager.shouldCapture ? renderAttendanceDigest(manager) : null;
   if (rendered && own.readFailures.length !== managerFailures.length) {
-    const note = 'This message lists the attendance problems and current unconfirmed checks. It is not a complete all-clear for every upload or check.';
+    const note = 'Some older checks are still uncertain. Andrew will look into those separately.';
     rendered = { ...rendered, text: rendered.text + '\n\n' + note,
       html: rendered.html.replace('</main>', '<p>' + note + '</p></main>') };
   }
