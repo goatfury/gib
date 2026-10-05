@@ -1,8 +1,9 @@
 // Synthetic rendering only. No endpoint, business storage, account or real email.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {fixture,renderFixture,DATE} from './fixtures/m1-email-repair-cases.mjs';
+import {fixture,renderFixture,DATE,scope as fixtureScope} from './fixtures/m1-email-repair-cases.mjs';
 import {buildAttendanceDigest,splitAttendanceDigest,renderAttendanceDigest} from '../netlify/functions/_lib/m1-attendance-digest.mjs';
+import {assessUploadEvidence} from '../netlify/functions/_lib/m1-upload-evidence.mjs';
 const plain=html=>html.replace(/<[^>]+>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'");
 for(const [gym,manager] of [['rev','Stu'],['richmond','Trey']]){
  test(gym+' missing-only asks a natural dated class question, with identical text/HTML intent',()=>{
@@ -83,4 +84,21 @@ test('plain manager copy requires an explicit single own-gym route; combined/leg
  const wrong=structuredClone(rev.route.digest);wrong.routedGym='richmond';assert.doesNotMatch(renderAttendanceDigest(wrong).text,/^Hi (?:Stu|Trey),/);
  const legacy=structuredClone(rev.digest);assert.doesNotMatch(renderAttendanceDigest(legacy).text,/^Hi Stu,/);
  assert.match(rev.route.rendered.text,/^Hi Stu,/);assert.match(rich.route.rendered.text,/^Hi Trey,/);
+});
+
+
+test('stale upload reason covers both old and wrong-day reports without inventing an age claim in text or HTML',async()=>{
+ const device='00000000-0000-4000-8000-000000000001',key='devices/'+device;
+ for(const gym of ['rev','richmond'])for(const condition of ['old','wrong-day']){
+  const input=fixture('clean',gym),now=input.now,manifestDate=condition==='old'?DATE:'2026-10-01';
+  const manifest={schema:'m1-upload-evidence/v1',deviceId:device,sequence:1,date:manifestDate,coverageFrom:condition==='old'?'2026-10-01':'2026-09-30',manifestComplete:true,rowIds:[],savedCount:0,pendingCount:0,unconfirmedCount:0};
+  const record={schema:'m1-upload-evidence/v1',manifest,receivedAt:condition==='old'?now-300001:now-1000};
+  const store={async list(){return {blobs:[{key}]};},async getWithMetadata(){return {data:record,etag:'synthetic-read-only'};}};
+  const assessment=await assessUploadEvidence(fixtureScope(gym),input.snapshots[0].attendance,DATE,now,{uploadStore:store});
+  assert.equal(assessment.reason,'TABLET_REPORT_STALE');assert.equal(assessment.ok,false);
+  input.snapshots[0].uploads=assessment;const digest=buildAttendanceDigest(input),rendered=splitAttendanceDigest(digest,input.configuration)[0].rendered;
+  assert.equal(digest.itemCount,0);assert.equal(digest.readFailures[0].uploadReason,'TABLET_REPORT_STALE');assert.equal(digest.shouldCapture,true);
+  assert.match(rendered.text,/The last tablet report can’t confirm today’s uploads/);assert.ok(plain(rendered.html).includes('The last tablet report can’t confirm today’s uploads'));
+  assert.doesNotMatch(rendered.text+plain(rendered.html),/too old|offline|Please reply|Who taught/);
+ }
 });

@@ -290,7 +290,7 @@ function managerCheckNote(failure) {
   const dates = failure.dates, range = dates?.length ? dates[0] + (dates.length > 1 ? ' through ' + dates.at(-1) : '') : '';
   if (failure.component === 'uploads') return {
     TABLET_REPORT_NOT_RECEIVED: 'We haven’t received an upload report from the tablet.',
-    TABLET_REPORT_STALE: 'The last tablet report is too old to confirm today’s uploads.',
+    TABLET_REPORT_STALE: 'The last tablet report can’t confirm today’s uploads.',
     TABLET_UPLOADS_PENDING: 'The tablet reports saved sign-ins that are still waiting to upload or be confirmed.',
     TABLET_MANIFEST_INCOMPLETE: 'The tablet couldn’t report all of its saved sign-ins.',
     SPREADSHEET_RECEIPTS_UNCONFIRMED: 'Some sign-ins in the tablet’s report couldn’t be matched to spreadsheet records.',
