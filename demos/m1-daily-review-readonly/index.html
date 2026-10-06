@@ -1,0 +1,860 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="icon" href="data:,">
+  <title>TEST ONLY — Admin Daily Sign-in Review</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #5e6a7d;
+      --line: #d7deea;
+      --panel: #ffffff;
+      --page: #f3f6fb;
+      --blue: #1759d2;
+      --blue-dark: #0f43a2;
+      --green: #17623c;
+      --green-bg: #edf9f2;
+      --amber: #744000;
+      --amber-bg: #fff4d9;
+      --red: #8d2424;
+      --red-bg: #fff0f0;
+      --shadow: 0 8px 28px rgba(29, 48, 82, .08);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--page); color: var(--ink); }
+    button, input { font: inherit; }
+    button { touch-action: manipulation; }
+    [hidden] { display: none !important; }
+
+    main {
+      width: min(100%, 74rem);
+      margin: 0 auto;
+      padding: max(14px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right))
+        max(40px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+    }
+
+    .test-banner {
+      margin-bottom: 18px;
+      padding: 15px 18px;
+      border: 3px solid #721818;
+      border-radius: 14px;
+      background: #a52a2a;
+      color: #fff;
+      text-align: center;
+      font-size: clamp(1.05rem, 4vw, 1.55rem);
+      font-weight: 900;
+      letter-spacing: .03em;
+    }
+
+    h1 { margin: 0; font-size: clamp(1.8rem, 6vw, 2.75rem); line-height: 1.08; }
+    h2 { margin: 0 0 7px; font-size: clamp(1.25rem, 4vw, 1.65rem); }
+    h3 { margin: 0 0 9px; font-size: 1.05rem; }
+    p { line-height: 1.5; }
+    .subtitle { margin: 8px 0 0; color: var(--muted); }
+    .muted { color: var(--muted); }
+    .small { font-size: .92rem; }
+
+    .card {
+      margin-top: 17px;
+      padding: clamp(16px, 4vw, 23px);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .notice, .error, .success {
+      margin: 14px 0;
+      padding: 13px 15px;
+      border-radius: 11px;
+      line-height: 1.45;
+    }
+    .notice { border: 1px solid #d3a244; background: var(--amber-bg); color: var(--amber); }
+    .error { border: 1px solid #bd5c5c; background: var(--red-bg); color: #701f1f; }
+    .success { border: 1px solid #63a17f; background: var(--green-bg); color: var(--green); }
+    .notice p, .error p, .success p { margin: 0; }
+
+    .status-bar,
+    .date-actions,
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    .status-bar { justify-content: space-between; }
+    .status-copy { display: grid; gap: 3px; }
+    .status-copy strong { font-size: 1rem; }
+    .status-copy span { color: var(--muted); font-size: .9rem; }
+    .date-actions { margin: 14px 0 10px; }
+    .button-row { margin-top: 16px; }
+
+    button {
+      min-height: 48px;
+      padding: 11px 16px;
+      border: 0;
+      border-radius: 10px;
+      font-weight: 850;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .primary { background: var(--blue); color: #fff; }
+    .primary:hover:not(:disabled) { background: var(--blue-dark); }
+    .secondary { background: #e7edf5; color: var(--ink); }
+    .quiet { border: 1px solid #b8c6dd; background: #fff; color: var(--blue-dark); }
+
+    label { display: block; margin: 14px 0 7px; font-weight: 800; }
+    input {
+      width: 100%;
+      min-height: 50px;
+      padding: 12px 13px;
+      border: 1px solid #8c99ae;
+      border-radius: 10px;
+      background: #fff;
+      color: var(--ink);
+    }
+    input:focus, button:focus-visible, summary:focus-visible {
+      outline: 3px solid rgba(23, 89, 210, .24);
+      outline-offset: 2px;
+    }
+
+    .date-picker-wrap {
+      display: grid;
+      grid-template-columns: minmax(11rem, 16rem);
+      align-items: end;
+    }
+    .date-picker-wrap label { margin-top: 0; }
+
+    .day-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px 16px;
+      margin: 20px 0 12px;
+    }
+    .day-heading h3 { margin: 0; font-size: clamp(1.18rem, 3vw, 1.45rem); }
+    .summary-count { color: var(--muted); font-weight: 700; }
+
+    .class-list, .record-list { display: grid; gap: 10px; }
+    .class-row {
+      display: grid;
+      grid-template-columns: minmax(15rem, 1.15fr) minmax(12rem, 1fr);
+      gap: 14px;
+      align-items: center;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcfe;
+    }
+    .class-row.missing {
+      border-color: #d6a04b;
+      background: #fffaf0;
+    }
+    .class-name { font-weight: 850; line-height: 1.35; }
+    .class-time {
+      display: block;
+      margin-bottom: 3px;
+      color: var(--blue-dark);
+      font-size: .86rem;
+      font-weight: 900;
+      letter-spacing: .02em;
+      text-transform: uppercase;
+    }
+    .missing-label { color: var(--amber); font-weight: 900; }
+    .coach-list { display: grid; gap: 6px; }
+    .coach-entry { font-weight: 850; overflow-wrap: anywhere; }
+
+    .unmatched {
+      margin-top: 22px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+    }
+    .record-item {
+      display: grid;
+      grid-template-columns: minmax(8rem, .65fr) minmax(0, 1.5fr) minmax(8rem, .7fr);
+      gap: 9px 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+    }
+    .record-item span { min-width: 0; overflow-wrap: anywhere; }
+    .record-class { font-weight: 800; }
+    .record-meta { color: var(--muted); }
+
+    details.card { padding: 0; }
+    details.card > summary {
+      padding: clamp(16px, 4vw, 23px);
+      cursor: pointer;
+      font-size: 1.15rem;
+      font-weight: 900;
+      list-style-position: inside;
+    }
+    details.card[open] > summary { border-bottom: 1px solid var(--line); }
+    .details-body { padding: 0 clamp(16px, 4vw, 23px) clamp(16px, 4vw, 23px); }
+
+    .grid-two {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(12rem, .55fr);
+      gap: 0 16px;
+    }
+    .search-results { display: grid; gap: 14px; margin-top: 16px; }
+    .result-block {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcfe;
+    }
+    .result-block h3 { margin-bottom: 4px; }
+    .summary-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: space-between;
+      margin-top: 18px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    @media (max-width: 700px) {
+      .class-row, .record-item { grid-template-columns: 1fr; gap: 7px; }
+      .grid-two { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 560px) {
+      .date-picker-wrap { grid-template-columns: 1fr; width: 100%; }
+      .date-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .date-actions button { width: 100%; }
+      .date-actions .date-picker-wrap { grid-column: 1 / -1; }
+      .status-bar { align-items: stretch; }
+      .status-bar button, .button-row button { width: 100%; }
+      .button-row { display: grid; grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <div class="test-banner">TEST ONLY — FAKE DATA — READ ONLY</div>
+
+  <header>
+    <h1>Admin — Daily Sign-in Review</h1>
+    <p class="subtitle">Open yesterday, scan the class list, and spot missing sign-ins.</p>
+    <div class="notice">
+      <p><strong>This page reads the copied TEST Sheet. Nothing can be added or changed here.</strong></p>
+    </div>
+  </header>
+
+  <section class="card" aria-labelledby="dataStatusTitle">
+    <div class="status-bar">
+      <div class="status-copy">
+        <strong id="dataStatusTitle">TEST Sheet status</strong>
+        <span id="dataStatus" role="status" aria-live="polite">Reading the TEST Sheet…</span>
+        <span id="rowCount">No TEST rows loaded yet</span>
+      </div>
+      <button id="refreshButton" class="quiet" type="button">Refresh</button>
+    </div>
+    <div id="refreshError" class="error" role="alert" hidden></div>
+  </section>
+
+  <section class="card" aria-labelledby="dailyReviewTitle">
+    <h2 id="dailyReviewTitle">Review a day</h2>
+    <p class="muted">Yesterday opens first. Choose any earlier date when a sign-in needs reviewing.</p>
+
+    <div class="date-actions" aria-label="Choose review date">
+      <button id="previousButton" class="secondary" type="button">Previous day</button>
+      <button id="yesterdayButton" class="secondary" type="button">Yesterday</button>
+      <button id="todayButton" class="secondary" type="button">Today</button>
+      <button id="nextButton" class="secondary" type="button">Next day</button>
+      <div class="date-picker-wrap">
+        <div>
+          <label for="datePicker">Choose another date</label>
+          <input id="datePicker" type="date">
+        </div>
+      </div>
+    </div>
+    <div id="dateError" class="error" role="alert" hidden></div>
+
+    <div class="notice">
+      <p>This shows the sign-ins that have reached the TEST Sheet. A blank does not confirm whether the class occurred.</p>
+    </div>
+
+    <div id="dailyLoadState" class="success" role="status">
+      <p>Reading the TEST Sheet before showing the schedule…</p>
+    </div>
+    <div id="dayHeading" class="day-heading"></div>
+    <div id="classList" class="class-list"></div>
+
+    <section id="unmatchedSection" class="unmatched" aria-labelledby="unmatchedTitle" hidden>
+      <h3 id="unmatchedTitle">Recorded sign-ins not matched to the stored schedule</h3>
+      <p class="muted small">These active TEST Sheet records are preserved separately because their class or site did not match a stored Rev class.</p>
+      <div id="unmatchedList" class="record-list"></div>
+    </section>
+  </section>
+
+  <details class="card">
+    <summary>Find an Instructor</summary>
+    <div class="details-body">
+      <p class="muted">Choose or type an instructor to review one date and their five most recent active sign-ins.</p>
+      <form id="instructorSearchForm" novalidate>
+        <div class="grid-two">
+          <div>
+            <label for="searchInstructor">Instructor</label>
+            <input id="searchInstructor" list="instructorSuggestions" autocomplete="off" required>
+          </div>
+          <div>
+            <label for="searchDate">Date</label>
+            <input id="searchDate" type="date" required>
+          </div>
+        </div>
+        <div class="button-row">
+          <button class="primary" type="submit">Find sign-ins</button>
+        </div>
+      </form>
+      <div id="instructorResults" class="search-results" aria-live="polite" hidden></div>
+    </div>
+  </details>
+
+  <datalist id="instructorSuggestions"></datalist>
+
+  <div class="summary-bar">
+    <span><strong>TEST ONLY:</strong> copied fake sign-in data.</span>
+    <span class="muted small">Read-only page. No live M1 changes.</span>
+  </div>
+</main>
+
+<script>
+(() => {
+  'use strict';
+
+  const SHEET_ID = '1tC5W8unEHTXKeaUQ3CCYv3ZDhpLulb8_ee-ANOpwDLI';
+  const SHEET_TAB = 'Signins';
+  const SHEET_QUERY_BASE = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`;
+  const TIME_ZONE = 'America/New_York';
+  const SITE = 'Rev';
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const REQUIRED_HEADINGS = ['Timestamp', 'Date', 'Class Label', 'Instructor', 'Site'];
+
+  // Exact Rev weekly schedule carried from the approved demo/current M1 code.
+  const REV_WEEKLY_SCHEDULE = {
+    Monday: [
+      '6:00 AM BJJ (Level 2)', '12:00 PM BJJ (Level 2)', '4:30 PM Yoga (Core)', '4:30 PM Kids’ BJJ',
+      '4:30 PM BJJ (Level 1)', '5:30 PM BJJ (Level 2)', '5:30 PM Lapel Guard Class (Level 4)',
+      '6:30 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)',
+      '6:30 PM Muay Thai (Fundamentals/Intermediate, and intros when scheduled)',
+      '6:30 PM Leglock Fundamentals (No-Gi, Level 3)', '7:00 PM BJJ (Level 2)',
+      '7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ'
+    ],
+    Tuesday: [
+      '6:00 AM BJJ (Level 4) / Gi BJJ Intro Class', '6:00 AM No-Gi BJJ (Level 2)', '7:15 AM Conditioning',
+      '12:00 PM BJJ (Level 2)', '4:30 PM Yoga (Flow)', '4:30 PM Kids’ BJJ', '5:30 PM BJJ (Level 2)',
+      '5:30 PM Gi BJJ Intro Class / Level 1', '5:30 PM BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)',
+      '6:30 PM Guard Passing Class (Level 3)', '6:30 PM Judo', '7:00 PM BJJ Competition Class (Level 2, gi)'
+    ],
+    Wednesday: [
+      '6:00 AM BJJ (Level 2)', '12:00 PM No-Gi BJJ (Level 2)', '4:30 PM Kids’ BJJ', '4:30 PM BJJ (Level 1)',
+      '5:30 PM BJJ (Level 2)', '5:30 PM BJJ (Level 4)',
+      '6:30 PM Muay Thai (Fundamentals/Intermediate, and intros when scheduled)',
+      '6:30 PM BJJ Drills (Level 3)', '7:00 PM BJJ (Level 4)', '7:00 PM No-Gi BJJ Intro Class/Level 1 BJJ'
+    ],
+    Thursday: [
+      '6:00 AM No-Gi BJJ (Level 4)', '6:00 AM No-Gi BJJ (Level 2) / Gi BJJ Intro Class', '7:15 AM Conditioning',
+      '12:00 PM BJJ (Level 2)', '4:30 PM Kids’ BJJ', '5:00 PM Get Warm', '5:30 PM BJJ (Level 2)',
+      '5:30 PM Gi BJJ Intro Class / Level 1', '5:30 PM No-Gi BJJ (Level 4)', '6:30 PM Muay Thai (Int/Adv)',
+      '6:30 PM Advanced Leglocks (No-Gi, Level 3)', '6:30 PM Judo', '7:00 PM BJJ Competition Class (Level 2, no-gi)'
+    ],
+    Friday: [
+      '6:00 AM Drill/Roll Class – BJJ', '12:00 PM Drill/Roll Class – BJJ', '4:30 PM Yoga (Flow)',
+      '5:00 PM Takedown Drills (minimum white belt 2 stripes or yellow belt in judo)', '5:30 PM BJJ (Level 2)',
+      '6:00 PM Muay Thai (Fundamentals/Intermediate)'
+    ],
+    Saturday: [
+      '10:00 AM Kids’ BJJ', '10:00 AM Wrestling', '11:00 AM BJJ (Level 2)', '12:00 PM Conditioning'
+    ],
+    Sunday: [
+      '12:00 PM BJJ Competition Class (Level 4, gi and no-gi)', '12:30 PM Get Warm', '1:00 PM BJJ Open Mat'
+    ]
+  };
+
+  const byId = id => document.getElementById(id);
+  const state = {
+    rows: [],
+    rowsReceived: 0,
+    selectedDate: '',
+    lastSuccessfulRead: null,
+    hasSuccessfulRead: false,
+    requestNumber: 0
+  };
+
+  function clean(value) {
+    return String(value == null ? '' : value).trim().replace(/\s+/g, ' ');
+  }
+
+  function normalizeLabel(value) {
+    return clean(value)
+      .toLocaleLowerCase('en-US')
+      .replace(/[’‘`´]/g, "'")
+      .replace(/[‐‑‒–—―−]/g, '-');
+  }
+
+  function normalizeSimple(value) {
+    return clean(value).toLocaleLowerCase('en-US');
+  }
+
+  function nyToday() {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: TIME_ZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date());
+    const values = {};
+    parts.forEach(part => {
+      if (part.type !== 'literal') values[part.type] = part.value;
+    });
+    return `${values.year}-${values.month}-${values.day}`;
+  }
+
+  function shiftDate(dateString, days) {
+    const [year, month, day] = String(dateString).split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+  }
+
+  function isValidNonFutureDate(value) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) && value <= nyToday();
+  }
+
+  function dayNameForDate(dateString) {
+    const [year, month, day] = dateString.split('-').map(Number);
+    return DAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+  }
+
+  function formatDate(dateString) {
+    const [year, month, day] = dateString.split('-').map(Number);
+    return new Intl.DateTimeFormat('en-US', {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      timeZone: 'UTC'
+    }).format(new Date(Date.UTC(year, month - 1, day)));
+  }
+
+  function displayClassName(label) {
+    return clean(label).replace(/^\d{1,2}:\d{2}\s*(AM|PM)\s*/i, '');
+  }
+
+  function leadingTime(label) {
+    const match = clean(label).match(/^(\d{1,2}):(\d{2})\s*(AM|PM)\b/i);
+    return match ? `${match[1]}:${match[2]} ${match[3].toUpperCase()}` : 'Time not listed';
+  }
+
+  function startMinutes(label) {
+    const match = clean(label).match(/^(\d{1,2}):(\d{2})\s*(AM|PM)\b/i);
+    if (!match) return Number.POSITIVE_INFINITY;
+    let hour = Number(match[1]) % 12;
+    if (match[3].toUpperCase() === 'PM') hour += 12;
+    return (hour * 60) + Number(match[2]);
+  }
+
+  function scheduleForDate(dateString) {
+    return (REV_WEEKLY_SCHEDULE[dayNameForDate(dateString)] || [])
+      .map((label, index) => ({ label, index, minutes: startMinutes(label) }))
+      .sort((a, b) => a.minutes - b.minutes || a.index - b.index)
+      .map(item => item.label);
+  }
+
+  function googleDateString(value) {
+    const text = clean(value);
+    const match = text.match(/^Date\((\d{4}),(\d{1,2}),(\d{1,2})(?:,(\d{1,2}),(\d{1,2}),(\d{1,2}))?\)$/);
+    if (!match) return text;
+    const year = match[1];
+    const month = String(Number(match[2]) + 1).padStart(2, '0');
+    const day = String(match[3]).padStart(2, '0');
+    if (match[4] == null) return `${year}-${month}-${day}`;
+    return `${year}-${month}-${day} ${String(match[4]).padStart(2, '0')}:${String(match[5]).padStart(2, '0')}:${String(match[6]).padStart(2, '0')}`;
+  }
+
+  function cellText(cell) {
+    if (!cell) return '';
+    if (cell.f != null) return clean(cell.f);
+    return googleDateString(cell.v);
+  }
+
+  function parseSheetPayload(payload) {
+    if (!payload || payload.status !== 'ok' || !payload.table) {
+      throw new Error('TEST Sheet response was not usable.');
+    }
+
+    const headings = (payload.table.cols || []).map(column => clean(column && column.label));
+    const missing = REQUIRED_HEADINGS.filter(heading => !headings.includes(heading));
+    if (missing.length) {
+      throw new Error(`TEST Sheet error: missing required heading${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}.`);
+    }
+
+    const index = {};
+    headings.forEach((heading, position) => {
+      if (heading && index[heading] == null) index[heading] = position;
+    });
+
+    const value = (cells, heading) => index[heading] == null ? '' : cellText(cells[index[heading]]);
+    const sourceRows = payload.table.rows || [];
+    const rows = sourceRows.map((row, rowIndex) => {
+      const cells = row && Array.isArray(row.c) ? row.c : [];
+      return {
+        sourceRow: rowIndex + 2,
+        timestamp: value(cells, 'Timestamp'),
+        date: value(cells, 'Date').slice(0, 10),
+        classLabel: value(cells, 'Class Label'),
+        duration: value(cells, 'Duration (hr)'),
+        instructor: value(cells, 'Instructor'),
+        site: value(cells, 'Site'),
+        notes: value(cells, 'Notes'),
+        status: index.Status == null ? '' : value(cells, 'Status'),
+        rowId: value(cells, 'RowID'),
+        device: value(cells, 'Device'),
+        build: value(cells, 'Build')
+      };
+    });
+
+    return { rows, rowsReceived: sourceRows.length, headings };
+  }
+
+  function obviousTestValue(value) {
+    const text = clean(value);
+    return !text || /\b(test|fake|demo|qa)\b|do not pay/i.test(text);
+  }
+
+  function privacyIssue(rows) {
+    if (rows.some(row => !obviousTestValue(row.instructor))) return 'instructor names';
+    if (rows.some(row => !obviousTestValue(row.notes))) return 'notes';
+    return '';
+  }
+
+  function isActive(row) {
+    const status = clean(row.status).toUpperCase();
+    return status !== 'VOID' && status !== 'VOIDED';
+  }
+
+  function timestampSortKey(row) {
+    return `${clean(row.date)}T${clean(row.timestamp).replace(' ', 'T')}`;
+  }
+
+  function element(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = String(text);
+    return node;
+  }
+
+  function setControlAvailability(enabled) {
+    ['previousButton', 'yesterdayButton', 'todayButton', 'datePicker'].forEach(id => {
+      byId(id).disabled = !enabled;
+    });
+    byId('nextButton').disabled = !enabled || state.selectedDate >= nyToday();
+    byId('searchInstructor').disabled = !enabled;
+    byId('searchDate').disabled = !enabled;
+    byId('instructorSearchForm').querySelector('button').disabled = !enabled;
+  }
+
+  function updateDataStatus() {
+    if (!state.hasSuccessfulRead) {
+      byId('dataStatus').textContent = 'No successful TEST Sheet read yet';
+      byId('rowCount').textContent = 'No TEST rows loaded yet';
+      return;
+    }
+    byId('dataStatus').textContent = `Last read ${new Intl.DateTimeFormat('en-US', {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    }).format(state.lastSuccessfulRead)}`;
+    byId('rowCount').textContent = `${state.rowsReceived} TEST row${state.rowsReceived === 1 ? '' : 's'} received`;
+  }
+
+  function showRefreshFailure(message) {
+    const box = byId('refreshError');
+    box.replaceChildren(element('p', '', state.hasSuccessfulRead
+      ? `Refresh failed. The last successful display is still visible. ${message}`
+      : `${message} No schedule is shown, so blanks cannot be mistaken for missing sign-ins.`));
+    box.hidden = false;
+    updateDataStatus();
+    if (!state.hasSuccessfulRead) {
+      const loadState = byId('dailyLoadState');
+      loadState.className = 'error';
+      loadState.replaceChildren(element('p', '', 'TEST Sheet data did not load. The daily review is unavailable.'));
+      setControlAvailability(false);
+    }
+  }
+
+  function populateInstructorSuggestions() {
+    const list = byId('instructorSuggestions');
+    list.replaceChildren();
+    const names = [...new Set(state.rows.filter(isActive).map(row => clean(row.instructor)).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b));
+    names.forEach(name => {
+      const option = document.createElement('option');
+      option.value = name;
+      list.append(option);
+    });
+  }
+
+  function classMatches(row, date, classLabel) {
+    return isActive(row)
+      && row.date === date
+      && normalizeSimple(row.site) === normalizeSimple(SITE)
+      && normalizeLabel(row.classLabel) === normalizeLabel(classLabel);
+  }
+
+  function appendRecordItem(parent, row) {
+    const item = element('div', 'record-item');
+    item.append(
+      element('span', 'record-meta', row.timestamp || row.date || 'Time not recorded'),
+      element('span', 'record-class', row.classLabel || 'Class label not recorded'),
+      element('span', '', row.instructor || 'Instructor not recorded')
+    );
+    const meta = element('span', 'record-meta', `Site: ${row.site || 'not recorded'}`);
+    meta.style.gridColumn = '1 / -1';
+    item.append(meta);
+    parent.append(item);
+  }
+
+  function renderDailyReview() {
+    if (!state.hasSuccessfulRead) return;
+
+    const date = state.selectedDate;
+    const classes = scheduleForDate(date);
+    const classList = byId('classList');
+    const heading = byId('dayHeading');
+    const activeForDate = state.rows.filter(row => isActive(row) && row.date === date);
+    const matchedRows = new Set();
+
+    classList.replaceChildren();
+    heading.replaceChildren();
+    byId('datePicker').value = date;
+    byId('datePicker').max = nyToday();
+    byId('searchDate').max = nyToday();
+    byId('nextButton').disabled = date >= nyToday();
+
+    let filledCount = 0;
+    classes.forEach(classLabel => {
+      const rows = activeForDate
+        .filter(row => classMatches(row, date, classLabel))
+        .sort((a, b) => timestampSortKey(a).localeCompare(timestampSortKey(b)));
+      rows.forEach(row => matchedRows.add(row));
+      if (rows.length) filledCount += 1;
+
+      const item = element('article', `class-row${rows.length ? '' : ' missing'}`);
+      const classInfo = element('div');
+      classInfo.append(
+        element('span', 'class-time', leadingTime(classLabel)),
+        element('div', 'class-name', displayClassName(classLabel))
+      );
+
+      const status = element('div');
+      if (!rows.length) {
+        status.append(element('span', 'missing-label', 'No sign-in recorded'));
+      } else {
+        const coaches = element('div', 'coach-list');
+        rows.forEach(row => coaches.append(element('div', 'coach-entry', row.instructor || 'Instructor not recorded')));
+        status.append(coaches);
+      }
+      item.append(classInfo, status);
+      classList.append(item);
+    });
+
+    heading.append(
+      element('h3', '', formatDate(date)),
+      element('span', 'summary-count', `${filledCount} of ${classes.length} scheduled classes have recorded sign-ins`)
+    );
+
+    if (!classes.length) {
+      const empty = element('div', 'notice');
+      empty.append(element('p', '', 'No scheduled classes are stored for this day of the week.'));
+      classList.append(empty);
+    }
+
+    const unmatched = activeForDate.filter(row => !matchedRows.has(row))
+      .sort((a, b) => timestampSortKey(a).localeCompare(timestampSortKey(b)));
+    const unmatchedSection = byId('unmatchedSection');
+    const unmatchedList = byId('unmatchedList');
+    unmatchedList.replaceChildren();
+    unmatched.forEach(row => appendRecordItem(unmatchedList, row));
+    unmatchedSection.hidden = unmatched.length === 0;
+
+    const loadState = byId('dailyLoadState');
+    loadState.hidden = true;
+  }
+
+  function setSelectedDate(dateString) {
+    const box = byId('dateError');
+    if (!isValidNonFutureDate(dateString)) {
+      box.replaceChildren(element('p', '', 'Choose today or an earlier date. Future dates are not available.'));
+      box.hidden = false;
+      byId('datePicker').value = state.selectedDate;
+      return false;
+    }
+    box.hidden = true;
+    state.selectedDate = dateString;
+    renderDailyReview();
+    return true;
+  }
+
+  function renderSearchResults(instructor, date) {
+    const results = byId('instructorResults');
+    results.replaceChildren();
+    results.hidden = false;
+
+    const matchingInstructor = state.rows
+      .filter(row => isActive(row) && normalizeSimple(row.instructor) === normalizeSimple(instructor))
+      .sort((a, b) => timestampSortKey(b).localeCompare(timestampSortKey(a)));
+    const onDate = matchingInstructor.filter(row => row.date === date);
+    const recent = matchingInstructor.slice(0, 5);
+
+    const dayBlock = element('section', 'result-block');
+    dayBlock.append(element('h3', '', `Records on ${formatDate(date)}`));
+    if (!onDate.length) {
+      dayBlock.append(element('p', 'muted', 'No active sign-ins recorded for this instructor on that date.'));
+    } else {
+      const list = element('div', 'record-list');
+      onDate.forEach(row => appendRecordItem(list, row));
+      dayBlock.append(list);
+    }
+
+    const recentBlock = element('section', 'result-block');
+    recentBlock.append(element('h3', '', 'Five most recent active sign-ins'));
+    if (!recent.length) {
+      recentBlock.append(element('p', 'muted', 'No active sign-ins found for that instructor.'));
+    } else {
+      const list = element('div', 'record-list');
+      recent.forEach(row => appendRecordItem(list, row));
+      recentBlock.append(list);
+    }
+    results.append(dayBlock, recentBlock);
+  }
+
+  function acceptPayload(payload) {
+    const parsed = parseSheetPayload(payload);
+    const sensitiveType = privacyIssue(parsed.rows);
+    if (sensitiveType) {
+      throw new Error(`Privacy stop: ${sensitiveType} were not all clearly marked as TEST data. No Sheet rows were displayed.`);
+    }
+
+    state.rows = parsed.rows;
+    state.rowsReceived = parsed.rowsReceived;
+    state.lastSuccessfulRead = new Date();
+    state.hasSuccessfulRead = true;
+    byId('refreshError').hidden = true;
+    updateDataStatus();
+    setControlAvailability(true);
+    populateInstructorSuggestions();
+    renderDailyReview();
+  }
+
+  function loadSheet() {
+    state.requestNumber += 1;
+    const requestId = state.requestNumber;
+    const callbackName = `__gibM1ReadOnlyResponse${requestId}`;
+    const script = document.createElement('script');
+    let settled = false;
+    let timer = null;
+
+    byId('refreshButton').disabled = true;
+    byId('dataStatus').textContent = state.hasSuccessfulRead
+      ? 'Refreshing the TEST Sheet…'
+      : 'Reading the TEST Sheet…';
+    byId('refreshError').hidden = true;
+
+    const finish = () => {
+      window.clearTimeout(timer);
+      delete window[callbackName];
+      script.remove();
+      byId('refreshButton').disabled = false;
+    };
+
+    const fail = message => {
+      if (settled) return;
+      settled = true;
+      finish();
+      showRefreshFailure(message);
+    };
+
+    window[callbackName] = payload => {
+      if (settled) return;
+      settled = true;
+      try {
+        acceptPayload(payload);
+        finish();
+      } catch (error) {
+        finish();
+        showRefreshFailure(error && error.message ? error.message : 'The TEST Sheet could not be read.');
+      }
+    };
+
+    script.async = true;
+    script.src = `${SHEET_QUERY_BASE}?sheet=${encodeURIComponent(SHEET_TAB)}&tqx=${encodeURIComponent(`out:json;responseHandler:${callbackName}`)}&_=${Date.now()}`;
+    script.onerror = () => fail('The TEST Sheet request failed.');
+    timer = window.setTimeout(() => fail('The TEST Sheet request timed out.'), 12000);
+    document.head.append(script);
+  }
+
+  byId('previousButton').addEventListener('click', () => setSelectedDate(shiftDate(state.selectedDate, -1)));
+  byId('yesterdayButton').addEventListener('click', () => setSelectedDate(shiftDate(nyToday(), -1)));
+  byId('todayButton').addEventListener('click', () => setSelectedDate(nyToday()));
+  byId('nextButton').addEventListener('click', () => setSelectedDate(shiftDate(state.selectedDate, 1)));
+  byId('datePicker').addEventListener('change', event => setSelectedDate(event.target.value));
+  byId('refreshButton').addEventListener('click', loadSheet);
+
+  byId('instructorSearchForm').addEventListener('submit', event => {
+    event.preventDefault();
+    const instructor = clean(byId('searchInstructor').value);
+    const date = byId('searchDate').value;
+    const results = byId('instructorResults');
+    if (!instructor) {
+      results.hidden = false;
+      results.replaceChildren(element('div', 'error', 'Choose or type an instructor.'));
+      return;
+    }
+    if (!isValidNonFutureDate(date)) {
+      results.hidden = false;
+      results.replaceChildren(element('div', 'error', 'Choose today or an earlier date.'));
+      return;
+    }
+    renderSearchResults(instructor, date);
+  });
+
+  state.selectedDate = shiftDate(nyToday(), -1);
+  byId('datePicker').value = state.selectedDate;
+  byId('datePicker').max = nyToday();
+  byId('searchDate').value = state.selectedDate;
+  byId('searchDate').max = nyToday();
+  setControlAvailability(false);
+
+  window.__M1_READ_ONLY_TEST__ = Object.freeze({
+    normalizeLabel,
+    startMinutes,
+    scheduleForDate,
+    parseSheetPayload,
+    isActive,
+    nyToday,
+    shiftDate,
+    state,
+    acceptPayload,
+    setSelectedDate,
+    renderSearchResults,
+    simulateRefreshFailure: () => showRefreshFailure('Simulated refresh failure.')
+  });
+
+  loadSheet();
+})();
+</script>
+</body>
+</html>
