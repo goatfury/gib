@@ -303,8 +303,64 @@ function managerCheckNote(failure) {
   // a class identity or extracting one from old prose.
   return failure.message;
 }
+function richmondAttendanceDate(date, jobDate) {
+  const value = new Date(date + 'T12:00:00Z');
+  const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  return weekdays[value.getUTCDay()] + ', ' + months[value.getUTCMonth()] + ' ' + value.getUTCDate()
+    + (date.slice(0, 4) === jobDate.slice(0, 4) ? '' : ', ' + value.getUTCFullYear());
+}
+function richmondAttendanceItem(item) {
+  const detail = item.attendance;
+  if (!detail) return item.summary;
+  if (item.kind === 'missing-instructor') return detail.classLabel;
+  const notes = {
+    'review-flag': 'marked for review',
+    'duplicate-id': 'shares a record number with another sign-in',
+    duration: 'recorded length is zero or less',
+    'schedule-cancellation': 'the schedule says it was canceled',
+    'not-held': 'marked as not held'
+  };
+  return detail.classLabel + ' — ' + (detail.instructor ? detail.instructor + '; ' : '') + notes[detail.problem];
+}
+function renderRichmondManagerAttendance(digest) {
+  const items = digest.groups.flatMap(group => group.items);
+  const missing = items.filter(item => item.kind === 'missing-instructor');
+  const currentFailures = digest.readFailures.filter(failure => failure.code !== 'HISTORICAL_SCHEDULE_UNAVAILABLE');
+  const uploads = currentFailures.some(failure => failure.component === 'uploads');
+  const otherFailures = currentFailures.some(failure => failure.component !== 'uploads');
+  const subject = items.length ? 'Sign-in questions for Richmond BJJ on ' + richmondAttendanceDate(digest.date, digest.date)
+    : !digest.shouldCapture ? 'Today’s sign-in check is complete'
+    : currentFailures.length ? 'Today’s sign-in check couldn’t finish' : 'Earlier sign-in checks are still incomplete';
+  const sections = ['Hi Trey,'], blocks = ['<p>Hi Trey,</p>'];
+  const paragraph = text => { sections.push(text); blocks.push('<p>' + escape(text) + '</p>'); };
+  if (uploads) paragraph(otherFailures
+    ? 'We couldn’t finish the sign-in check or confirm that all saved sign-ins reached the spreadsheet.'
+    : 'We couldn’t confirm that all saved sign-ins reached the spreadsheet.');
+  else if (otherFailures) paragraph('We couldn’t finish checking the sign-in records against the class schedule.');
+  else if (!items.length && digest.readFailures.length) paragraph('Some earlier sign-in checks are still incomplete.');
+  for (const failure of currentFailures.filter(failure => ['ATTENDANCE_RECORD_UNCONFIRMED', 'CLASS_STATUS_UNCONFIRMED'].includes(failure.code))) paragraph(failure.message);
+  if (items.length) {
+    paragraph(missing.length === items.length
+      ? items.length === 1 ? 'Who taught this class? If it was canceled, just say so.' : 'Who taught these classes? If any were canceled, just say so.'
+      : missing.length ? 'Who taught the classes without a sign-in, and what needs changing in the flagged sign-ins? If any were canceled, just say so.'
+      : 'Could you check these sign-ins and reply with what needs changing?');
+    const dates = [...new Set(items.map(item => item.date))].sort();
+    for (const date of dates) {
+      const heading = richmondAttendanceDate(date, digest.date);
+      const lines = items.filter(item => item.date === date).map(richmondAttendanceItem);
+      sections.push(heading + '\n' + lines.map(line => '• ' + line).join('\n'));
+      blocks.push('<p><strong>' + escape(heading) + '</strong></p><ul>' + lines.map(line => '<li>' + escape(line) + '</li>').join('') + '</ul>');
+    }
+    paragraph('Reply here and Andrew will update the records.');
+  } else if (!digest.readFailures.length) paragraph('Today’s check found no sign-in questions. No reply is needed.');
+  return { subject, text: sections.join('\n\n'),
+    html: '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>' + escape(subject)
+      + '</title></head><body style="font:16px/1.5 Arial,sans-serif;color:#17212c"><main>' + blocks.join('') + '</main></body></html>' };
+}
 function renderManagerAttendance(digest) {
   const group = digest.groups[0], manager = reviewerFor[group?.gym]?.[1];
+  if (group?.gym === 'richmond') return renderRichmondManagerAttendance(digest);
   const items = digest.groups.flatMap(g => g.items);
   const uploads = digest.readFailures.some(f => f.component === 'uploads');
   const onlyHistory = digest.readFailures.length > 0 && digest.readFailures.every(f => f.code === 'HISTORICAL_SCHEDULE_UNAVAILABLE');

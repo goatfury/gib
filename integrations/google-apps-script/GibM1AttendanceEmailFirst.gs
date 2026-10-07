@@ -97,7 +97,16 @@ function gibM1EmailFirstCopy_(scope, subject, paragraphs) {
     html: '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>' + escape(subject) + '</title></head><body><main>'
       + lines.map(function(line) { return '<p>' + escape(line) + '</p>'; }).join('') + '</main></body></html>' };
 }
+function gibM1EmailFirstRichmondDate_(date) {
+  var value = new Date(date + 'T12:00:00Z');
+  var weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  var months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  return weekdays[value.getUTCDay()] + ', ' + months[value.getUTCMonth()] + ' ' + value.getUTCDate();
+}
 function gibM1EmailFirstFallback_(scope, date) {
+  if (scope.gym === 'richmond') return gibM1EmailFirstCopy_(scope, 'Today’s sign-in check couldn’t finish', [
+    'We couldn’t finish the sign-in check for ' + gibM1EmailFirstRichmondDate_(date) + ' or confirm that all saved sign-ins reached the spreadsheet.'
+  ]);
   return gibM1EmailFirstCopy_(scope, 'Today’s sign-in check couldn’t finish', [
     'We couldn’t confirm that all the sign-ins reached the spreadsheet. We haven’t identified a specific missing sign-in, so no correction reply is needed.',
     'The scheduled check for ' + date + ' couldn’t finish.',
@@ -169,9 +178,20 @@ function gibM1AttendanceEmailFirstTick_() {
   if (report && !report.shouldSend && missed.length) {
     var cleanNote = 'Today’s sign-in and upload check finished, and no problems were found. Earlier checks are still uncertain. We haven’t identified a specific missing sign-in, so no correction reply is needed.';
     rendered = gibM1EmailFirstCopy_(scope, 'Earlier sign-in checks are still uncertain', [cleanNote, 'Andrew will look into the earlier checks.']);
+    if (scope.gym === 'richmond') rendered = gibM1EmailFirstCopy_(scope, 'Earlier sign-in checks are still incomplete', [
+      'Today’s sign-in check found no questions; some earlier scheduled checks are still incomplete.'
+    ]);
   }
   if (report && report.unconfirmedChecks === 0) properties.setProperty('GIB_M1_ATTENDANCE_EMAIL_FIRST_COVERAGE_THROUGH', date);
-  if (missed.length) {
+  if (missed.length && scope.gym === 'richmond' && (!report || report.shouldSend)) {
+    var missedNote = 'Some earlier scheduled checks are still incomplete.';
+    var greeting = 'Hi Trey,\n\n', greetingHtml = '<p>Hi Trey,</p>';
+    rendered = { subject: rendered.subject,
+      text: rendered.text.startsWith(greeting) ? rendered.text.replace(greeting, greeting + missedNote + '\n\n') : missedNote + '\n\n' + rendered.text,
+      html: rendered.html.includes(greetingHtml) ? rendered.html.replace(greetingHtml, greetingHtml + '<p>' + missedNote + '</p>')
+        : rendered.html.replace(/<body[^>]*>/, '$&<p>' + missedNote + '</p>') };
+  }
+  if (missed.length && scope.gym !== 'richmond') {
     var note = 'Earlier checks are still uncertain for ' + missed.length + ' day' + (missed.length === 1 ? '' : 's') + ': ' + missed[0] + (missed.length > 1 ? ' through ' + missed[missed.length - 1] : '') + '. Today’s email doesn’t resolve those older checks.';
     rendered = { subject: rendered.subject, text: rendered.text + '\n\n' + note, html: rendered.html.includes('</main>') ? rendered.html.replace('</main>', '<p>' + note + '</p></main>') : rendered.html.replace('</body>', '<p>' + note + '</p></body>') };
   }
