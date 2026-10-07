@@ -29,12 +29,12 @@ test('Richmond asks once, groups five exact class names and times by readable da
   assert.ok(rendered.text.startsWith('Hi Trey,\n\n'));
   assert.equal((rendered.text.match(/Who taught/g)||[]).length,1);
   assert.match(rendered.text,/Who taught these classes\? If any were canceled, just say so\./);
-  const warning='We couldn’t confirm that all saved sign-ins reached the spreadsheet.';
-  assert.equal((rendered.text.match(/saved sign-ins reached the spreadsheet/g)||[]).length,1);
+  const warning='The check for Tuesday, October 6 couldn’t confirm sign-in uploads.';
+  assert.equal((rendered.text.match(/couldn’t confirm sign-in uploads/g)||[]).length,1);
   assert.ok(rendered.text.indexOf(warning)<rendered.text.indexOf('Who taught'));
   assert.ok(rendered.html.includes(warning));assert.ok(rendered.html.indexOf(warning)<rendered.html.indexOf('Who taught'));
   const headings=['Friday, October 2','Sunday, October 4','Monday, October 5','Tuesday, October 6'];
-  let previous=0;for(const heading of headings){const index=rendered.text.indexOf(heading);assert.ok(index>previous);previous=index;assert.ok(rendered.html.includes('<strong>'+heading+'</strong>'));}
+  let previous=0;for(const heading of headings){const index=rendered.text.indexOf('\n\n'+heading+'\n');assert.ok(index>previous);previous=index;assert.ok(rendered.html.includes('<strong>'+heading+'</strong>'));}
   for(const [date,label] of classes){assert.equal((rendered.text.match(new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g'))||[]).length,date==='2026-10-02'&&label===schedule.days.Friday[3]||date==='2026-10-05'?2:1);assert.ok(rendered.text.includes('• '+label));assert.ok(rendered.html.includes('<li>'+label+'</li>'));}
   assert.equal((rendered.text.match(/^• /gm)||[]).length,5);assert.equal((rendered.html.match(/<ul>/g)||[]).length,4);
   assert.ok(rendered.text.endsWith('Reply here and Andrew will update the records.'));
@@ -54,7 +54,7 @@ test('Richmond retains every current warning and send decision while dropping re
 test('Richmond historical-only uncertainty never claims a completed all-clear or requests corrections',()=>{
   const {digest,route}=renderFixture('stale','richmond');
   assert.equal(digest.readFailures[0].code,'HISTORICAL_SCHEDULE_UNAVAILABLE');
-  assert.equal(route.rendered.text,'Hi Trey,\n\nSome earlier sign-in checks are still incomplete.');
+  assert.equal(route.rendered.text,'Hi Trey,\n\nSome earlier sign-in checks are still incomplete as of Friday, October 2.');
   assert.doesNotMatch(route.rendered.text,/Who taught|Reply here|complete check|no problems were found|reached the spreadsheet/);
 });
 

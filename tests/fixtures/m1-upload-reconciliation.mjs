@@ -118,7 +118,7 @@ export async function assertReconciledUpload({context, request, post, gym, row, 
     const digest=buildAttendanceDigest({...input,snapshots:[{gym,attendance:{ok:true,ledger},uploads}]});
     assert.equal(digest.itemCount,0);assert.equal(digest.shouldCapture,true);
     const rendered=splitAttendanceDigest(digest,configuration)[0].rendered;
-    assert.match(rendered.text,/No specific attendance correction is listed/);
+    assert.match(rendered.text,gym==='richmond'?/The check for .* couldn.t confirm sign-in uploads\./:/haven.t identified a specific missing sign-in, so no correction reply is needed/);
     assert.doesNotMatch(rendered.text,/Please reply[^\n]*correction/);
   }
 

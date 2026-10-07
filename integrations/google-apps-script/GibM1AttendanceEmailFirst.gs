@@ -105,7 +105,7 @@ function gibM1EmailFirstRichmondDate_(date) {
 }
 function gibM1EmailFirstFallback_(scope, date) {
   if (scope.gym === 'richmond') return gibM1EmailFirstCopy_(scope, 'Today’s sign-in check couldn’t finish', [
-    'We couldn’t finish the sign-in check for ' + gibM1EmailFirstRichmondDate_(date) + ' or confirm that all saved sign-ins reached the spreadsheet.'
+    'The sign-in check for ' + gibM1EmailFirstRichmondDate_(date) + ' couldn’t finish or confirm uploads.'
   ]);
   return gibM1EmailFirstCopy_(scope, 'Today’s sign-in check couldn’t finish', [
     'We couldn’t confirm that all the sign-ins reached the spreadsheet. We haven’t identified a specific missing sign-in, so no correction reply is needed.',
@@ -179,12 +179,12 @@ function gibM1AttendanceEmailFirstTick_() {
     var cleanNote = 'Today’s sign-in and upload check finished, and no problems were found. Earlier checks are still uncertain. We haven’t identified a specific missing sign-in, so no correction reply is needed.';
     rendered = gibM1EmailFirstCopy_(scope, 'Earlier sign-in checks are still uncertain', [cleanNote, 'Andrew will look into the earlier checks.']);
     if (scope.gym === 'richmond') rendered = gibM1EmailFirstCopy_(scope, 'Earlier sign-in checks are still incomplete', [
-      'Today’s sign-in check found no questions; some earlier scheduled checks are still incomplete.'
+      'The sign-in check for ' + gibM1EmailFirstRichmondDate_(date) + ' found no questions; some earlier scheduled checks are still incomplete.'
     ]);
   }
   if (report && report.unconfirmedChecks === 0) properties.setProperty('GIB_M1_ATTENDANCE_EMAIL_FIRST_COVERAGE_THROUGH', date);
   if (missed.length && scope.gym === 'richmond' && (!report || report.shouldSend)) {
-    var missedNote = 'Some earlier scheduled checks are still incomplete.';
+    var missedNote = 'Some earlier scheduled checks are still incomplete as of ' + gibM1EmailFirstRichmondDate_(date) + '.';
     var greeting = 'Hi Trey,\n\n', greetingHtml = '<p>Hi Trey,</p>';
     rendered = { subject: rendered.subject,
       text: rendered.text.startsWith(greeting) ? rendered.text.replace(greeting, greeting + missedNote + '\n\n') : missedNote + '\n\n' + rendered.text,

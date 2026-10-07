@@ -6,34 +6,59 @@ import {assessUploadEvidence,recordUploadEvidence} from '../netlify/functions/_l
 import {uploadManifest,startUploadEvidence} from '../m1/upload-evidence.mjs';
 import {DATE,NOW,CASES,fixture,renderFixture,scope} from './fixtures/m1-email-repair-cases.mjs';
 const owner=JSON.parse(readFileSync(new URL('./fixtures/m1-october2-owner-email.json',import.meta.url),'utf8'));
-const asks=rendered=>/Please reply[^\n<]*correction/i.test(rendered.text+rendered.html);
+const asks=rendered=>/Please reply[^\n<]*correction|Reply here and Andrew will update the records\./i.test(rendered.text+rendered.html);
 for(const gym of ['rev','richmond'])for(const kind of CASES)test(gym+' normal rendering: '+kind,()=>{
  const input=fixture(kind,gym),before=structuredClone(input),digest=buildAttendanceDigest(input),route=splitAttendanceDigest(digest,input.configuration)[0];
  assert.deepEqual(input,before,'rendering must not edit attendance, history or schedules');
  assert.deepEqual(route.to,[gym==='rev'?'info@revolutionbjj.com':'info@richmondbjj.com']);assert.deepEqual(route.cc,[]);assert.deepEqual(route.bcc,['andrew@revolutionbjj.com']);
  if(kind==='clean'){assert.equal(route.routeStatus,'suppressed');assert.equal(route.rendered,null);assert.equal(digest.shouldCapture,false);return;}
- const rendered=route.rendered;assert.ok(rendered?.subject);assert.match(rendered.html,/<h1[^>]*>[^<]+<\/h1>/);assert.doesNotMatch(rendered.text+rendered.html,/Open authenticated correction screen|\/m1\/admin\//);
+ const rendered=route.rendered;assert.ok(rendered?.subject);assert.match(rendered.html,new RegExp('<p>Hi '+(gym==='rev'?'Stu':'Trey')+',</p>'));assert.doesNotMatch(rendered.text+rendered.html,/Open authenticated correction screen|\/m1\/admin\//);
  assert.equal(asks(rendered),['missing','mixed'].includes(kind));
- if(asks(rendered)) {assert.match(rendered.text,/corrections only for the specific attendance problems listed below/);assert.match(rendered.text,/2026-10-02 — 6:00 PM Isolated QA class — instructor: not identified; no valid instructor sign-in recorded in the spreadsheet/);assert.match(rendered.text,/reply goes to Andrew/);assert.match(rendered.text,/original records and correction history/);}
- else{assert.match(rendered.subject,/attendance check unconfirmed/);assert.match(rendered.html,/>Attendance check could not be confirmed<\/h1>/);assert.match(rendered.text,/No correction reply is requested/);assert.doesNotMatch(rendered.html,/Attendance that needs attention<\/h1>/);assert.equal(digest.itemCount,0);}
- if(['upload','mixed'].includes(kind))assert.match(rendered.text,/Could not confirm that every saved instructor sign-in reached the spreadsheet/);
- if(kind==='upload')assert.match(rendered.text,/No tablet upload report has been received/);
- if(kind==='failed')assert.match(rendered.text,/Instructor attendance could not be checked. This is not a missing-instructor count/);
- if(kind==='stale'){assert.match(rendered.text,/24 dates \(2026-09-07 through 2026-09-30\), before daily monitoring began/);assert.match(rendered.text,/retained setup\/history gap, not a new attendance problem/);assert.equal(digest.readFailures[0].code,'HISTORICAL_SCHEDULE_UNAVAILABLE');}
- if(kind==='mixed'){assert.match(rendered.text,/separate unconfirmed checks do not establish additional missing sign-ins/);assert.match(rendered.text,/pending uploads/);assert.match(rendered.text,/incomplete check, not evidence of missing sign-ins/);}
+ if(asks(rendered)) {
+  assert.equal(digest.itemCount,1);assert.equal(digest.groups[0].items[0].kind,'missing-instructor');assert.equal(digest.groups[0].items[0].date,DATE);
+  assert.equal(digest.groups[0].items[0].attendance.classLabel,'6:00 PM Isolated QA class');assert.match(rendered.text,/6:00 PM Isolated QA class/);
+  assert.match(rendered.text,gym==='richmond'?/Friday, October 2/:/2026-10-02/);assert.match(rendered.text,/Who taught/);
+  assert.match(rendered.text,gym==='richmond'?/Reply here and Andrew will update the records\./:/Please reply here with any corrections and Andrew will update the record/);
+ } else {
+  assert.match(rendered.subject,/sign-in checks? (?:couldn.t finish|are still (?:uncertain|incomplete))/);assert.equal(digest.itemCount,0);
+  assert.doesNotMatch(rendered.text+rendered.html,/Who taught|Please reply|Reply here/);
+  if(gym==='rev')assert.match(rendered.text,/no correction reply is needed/);
+ }
+ if(['upload','mixed'].includes(kind)){
+  assert.ok(digest.readFailures.some(f=>f.component==='uploads'&&f.code==='UPLOAD_COMPLETENESS_UNCONFIRMED'));
+  assert.match(rendered.text,gym==='richmond'?/The (?:sign-in )?check for Friday, October 2 couldn.t (?:confirm sign-in uploads|finish or confirm uploads)\./:/We couldn.t confirm that all the sign-ins reached the spreadsheet/);
+ }
+ if(kind==='upload'){assert.equal(digest.readFailures[0].uploadReason,'TABLET_REPORT_NOT_RECEIVED');if(gym==='rev')assert.match(rendered.text,/haven.t received an upload report from the tablet/);}
+ if(kind==='failed'){
+  assert.ok(digest.readFailures.some(f=>f.code==='ATTENDANCE_UNAVAILABLE'));assert.ok(digest.readFailures.some(f=>f.uploadReason==='UPLOAD_EVIDENCE_READ_UNAVAILABLE'));
+  assert.match(rendered.text,gym==='richmond'?/The sign-in check for Friday, October 2 couldn.t finish or confirm uploads\./:/attendance records couldn.t be read/);
+ }
+ if(kind==='stale'){
+  assert.equal(digest.readFailures[0].code,'HISTORICAL_SCHEDULE_UNAVAILABLE');assert.equal(digest.readFailures[0].dates.length,24);
+  assert.equal(digest.readFailures[0].dates[0],'2026-09-07');assert.equal(digest.readFailures[0].dates.at(-1),'2026-09-30');
+  assert.match(rendered.text,gym==='richmond'?/Some earlier sign-in checks are still incomplete as of Friday, October 2\./:/older setup gaps, not new attendance problems/);
+ }
+ if(kind==='mixed'){
+  assert.equal(digest.readFailures.length,2);assert.ok(digest.readFailures.some(f=>f.uploadReason==='TABLET_UPLOADS_PENDING'));
+  assert.ok(digest.readFailures.some(f=>f.code==='SCHEDULE_COVERAGE_UNAVAILABLE'&&f.dates[0]==='2026-10-01'));
+  if(gym==='rev'){assert.match(rendered.text,/This doesn.t identify another missing sign-in/);assert.match(rendered.text,/still waiting to upload or be confirmed/);assert.match(rendered.text,/doesn.t tell us whether a sign-in is missing/);}
+  else assert.ok(rendered.text.indexOf('couldn’t finish or confirm uploads')<rendered.text.indexOf('Who taught'));
+ }
 });
 test('exact owner-supplied October 2 email regression retains both uncertainties without requesting corrections',()=>{
  assert.equal(owner.concrete_attendance_corrections_listed,0);assert.equal(owner.provenance.managerFeedbackConveyedBy,'Andrew');assert.match(owner.stu_reply,/not any corrections needed/);
  const {input,digest}=renderFixture('clean');digest.readFailures=owner.findings.map((message,i)=>({gym:'rev',component:i?'schedule':'uploads',code:i?'SCHEDULE_COVERAGE_UNAVAILABLE':'UPLOAD_COMPLETENESS_UNCONFIRMED',message,url:'https://gib-live.netlify.app/m1/admin/?reviewDate='+DATE+'#sign-ins'}));
  digest.shouldCapture=true;
  const rendered=splitAttendanceDigest(digest,input.configuration)[0].rendered;
- for(const message of owner.findings){assert.ok(rendered.text.includes(message));assert.ok(rendered.html.includes(message));}
- assert.equal(asks(rendered),false);assert.ok(!rendered.text.includes(owner.correction_request));assert.match(rendered.subject,/unconfirmed/);assert.match(rendered.text,/Late uploads and corrections are checked again/);
+ assert.deepEqual(digest.readFailures.map(f=>f.message),owner.findings,'original uncertainty remains in evidence');
+ assert.match(rendered.text,/We couldn.t confirm that all the sign-ins reached the spreadsheet/);assert.match(rendered.text,/no correction reply is needed/);
+ assert.equal(asks(rendered),false);assert.ok(!rendered.text.includes(owner.correction_request));assert.equal(rendered.subject,'Today’s sign-in check couldn’t finish');
 });
 test('retained old real attendance problems survive even when historical schedules are unavailable',()=>{
  const input=fixture('stale'),day=input.snapshots[0].attendance.ledger.days[0];day.records.push({recordId:'isolated-QA-original',date:day.date,classLabel:'6:00 PM Isolated QA historical class',instructor:'Isolated QA Instructor',duration:1,reviewRequired:true});
  const digest=buildAttendanceDigest(input),rendered=splitAttendanceDigest(digest,input.configuration)[0].rendered;
- assert.equal(digest.itemCount,1);assert.equal(asks(rendered),true);assert.match(rendered.text,/2026-09-07 — 6:00 PM Isolated QA historical class — instructor: Isolated QA Instructor; the saved sign-in is flagged for review/);assert.match(rendered.text,/Historical schedule coverage remains unconfirmed/);
+ assert.equal(digest.itemCount,1);assert.equal(asks(rendered),true);assert.match(rendered.text,/6:00 PM Isolated QA historical class on 2026-09-07 lists Isolated QA Instructor and is marked for review/);
+ assert.equal(digest.readFailures[0].code,'HISTORICAL_SCHEDULE_UNAVAILABLE');assert.match(rendered.text,/Older schedule checks/);
 });
 test('a generic unreadable record or old unknown class decision is retained uncertainty, not a concrete correction',()=>{
  const input=fixture('stale'),day=input.snapshots[0].attendance.ledger.days[0];day.warnings.push({code:'UNREADABLE_RECORD',message:'An older attendance row could not be read.'});
@@ -70,7 +95,7 @@ test('an excluded unreadable row prevents a false missing sign-in allegation for
 test('a present collision-review sign-in is listed once as a record problem, not also as missing',()=>{
  const input=fixture('missing');input.snapshots[0].attendance.ledger.days.at(-1).records.push({recordId:'isolated-QA-present',date:DATE,classLabel:'6:00 PM Isolated QA class',instructor:'Isolated QA Instructor',duration:1,reviewRequired:true});
  const digest=buildAttendanceDigest(input),rendered=splitAttendanceDigest(digest,input.configuration)[0].rendered;
- assert.equal(digest.itemCount,1);assert.equal(asks(rendered),true);assert.match(rendered.text,/Isolated QA Instructor; the saved sign-in is flagged for review/);assert.doesNotMatch(rendered.text,/no valid instructor sign-in recorded/);
+ assert.equal(digest.itemCount,1);assert.equal(asks(rendered),true);assert.match(rendered.text,/lists Isolated QA Instructor and is marked for review/);assert.doesNotMatch(rendered.text,/no valid instructor sign-in recorded/);
 });
 
 function readableIdConflictInput(gym='rev') {
@@ -86,11 +111,12 @@ for(const gym of ['rev','richmond'])test(gym+' readable ID conflicts retain a di
  const input=readableIdConflictInput(gym),before=structuredClone(input),digest=buildAttendanceDigest(input),route=splitAttendanceDigest(digest,input.configuration)[0],rendered=route.rendered;
  assert.deepEqual(input,before,'original rows, warnings, schedules and history must remain unchanged');
  assert.deepEqual(digest.groups[0].items.map(item=>item.kind).sort(),['attendance-conflict','missing-instructor']);
- const conflict=DATE+' — 6:00 PM Isolated QA Class A — instructor: Isolated QA Instructor A; the saved sign-in has a duplicate permanent attendance ID.';
- const missing=DATE+' — 7:00 PM Isolated QA Class B — instructor: not identified; no valid instructor sign-in recorded in the spreadsheet.';
+ const conflict=gym==='richmond'?'6:00 PM Isolated QA Class A — Isolated QA Instructor A; shares a record number with another sign-in':'The sign-in for 6:00 PM Isolated QA Class A on '+DATE+' lists Isolated QA Instructor A and shares a record number with another sign-in.';
+ const missing=gym==='richmond'?'7:00 PM Isolated QA Class B':'We don’t have an instructor sign-in for 7:00 PM Isolated QA Class B on '+DATE+'. Who taught it, or was it canceled?';
  for(const body of [rendered.text,rendered.html.replace(/<[^>]+>/g,'')]){assert.ok(body.includes(conflict));assert.ok(body.includes(missing));}
- assert.equal(asks(rendered),true);assert.match(rendered.text,/corrections only for the specific attendance problems listed below/);
- assert.match(rendered.text,/separate unconfirmed checks do not establish additional missing sign-ins/);
+ assert.equal(asks(rendered),true);assert.match(rendered.text,gym==='richmond'?/Who taught the classes without a sign-in, and what needs changing in the flagged sign-ins\?/:/Please reply here with any corrections and Andrew will update the record/);
+ if(gym==='rev')assert.match(rendered.text,/This doesn.t identify another missing sign-in/);
+ else {assert.match(rendered.text,/Friday, October 2/);assert.equal((rendered.html.match(/<li>/g)||[]).length,2);}
  assert.equal(digest.readFailures.length,2,'retained-row warnings are still reported');
  assert.deepEqual(route.to,[gym==='rev'?'info@revolutionbjj.com':'info@richmondbjj.com']);assert.deepEqual(route.cc,[]);assert.deepEqual(route.bcc,['andrew@revolutionbjj.com']);
 });
@@ -99,7 +125,7 @@ test('excluded or unknown warnings remain conservative even alongside readable I
   const input=readableIdConflictInput();input.snapshots[0].attendance.ledger.days.at(-1).warnings.push({code,message:'An attendance row could not be read completely.'});
   const digest=buildAttendanceDigest(input),rendered=splitAttendanceDigest(digest,input.configuration)[0].rendered;
   assert.equal(digest.itemCount,1,code);assert.equal(digest.groups[0].items[0].kind,'attendance-conflict',code);
-  assert.match(rendered.text,/Class A.*duplicate permanent attendance ID/);assert.match(rendered.text,/attendance row could not be read completely/);
+  assert.match(rendered.text,/Class A.*shares a record number with another sign-in/);assert.match(rendered.text,/attendance row could not be read completely/);
   assert.doesNotMatch(rendered.text+rendered.html,/Class B|no valid instructor sign-in recorded/);
  }
 });

@@ -334,11 +334,12 @@ function renderRichmondManagerAttendance(digest) {
     : currentFailures.length ? 'Today’s sign-in check couldn’t finish' : 'Earlier sign-in checks are still incomplete';
   const sections = ['Hi Trey,'], blocks = ['<p>Hi Trey,</p>'];
   const paragraph = text => { sections.push(text); blocks.push('<p>' + escape(text) + '</p>'); };
+  const assessedDate = richmondAttendanceDate(digest.date, digest.date);
   if (uploads) paragraph(otherFailures
-    ? 'We couldn’t finish the sign-in check or confirm that all saved sign-ins reached the spreadsheet.'
-    : 'We couldn’t confirm that all saved sign-ins reached the spreadsheet.');
-  else if (otherFailures) paragraph('We couldn’t finish checking the sign-in records against the class schedule.');
-  else if (!items.length && digest.readFailures.length) paragraph('Some earlier sign-in checks are still incomplete.');
+    ? 'The sign-in check for ' + assessedDate + ' couldn’t finish or confirm uploads.'
+    : 'The check for ' + assessedDate + ' couldn’t confirm sign-in uploads.');
+  else if (otherFailures) paragraph('The sign-in check for ' + assessedDate + ' couldn’t finish.');
+  else if (!items.length && digest.readFailures.length) paragraph('Some earlier sign-in checks are still incomplete as of ' + assessedDate + '.');
   for (const failure of currentFailures.filter(failure => ['ATTENDANCE_RECORD_UNCONFIRMED', 'CLASS_STATUS_UNCONFIRMED'].includes(failure.code))) paragraph(failure.message);
   if (items.length) {
     paragraph(missing.length === items.length

@@ -7,7 +7,7 @@ import { webcrypto } from 'node:crypto';
 // Execute the shipped client, with only the browser DOM and Google RPC boundary
 // replaced. These ordering tests complement the real browser layout/input checks.
 const html = readFileSync(new URL('../promotions/Index.html', import.meta.url), 'utf8');
-const source = html.match(/<script>([\s\S]*?)<\/script>/u)[1];
+const source = html.match(/<script>([\s\S]*?)<\/script>/u)[1].replace(/\r\n/g, '\n');
 const formIds = [...html.match(/<form id="entryForm"[\s\S]*?<\/form>/u)[0].matchAll(/\bid="([^"]+)"/gu)].map(match => match[1]);
 const student = (id, revision = 1, marks = 1) => ({
   studentId:id, displayName:`TEST Student ${id}`, distinguishingLabel:`Group ${id}`,

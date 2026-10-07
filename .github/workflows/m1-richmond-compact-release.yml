@@ -1,0 +1,50 @@
+name: Richmond compact release evidence
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  richmond-production-archives:
+    if: github.head_ref == 'repair/m1-richmond-compact-email-20261007' || github.ref_name == 'repair/m1-richmond-compact-email-20261007'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.3'
+      - name: Install existing pinned project dependencies
+        run: npm ci
+      - name: Prepare existing pinned offline packager
+        run: npm install --prefix .m1-test-packager --no-audit --no-fund @netlify/zip-it-and-ship-it@14.5.4 netlify-cli@26.0.1
+      - name: Package and probe Richmond attendance-only production archives
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {execFileSync} from 'node:child_process';
+          import {writeFile} from 'node:fs/promises';
+          import {packageDisabledRelease} from './tools/package-m1-disabled-release.mjs';
+          const source=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
+          const [receipt]=await packageDisabledRelease({source,root:process.cwd(),output:'.m1-richmond-compact-release',cliRoot:'.m1-test-packager/node_modules/netlify-cli',emailFirst:true,gyms:['richmond']});
+          assert.equal(receipt.installation,'richmond');
+          assert.equal(receipt.runtimeVerification.archiveCount,35);
+          assert.equal(receipt.runtimeVerification.realNetworkRequests,0);
+          assert.equal(receipt.emailFirstSettings.GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED,'true');
+          for(const flag of ['GIB_M1_MANAGER_REVIEW_LIVE_PILOT','GIB_M1_STAFF_RECOVERY_LIVE_ENABLED','GIB_RICHMOND_TREY_ADMIN_LIVE_ENABLED','GIB_M1_MAILAPP_LIVE_SEND_ENABLED'])assert.equal(receipt.emailFirstSettings[flag],'false');
+          const evidence={source,node:process.version,installation:'richmond',deployed:false,realEmails:0,archives:receipt.functions,runtime:receipt.runtimeVerification,archiveHashes:receipt.archiveHashes,publicHashes:receipt.publicHashes,googleHashes:receipt.googleHashes};
+          await writeFile('.m1-richmond-compact-release/richmond/exact-candidate-evidence.json',JSON.stringify(evidence,null,2)+'\n');
+          console.log(JSON.stringify({source,node:process.version,archives:receipt.functions.length,probes:receipt.runtimeVerification.archiveCount,installation:'richmond',deployed:false}));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: richmond-compact-release-${{ github.event.pull_request.head.sha || github.sha }}
+          path: .m1-richmond-compact-release/richmond/
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: error

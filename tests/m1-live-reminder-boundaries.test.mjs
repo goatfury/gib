@@ -110,12 +110,12 @@ test('actual enabled production workflow reaches fake Google once, survives lost
     assert.equal(original.messageId, 'm1-production-scheduled-' + gym + '-' + DATE); assert.equal(original.synthetic, false);
     assert.deepEqual(original.to, [LIVE_RECIPIENTS[gym]]); assert.deepEqual(original.bcc, ['andrew@revolutionbjj.com']);
     assert.doesNotMatch(original.html + original.text, /Bcc:|TEST|deploy-preview|gib-richmond-test|correction screen/);
-    assert.match(original.text, /older unresolved class/); assert.match(original.text, /reply.*corrections/i);
-    assert.match(original.text, /andrew@revolutionbjj.com/);
+    assert.match(original.text, /older unresolved class/); assert.match(original.text, gym === 'richmond' ? /Reply here and Andrew will update the records\./ : /reply.*corrections/i);
+    assert.match(original.text, /Andrew will update the record/);
     const reloaded = { ...h.dependencies }; h.settings.dropReply = false;
     await processAttendanceWorkflow(h.input(), reloaded); await h.read(); assert.equal(h.sends.length, 1);
     h.at(NOW + 86400000); await h.run(); assert.equal(h.sends.length, 2);
-    assert.equal(h.sends[1].messageId, 'm1-production-scheduled-' + gym + '-2026-09-30'); assert.match(h.sends[1].text, /2026-09-29/);
+    assert.equal(h.sends[1].messageId, 'm1-production-scheduled-' + gym + '-2026-09-30'); assert.match(h.sends[1].text, gym === 'richmond' ? /Tuesday, September 29/ : /2026-09-29/);
     assert.deepEqual((await h.read()).messages.find(entry => entry.messageId === original.messageId).message, original);
   }
 });
@@ -125,7 +125,7 @@ test('production clean decisions and incomplete checks remain durable and concur
     const clean = fixture(gym); await clean.run('clean'); await clean.run('clean'); assert.equal(clean.calls.length, 0);
     assert.equal((await clean.read()).messages[0].state, 'suppressed'); assert.equal((await workflowHealth(clean.scope, clean.dependencies)).state, 'clear');
     const incomplete = fixture(gym); await incomplete.run('incomplete');
-    assert.equal(incomplete.sends.length, 1); assert.match(incomplete.sends[0].text, /could not be checked/); assert.doesNotMatch(incomplete.sends[0].text, /No instructor sign-in/);
+    assert.equal(incomplete.sends.length, 1); assert.match(incomplete.sends[0].text, gym === 'richmond' ? /The sign-in check for .* couldn.t finish\./ : /attendance records couldn.t be read/); assert.doesNotMatch(incomplete.sends[0].text, /No instructor sign-in/);
     assert.ok((await workflowHealth(incomplete.scope, incomplete.dependencies)).codes.includes('CHECK_INCOMPLETE'));
     const concurrent = fixture(gym); const results = await Promise.allSettled([concurrent.run(), concurrent.run()]);
     assert.ok(results.some(result => result.status === 'fulfilled')); await concurrent.run(); assert.equal(concurrent.sends.length, 1);

@@ -124,9 +124,8 @@ for(const gym of ['rev','richmond'])test(gym+' unavailable records/website still
   assert.equal(h.sends.length,1);assert.equal(h.sends[0].to,gym==='rev'?'info@revolutionbjj.com':'info@richmondbjj.com');
   assert.equal(h.sends[0].bcc,'andrew@revolutionbjj.com');assert.equal(h.sends[0].replyTo,'andrew@revolutionbjj.com');assert.equal(h.sends[0].cc,undefined);
   assert.doesNotMatch(h.sends[0].body+h.sends[0].htmlBody,/Please reply.*correction/i);
-  assert.match(h.sends[0].body,/couldn.t (?:finish the sign-in check.*or )?confirm that all (?:saved |the )?sign-ins reached the spreadsheet/i);
-  if(gym==='rev')assert.match(h.sends[0].body,/haven.t identified a specific missing sign-in/);
-  else assert.match(h.sends[0].body,/Thursday, October 1/);
+  if(gym==='rev'){assert.match(h.sends[0].body,/couldn.t confirm that all the sign-ins reached the spreadsheet/i);assert.match(h.sends[0].body,/haven.t identified a specific missing sign-in/);}
+  else assert.match(h.sends[0].body,/The sign-in check for Thursday, October 1 couldn.t finish or confirm uploads\./);
   h.tick();h.tick();assert.equal(h.sends.length,1);
   h.at(NOW+86400000);h.tick();assert.equal(h.sends.length,2);assert.match(h.sends[1].body,gym==='rev'?/Earlier checks are still uncertain/:/Some earlier scheduled checks are still incomplete/);
 });
@@ -186,7 +185,7 @@ test('Richmond missed-check warning precedes class questions without changing th
   const h=timerHarness('richmond'),fixture=renderFixture('missing','richmond');h.at(Date.parse('2026-10-03T00:06:00Z'));
   h.report({shouldSend:true,rendered:fixture.route.rendered,issueCount:fixture.digest.itemCount,unconfirmedChecks:fixture.digest.readFailures.length});
   assert.equal(h.tick().state,'submitted');const email=h.sends[0];
-  assert.equal((email.body.match(/Some earlier scheduled checks are still incomplete\./g)||[]).length,1);
+  assert.equal((email.body.match(/Some earlier scheduled checks are still incomplete as of Friday, October 2\./g)||[]).length,1);
   assert.ok(email.body.indexOf('Some earlier scheduled checks')<email.body.indexOf('Who taught'));
   assert.ok(email.htmlBody.indexOf('Some earlier scheduled checks')<email.htmlBody.indexOf('Who taught'));
   assert.ok(email.body.endsWith('Reply here and Andrew will update the records.'));
@@ -197,7 +196,7 @@ test('Richmond missed-check warning precedes class questions without changing th
 
 test('Richmond clean check with a missed day warns honestly, retains prior claims and suppresses the next clean day',()=>{
   const h=timerHarness('richmond');h.at(NOW+86400000);assert.equal(h.tick().state,'submitted');const email=h.sends[0];
-  assert.match(email.body,/Today.s sign-in check found no questions; some earlier scheduled checks are still incomplete\./);
+  assert.match(email.body,/The sign-in check for Friday, October 2 found no questions; some earlier scheduled checks are still incomplete\./);
   assert.doesNotMatch(email.body+email.htmlBody,/Who taught|Reply here|Earlier checks are still uncertain for|2026-10-01/);
   assert.equal((email.body.match(/earlier scheduled checks/g)||[]).length,1);
   const claim=h.values.get('M1_ATTENDANCE_EMAIL_FIRST_DAY_2026-10-02');h.tick();assert.equal(h.sends.length,1);
