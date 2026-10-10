@@ -6,6 +6,7 @@ import { processDigestRehearsal } from './_lib/m1-attendance-digest-rehearsal.mj
 import { enqueueAttendanceWorkflow } from './_lib/m1-attendance-digest-workflow.mjs';
 import { digestGym } from './_lib/m1-attendance-digest.mjs';
 import { managerAttendanceEmail } from './_lib/m1-manager-attendance-email.mjs';
+import { prepareReplyEvent } from './_lib/m1-reply-intake.mjs';
 
 export const config = { path: '/api/m1-attendance-digest-job', rateLimit: { windowLimit: 20, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 const responseCodes = new Set(['DIGEST_AUTHENTICATION_FAILED', 'DIGEST_RUNTIME_UNAVAILABLE', 'DIGEST_INVALID_JSON', 'DIGEST_INVALID_ENVELOPE',
@@ -65,6 +66,12 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
     const workflowDependencies = job.binding.mode === 'scheduled' ? { ...checkDependencies, onDigestCheck: async check => {
       if (emailFirst) {
         dailyEmail = managerAttendanceEmail(check.digest, check.configuration, check.uploadAssessment);
+        if (!verifyOnly && dailyEmail.rendered && (dependencies.env || process.env).GIB_M1_REPLY_INTAKE_ENABLED === 'true') {
+          // Queue failure cannot suppress the existing warning. No marker means
+          // the Google sender keeps the existing Andrew Reply-To for this mail.
+          try { dailyEmail = await prepareReplyEvent(check, scope, dailyEmail, dependencies); }
+          catch { (dependencies.traceLog || console.info)('M1_REPLY_EVENT_UNAVAILABLE', JSON.stringify({ gym: digestGym(scope), requestId: check.binding.requestId })); }
+        }
         return; // Google owns the one send opportunity; no detached second sender.
       }
       stage = 'job.workflow';

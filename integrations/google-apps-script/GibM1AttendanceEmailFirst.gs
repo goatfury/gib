@@ -271,7 +271,11 @@ function gibM1AttendanceEmailFirstTick_() {
     || properties.getProperty('GIB_M1_MAILAPP_LIVE_SEND_ENABLED') !== 'true'
     || properties.getProperty('GIB_M1_ATTENDANCE_DIGEST_LIVE_SCHEDULE_ENABLED') !== 'true') return;
   // Do not depend on Spreadsheet availability for a warning about unavailable records.
-  var hash = managerHash_({ ...rendered, from: GIB_M1_MAILAPP_SENDER_, ...expected, replyTo: 'andrew@revolutionbjj.com' });
+  var sendOptions = { to: expected.to[0], bcc: expected.bcc[0], replyTo: 'andrew@revolutionbjj.com',
+    subject: rendered.subject, body: rendered.text, htmlBody: rendered.html };
+  if (typeof gibM1ReplyMailOptions_ === 'function') sendOptions = gibM1ReplyMailOptions_(scope, sendOptions);
+  rendered = { subject: sendOptions.subject, text: sendOptions.body, html: sendOptions.htmlBody };
+  var hash = managerHash_({ ...rendered, from: GIB_M1_MAILAPP_SENDER_, ...expected, replyTo: sendOptions.replyTo });
   var attempt = { ...claimed, ...managerSummary, state: 'call-pending', attemptedAt: Date.now(), hash: hash, checkConfirmed: Boolean(report) };
   if (managerPolicy) attempt.monitorState=gibM1RevMonitorState_(date,faults,priorFaults,report,
     {date:date,requestId:claimed.requestId,payloadHash:hash,outcome:'call-pending'});
@@ -281,8 +285,7 @@ function gibM1AttendanceEmailFirstTick_() {
     || properties.getProperty('GIB_M1_MAILAPP_LIVE_SEND_ENABLED') !== 'true'
     || properties.getProperty('GIB_M1_ATTENDANCE_DIGEST_LIVE_SCHEDULE_ENABLED') !== 'true') return;
   var submitted = false;
-  try { MailApp.sendEmail({ to: expected.to[0], bcc: expected.bcc[0], replyTo: 'andrew@revolutionbjj.com',
-    subject: rendered.subject, body: rendered.text, htmlBody: rendered.html }); submitted = true; }
+  try { MailApp.sendEmail(sendOptions); submitted = true; }
   catch (_) { /* Google may have accepted it; never resend this date. */ }
   var completed = { ...attempt, state: submitted ? 'submitted' : 'uncertain', completedAt: Date.now(),
     code: submitted ? 'GOOGLE_ACCEPTED_SEND' : 'SEND_OUTCOME_UNCERTAIN' };

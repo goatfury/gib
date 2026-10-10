@@ -31,8 +31,8 @@ export function activationSettings(gym) {
     GIB_RICHMOND_TREY_ADMIN_LIVE_ENABLED: gym === 'richmond' ? 'true' : 'false' };
 }
 export const GOOGLE_FILES = Object.freeze({
-  rev: ['Code.gs', 'GibM1Receiver.gs', 'GibM1ManagerReview.gs', 'GibM1StaffRecovery.gs', 'GibM1AttendanceDigest.gs', 'GibM1MailApp.gs', 'GibM1LiveFeatures.gs', 'GibM1AttendanceEmailFirst.gs', 'appsscript.json', '.claspignore'],
-  richmond: ['Code.gs', 'GibM1Receiver.gs', 'GibM1ManagerReview.gs', 'GibM1AttendanceDigest.gs', 'GibM1MailApp.gs', 'GibM1LiveFeatures.gs', 'GibM1AttendanceEmailFirst.gs', 'appsscript.json', '.claspignore']
+  rev: ['Code.gs', 'GibM1Receiver.gs', 'GibM1ManagerReview.gs', 'GibM1StaffRecovery.gs', 'GibM1AttendanceDigest.gs', 'GibM1MailApp.gs', 'GibM1ReplyIntake.gs', 'GibM1LiveFeatures.gs', 'GibM1AttendanceEmailFirst.gs', 'appsscript.json', '.claspignore'],
+  richmond: ['Code.gs', 'GibM1Receiver.gs', 'GibM1ManagerReview.gs', 'GibM1AttendanceDigest.gs', 'GibM1MailApp.gs', 'GibM1ReplyIntake.gs', 'GibM1LiveFeatures.gs', 'GibM1AttendanceEmailFirst.gs', 'appsscript.json', '.claspignore']
 });
 async function filesAt(root, prefix) {
   const files = [];
