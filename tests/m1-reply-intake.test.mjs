@@ -72,6 +72,33 @@ test('projection failures are retained across recovery and reject extra data', a
   assert.equal((await replyProjection(store, 'rev', NOW + 2000, REVIEW)).health[1][19], recovered.recoveredAt);
   await assert.rejects(replyProjection(store, 'rev', NOW, REVIEW, { ...fault, rawEmail: 'unrelated' }), /PROJECTION_FAULT/);
 });
+test('six-hour checks deduplicate persistent quarantine health independently of hourly timestamps', async () => {
+  const f = await seeded(); await ingestReply(f.store, 'rev', { ...f.message, authenticated: false }, NOW);
+  const poll = { requestId: ID, scanFrom: NOW - 3600000, scanThrough: NOW - 120000, createdAt: NOW, status: 'complete', messages: [] };
+  await recordReplyPoll(f.store, 'rev', poll, NOW);
+  let s = await replyProjection(f.store, 'rev', NOW, ID);
+  const first = verifyReplyProjection({ gym:'rev', before:s.health, after:s.health, replies:s.replies, now:NOW });
+  assert.equal(first.currentException.code, 'message-quarantined');
+  const receipt = ['rev','health',first.currentException.sourceId,first.currentException.sourceVersion,NOW,'parent-health-output'];
+  await recordReplyPoll(f.store, 'rev', { ...poll,requestId:REVIEW,createdAt:NOW+3600000,scanThrough:NOW+3480000 },NOW+3600000);
+  s = await replyProjection(f.store, 'rev', NOW+3600000, REVIEW);
+  const next = verifyReplyProjection({ gym:'rev', before:s.health, after:s.health, replies:s.replies, now:NOW+3600000, receipts:[receipt] });
+  assert.equal(next.health,'message-quarantined');assert.equal(next.currentException,null);
+});
+test('a poll becoming overdue after projection gets a stable nonempty delivery key', async () => {
+  const f = await seeded();
+  await recordReplyPoll(f.store, 'rev', { requestId: ID, scanFrom: NOW - 3600000, scanThrough: NOW - 120000,
+    createdAt: NOW, status: 'complete', messages: [] }, NOW);
+  const s = await replyProjection(f.store, 'rev', NOW + 1000, REVIEW);
+  const input = { gym: 'rev', before: s.health, after: s.health, replies: s.replies, now: NOW + 3 * 3600000 + 1 };
+  const first = verifyReplyProjection(input);
+  assert.equal(first.health, 'poll-overdue');
+  assert.match(first.currentException.sourceId, /^[a-f0-9]{64}$/);
+  assert.match(first.currentException.sourceVersion, /^[a-f0-9]{64}$/);
+  const receipt = ['rev', 'health', first.currentException.sourceId, first.currentException.sourceVersion, input.now, 'parent-health-output'];
+  const next = verifyReplyProjection({ ...input, now: input.now + 1, receipts: [receipt] });
+  assert.equal(next.currentException, null); assert.equal(next.health, 'poll-overdue');
+});
 function memory() {
   const entries = new Map(); let serial = 0, failKey = null;
   return { entries, fail: key => { failKey = key; }, async getWithMetadata(key) { return structuredClone(entries.get(key) || null); },

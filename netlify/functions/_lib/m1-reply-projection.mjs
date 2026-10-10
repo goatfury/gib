@@ -89,7 +89,9 @@ export async function replyProjection(store, gym, now, generation, projectionFau
     routeOverflowJson: JSON.stringify(queue.routing.unresolvedFaults.filter(f => f.code === 'sender-route-overflow')),
     generation, projectedAt: now, replyRowCount: rows.length, replySnapshotHash: digestHash(rows),
     episodeRowCount: episodeRows.length, episodeSnapshotHash: digestHash(episodeRows),
-    sourceRevision: digestHash([sources, queue.reviews, episodes, queue.health, queue.routing.unresolvedFaults]), projectionStatus: 'ready' });
+    sourceRevision: digestHash([sources, queue.reviews, episodes, queue.health, queue.routing.unresolvedFaults]), projectionStatus: 'ready',
+    episodeId: queue.health.episode || '', episodeVersion: queue.health.episode ? digestHash([queue.health.episode,
+      queue.rejections.map(r => [r.id, r.code]).sort(), queue.routing.unresolvedFaults.map(r => r.id).sort()]) : '' });
   return { schema: PROJECTION_SCHEMA, gym, generation, projectionFaultAccepted, tabs: projectionTabs(gym), replyHeaders: REPLY_HEADERS,
     healthHeaders: HEALTH_HEADERS, receiptHeaders: RECEIPT_HEADERS, replies: rows, health: [overview, ...episodeRows],
     intakeCadenceHours: 1, parentCadenceHours: 6, attendanceWritesEnabled: false, payrollReleaseEnabled: false };
@@ -117,6 +119,14 @@ export function verifyReplyProjection({ gym, before, replies, after, receipts = 
   const unseenEpisodes = episodes.filter(r => !delivered.has([gym, 'health', r[15], r[20]].join(':')));
   const health = !current.checkedAt || now - current.checkedAt > 3 * 3600000 ? 'poll-overdue'
     : !current.scanThrough || now - current.scanThrough > 24 * 3600000 ? 'poll-backlog' : current.code;
-  return { gym, generation: current.generation, health, unseenReplies: unseen, unseenEpisodes,
+  // Retained poll episodes cover their own active failures. Quarantine/routing
+  // exceptions also need a stable delivery key, unaffected by healthy poll time.
+  const derivedException = health !== current.code || !current.episodeId || !current.episodeVersion;
+  const exceptionId = derivedException ? digestHash([gym, health, current.checkedAt || 'initial']) : current.episodeId;
+  const exceptionVersion = derivedException ? digestHash([exceptionId, current.scanThrough || '']) : current.episodeVersion;
+  const currentException = health !== 'healthy' && !episodes.some(r => r[2] === health && !r[19])
+    && !delivered.has([gym, 'health', exceptionId, exceptionVersion].join(':'))
+    ? { kind: 'health', sourceId: exceptionId, sourceVersion: exceptionVersion, code: health } : null;
+  return { gym, generation: current.generation, health, currentException, unseenReplies: unseen, unseenEpisodes,
     attendanceWritesEnabled: false, payrollReleaseEnabled: false };
 }

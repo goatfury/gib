@@ -61,7 +61,15 @@ function verifyReplyProjection({ gym, before, replies, after, receipts = [], now
   const unseenEpisodes = episodes.filter(r => !delivered.has([gym, 'health', r[15], r[20]].join(':')));
   const health = !current.checkedAt || now - current.checkedAt > 3 * 3600000 ? 'poll-overdue'
     : !current.scanThrough || now - current.scanThrough > 24 * 3600000 ? 'poll-backlog' : current.code;
-  return { gym, generation: current.generation, health, unseenReplies: unseen, unseenEpisodes,
+  // Retained poll episodes cover their own active failures. Quarantine/routing
+  // exceptions also need a stable delivery key, unaffected by healthy poll time.
+  const derivedException = health !== current.code || !current.episodeId || !current.episodeVersion;
+  const exceptionId = derivedException ? digestHash([gym, health, current.checkedAt || 'initial']) : current.episodeId;
+  const exceptionVersion = derivedException ? digestHash([exceptionId, current.scanThrough || '']) : current.episodeVersion;
+  const currentException = health !== 'healthy' && !episodes.some(r => r[2] === health && !r[19])
+    && !delivered.has([gym, 'health', exceptionId, exceptionVersion].join(':'))
+    ? { kind: 'health', sourceId: exceptionId, sourceVersion: exceptionVersion, code: health } : null;
+  return { gym, generation: current.generation, health, currentException, unseenReplies: unseen, unseenEpisodes,
     attendanceWritesEnabled: false, payrollReleaseEnabled: false };
 }
 globalThis.GibReplySheetVerifier = Object.freeze({ verify: verifyReplyProjection, hash: digestHash });
