@@ -3,6 +3,7 @@ import { attendanceDigestScope } from './m1-attendance-digest.mjs';
 import { digestGym, digestOrigin } from './_lib/m1-attendance-digest.mjs';
 import { REPLY_SCHEMA, replySignature, replyStore, recordReplyPoll, replyQueue, reviewReply, verifyReplyRouteRecovery } from './_lib/m1-reply-intake.mjs';
 import { pendingReplyHandoffs, acknowledgeReplyHandoff } from './_lib/m1-reply-handoff.mjs';
+import { replyProjection } from './_lib/m1-reply-projection.mjs';
 
 export const config = { path: '/api/m1-reply-intake', rateLimit: { windowLimit: 30, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 export async function handleReplyIntake(request, dependencies = {}) {
@@ -23,9 +24,10 @@ export async function handleReplyIntake(request, dependencies = {}) {
       const signature = request.headers.get('X-GIB-M1-Reply-Signature');
       if (!/^[0-9a-f]{64}$/.test(signature) || !constantTimeSecretEqual(signature, replySignature(raw, runtime.adminActionToken))) return jsonResponse(403, { ok: false });
       const input = JSON.parse(raw);
-      if (input.schema !== REPLY_SCHEMA || input.gym !== gym || input.target !== 'production' || !['poll', 'read', 'handoffs', 'ack-handoff'].includes(input.action)
+      if (input.schema !== REPLY_SCHEMA || input.gym !== gym || input.target !== 'production' || !['poll', 'read', 'projection', 'handoffs', 'ack-handoff'].includes(input.action)
         || !Number.isSafeInteger(input.createdAt) || input.createdAt > now + 5000 || input.expiresAt !== input.createdAt + 60000 || now >= input.expiresAt) return jsonResponse(409, { ok: false, code: 'REPLY_BINDING_INVALID' });
       const store = await replyStore(scope, dependencies);
+      if (input.action === 'projection') return jsonResponse(200, { ok: true, requestId: input.requestId, ...await replyProjection(store, gym, now, input.requestId, input.projectionFault) });
       if (input.action === 'read') return jsonResponse(200, { ok: true, requestId: input.requestId, ...await replyQueue(store, gym, now) });
       if (input.action === 'handoffs') return jsonResponse(200, { ok: true, requestId: input.requestId, ...await pendingReplyHandoffs(store, gym, now) });
       if (input.action === 'ack-handoff') return jsonResponse(200, { ok: true, requestId: input.requestId, receipt: await acknowledgeReplyHandoff(store, gym, input) });

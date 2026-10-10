@@ -9,11 +9,69 @@ import { MAILBOX, MANAGERS, REPLY_PREFIX, replyEvent, prepareReplyEvent, ingestR
 import { handleReplyIntake } from '../netlify/functions/m1-reply-intake.mjs';
 import { pendingReplyHandoffs, acknowledgeReplyHandoff, deliverReplyHandoffs } from '../netlify/functions/_lib/m1-reply-handoff.mjs';
 import { runtimeConfig, createAdminSession, ADMIN_COOKIE, ADMIN_REQUEST_HEADER } from '../netlify/functions/_lib/m1-common.mjs';
+import { replyProjection, replyHealthEpisodes, verifyReplyProjection, REPLY_HEADERS, HEALTH_HEADERS } from '../netlify/functions/_lib/m1-reply-projection.mjs';
 
 const ID = '11111111-1111-4111-8111-111111111111', REVIEW = '22222222-2222-4222-8222-222222222222';
 const NOW = Date.parse('2026-10-11T01:00:00Z'), DATE = '2026-10-10', LABEL = '7:15 PM BJJ', NAME = 'Canonical Instructor';
 const scope = gym => ({ target: 'production', profile: { installationId: gym, gymName: gym === 'rev' ? 'Revolution BJJ' : 'Richmond BJJ', environment: 'production', activation: 'active' }, liveFeatures: { reminders: true } });
 const plain = value => JSON.parse(JSON.stringify(value));
+
+test('private Sheet projections minimize both gyms and survive idempotent rebuilds', async () => {
+  for (const gym of ['rev', 'richmond']) {
+    const f = await seeded(gym); await ingestReply(f.store, gym, f.message, NOW);
+    const poll = { requestId: ID, scanFrom: NOW - 3600000, scanThrough: NOW - 120000, createdAt: NOW, status: 'complete', messages: [] };
+    await recordReplyPoll(f.store, gym, poll, NOW);
+    const snapshot = await replyProjection(f.store, gym, NOW, REVIEW);
+    assert.equal(snapshot.replies.length, 1); assert.equal(snapshot.replies[0][11], f.message.body);
+    assert.equal(snapshot.replies[0][5], MANAGERS[gym].address);
+    const q = JSON.parse(snapshot.replies[0][14])[0]; assert.equal(q.itemId, f.event.questions[0].itemId); assert.equal(q.attendanceHash, 'a'.repeat(64));
+    assert.ok(!JSON.stringify(snapshot).includes('instructors')); assert.ok(!JSON.stringify(snapshot).includes('<sent@'));
+    const result = verifyReplyProjection({ gym, before: snapshot.health, replies: snapshot.replies, after: snapshot.health, now: NOW });
+    assert.equal(result.health, 'healthy'); assert.equal(result.unseenReplies.length, 1); assert.equal(result.attendanceWritesEnabled, false);
+    assert.deepEqual(await replyProjection(f.store, gym, NOW, REVIEW), snapshot);
+    const receipt = [gym, 'reply', snapshot.replies[0][1], snapshot.replies[0][2], NOW, 'parent-output-1'];
+    assert.equal(verifyReplyProjection({ gym, before: snapshot.health, replies: snapshot.replies, after: snapshot.health, now: NOW, receipts: [receipt] }).unseenReplies.length, 0);
+  }
+});
+test('Sheet projection preserves previously published source versions after new thread evidence', async () => {
+  const f = await seeded(); await ingestReply(f.store, 'rev', { ...f.message, parent: null }, NOW);
+  const first = await replyProjection(f.store, 'rev', NOW, ID);
+  await ingestReply(f.store, 'rev', f.message, NOW);
+  const next = await replyProjection(f.store, 'rev', NOW + 1, REVIEW);
+  assert.equal(next.replies.length, 2); assert.ok(next.replies.some(r => r[2] === first.replies[0][2]));
+  assert.deepEqual(next.replies.map(r => r[9]).sort(), ['needs-review', 'thread-unverified']);
+});
+test('six-hour reader fails closed on stale, partial, mixed-gym or changing projections', async () => {
+  const f = await seeded(); await ingestReply(f.store, 'rev', f.message, NOW);
+  const s = await replyProjection(f.store, 'rev', NOW, ID), good = { gym: 'rev', before: s.health, replies: s.replies, after: s.health, now: NOW };
+  assert.throws(() => verifyReplyProjection({ ...good, now: NOW + 3 * 3600000 + 1 }), /STALE/);
+  assert.throws(() => verifyReplyProjection({ ...good, replies: [] }), /INCOMPLETE/);
+  assert.throws(() => verifyReplyProjection({ ...good, gym: 'richmond' }), /NOT_READY/);
+  const changed = structuredClone(s.health); changed[0][7] = REVIEW;
+  assert.throws(() => verifyReplyProjection({ ...good, after: changed }), /CHANGED/);
+  const tampered = structuredClone(s.replies); tampered[0][11] = 'Tampered';
+  assert.throws(() => verifyReplyProjection({ ...good, replies: tampered }), /INCOMPLETE/);
+  const partial = structuredClone(s.health); partial[0][14] = 'writing';
+  assert.throws(() => verifyReplyProjection({ ...good, before: partial, after: partial }), /NOT_READY/);
+});
+test('recovered mailbox failures and silent gaps remain in immutable history between parent reads', () => {
+  const poll = (id, hour, status) => ({ gym: 'rev', requestId: id, checkedAt: NOW + hour * 3600000, status });
+  const polls = [poll(ID, 0, 'complete'), poll('failure-a', 1, 'access-revoked'), poll('failure-b', 2, 'access-revoked'), poll(REVIEW, 3, 'complete'), poll('late', 8, 'complete')];
+  const episodes = replyHealthEpisodes(polls, 'rev', NOW + 8 * 3600000);
+  assert.equal(episodes.length, 2); assert.equal(episodes[0].failureCount, 2); assert.equal(episodes[0].recoveredAt, NOW + 3 * 3600000);
+  assert.equal(episodes[1].code, 'poll-overdue'); assert.equal(episodes[1].firstFailureAt, NOW + 6 * 3600000); assert.equal(episodes[1].recoveredAt, NOW + 8 * 3600000);
+  assert.deepEqual(replyHealthEpisodes([...polls].reverse(), 'rev', NOW + 8 * 3600000), episodes);
+});
+test('projection failures are retained across recovery and reject extra data', async () => {
+  const store = memory(), fault = { code: 'projection-failed', episodeId: ID, firstFailureAt: NOW, lastFailureAt: NOW, failureCount: 1, recoveredAt: '', updatedAt: NOW };
+  let s = await replyProjection(store, 'rev', NOW, REVIEW, fault);
+  assert.equal(s.projectionFaultAccepted, digestHash(fault)); assert.equal(s.health[1][2], 'projection-failed');
+  const recovered = { ...fault, recoveredAt: NOW + 1000, updatedAt: NOW + 1000 };
+  s = await replyProjection(store, 'rev', NOW + 1000, REVIEW, recovered);
+  assert.equal(s.health[1][19], recovered.recoveredAt);
+  assert.equal((await replyProjection(store, 'rev', NOW + 2000, REVIEW)).health[1][19], recovered.recoveredAt);
+  await assert.rejects(replyProjection(store, 'rev', NOW, REVIEW, { ...fault, rawEmail: 'unrelated' }), /PROJECTION_FAULT/);
+});
 function memory() {
   const entries = new Map(); let serial = 0, failKey = null;
   return { entries, fail: key => { failKey = key; }, async getWithMetadata(key) { return structuredClone(entries.get(key) || null); },

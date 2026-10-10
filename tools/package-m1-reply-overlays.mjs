@@ -34,7 +34,7 @@ for (const gym of ['rev', 'richmond']) {
   }
   const verifiedFiles = {};
   for (const path of paths) verifiedFiles[path] = hashes(await readFile(resolve(stage, path)));
-  const regression = execFileSync(process.execPath, ['--test', 'tests/m1-reply-intake.test.mjs'], { cwd: stage, encoding: 'utf8' });
+  const regression = execFileSync(process.execPath, ['--test', 'tests/m1-reply-intake.test.mjs', 'tests/m1-reply-projection.test.mjs'], { cwd: stage, encoding: 'utf8' });
   await writeFile(resolve(output, gym + '-regressions.txt'), regression);
   // The packager makes isolated lockfile stages and runs all archives under
   // production Node22 with network/credentials excluded from the probes.

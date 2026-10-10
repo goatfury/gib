@@ -31,7 +31,7 @@ export async function retainReplyRecord(store, key, value) {
 }
 const retain = retainReplyRecord;
 export async function listReplyRecords(store, kind) {
-  if (!['events', 'queue', 'reviews', 'polls', 'rejections', 'thread-evidence', 'route-faults', 'route-verifications', 'handoffs', 'handoff-receipts'].includes(kind)) fail('REPLY_KEY_INVALID');
+  if (!['events', 'queue', 'reviews', 'polls', 'rejections', 'thread-evidence', 'route-faults', 'route-verifications', 'handoffs', 'handoff-receipts', 'projection-replies', 'projection-health'].includes(kind)) fail('REPLY_KEY_INVALID');
   const { blobs } = await store.list({ prefix: REPLY_PREFIX + kind + '/' });
   if (blobs.length > 10000) fail('REPLY_REVIEW_CAPACITY');
   return Promise.all(blobs.map(async blob => {

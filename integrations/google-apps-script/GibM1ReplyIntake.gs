@@ -209,8 +209,15 @@ function pollBusinessAttendanceReplies() {
       if (Number(properties.getProperty('GIB_M1_REPLY_SCAN_THROUGH') || start) < input.scanThrough) throw new Error('REPLY_CURSOR_UNCONFIRMED');
     } finally { lock.releaseLock(); }
   }
+  // Projection retries even after a retained failed mailbox poll. Its failure
+  // never rolls back a durably acknowledged mailbox scan or changes attendance.
+  var projection = { enabled: false };
+  if (properties.getProperty('GIB_M1_REPLY_PROJECTION_ENABLED') === 'true') {
+    try { projection = publishBusinessAttendanceReplyProjection(); }
+    catch (_) { projection = { ok: false, code: 'projection-failed' }; }
+  }
   // IDs/counts only, no email bodies, credentials, or exception payloads in logs.
-  return { ok: input.status === 'complete', gym: scope.gym, status: input.status, newRelevant: result.newRelevant, scanThrough: input.scanThrough };
+  return { ok: input.status === 'complete', gym: scope.gym, status: input.status, newRelevant: result.newRelevant, scanThrough: input.scanThrough, projection: projection };
 }
 function gibM1ReplyMailOptions_(scope, options) {
   var eventId = gibM1ReplyEventId_(options.subject, scope.gym);
