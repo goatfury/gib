@@ -290,4 +290,10 @@ for (const gym of ['rev', 'richmond']) test(gym + ' real endpoint permits own-gy
   const session = createAdminSession('Andrew Smith', runtime.sessionSecret, NOW, requestToken, runtime);
   const headers = { Origin: h.origin, Cookie: ADMIN_COOKIE + '=' + session, [ADMIN_REQUEST_HEADER]: requestToken };
   assert.equal((await handleReplyIntake(new Request(url, { headers }), h.deps)).status, 200);
+  const beforeRead = h.deps.replyStore.entries.size;
+  const adminRead = await handleReplyIntake(new Request(url, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'read' }) }), h.deps);
+  assert.equal(adminRead.status, 200); assert.equal((await adminRead.json()).health.code, 'healthy');
+  assert.equal(h.deps.replyStore.entries.size, beforeRead);
+  assert.equal((await handleReplyIntake(h.request({ action: 'read' }), h.deps)).status, 200);
+  assert.equal(h.deps.replyStore.entries.size, beforeRead);
 });

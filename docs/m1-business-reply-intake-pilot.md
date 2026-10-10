@@ -21,7 +21,7 @@ For an exact thread match, the reply must belong to the Gmail thread containing 
 
 ## Private review and state boundaries
 
-The endpoint offers an authenticated same-origin Admin GET and a signed own-gym `action: "read"` POST. `readBusinessAttendanceReplyQueue` provides the latter from the already trusted production project without copying its credential. No public queue page is published. The real goati/operator access path still needs to be exercised on the deployed receiver before activation; a local authentication test is not a live access test.
+The endpoint offers authenticated Admin `action: "read"` POST and GET with the existing same-origin/session checks, plus a signed own-gym `action: "read"` POST. Browser readers use POST because same-origin GET may omit `Origin`. `readBusinessAttendanceReplyQueue` provides the signed path from the already trusted production project without copying its credential. No public queue page is published. The real goati/operator access path still needs to be exercised on the deployed receiver before activation; a local authentication test is not a live access test.
 
 Email content is untrusted evidence. It cannot select a spreadsheet, recipient, URL, command, scope, class identity or payroll rule. The queue exposes the exact source ID, event and related later replies. A repeated Gmail ID is replayed once; a separate reply repeating a business fact remains separate evidence, not another authorized attendance write. An “actually” reply preserves the earlier message and review. Before any eventual write, the reviewer must compare related replies for superseding or repeated facts.
 

@@ -36,6 +36,9 @@ export async function handleReplyIntake(request, dependencies = {}) {
     const store = await replyStore(scope, dependencies);
     if (request.method === 'GET') return jsonResponse(200, { ok: true, ...await replyQueue(store, gym, now) });
     const parsed = await readJson(request, 4096); if (parsed.response) return parsed.response;
+    // Browser same-origin GET requests do not reliably include Origin. The
+    // existing authenticated Admin POST path supplies it without weaker checks.
+    if (parsed.value?.action === 'read') return jsonResponse(200, { ok: true, ...await replyQueue(store, gym, now) });
     return jsonResponse(200, { ok: true, review: await reviewReply(store, gym, parsed.value, auth.session.adminName, now) });
   } catch (error) {
     const code = /^REPLY_[A-Z_]+$/.test(error?.code) ? error.code : 'REPLY_UNAVAILABLE';
