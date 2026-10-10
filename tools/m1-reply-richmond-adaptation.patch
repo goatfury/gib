@@ -57,7 +57,7 @@ index 39253ee..829b462 100644
  import { enqueueAttendanceWorkflow } from './_lib/m1-attendance-digest-workflow.mjs';
  import { digestGym, splitAttendanceDigest } from './_lib/m1-attendance-digest.mjs';
 +import { prepareReplyEvent, replyStore, retainReplyRouteFault } from './_lib/m1-reply-intake.mjs';
- 
+
  export const config = { path: '/api/m1-attendance-digest-job', rateLimit: { windowLimit: 20, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
  const responseCodes = new Set(['DIGEST_AUTHENTICATION_FAILED', 'DIGEST_RUNTIME_UNAVAILABLE', 'DIGEST_INVALID_JSON', 'DIGEST_INVALID_ENVELOPE',
 @@ -60,13 +61,24 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
