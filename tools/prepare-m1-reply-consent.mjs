@@ -7,9 +7,16 @@ export async function prepareReplyConsent(root, output) {
   for (const [gym, folder] of [['rev', 'production'], ['richmond', 'richmond-production']]) {
     const manifest = JSON.parse(await readFile(resolve(root, 'integrations/google-apps-script', folder, 'appsscript.json'), 'utf8'));
     manifest.oauthScopes = [...new Set([...manifest.oauthScopes, 'https://www.googleapis.com/auth/gmail.readonly'])];
+    // With the existing Apps Script-managed default Cloud project this enables
+    // Gmail API at the approved upload. Explicit scopes still limit it to read.
+    // Standard Cloud projects instead require their existing API enable step.
+    const services = manifest.dependencies?.enabledAdvancedServices || [];
+    manifest.dependencies = { ...manifest.dependencies, enabledAdvancedServices: [
+      ...services.filter(service => service.serviceId !== 'gmail'), { userSymbol: 'Gmail', version: 'v1', serviceId: 'gmail' }
+    ] };
     const destination = resolve(output, gym); await mkdir(destination, { recursive: true });
     await writeFile(resolve(destination, 'appsscript.json'), JSON.stringify(manifest, null, 2) + '\n', { flag: 'wx' });
-    result.push({ gym, account: 'revbjjops@gmail.com', addedScope: 'https://www.googleapis.com/auth/gmail.readonly', manifest: resolve(destination, 'appsscript.json'), consentGranted: false });
+    result.push({ gym, account: 'revbjjops@gmail.com', addedScope: 'https://www.googleapis.com/auth/gmail.readonly', addedService: 'gmail:v1', manifest: resolve(destination, 'appsscript.json'), consentGranted: false });
   }
   return result;
 }

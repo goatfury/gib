@@ -30,6 +30,7 @@ globalThis.fetch = async (input, options = {}) => {
   if (method === 'PUT') return new Response(null, { status: rejectConditionalWrite ? 412 : 200, headers: { etag: 'isolated-etag' } });
   return new Response(null, { status: 404 });
 };
+if (name === 'm1-reply-intake') process.env.GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED = 'true';
 await import(pathToFileURL(entry).href);
 const module = await import(pathToFileURL(main).href);
 const mainSource = await readFile(main, 'utf8');

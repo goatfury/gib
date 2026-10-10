@@ -6,7 +6,7 @@ import { processDigestRehearsal } from './_lib/m1-attendance-digest-rehearsal.mj
 import { enqueueAttendanceWorkflow } from './_lib/m1-attendance-digest-workflow.mjs';
 import { digestGym } from './_lib/m1-attendance-digest.mjs';
 import { managerAttendanceEmail } from './_lib/m1-manager-attendance-email.mjs';
-import { prepareReplyEvent } from './_lib/m1-reply-intake.mjs';
+import { prepareReplyEvent, replyStore, retainReplyRouteFault } from './_lib/m1-reply-intake.mjs';
 
 export const config = { path: '/api/m1-attendance-digest-job', rateLimit: { windowLimit: 20, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
 const responseCodes = new Set(['DIGEST_AUTHENTICATION_FAILED', 'DIGEST_RUNTIME_UNAVAILABLE', 'DIGEST_INVALID_JSON', 'DIGEST_INVALID_ENVELOPE',
@@ -62,7 +62,7 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
     const emailFirst = scope.target === 'production' && (dependencies.env || process.env).GIB_M1_ATTENDANCE_EMAIL_FIRST_ENABLED === 'true';
     const verifyOnly = emailFirst && job.binding.mode === 'scheduled' && request.headers.get('X-GIB-M1-Digest-Check') === 'read-only-v1';
     const checkDependencies = verifyOnly ? { ...dependencies, digestStore: readOnlyDigestOverlay(dependencies.digestStore || await defaultDigestStore(scope)) } : dependencies;
-    let dailyEmail = null;
+    let dailyEmail = null, replyRouteFault = null;
     const workflowDependencies = job.binding.mode === 'scheduled' ? { ...checkDependencies, onDigestCheck: async check => {
       if (emailFirst) {
         dailyEmail = managerAttendanceEmail(check.digest, check.configuration, check.uploadAssessment);
@@ -70,7 +70,13 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
           // Queue failure cannot suppress the existing warning. No marker means
           // the Google sender keeps the existing Andrew Reply-To for this mail.
           try { dailyEmail = await prepareReplyEvent(check, scope, dailyEmail, dependencies); }
-          catch { (dependencies.traceLog || console.info)('M1_REPLY_EVENT_UNAVAILABLE', JSON.stringify({ gym: digestGym(scope), requestId: check.binding.requestId })); }
+          catch {
+            replyRouteFault = { eventId: check.binding.requestId, at: check.binding.createdAt, code: 'event-registration-unavailable' };
+            try { await retainReplyRouteFault(await replyStore(scope, dependencies), digestGym(scope), replyRouteFault, clock()); } catch {}
+            // The worker also retains this metadata in its separate Script
+            // Properties store, so a Blobs outage cannot erase the fallback.
+            (dependencies.traceLog || console.info)('M1_REPLY_EVENT_UNAVAILABLE', JSON.stringify({ gym: digestGym(scope), requestId: check.binding.requestId }));
+          }
         }
         return; // Google owns the one send opportunity; no detached second sender.
       }
@@ -81,7 +87,7 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
     const result = await (job.binding.mode === 'rehearsal' ? processDigestRehearsal : processDigestJob)(job, scope, workflowDependencies);
     report(200, 'DIGEST_JOB_ACCEPTED');
     return jsonResponse(200, { ok: true, accepted: true, requestId: job.binding.requestId, state: result.state, messageId: result.messageId || null,
-      ...(emailFirst ? { dailyEmail } : {}), ...(verifyOnly ? { readOnly: true } : {}) });
+      ...(emailFirst ? { dailyEmail } : {}), ...(replyRouteFault ? { replyRouteFault } : {}), ...(verifyOnly ? { readOnly: true } : {}) });
   } catch (error) {
     return reject(Number.isInteger(error.status) && error.status >= 400 && error.status < 600 ? error.status : 503,
       responseCodes.has(error.code) ? error.code : 'DIGEST_JOB_UNAVAILABLE');

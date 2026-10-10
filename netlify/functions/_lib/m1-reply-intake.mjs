@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { digestHash, digestGym, digestStoreName } from './m1-attendance-digest.mjs';
+import { digestHash, digestGym, digestStoreName, digestLabelKey as labelKey } from './m1-attendance-digest.mjs';
 import { periodFor } from './m1-manager-review.mjs';
 
 export const REPLY_SCHEMA = 'm1-reply-intake/v1';
@@ -13,7 +13,6 @@ const hex = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const gmailId = value => typeof value === 'string' && /^[a-f0-9]{8,40}$/.test(value);
 const text = (value, max = 240) => typeof value === 'string' && value.length > 0 && value.length <= max && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
 const normal = value => String(value).normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
-const labelKey = value => normal(value).replace(/['`]/g, "'");
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 export const eventMarker = (gym, id) => '[GiB ' + gym + ' ' + id + ']';
 export async function replyStore(scope, dependencies = {}) {
@@ -22,15 +21,17 @@ export async function replyStore(scope, dependencies = {}) {
   const { getStore } = await import('@netlify/blobs');
   return getStore({ name: digestStoreName(scope, 'delivery'), consistency: 'strong' });
 }
-async function read(store, key) { return (await store.getWithMetadata(REPLY_PREFIX + key, { type: 'json', consistency: 'strong' }))?.data ?? null; }
-async function retain(store, key, value) {
+export async function readReplyRecord(store, key) { return (await store.getWithMetadata(REPLY_PREFIX + key, { type: 'json', consistency: 'strong' }))?.data ?? null; }
+const read = readReplyRecord;
+export async function retainReplyRecord(store, key, value) {
   const result = await store.set(REPLY_PREFIX + key, JSON.stringify(value), { onlyIfNew: true });
   const saved = await read(store, key);
   if (![true, false].includes(result?.modified) || digestHash(saved) !== digestHash(value)) fail('REPLY_STORAGE_CONFLICT');
   return result.modified;
 }
+const retain = retainReplyRecord;
 export async function listReplyRecords(store, kind) {
-  if (!['events', 'queue', 'reviews', 'polls', 'rejections'].includes(kind)) fail('REPLY_KEY_INVALID');
+  if (!['events', 'queue', 'reviews', 'polls', 'rejections', 'thread-evidence', 'route-faults', 'route-verifications', 'handoffs', 'handoff-receipts'].includes(kind)) fail('REPLY_KEY_INVALID');
   const { blobs } = await store.list({ prefix: REPLY_PREFIX + kind + '/' });
   if (blobs.length > 10000) fail('REPLY_REVIEW_CAPACITY');
   return Promise.all(blobs.map(async blob => {
@@ -75,6 +76,22 @@ export async function prepareReplyEvent(check, scope, report, dependencies = {})
   await retain(store, 'events/' + event.eventId, event);
   return { ...report, rendered: { ...report.rendered, subject: event.subject } };
 }
+export async function retainReplyRouteFault(store, gym, fault, now) {
+  if (!uuid(fault?.eventId) || !Number.isSafeInteger(fault.at) || fault.at <= 0 || fault.at > now
+    || !['event-registration-unavailable', 'sender-route-unconfirmed'].includes(fault.code)) fail('REPLY_ROUTE_FAULT_INVALID');
+  const record = { id: digestHash([gym, fault.eventId, fault.code]), gym, eventId: fault.eventId, at: fault.at, code: fault.code };
+  await retain(store, 'route-faults/' + record.id, record); return record;
+}
+export async function verifyReplyRouteRecovery(store, gym, input, reviewer, now) {
+  if (!hex(input.faultId) || !uuid(input.eventId) || !text(input.reason, 1000)) fail('REPLY_ROUTE_PROOF_REQUIRED');
+  const fault = await read(store, 'route-faults/' + input.faultId), event = await read(store, 'events/' + input.eventId);
+  const polls = await listReplyRecords(store, 'polls');
+  if (fault?.gym !== gym || event?.gym !== gym || event.createdAt < fault.at
+    || !polls.some(p => p.gym === gym && p.status === 'complete' && p.checkedAt >= fault.at)) fail('REPLY_ROUTE_PROOF_REQUIRED');
+  const key = 'route-verifications/' + fault.id;
+  const record = { faultId: fault.id, eventId: event.eventId, gym, reason: input.reason, reviewer };
+  await retain(store, key, record); return record;
+}
 
 export function validateReplyMessage(message) {
   if (!message || !gmailId(message.gmailId) || !gmailId(message.threadId) || !uuid(message.eventId)
@@ -112,10 +129,16 @@ export async function ingestReply(store, gym, message, now) {
   if (event && (event.gym !== gym || event.target !== 'production')) fail('REPLY_GYM_MISMATCH');
   const id = digestHash([MAILBOX, message.gmailId]);
   const original = await read(store, 'queue/' + id);
-  const sourceHash = digestHash(message);
+  const { parent, ...immutableMessage } = message;
+  const sourceHash = digestHash(immutableMessage);
   if (original) {
-    if (original.sourceHash !== sourceHash) fail('REPLY_REPLAY_CONFLICT');
-    return { id, new: false, state: original.state };
+    if (original.sourceHash !== sourceHash) {
+      await retain(store, 'rejections/' + id + '/conflict-' + sourceHash, { id, gym, gmailId: message.gmailId,
+        code: 'REPLY_REPLAY_CONFLICT', state: 'operator-review-required', originalSourceHash: original.sourceHash, conflictingSourceHash: sourceHash });
+      return { id, new: false, state: 'replay-conflict' };
+    }
+    await quarantineUnverifiedReply(store, original);
+    return observeThreadEvidence(store, original, message, event, now, false);
   }
   const state = classify(message, event, now);
   // Wrong sender/recipient/event gets no body retention and no agent wake.
@@ -128,13 +151,45 @@ export async function ingestReply(store, gym, message, now) {
     unresolvedRemainder: relevant && /\bboth\b/i.test(message.body) ? 'A second occurrence is not established by this reply; verify it separately.' : null,
     payrollState: 'held-for-review', attendanceWritten: false, payrollReleased: false };
   const created = await retain(store, 'queue/' + id, record);
-  return { id, new: created && relevant, state };
+  await quarantineUnverifiedReply(store, record);
+  return observeThreadEvidence(store, record, message, event, now, created);
+}
+async function observeThreadEvidence(store, source, message, event, now, created) {
+  if (!source.relevant) return { id: source.id, new: false, state: source.state };
+  const state = classify(message, event, now);
+  const parentHash = digestHash(message.parent);
+  const evidenceId = digestHash([source.id, source.sourceHash, parentHash, state]);
+  const evidence = { schema: 'm1-reply-thread-evidence/v1', id: evidenceId, sourceId: source.id, sourceHash: source.sourceHash,
+    gym: source.gym, eventId: source.eventId, parentHash, parent: message.parent, state };
+  const fresh = await retain(store, 'thread-evidence/' + source.id + '/' + evidenceId, evidence);
+  return { id: source.id, new: created || fresh && source.state === 'thread-unverified' && state !== 'thread-unverified', state, evidenceId };
+}
+function projectedReply(source, evidence, rejections) {
+  const matching = evidence.filter(e => e.sourceId === source.id && e.sourceHash === source.sourceHash && e.gym === source.gym);
+  const verified = matching.filter(e => e.state !== 'thread-unverified');
+  const parents = [...new Set(verified.map(e => e.parentHash))];
+  const conflicting = rejections.some(r => r.id === source.id && r.code === 'REPLY_REPLAY_CONFLICT');
+  // Missing a parent on a later fetch cannot erase previously verified proof.
+  // Different verified parents or source bytes always return to an explicit hold.
+  const state = conflicting ? 'replay-conflict' : parents.length > 1 ? 'thread-evidence-conflict'
+    : verified.find(e => e.state === 'stale-thread')?.state || verified[0]?.state || source.state;
+  const evidenceIds = verified.map(e => e.id).sort();
+  return { ...source, state, evidenceIds, sourceVersion: digestHash([source.sourceHash, state, evidenceIds, conflicting]) };
+}
+async function quarantineUnverifiedReply(store, record) {
+  if (!['sender-unverified', 'event-not-found'].includes(record.state)) return;
+  // The expected attendance scan found evidence we cannot verify. Keep it
+  // visible to the operator without trusting or retaining its message body.
+  // Replay also repairs a crash after the source write but before quarantine.
+  await retain(store, 'rejections/' + record.id, { id: record.id, gym: record.gym, gmailId: record.gmailId,
+    code: record.state === 'sender-unverified' ? 'REPLY_SENDER_UNVERIFIED' : 'REPLY_EVENT_NOT_FOUND', state: 'operator-review-required' });
 }
 export async function recordReplyPoll(store, gym, input, now) {
   if (!uuid(input.requestId) || !Number.isSafeInteger(input.scanFrom) || !Number.isSafeInteger(input.scanThrough)
     || input.scanFrom > input.scanThrough || input.scanThrough > now || !['complete', 'access-revoked', 'poll-failed', 'capacity-exceeded'].includes(input.status)
     || !Array.isArray(input.messages) || input.messages.length > 50 || input.status !== 'complete' && input.messages.length) fail('REPLY_POLL_INVALID');
   const receipts = [];
+  const routeFault = input.routeFault && await retainReplyRouteFault(store, gym, input.routeFault, now);
   for (const message of input.messages) {
     try { receipts.push(await ingestReply(store, gym, message, now)); }
     catch (error) {
@@ -146,30 +201,44 @@ export async function recordReplyPoll(store, gym, input, now) {
   }
   // Retries retain the exact batch; freshness is not rewritten by a replay.
   const poll = { schema: 'm1-reply-poll/v1', requestId: input.requestId, gym, scanFrom: input.scanFrom, scanThrough: input.scanThrough,
-    status: input.status, checkedAt: input.createdAt, messageIds: receipts.map(r => r.id) };
+    status: input.status, checkedAt: input.createdAt, messageIds: receipts.map(r => r.id), evidenceIds: receipts.map(r => r.evidenceId || null) };
   await retain(store, 'polls/' + input.requestId, poll);
-  return { accepted: true, newRelevant: receipts.filter(r => r.new).map(r => r.id) };
+  const routeFaultAcknowledged = routeFault && await read(store, 'route-verifications/' + routeFault.id);
+  return { accepted: true, newRelevant: receipts.filter(r => r.new).map(r => r.id),
+    ...(routeFaultAcknowledged ? { routeFaultAcknowledged: routeFault.eventId } : {}) };
 }
 export async function replyQueue(store, gym, now) {
-  const [queue, polls, reviews, rejections] = await Promise.all(['queue', 'polls', 'reviews', 'rejections'].map(kind => listReplyRecords(store, kind)));
-  const latest = polls.filter(p => p.gym === gym).sort((a,b) => b.checkedAt - a.checkedAt)[0];
-  const code = !latest || now - latest.checkedAt > 3 * 3600000 ? 'poll-overdue' : latest.status !== 'complete' ? latest.status
-    : now - latest.scanThrough > 24 * 3600000 ? 'poll-backlog' : rejections.length ? 'message-quarantined' : 'healthy';
-  return { gym, health: { code, checkedAt: latest?.checkedAt || null, scanThrough: latest?.scanThrough || null,
+  const [sources, polls, reviews, rejections, evidence, routeFaults, routeVerifications] = await Promise.all(['queue', 'polls', 'reviews', 'rejections', 'thread-evidence', 'route-faults', 'route-verifications'].map(kind => listReplyRecords(store, kind)));
+  const queue = sources.map(source => projectedReply(source, evidence, rejections));
+  const unresolvedRouteFaults = routeFaults.filter(f => f.gym === gym && !routeVerifications.some(v => v.faultId === f.id && v.gym === gym));
+  const orderedPolls = polls.filter(p => p.gym === gym).sort((a,b) => b.checkedAt - a.checkedAt);
+  const latest = orderedPolls[0];
+  const mailboxCode = !latest || now - latest.checkedAt > 3 * 3600000 ? 'poll-overdue' : latest.status !== 'complete' ? latest.status
+    : now - latest.scanThrough > 24 * 3600000 ? 'poll-backlog' : rejections.length || queue.some(r => r.state === 'thread-evidence-conflict') ? 'message-quarantined' : 'healthy';
+  const code = mailboxCode === 'healthy' && unresolvedRouteFaults.length ? 'route-degraded' : mailboxCode;
+  const episodeAnchor = mailboxCode === 'poll-overdue' ? latest?.requestId : latest?.status !== 'complete'
+    ? orderedPolls.find(p => p.status !== latest?.status)?.requestId
+    : mailboxCode === 'poll-backlog' ? orderedPolls.find(p => p.status === 'complete' && p.checkedAt - p.scanThrough <= 24 * 3600000)?.requestId : null;
+  return { gym, health: { code, mailboxCode, checkedAt: latest?.checkedAt || null, scanThrough: latest?.scanThrough || null,
+    episode: code === 'healthy' ? null : digestHash([gym, code, episodeAnchor || 'initial']),
     exceptionKey: code === 'healthy' ? null : gym + ':reply-intake', action: code === 'healthy' ? null : 'Check the hourly business-mailbox trigger and its authorization; retry the retained interval. Do not change attendance.' },
+    routing: { code: unresolvedRouteFaults.length ? 'route-degraded' : routeFaults.length ? 'recovery-verified' : 'unverified', unresolvedFaults: unresolvedRouteFaults, verifications: routeVerifications,
+      action: unresolvedRouteFaults.length ? 'A reminder fell back to Andrew. Repair event registration, verify a retained event and successful scan, and account for replies to the old address before clearing this exception.' : null },
     items: queue.filter(r => r.gym === gym && r.relevant).sort((a,b) => a.receivedAt - b.receivedAt).map(r => ({ ...r,
       relatedSourceIds: queue.filter(other => other.id !== r.id && other.gym === gym && other.eventId === r.eventId && other.relevant).map(other => other.id),
-      intakeState: reviews.find(review => review.sourceId === r.id)?.decision === 'propose-correction' ? 'proposed'
-        : reviews.find(review => review.sourceId === r.id)?.decision || 'received' })), reviews, rejections,
+      intakeState: reviews.find(review => review.sourceId === r.id && review.sourceVersion === r.sourceVersion)?.decision === 'propose-correction' ? 'proposed'
+        : reviews.find(review => review.sourceId === r.id && review.sourceVersion === r.sourceVersion)?.decision || 'received' })), reviews, rejections,
     attendanceWritesEnabled: false, clarificationEmailsEnabled: false, payrollReleaseEnabled: false };
 }
 
-// One immutable human decision per source reply. Amended replies are new source
-// messages, not overwrites. This records a proposal, never calls attendance APIs.
+// One immutable human decision per source/evidence version. New thread proof
+// preserves earlier held reviews. No decision calls attendance APIs.
 export async function reviewReply(store, gym, input, reviewer, now) {
   if (!hex(input.id) || !uuid(input.reviewId) || !CAUSES.includes(input.cause) || !text(input.reason, 1000)
     || !['propose-correction', 'hold', 'dismiss'].includes(input.decision)) fail('REPLY_REVIEW_INVALID');
-  const source = await read(store, 'queue/' + input.id), event = source && await read(store, 'events/' + source.eventId);
+  const original = await read(store, 'queue/' + input.id), event = original && await read(store, 'events/' + original.eventId);
+  const [evidence, rejections] = await Promise.all(['thread-evidence', 'rejections'].map(kind => listReplyRecords(store, kind)));
+  const source = original && projectedReply(original, evidence, rejections);
   if (!source?.relevant || source.gym !== gym || !event) fail('REPLY_REVIEW_SOURCE_INVALID');
   let selected = null;
   if (input.decision === 'propose-correction') {
@@ -185,14 +254,16 @@ export async function reviewReply(store, gym, input, reviewer, now) {
     selected = { ...question, instructor: input.instructor, action: input.action, duration: input.duration };
   }
   const record = { schema: 'm1-reply-review/v1', reviewId: input.reviewId, sourceId: source.id, sourceHash: source.sourceHash,
+    sourceVersion: source.sourceVersion,
     eventId: event.eventId, gym, reviewer, reviewedAt: now, decision: input.decision, reason: input.reason,
     cause: input.cause, causeReviewed: input.cause !== 'unresolved', selected, payrollState: 'held-until-audit-and-payroll-readback', attendanceWritten: false, payrollReleased: false };
-  const existing = await read(store, 'reviews/' + source.id);
+  const reviewKey = 'reviews/' + source.id + '/' + source.sourceVersion;
+  const existing = await read(store, reviewKey);
   if (existing) {
     if (digestHash({ ...existing, reviewedAt: 0 }) !== digestHash({ ...record, reviewedAt: 0 })) fail('REPLY_REVIEW_CONFLICT');
     return existing;
   }
-  await retain(store, 'reviews/' + source.id, record); return record;
+  await retain(store, reviewKey, record); return record;
 }
 
 // Offline comparison of independently exported attendance audit and payroll

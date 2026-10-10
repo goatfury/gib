@@ -226,6 +226,9 @@ function gibM1AttendanceEmailFirstTick_() {
     var checked = gibM1DigestDispatch_(binding);
     if (checked.ok === true && gibM1EmailFirstReportValid_(checked.dailyEmail, scope, date)) report = checked.dailyEmail;
   } catch (_) { /* A new unavailable check still follows the accepted warning policy. */ }
+  if (typeof gibM1ReplyRememberRoute_ === 'function') {
+    try { gibM1ReplyRememberRoute_(scope, report, claimed.requestId, now, checked?.replyRouteFault); } catch (_) { /* Keep the existing warning send policy. */ }
+  }
   var managerPolicy = scope.gym === 'rev' && (!report || report.schema === GIB_M1_EMAIL_FIRST_MANAGER_SCHEMA_);
   var faults = report?.monitorFaults || [{signature:managerHash_(['rev-repeat-unchanged-monitor/v1','rev','production','MONITOR_CHECK_UNAVAILABLE']),repeatable:true}];
   var repeated = managerPolicy ? faults.filter(function(f){return f.repeatable && priorFaults.some(function(p){return p.signature===f.signature && p.lastWarning;});}) : [];

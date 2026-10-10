@@ -100,6 +100,23 @@ function readBusinessAttendanceReplyQueue() {
   return gibM1ReplyPost_(scope, { schema: GIB_M1_REPLY_SCHEMA_, action: 'read', gym: scope.gym, target: 'production',
     requestId: Utilities.getUuid(), createdAt: now, expiresAt: now + 60000 });
 }
+function gibM1ReplyRememberRoute_(scope, report, requestId, now, reportedFault) {
+  var p = PropertiesService.getScriptProperties();
+  if (p.getProperty('GIB_M1_REPLY_ROUTING_ENABLED') !== 'true') return;
+  var missingMarker = !report || report.shouldSend && !gibM1ReplyEventId_(report.rendered?.subject || '', scope.gym);
+  if (!reportedFault && !missingMarker) return;
+  var fault = reportedFault?.eventId === requestId ? reportedFault : { eventId: requestId, at: now, code: 'sender-route-unconfirmed' };
+  var key = 'GIB_M1_REPLY_ROUTE_FAULT';
+  // Successful reports do not clear a fault. A new fallback replaces the
+  // transport pointer so an earlier acknowledgement cannot hide a recurrence;
+  // each observed fault stays immutable in the private server queue.
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) throw new Error('REPLY_ROUTE_FAULT_UNCONFIRMED');
+  try {
+    p.setProperty(key, JSON.stringify(fault));
+    if (p.getProperty(key) !== JSON.stringify(fault)) throw new Error('REPLY_ROUTE_FAULT_UNCONFIRMED');
+  } finally { lock.releaseLock(); }
+}
 // Install one hourly time trigger per existing production project using the
 // editor UI only after access + receiving route verification. No trigger API
 // scope is requested here; this source never creates or deletes triggers.
@@ -114,6 +131,8 @@ function pollBusinessAttendanceReplies() {
   var input = { schema: GIB_M1_REPLY_SCHEMA_, action: 'poll', gym: scope.gym, target: 'production',
     requestId: Utilities.getUuid(), createdAt: now, expiresAt: now + 60000,
     scanFrom: Math.max(start, cursor - 600000), scanThrough: now - 120000, messages: [], status: 'complete' };
+  var routeFault = properties.getProperty('GIB_M1_REPLY_ROUTE_FAULT');
+  if (routeFault) input.routeFault = JSON.parse(routeFault);
   if (input.scanThrough < input.scanFrom) return { warmingUp: true };
   try {
     if (gibM1ReplyGet_('profile').emailAddress !== GIB_M1_REPLY_MAILBOX_) throw new Error('REPLY_ACCOUNT_UNVERIFIED');
@@ -147,6 +166,14 @@ function pollBusinessAttendanceReplies() {
   // Fresh transport binding; scan interval remains the original interval.
   input.createdAt = Date.now(); input.expiresAt = input.createdAt + 60000;
   var result = gibM1ReplyPost_(scope, input);
+  if (input.routeFault && result.routeFaultAcknowledged === input.routeFault.eventId) {
+    // Never clear a newer failure written by a concurrent nightly sender.
+    var faultLock = LockService.getScriptLock();
+    if (faultLock.tryLock(1000)) {
+      try { if (properties.getProperty('GIB_M1_REPLY_ROUTE_FAULT') === routeFault) properties.setProperty('GIB_M1_REPLY_ROUTE_FAULT', ''); }
+      finally { faultLock.releaseLock(); }
+    }
+  }
   if (input.status === 'complete') {
     var lock = LockService.getScriptLock(); if (!lock.tryLock(1000)) throw new Error('REPLY_CURSOR_UNCONFIRMED');
     try {

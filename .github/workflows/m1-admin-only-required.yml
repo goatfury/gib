@@ -78,7 +78,7 @@ jobs:
 
   richmond-test-package:
     name: Package Richmond TEST pilot (no deployment)
-    if: github.head_ref == 'feature/m1-manager-day-review-20260922'
+    if: github.head_ref == 'feature/m1-manager-day-review-20260922' || github.head_ref == 'business-reply-intake-20261010'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -133,6 +133,23 @@ jobs:
       - name: Validate attendance-only release archives with correction/access/recovery off
         run: |
           node tools/package-m1-disabled-release.mjs "$(git rev-parse HEAD)" .m1-email-first-release .m1-test-packager/node_modules/netlify-cli --preserve-revolution-promotions --email-first
+      - name: Verify reply pilot overlays on both exact live source revisions (no deployment)
+        if: github.head_ref == 'business-reply-intake-20261010'
+        run: |
+          git fetch --no-tags origin 2cd775876af71f8b8ead0fed6eaa527e617e5d60 682e9eb6aab5db00d8933a1925a51783b362f904 5984438610d474f3c286752e42ebd78c9e6f241e
+          node tools/package-m1-reply-overlays.mjs .m1-reply-overlays .m1-test-packager/node_modules/netlify-cli
+      - uses: actions/upload-artifact@v4
+        if: github.head_ref == 'business-reply-intake-20261010'
+        with:
+          name: m1-reply-overlays-${{ github.event.pull_request.head.sha }}
+          path: |
+            .m1-reply-overlays/*-artifacts/
+            .m1-reply-overlays/*-overlay.json
+            .m1-reply-overlays/*-regressions.txt
+            .m1-reply-overlays/overlays.json
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: m1-email-first-release-${{ github.event.pull_request.head.sha }}

@@ -44,11 +44,12 @@ async function filesAt(root, prefix) {
   }
   return files.sort();
 }
-export async function packageDisabledRelease({ source, output, cliRoot, root = ROOT, preserveRevolutionPromotions = false, activation = false, emailFirst = false, runtime = process.execPath }) {
+export async function packageDisabledRelease({ source, output, cliRoot, root = ROOT, preserveRevolutionPromotions = false, activation = false, emailFirst = false, runtime = process.execPath, gyms = ['rev', 'richmond'] }) {
   assert.match(source || '', /^[a-f0-9]{40}$/, 'Exact reviewed GitHub source required; local HEAD is not assumed.');
   assert.equal(typeof preserveRevolutionPromotions, 'boolean', 'Explicit promotion preservation must be a boolean.');
   assert.equal(typeof activation, 'boolean');
   assert.equal(typeof emailFirst, 'boolean'); assert.ok(!(activation && emailFirst));
+  assert.ok(Array.isArray(gyms) && gyms.length && new Set(gyms).size === gyms.length && gyms.every(gym => ['rev', 'richmond'].includes(gym)));
   assert.match(execFileSync(runtime, ['--version'], { encoding: 'utf8' }).trim(), /^v22\./, 'Archive verification requires production Node22.');
   const destination = resolve(output), clientRoot = resolve(cliRoot);
   await mkdir(destination, { recursive: true });
@@ -66,7 +67,7 @@ export async function packageDisabledRelease({ source, output, cliRoot, root = R
   const sourceHashes = {};
   for (const path of inputs) sourceHashes[path] = sha256(await readFile(resolve(root, path)));
   const receipts = [];
-  for (const gym of ['rev', 'richmond']) {
+  for (const gym of gyms) {
     // A separate lockfile install is essential: the packager must resolve from
     // this stage, rather than a checkout junction or an unrelated parent install.
     const stage = resolve(root, emailFirst ? '.m1-email-first-release-stage' : activation ? '.m1-activation-release-stage' : '.m1-disabled-release-stage', source, gym);

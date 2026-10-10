@@ -1,0 +1,97 @@
+diff --git a/integrations/google-apps-script/GibM1AttendanceEmailFirst.gs b/integrations/google-apps-script/GibM1AttendanceEmailFirst.gs
+index e5668e7..b851996 100644
+--- a/integrations/google-apps-script/GibM1AttendanceEmailFirst.gs
++++ b/integrations/google-apps-script/GibM1AttendanceEmailFirst.gs
+@@ -160,6 +160,9 @@ function gibM1AttendanceEmailFirstTick_() {
+     var checked = gibM1DigestDispatch_(binding);
+     if (checked.ok === true && gibM1EmailFirstReportValid_(checked.dailyEmail, scope, date)) report = checked.dailyEmail;
+   } catch (_) { /* A failed website/record read still produces an honest warning. */ }
++  if (typeof gibM1ReplyRememberRoute_ === 'function') {
++    try { gibM1ReplyRememberRoute_(scope, report, claimed.requestId, now, checked?.replyRouteFault); } catch (_) { /* Preserve the existing warning policy. */ }
++  }
+   if (report && !report.shouldSend && !missed.length) {
+     properties.setProperty('GIB_M1_ATTENDANCE_EMAIL_FIRST_COVERAGE_THROUGH', date);
+     gibM1EmailFirstWrite_(properties, { ...claimed, state: 'suppressed', completedAt: Date.now(), code: 'COMPLETE_CLEAN_CHECK' });
+@@ -187,7 +190,11 @@ function gibM1AttendanceEmailFirstTick_() {
+     || properties.getProperty('GIB_M1_MAILAPP_LIVE_SEND_ENABLED') !== 'true'
+     || properties.getProperty('GIB_M1_ATTENDANCE_DIGEST_LIVE_SCHEDULE_ENABLED') !== 'true') return;
+   // Do not depend on Spreadsheet availability for a warning about unavailable records.
+-  var hash = managerHash_({ ...rendered, from: GIB_M1_MAILAPP_SENDER_, ...expected, replyTo: 'andrew@revolutionbjj.com' });
++  var sendOptions = { to: expected.to[0], bcc: expected.bcc[0], replyTo: 'andrew@revolutionbjj.com',
++    subject: rendered.subject, body: rendered.text, htmlBody: rendered.html };
++  if (typeof gibM1ReplyMailOptions_ === 'function') sendOptions = gibM1ReplyMailOptions_(scope, sendOptions);
++  rendered = { subject: sendOptions.subject, text: sendOptions.body, html: sendOptions.htmlBody };
++  var hash = managerHash_({ ...rendered, from: GIB_M1_MAILAPP_SENDER_, ...expected, replyTo: sendOptions.replyTo });
+   var attempt = { ...claimed, state: 'call-pending', attemptedAt: Date.now(), hash: hash, checkConfirmed: Boolean(report) };
+   gibM1EmailFirstWrite_(properties, attempt);
+   gibM1EmailFirstAudit_(scope, attempt, rendered, 'attempt');
+@@ -195,8 +202,7 @@ function gibM1AttendanceEmailFirstTick_() {
+     || properties.getProperty('GIB_M1_MAILAPP_LIVE_SEND_ENABLED') !== 'true'
+     || properties.getProperty('GIB_M1_ATTENDANCE_DIGEST_LIVE_SCHEDULE_ENABLED') !== 'true') return;
+   var submitted = false;
+-  try { MailApp.sendEmail({ to: expected.to[0], bcc: expected.bcc[0], replyTo: 'andrew@revolutionbjj.com',
+-    subject: rendered.subject, body: rendered.text, htmlBody: rendered.html }); submitted = true; }
++  try { MailApp.sendEmail(sendOptions); submitted = true; }
+   catch (_) { /* Google may have accepted it; never resend this date. */ }
+   var completed = { ...attempt, state: submitted ? 'submitted' : 'uncertain', completedAt: Date.now(),
+     code: submitted ? 'GOOGLE_ACCEPTED_SEND' : 'SEND_OUTCOME_UNCERTAIN' };
+diff --git a/netlify/functions/_lib/m1-attendance-digest-outbox.mjs b/netlify/functions/_lib/m1-attendance-digest-outbox.mjs
+index 5983ff8..c04c7ff 100644
+--- a/netlify/functions/_lib/m1-attendance-digest-outbox.mjs
++++ b/netlify/functions/_lib/m1-attendance-digest-outbox.mjs
+@@ -199,7 +199,7 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies =
+     }
+     // The workflow consumes this fresh authenticated check, never an earlier
+     // immutable daily capture. Its one bounded attempt stays fully awaited.
+-    if (dependencies.onDigestCheck) await dependencies.onDigestCheck({ digest, configuration, binding, due, dueByGym, opportunityDueByGym });
++    if (dependencies.onDigestCheck) await dependencies.onDigestCheck({ digest, configuration, binding, due, dueByGym, opportunityDueByGym, snapshots, schedules });
+     if (due !== 'due') return completeRequest(store, binding.requestId, { state: due });
+   }
+   const rendered = renderAttendanceDigest(digest);
+diff --git a/netlify/functions/m1-attendance-digest-job.mjs b/netlify/functions/m1-attendance-digest-job.mjs
+index 39253ee..829b462 100644
+--- a/netlify/functions/m1-attendance-digest-job.mjs
++++ b/netlify/functions/m1-attendance-digest-job.mjs
+@@ -5,6 +5,7 @@ import { validId } from './_lib/m1-test-read-callback.mjs';
+ import { processDigestRehearsal } from './_lib/m1-attendance-digest-rehearsal.mjs';
+ import { enqueueAttendanceWorkflow } from './_lib/m1-attendance-digest-workflow.mjs';
+ import { digestGym, splitAttendanceDigest } from './_lib/m1-attendance-digest.mjs';
++import { prepareReplyEvent, replyStore, retainReplyRouteFault } from './_lib/m1-reply-intake.mjs';
+ 
+ export const config = { path: '/api/m1-attendance-digest-job', rateLimit: { windowLimit: 20, windowSize: 60, aggregateBy: ['ip', 'domain'] } };
+ const responseCodes = new Set(['DIGEST_AUTHENTICATION_FAILED', 'DIGEST_RUNTIME_UNAVAILABLE', 'DIGEST_INVALID_JSON', 'DIGEST_INVALID_ENVELOPE',
+@@ -60,13 +61,24 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
+     const emailFirst = scope.target === 'production' && (dependencies.env || process.env).GIB_M1_ATTENDANCE_EMAIL_FIRST_ENABLED === 'true';
+     const verifyOnly = emailFirst && job.binding.mode === 'scheduled' && request.headers.get('X-GIB-M1-Digest-Check') === 'read-only-v1';
+     const checkDependencies = verifyOnly ? { ...dependencies, digestStore: readOnlyDigestOverlay(dependencies.digestStore || await defaultDigestStore(scope)) } : dependencies;
+-    let dailyEmail = null;
++    let dailyEmail = null, replyRouteFault = null;
+     const workflowDependencies = job.binding.mode === 'scheduled' ? { ...checkDependencies, onDigestCheck: async check => {
+       if (emailFirst) {
+         const route = splitAttendanceDigest(check.digest, check.configuration)[0];
+         dailyEmail = { schema: 'm1-daily-email-check/v1', gym: digestGym(scope), date: job.binding.jobDate,
+           complete: true, shouldSend: route.digest.shouldCapture, rendered: route.rendered,
+           issueCount: route.digest.itemCount, unconfirmedChecks: route.digest.readFailures.length };
++        if (!verifyOnly && dailyEmail.rendered && (dependencies.env || process.env).GIB_M1_REPLY_INTAKE_ENABLED === 'true') {
++          try { dailyEmail = await prepareReplyEvent(check, scope, dailyEmail, dependencies); }
++          catch {
++            replyRouteFault = { eventId: check.binding.requestId, at: check.binding.createdAt, code: 'event-registration-unavailable' };
++            // Preserve the warning and its old Reply-To. Persist an independent
++            // health fault if Blobs is reachable; return it to the sender too,
++            // so Script Properties can report it after a storage outage.
++            try { await retainReplyRouteFault(await replyStore(scope, dependencies), digestGym(scope), replyRouteFault, clock()); } catch {}
++            (dependencies.traceLog || console.info)('M1_REPLY_EVENT_UNAVAILABLE', JSON.stringify({ gym: digestGym(scope), requestId: check.binding.requestId }));
++          }
++        }
+         return; // Google owns the one send opportunity; no detached second sender.
+       }
+       stage = 'job.workflow';
+@@ -76,7 +88,7 @@ export async function handleAttendanceDigestJob(request, dependencies = {}) {
+     const result = await (job.binding.mode === 'rehearsal' ? processDigestRehearsal : processDigestJob)(job, scope, workflowDependencies);
+     report(200, 'DIGEST_JOB_ACCEPTED');
+     return jsonResponse(200, { ok: true, accepted: true, requestId: job.binding.requestId, state: result.state, messageId: result.messageId || null,
+-      ...(emailFirst ? { dailyEmail } : {}), ...(verifyOnly ? { readOnly: true } : {}) });
++      ...(emailFirst ? { dailyEmail } : {}), ...(replyRouteFault ? { replyRouteFault } : {}), ...(verifyOnly ? { readOnly: true } : {}) });
+   } catch (error) {
+     return reject(Number.isInteger(error.status) && error.status >= 400 && error.status < 600 ? error.status : 503,
+       responseCodes.has(error.code) ? error.code : 'DIGEST_JOB_UNAVAILABLE');

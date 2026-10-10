@@ -3,14 +3,16 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { createHash, createHmac } from 'node:crypto';
-import { digestHash } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
-import { MAILBOX, MANAGERS, REPLY_PREFIX, replyEvent, prepareReplyEvent, ingestReply, recordReplyPoll, replyQueue, reviewReply, reconcileReplyPayroll, replySignature } from '../netlify/functions/_lib/m1-reply-intake.mjs';
+import { digestHash, buildAttendanceDigest, defaultDigestConfiguration } from '../netlify/functions/_lib/m1-attendance-digest.mjs';
+import { datesThrough } from '../netlify/functions/_lib/m1-manager-review.mjs';
+import { MAILBOX, MANAGERS, REPLY_PREFIX, replyEvent, prepareReplyEvent, ingestReply, recordReplyPoll, replyQueue, reviewReply, reconcileReplyPayroll, replySignature, retainReplyRouteFault, verifyReplyRouteRecovery } from '../netlify/functions/_lib/m1-reply-intake.mjs';
 import { handleReplyIntake } from '../netlify/functions/m1-reply-intake.mjs';
+import { pendingReplyHandoffs, acknowledgeReplyHandoff, deliverReplyHandoffs } from '../netlify/functions/_lib/m1-reply-handoff.mjs';
 import { runtimeConfig, createAdminSession, ADMIN_COOKIE, ADMIN_REQUEST_HEADER } from '../netlify/functions/_lib/m1-common.mjs';
 
 const ID = '11111111-1111-4111-8111-111111111111', REVIEW = '22222222-2222-4222-8222-222222222222';
 const NOW = Date.parse('2026-10-11T01:00:00Z'), DATE = '2026-10-10', LABEL = '7:15 PM BJJ', NAME = 'Canonical Instructor';
-const scope = gym => ({ target: 'production', profile: { installationId: gym, environment: 'production', activation: 'active' }, liveFeatures: { reminders: true } });
+const scope = gym => ({ target: 'production', profile: { installationId: gym, gymName: gym === 'rev' ? 'Revolution BJJ' : 'Richmond BJJ', environment: 'production', activation: 'active' }, liveFeatures: { reminders: true } });
 const plain = value => JSON.parse(JSON.stringify(value));
 function memory() {
   const entries = new Map(); let serial = 0, failKey = null;
@@ -43,6 +45,24 @@ async function seeded(gym = 'rev') {
   const f = fixture(gym), store = memory();
   await prepareReplyEvent(f.check, scope(gym), f.report, { replyStore: store }); return { ...f, store };
 }
+test('actual generated digest questions share canonical Unicode class identities with reply review', async () => {
+  for (const gym of ['rev', 'richmond']) for (const label of ['4:30 PM Kids\u2019 BJJ', '4:30 PM Kids\u2018 BJJ', '4:30 PM Kids\uFF07 BJJ']) {
+    const f = fixture(gym), dates = datesThrough(DATE);
+    f.check.snapshots[0].attendance = { ok: true, ledger: { ok: true, target: 'production', schema: 'm1-manager-review/v1', complete: true, gym,
+      from: dates[0], to: DATE, days: dates.map(date => ({ date, attendanceHash: 'a'.repeat(64), records: [], warnings: [], review: null })) } };
+    f.check.snapshots[0].attendance.ledger.days[0].records = [{ recordId: 'canonical-name-history', date: dates[0], classLabel: 'History', instructor: NAME, duration: 1, reviewRequired: false }];
+    f.check.snapshots[0].staff = { ok: true, complete: true, items: [] };
+    f.check.schedules = [{ gym, timezone: 'America/New_York', days: dates.map(date => ({ date, status: 'complete', observedAt: date + 'T12:00:00.000Z', sourceVersion: 'actual-' + date, occurrences: date === DATE ? [{ label, startAt: DATE + 'T20:30:00.000Z', endAt: DATE + 'T21:30:00.000Z', cancelled: false }] : [] })) }];
+    f.check.digest = buildAttendanceDigest({ jobDate: DATE, snapshots: f.check.snapshots, schedules: f.check.schedules, configuration: defaultDigestConfiguration(scope(gym), { GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true' }), now: NOW });
+    const item = f.check.digest.groups[0].items.find(i => i.kind === 'missing-instructor'); assert.ok(item, 'Real digest must generate a missing occurrence');
+    const store = memory(); await prepareReplyEvent(f.check, scope(gym), f.report, { replyStore: store });
+    const event = store.entries.get(REPLY_PREFIX + 'events/' + ID).data;
+    assert.equal(event.questions[0].classLabel, label); assert.equal(event.questions[0].itemId, item.id);
+    await ingestReply(store, gym, { ...f.message, subject: 'Re: ' + event.subject, parent: { ...f.message.parent, subject: event.subject } }, NOW);
+    const review = await reviewReply(store, gym, { ...f.review, itemId: item.id }, 'Andrew Smith', NOW);
+    assert.equal(review.selected.classLabel, label);
+  }
+});
 test('both gyms retain exact question, manager, canonical name, attendance hash and payroll period without changing send claims', async () => {
   for (const gym of ['rev', 'richmond']) {
     const f = await seeded(gym); f.store.entries.set('mailapp/messages/original', { data: { immutable: true }, etag: 'original' });
@@ -61,7 +81,8 @@ test('replays and concurrent polls create one source; altered replay is a confli
   const receipts = await Promise.all([1,2,3].map(() => ingestReply(f.store, 'rev', f.message, NOW)));
   assert.equal(receipts.filter(r => r.new).length, 1);
   assert.equal((await ingestReply(f.store, 'rev', f.message, NOW + 86400000)).new, false);
-  await assert.rejects(ingestReply(f.store, 'rev', { ...f.message, body: 'Changed' }, NOW), /REPLAY_CONFLICT/);
+  assert.equal((await ingestReply(f.store, 'rev', { ...f.message, body: 'Changed' }, NOW)).state, 'replay-conflict');
+  assert.equal((await replyQueue(f.store, 'rev', NOW)).rejections[0].code, 'REPLY_REPLAY_CONFLICT');
   assert.equal([...f.store.entries.keys()].filter(k => k.startsWith(REPLY_PREFIX + 'queue/')).length, 1);
 });
 test('wrong manager/gym, spoofed sender, recipient and missing event do not retain body or wake review', async () => {
@@ -154,6 +175,26 @@ test('a malformed message is durably quarantined without losing later replies or
   const q = await replyQueue(f.store, 'rev', NOW); assert.equal(q.items.length, 1); assert.equal(q.rejections.length, 1);
   assert.equal(q.health.code, 'message-quarantined');
 });
+test('unverified sender or missing event remains operator-visible without retaining body or reporting healthy', async () => {
+  for (const [patch, code] of [[{ authenticated: false }, 'REPLY_SENDER_UNVERIFIED'], [{ eventId: REVIEW }, 'REPLY_EVENT_NOT_FOUND']]) {
+    const f = await seeded();
+    const poll = { requestId: ID, scanFrom: NOW - 3600000, scanThrough: NOW - 120000, createdAt: NOW, status: 'complete', messages: [{ ...f.message, ...patch }] };
+    f.store.fail('rejections/');
+    await assert.rejects(recordReplyPoll(f.store, 'rev', poll, NOW));
+    assert.equal([...f.store.entries.keys()].some(k => k.startsWith(REPLY_PREFIX + 'polls/')), false);
+    f.store.fail(null);
+    const result = await recordReplyPoll(f.store, 'rev', poll, NOW);
+    assert.deepEqual(result.newRelevant, []);
+    const q = await replyQueue(f.store, 'rev', NOW);
+    assert.equal(q.items.length, 0); assert.equal(q.rejections.length, 1); assert.equal(q.rejections[0].code, code);
+    assert.equal(q.health.code, 'message-quarantined'); assert.equal(q.health.exceptionKey, 'rev:reply-intake');
+    assert.ok(!JSON.stringify(q).includes(f.message.body));
+    const source = [...f.store.entries.entries()].find(([k]) => k.startsWith(REPLY_PREFIX + 'queue/'))[1].data;
+    assert.equal(source.body, null);
+    await recordReplyPoll(f.store, 'rev', poll, NOW);
+    assert.equal((await replyQueue(f.store, 'rev', NOW)).rejections.length, 1);
+  }
+});
 test('crash after queue write before checkpoint is repaired by replaying the retained interval', async () => {
   const f = await seeded();
   const poll = { requestId: ID, scanFrom: NOW - 3600000, scanThrough: NOW - 120000, createdAt: NOW, status: 'complete', messages: [f.message] };
@@ -162,6 +203,33 @@ test('crash after queue write before checkpoint is repaired by replaying the ret
   f.store.fail(null); const retry = await recordReplyPoll(f.store, 'rev', poll, NOW);
   assert.deepEqual(retry.newRelevant, []); assert.equal((await replyQueue(f.store, 'rev', NOW)).items.length, 1);
   assert.equal((await replyQueue(f.store, 'rev', NOW)).health.code, 'healthy');
+});
+test('later SENT parent enriches the same immutable source, preserves held review and accepts subsequent replies', async () => {
+  const f = await seeded();
+  const first = await ingestReply(f.store, 'rev', { ...f.message, parent: null }, NOW);
+  assert.equal(first.state, 'thread-unverified');
+  const held = await reviewReply(f.store, 'rev', { ...f.review, decision: 'hold' }, 'Andrew Smith', NOW);
+  const poll = { requestId: ID, scanFrom: NOW - 3600000, scanThrough: NOW - 120000, createdAt: NOW, status: 'complete',
+    messages: [f.message, { ...f.message, gmailId: 'abcdef3333333333', rfcId: '<later@example.invalid>' }] };
+  const result = await recordReplyPoll(f.store, 'rev', poll, NOW);
+  assert.equal(result.accepted, true); assert.equal(result.newRelevant.length, 2);
+  let q = await replyQueue(f.store, 'rev', NOW);
+  assert.equal(q.items.length, 2); assert.equal(q.items[0].state, 'needs-review'); assert.equal(q.reviews[0].sourceVersion, held.sourceVersion);
+  const review = await reviewReply(f.store, 'rev', f.review, 'Andrew Smith', NOW);
+  assert.notEqual(review.sourceVersion, held.sourceVersion); assert.equal((await replyQueue(f.store, 'rev', NOW)).reviews.length, 2);
+  await ingestReply(f.store, 'rev', { ...f.message, parent: null }, NOW);
+  q = await replyQueue(f.store, 'rev', NOW); assert.equal(q.items[0].state, 'needs-review');
+  assert.equal([...f.store.entries.keys()].filter(k => k.startsWith(REPLY_PREFIX + 'queue/')).length, 2);
+});
+test('true conflicting source replay is quarantined without blocking a later valid reply or checkpoint', async () => {
+  const f = await seeded(); await ingestReply(f.store, 'rev', f.message, NOW);
+  const result = await recordReplyPoll(f.store, 'rev', { requestId: ID, scanFrom: NOW - 3600000, scanThrough: NOW - 120000, createdAt: NOW, status: 'complete',
+    messages: [{ ...f.message, body: 'Contradictory source bytes' }, { ...f.message, gmailId: 'abcdef4444444444', rfcId: '<later@example.invalid>' }] }, NOW);
+  assert.equal(result.accepted, true); assert.equal(result.newRelevant.length, 1);
+  const q = await replyQueue(f.store, 'rev', NOW); assert.equal(q.items.length, 2); assert.equal(q.health.code, 'message-quarantined');
+  assert.equal(q.items[0].body, f.message.body); assert.equal(q.items[0].state, 'replay-conflict');
+  await assert.rejects(reviewReply(f.store, 'rev', f.review, 'Andrew Smith', NOW), /AMBIGUITY/);
+  assert.equal(q.items[1].state, 'needs-review');
 });
 test('repeated facts and a later actually reply remain separate source evidence on the same event', async () => {
   const f = await seeded();
@@ -218,6 +286,89 @@ test('reviewer read failure is explicit, never a false empty queue', async () =>
   const f = await seeded();
   f.store.list = async () => { throw Error('read failure'); };
   await assert.rejects(replyQueue(f.store, 'rev', NOW), /read failure/);
+});
+
+test('private handoff wakes once for new evidence, retries a lost acknowledgement, and never wakes for healthy empty polling', async () => {
+  for (const gym of ['rev', 'richmond']) {
+    const f = await seeded(gym), accepted = new Map(); let attempts = 0, loseAck = true;
+    await recordReplyPoll(f.store, gym, { requestId: ID, createdAt: NOW, scanFrom: NOW - 3600000, scanThrough: NOW - 120000, status: 'complete', messages: [] }, NOW);
+    const request = async input => {
+      if (input.action === 'read') return { ok: true, ...await replyQueue(f.store, gym, NOW) };
+      if (input.action === 'handoffs') return { ok: true, ...await pendingReplyHandoffs(f.store, gym, NOW) };
+      if (loseAck) { loseAck = false; throw Error('ack response lost'); }
+      return { ok: true, receipt: await acknowledgeReplyHandoff(f.store, gym, input) };
+    };
+    const wakeGoati = async input => {
+      attempts++; assert.doesNotMatch(JSON.stringify(input), /taught the listed class/);
+      assert.match(input.instruction, /untrusted evidence/);
+      if (!accepted.has(input.idempotencyKey)) accepted.set(input.idempotencyKey, { accepted: true, idempotencyKey: input.idempotencyKey, receiptId: 'host-receipt-' + accepted.size });
+      return accepted.get(input.idempotencyKey);
+    };
+    const run = () => deliverReplyHandoffs({ gym, request, wakeGoati, idempotentWake: true });
+    assert.deepEqual((await run()).delivered, []); assert.equal(attempts, 0);
+    await ingestReply(f.store, gym, f.message, NOW);
+    await assert.rejects(run(), /ack response lost/);
+    assert.equal((await pendingReplyHandoffs(f.store, gym, NOW)).notices.length, 1);
+    assert.equal((await run()).delivered.length, 1); assert.equal(accepted.size, 1); assert.equal(attempts, 2);
+    await ingestReply(f.store, gym, f.message, NOW); await run(); assert.equal(attempts, 2);
+    await ingestReply(f.store, gym, { ...f.message, gmailId: 'abcdef1234567801', rfcId: '<later@example.invalid>', body: 'Actually, another instructor taught it.' }, NOW);
+    await run(); assert.equal(accepted.size, 2);
+  }
+});
+
+test('private handoff fails closed on unauthenticated reads, wake failure and cross-gym delivery', async () => {
+  const f = await seeded(); await ingestReply(f.store, 'rev', f.message, NOW);
+  let wakes = 0, readsFail = true;
+  const request = async input => input.action === 'handoffs' ? { ok: true, ...await pendingReplyHandoffs(f.store, 'rev', NOW) }
+    : readsFail ? { ok: false, status: 401 } : { ok: true, ...await replyQueue(f.store, 'rev', NOW) };
+  const wakeGoati = async () => { wakes++; return { accepted: false }; };
+  await assert.rejects(deliverReplyHandoffs({ gym: 'rev', request, wakeGoati }), /TRANSPORT_REQUIRED/);
+  await assert.rejects(deliverReplyHandoffs({ gym: 'rev', request, wakeGoati, idempotentWake: true }), /READ_UNCONFIRMED/); assert.equal(wakes, 0);
+  readsFail = false;
+  await assert.rejects(deliverReplyHandoffs({ gym: 'rev', request, wakeGoati, idempotentWake: true }), /WAKE_UNCONFIRMED/);
+  await assert.rejects(deliverReplyHandoffs({ gym: 'richmond', request, wakeGoati, idempotentWake: true }), /READ_UNCONFIRMED/);
+  assert.equal((await pendingReplyHandoffs(f.store, 'rev', NOW)).notices.length, 2);
+  assert.equal([...f.store.entries.keys()].filter(k => k.startsWith(REPLY_PREFIX + 'handoff-receipts/')).length, 0);
+});
+
+test('revoked access produces one health wake per failure episode and a new wake after verified recovery', async () => {
+  const f = await seeded(); let serial = 1;
+  const poll = async (status, offset) => recordReplyPoll(f.store, 'rev', { requestId: '00000000-0000-4000-8000-' + String(serial++).padStart(12, '0'),
+    createdAt: NOW + offset, scanFrom: NOW - 3600000, scanThrough: NOW - 120000 + offset, status, messages: [] }, NOW + offset);
+  await poll('access-revoked', 0);
+  let notices = (await pendingReplyHandoffs(f.store, 'rev', NOW)).notices;
+  assert.equal(notices.length, 1); assert.equal(notices[0].code, 'access-revoked');
+  await acknowledgeReplyHandoff(f.store, 'rev', { noticeId: notices[0].id, receiptId: 'health-receipt-1' });
+  await poll('access-revoked', 1000); assert.equal((await pendingReplyHandoffs(f.store, 'rev', NOW + 1000)).notices.length, 0);
+  await poll('complete', 2000); assert.equal((await pendingReplyHandoffs(f.store, 'rev', NOW + 2000)).health.code, 'healthy');
+  await poll('access-revoked', 3000); notices = (await pendingReplyHandoffs(f.store, 'rev', NOW + 3000)).notices;
+  assert.equal(notices.length, 1); assert.equal(notices[0].code, 'access-revoked');
+});
+test('fallback routing stays degraded across healthy polls until an authenticated, evidenced recovery; recurrence opens a new fault', async () => {
+  const f = await seeded();
+  const fault = { eventId: ID, at: f.event.createdAt, code: 'event-registration-unavailable' };
+  const saved = await retainReplyRouteFault(f.store, 'rev', fault, NOW);
+  await assert.rejects(verifyReplyRouteRecovery(f.store, 'rev', { faultId: saved.id, eventId: ID, reason: 'checked' }, 'Andrew Smith', NOW), /PROOF_REQUIRED/);
+  const poll = { requestId: ID, scanFrom: NOW - 3600000, scanThrough: NOW - 120000, createdAt: NOW, status: 'complete', messages: [], routeFault: fault };
+  await recordReplyPoll(f.store, 'rev', poll, NOW);
+  let q = await replyQueue(f.store, 'rev', NOW);
+  assert.equal(q.health.mailboxCode, 'healthy'); assert.equal(q.health.code, 'route-degraded'); assert.equal(q.routing.unresolvedFaults.length, 1);
+  await verifyReplyRouteRecovery(f.store, 'rev', { faultId: saved.id, eventId: ID, reason: 'Retained event and scan checked; old-address gap accounted for.' }, 'Andrew Smith', NOW);
+  assert.equal((await recordReplyPoll(f.store, 'rev', poll, NOW)).routeFaultAcknowledged, ID);
+  q = await replyQueue(f.store, 'rev', NOW); assert.equal(q.routing.code, 'recovery-verified');
+  await retainReplyRouteFault(f.store, 'rev', { ...fault, eventId: REVIEW, at: NOW }, NOW);
+  assert.equal((await replyQueue(f.store, 'rev', NOW)).health.code, 'route-degraded');
+});
+test('Google retains fallback metadata separately from Blobs and reports it after recovery without changing Reply-To', () => {
+  const h = googleHarness(); h.properties.set('GIB_M1_REPLY_ROUTING_ENABLED', 'true');
+  h.context.gibM1ReplyRememberRoute_({ gym: 'rev' }, null, ID, NOW - 600000, null);
+  const saved = h.properties.get('GIB_M1_REPLY_ROUTE_FAULT'); assert.equal(JSON.parse(saved).eventId, ID);
+  h.context.pollBusinessAttendanceReplies(); assert.equal(h.posts.at(-1).routeFault.eventId, ID);
+  h.context.gibM1ReplyRememberRoute_({ gym: 'rev' }, { shouldSend: true, rendered: { subject: fixture().event.subject } }, REVIEW, NOW, null);
+  assert.equal(h.properties.get('GIB_M1_REPLY_ROUTE_FAULT'), saved);
+  h.context.gibM1ReplyRememberRoute_({ gym: 'rev' }, null, REVIEW, NOW, null);
+  assert.equal(JSON.parse(h.properties.get('GIB_M1_REPLY_ROUTE_FAULT')).eventId, REVIEW);
+  assert.equal(h.context.gibM1ReplyMailOptions_({ gym: 'rev' }, { subject: 'Fallback', replyTo: 'andrew@revolutionbjj.com' }).replyTo, 'andrew@revolutionbjj.com');
 });
 test('hourly worker is disabled by default; approved business read polls are GET-only and cursor moves only after queue acknowledgement', () => {
   const off = googleHarness({ enabled: false }); assert.equal(off.context.pollBusinessAttendanceReplies().enabled, false); assert.equal(off.calls.length, 0);
@@ -296,4 +447,12 @@ for (const gym of ['rev', 'richmond']) test(gym + ' real endpoint permits own-gy
   assert.equal(h.deps.replyStore.entries.size, beforeRead);
   assert.equal((await handleReplyIntake(h.request({ action: 'read' }), h.deps)).status, 200);
   assert.equal(h.deps.replyStore.entries.size, beforeRead);
+  const f = fixture(gym); await prepareReplyEvent(f.check, scope(gym), f.report, { replyStore: h.deps.replyStore });
+  await ingestReply(h.deps.replyStore, gym, f.message, NOW);
+  const pendingResponse = await handleReplyIntake(h.request({ action: 'handoffs' }), h.deps);
+  assert.equal(pendingResponse.status, 200); const pending = await pendingResponse.json();
+  assert.equal(pending.notices.length, 1); assert.equal(pending.notices[0].gym, gym);
+  const acknowledged = await handleReplyIntake(h.request({ action: 'ack-handoff', noticeId: pending.notices[0].id, receiptId: 'authenticated-host-receipt' }), h.deps);
+  assert.equal(acknowledged.status, 200);
+  assert.equal((await (await handleReplyIntake(h.request({ action: 'handoffs' }), h.deps)).json()).notices.length, 0);
 });
