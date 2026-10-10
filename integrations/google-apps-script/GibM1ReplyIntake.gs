@@ -100,6 +100,13 @@ function readBusinessAttendanceReplyQueue() {
   return gibM1ReplyPost_(scope, { schema: GIB_M1_REPLY_SCHEMA_, action: 'read', gym: scope.gym, target: 'production',
     requestId: Utilities.getUuid(), createdAt: now, expiresAt: now + 60000 });
 }
+function gibM1ReplyRouteFaults_(properties) {
+  var raw = properties.getProperty('GIB_M1_REPLY_ROUTE_FAULT');
+  if (!raw) return { faults: [], overflow: null };
+  var saved = JSON.parse(raw);
+  // Preserve the earlier single-fault shape if encountered during an upgrade.
+  return saved.eventId ? { faults: [saved], overflow: null } : saved;
+}
 function gibM1ReplyRememberRoute_(scope, report, requestId, now, reportedFault) {
   var p = PropertiesService.getScriptProperties();
   if (p.getProperty('GIB_M1_REPLY_ROUTING_ENABLED') !== 'true') return;
@@ -107,14 +114,25 @@ function gibM1ReplyRememberRoute_(scope, report, requestId, now, reportedFault) 
   if (!reportedFault && !missingMarker) return;
   var fault = reportedFault?.eventId === requestId ? reportedFault : { eventId: requestId, at: now, code: 'sender-route-unconfirmed' };
   var key = 'GIB_M1_REPLY_ROUTE_FAULT';
-  // Successful reports do not clear a fault. A new fallback replaces the
-  // transport pointer so an earlier acknowledgement cannot hide a recurrence;
-  // each observed fault stays immutable in the private server queue.
+  // Retain every unacknowledged event, bounded below the 9 KB property limit.
+  // Beyond twenty events retain a cumulative affected interval/count. Overflow
+  // remains a separate operator exception until that exact interval is cleared.
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) throw new Error('REPLY_ROUTE_FAULT_UNCONFIRMED');
   try {
-    p.setProperty(key, JSON.stringify(fault));
-    if (p.getProperty(key) !== JSON.stringify(fault)) throw new Error('REPLY_ROUTE_FAULT_UNCONFIRMED');
+    var state = gibM1ReplyRouteFaults_(p);
+    if (!state.faults.some(function(existing) { return existing.eventId === fault.eventId; })) {
+      if (state.faults.length < 20) state.faults.push(fault);
+      else {
+        var previous = state.overflow;
+        if (!previous || previous.lastEventId !== fault.eventId) state.overflow = {
+          eventId: previous?.eventId || fault.eventId, at: Math.min(previous?.at || fault.at, fault.at),
+          through: Math.max(previous?.through || fault.at, fault.at), count: (previous?.count || 0) + 1,
+          lastEventId: fault.eventId, code: 'sender-route-overflow' };
+      }
+    }
+    var encoded = JSON.stringify(state); p.setProperty(key, encoded);
+    if (p.getProperty(key) !== encoded) throw new Error('REPLY_ROUTE_FAULT_UNCONFIRMED');
   } finally { lock.releaseLock(); }
 }
 // Install one hourly time trigger per existing production project using the
@@ -131,8 +149,9 @@ function pollBusinessAttendanceReplies() {
   var input = { schema: GIB_M1_REPLY_SCHEMA_, action: 'poll', gym: scope.gym, target: 'production',
     requestId: Utilities.getUuid(), createdAt: now, expiresAt: now + 60000,
     scanFrom: Math.max(start, cursor - 600000), scanThrough: now - 120000, messages: [], status: 'complete' };
-  var routeFault = properties.getProperty('GIB_M1_REPLY_ROUTE_FAULT');
-  if (routeFault) input.routeFault = JSON.parse(routeFault);
+  var routeFaults = gibM1ReplyRouteFaults_(properties);
+  input.routeFaults = routeFaults.faults;
+  if (routeFaults.overflow) input.routeFaultOverflow = routeFaults.overflow;
   if (input.scanThrough < input.scanFrom) return { warmingUp: true };
   try {
     if (gibM1ReplyGet_('profile').emailAddress !== GIB_M1_REPLY_MAILBOX_) throw new Error('REPLY_ACCOUNT_UNVERIFIED');
@@ -166,11 +185,19 @@ function pollBusinessAttendanceReplies() {
   // Fresh transport binding; scan interval remains the original interval.
   input.createdAt = Date.now(); input.expiresAt = input.createdAt + 60000;
   var result = gibM1ReplyPost_(scope, input);
-  if (input.routeFault && result.routeFaultAcknowledged === input.routeFault.eventId) {
-    // Never clear a newer failure written by a concurrent nightly sender.
+  if (result.routeFaultAcknowledgements?.length || result.routeFaultOverflowAcknowledged) {
+    // Remove only the exact faults/overflow snapshot that the server confirms
+    // an authenticated operator has accounted for. Preserve concurrent failures.
     var faultLock = LockService.getScriptLock();
     if (faultLock.tryLock(1000)) {
-      try { if (properties.getProperty('GIB_M1_REPLY_ROUTE_FAULT') === routeFault) properties.setProperty('GIB_M1_REPLY_ROUTE_FAULT', ''); }
+      try {
+        var current = gibM1ReplyRouteFaults_(properties), acknowledged = result.routeFaultAcknowledgements || [];
+        current.faults = current.faults.filter(function(fault) {
+          return !acknowledged.some(function(saved) { return JSON.stringify(saved) === JSON.stringify(fault); });
+        });
+        if (current.overflow && JSON.stringify(current.overflow) === JSON.stringify(result.routeFaultOverflowAcknowledged)) current.overflow = null;
+        properties.setProperty('GIB_M1_REPLY_ROUTE_FAULT', JSON.stringify(current));
+      }
       finally { faultLock.releaseLock(); }
     }
   }

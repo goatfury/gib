@@ -53,15 +53,23 @@ export function replyEvent(check, scope, report) {
   const questions = items.map(item => {
     const day = ledger?.days?.find(d => d.date === item.date);
     const labels = [...new Set([...(schedule?.days?.find(d => d.date === item.date)?.occurrences || []).map(o => o.label), ...(day?.records || []).map(r => r.classLabel), ...(day?.review?.decisions || []).map(d => d.label)])];
-    const matches = labels.filter(label => {
-      const records = (day?.records || []).filter(r => labelKey(r.classLabel) === labelKey(label));
-      const identities = [labelKey(label), 'schedule-cancellation:' + labelKey(label), 'cancellation:' + labelKey(label), ...records.flatMap(r => [r.recordId, 'duration:' + r.recordId, 'ambiguous-id:' + r.recordId])];
+    // One digest identity can have several original spellings. Group by the
+    // digest's exact key, without removing times or other occurrence markers.
+    const labelGroups = new Map();
+    for (const label of labels) {
+      const key = labelKey(label);
+      labelGroups.set(key, [...(labelGroups.get(key) || []), label]);
+    }
+    const matches = [...labelGroups].filter(([key]) => {
+      const records = (day?.records || []).filter(r => labelKey(r.classLabel) === key);
+      const identities = [key, 'schedule-cancellation:' + key, 'cancellation:' + key, ...records.flatMap(r => [r.recordId, 'duration:' + r.recordId, 'ambiguous-id:' + r.recordId])];
       return identities.some(identity => digestHash([gym, item.kind, item.date, identity]).slice(0, 24) === item.id);
     });
-    const classLabel = matches.length === 1 ? matches[0] : null;
-    return { itemId: item.id, date: item.date, kind: item.kind, classLabel, summary: item.summary,
+    const classLabels = matches.length === 1 ? matches[0][1] : [];
+    const classLabel = classLabels[0] || null;
+    return { itemId: item.id, date: item.date, kind: item.kind, classLabel, observedClassLabels: classLabels, summary: item.summary,
       attendanceHash: day?.attendanceHash || null, period: periodFor(item.date),
-      records: classLabel ? day.records.filter(r => labelKey(r.classLabel) === labelKey(classLabel)).map(r => ({ recordId: r.recordId, instructor: r.instructor, duration: r.duration, fingerprint: r.fingerprint || null, reviewRequired: r.reviewRequired })) : [] };
+      records: classLabel ? day.records.filter(r => labelKey(r.classLabel) === labelKey(classLabel)).map(r => ({ recordId: r.recordId, classLabel: r.classLabel, instructor: r.instructor, duration: r.duration, fingerprint: r.fingerprint || null, reviewRequired: r.reviewRequired })) : [] };
   });
   // The existing system's canonical identity is the complete instructor name.
   // New/ambiguous names require a human to verify the roster, never fuzzy aliases.
@@ -80,6 +88,14 @@ export async function retainReplyRouteFault(store, gym, fault, now) {
   if (!uuid(fault?.eventId) || !Number.isSafeInteger(fault.at) || fault.at <= 0 || fault.at > now
     || !['event-registration-unavailable', 'sender-route-unconfirmed'].includes(fault.code)) fail('REPLY_ROUTE_FAULT_INVALID');
   const record = { id: digestHash([gym, fault.eventId, fault.code]), gym, eventId: fault.eventId, at: fault.at, code: fault.code };
+  await retain(store, 'route-faults/' + record.id, record); return record;
+}
+async function retainReplyRouteOverflow(store, gym, overflow, now) {
+  if (!uuid(overflow?.eventId) || !uuid(overflow.lastEventId) || overflow.code !== 'sender-route-overflow'
+    || !Number.isSafeInteger(overflow.at) || overflow.at <= 0 || !Number.isSafeInteger(overflow.through)
+    || overflow.through < overflow.at || overflow.through > now || !Number.isSafeInteger(overflow.count) || overflow.count < 1) fail('REPLY_ROUTE_FAULT_INVALID');
+  const record = { id: digestHash([gym, overflow]), gym, eventId: overflow.eventId, at: overflow.through,
+    affectedFrom: overflow.at, affectedThrough: overflow.through, count: overflow.count, code: overflow.code };
   await retain(store, 'route-faults/' + record.id, record); return record;
 }
 export async function verifyReplyRouteRecovery(store, gym, input, reviewer, now) {
@@ -189,7 +205,11 @@ export async function recordReplyPoll(store, gym, input, now) {
     || input.scanFrom > input.scanThrough || input.scanThrough > now || !['complete', 'access-revoked', 'poll-failed', 'capacity-exceeded'].includes(input.status)
     || !Array.isArray(input.messages) || input.messages.length > 50 || input.status !== 'complete' && input.messages.length) fail('REPLY_POLL_INVALID');
   const receipts = [];
-  const routeFault = input.routeFault && await retainReplyRouteFault(store, gym, input.routeFault, now);
+  const routeFaults = input.routeFaults || (input.routeFault ? [input.routeFault] : []);
+  if (!Array.isArray(routeFaults) || routeFaults.length > 20) fail('REPLY_ROUTE_FAULT_INVALID');
+  const routeRecords = [];
+  for (const fault of routeFaults) routeRecords.push(await retainReplyRouteFault(store, gym, fault, now));
+  const overflowRecord = input.routeFaultOverflow && await retainReplyRouteOverflow(store, gym, input.routeFaultOverflow, now);
   for (const message of input.messages) {
     try { receipts.push(await ingestReply(store, gym, message, now)); }
     catch (error) {
@@ -203,9 +223,13 @@ export async function recordReplyPoll(store, gym, input, now) {
   const poll = { schema: 'm1-reply-poll/v1', requestId: input.requestId, gym, scanFrom: input.scanFrom, scanThrough: input.scanThrough,
     status: input.status, checkedAt: input.createdAt, messageIds: receipts.map(r => r.id), evidenceIds: receipts.map(r => r.evidenceId || null) };
   await retain(store, 'polls/' + input.requestId, poll);
-  const routeFaultAcknowledged = routeFault && await read(store, 'route-verifications/' + routeFault.id);
+  const routeFaultAcknowledgements = [];
+  for (let index = 0; index < routeRecords.length; index++) if (await read(store, 'route-verifications/' + routeRecords[index].id)) routeFaultAcknowledgements.push(routeFaults[index]);
+  const overflowAcknowledged = overflowRecord && await read(store, 'route-verifications/' + overflowRecord.id);
   return { accepted: true, newRelevant: receipts.filter(r => r.new).map(r => r.id),
-    ...(routeFaultAcknowledged ? { routeFaultAcknowledged: routeFault.eventId } : {}) };
+    routeFaultAcknowledgements,
+    ...(input.routeFault && routeFaultAcknowledgements.length ? { routeFaultAcknowledged: input.routeFault.eventId } : {}),
+    ...(overflowAcknowledged ? { routeFaultOverflowAcknowledged: input.routeFaultOverflow } : {}) };
 }
 export async function replyQueue(store, gym, now) {
   const [sources, polls, reviews, rejections, evidence, routeFaults, routeVerifications] = await Promise.all(['queue', 'polls', 'reviews', 'rejections', 'thread-evidence', 'route-faults', 'route-verifications'].map(kind => listReplyRecords(store, kind)));

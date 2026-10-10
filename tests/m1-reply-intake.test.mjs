@@ -76,6 +76,35 @@ test('both gyms retain exact question, manager, canonical name, attendance hash 
     assert.deepEqual(f.store.entries.get('mailapp/messages/original'), before);
   }
 });
+
+test('real canceled digest joins alternate apostrophes to existing rows without collapsing distinct occurrences', async () => {
+  for (const gym of ['rev', 'richmond']) {
+    const f = fixture(gym), dates = datesThrough(DATE);
+    const labels = ['4:30 PM Kids\u2019 BJJ', '5:30 PM Kids\u2019 BJJ'];
+    const rows = labels.map((label, index) => ({ recordId: 'same-day-' + index, date: DATE, classLabel: label.replace('\u2019', "'"), instructor: NAME,
+      duration: 1, reviewRequired: false, fingerprint: String(index + 1).repeat(64) }));
+    f.check.snapshots[0].attendance = { ok: true, ledger: { ok: true, target: 'production', schema: 'm1-manager-review/v1', complete: true, gym,
+      from: dates[0], to: DATE, days: dates.map(date => ({ date, attendanceHash: 'a'.repeat(64), records: date === DATE ? rows : [], warnings: [], review: null })) } };
+    f.check.snapshots[0].staff = { ok: true, complete: true, items: [] };
+    f.check.schedules = [{ gym, timezone: 'America/New_York', days: dates.map(date => ({ date, status: 'complete', observedAt: date + 'T12:00:00.000Z', sourceVersion: 'actual-' + date,
+      occurrences: date === DATE ? labels.map((label, index) => ({ label, startAt: DATE + (index ? 'T21:30:00.000Z' : 'T20:30:00.000Z'), endAt: null, cancelled: true })) : [] })) }];
+    f.check.digest = buildAttendanceDigest({ jobDate: DATE, snapshots: f.check.snapshots, schedules: f.check.schedules, configuration: defaultDigestConfiguration(scope(gym), { GIB_M1_DIGEST_CUTOFF_CONFIRMED: 'true' }), now: NOW });
+    assert.equal(f.check.digest.groups[0].items.filter(item => item.kind === 'attendance-conflict').length, 2);
+    const store = memory(); await prepareReplyEvent(f.check, scope(gym), f.report, { replyStore: store });
+    const event = store.entries.get(REPLY_PREFIX + 'events/' + ID).data;
+    assert.equal(event.questions.length, 2); assert.notEqual(event.questions[0].itemId, event.questions[1].itemId);
+    await ingestReply(store, gym, f.message, NOW);
+    for (const [index, label] of labels.entries()) {
+      const question = event.questions.find(q => q.classLabel === label);
+      assert.deepEqual(question.observedClassLabels, [label, rows[index].classLabel]);
+      assert.deepEqual(question.records.map(r => r.recordId), [rows[index].recordId]);
+      assert.equal(question.records[0].classLabel, rows[index].classLabel);
+    }
+    const selected = event.questions.find(q => q.classLabel === labels[0]);
+    const review = await reviewReply(store, gym, { ...f.review, itemId: selected.itemId, action: 'correct-attendance' }, 'Andrew Smith', NOW);
+    assert.equal(review.selected.classLabel, labels[0]); assert.equal(review.selected.records[0].recordId, rows[0].recordId);
+  }
+});
 test('replays and concurrent polls create one source; altered replay is a conflict', async () => {
   const f = await seeded();
   const receipts = await Promise.all([1,2,3].map(() => ingestReply(f.store, 'rev', f.message, NOW)));
@@ -359,16 +388,45 @@ test('fallback routing stays degraded across healthy polls until an authenticate
   await retainReplyRouteFault(f.store, 'rev', { ...fault, eventId: REVIEW, at: NOW }, NOW);
   assert.equal((await replyQueue(f.store, 'rev', NOW)).health.code, 'route-degraded');
 });
-test('Google retains fallback metadata separately from Blobs and reports it after recovery without changing Reply-To', () => {
+test('Google preserves both unacknowledged nightly fallbacks and clears only the accounted-for event after storage recovery', () => {
   const h = googleHarness(); h.properties.set('GIB_M1_REPLY_ROUTING_ENABLED', 'true');
   h.context.gibM1ReplyRememberRoute_({ gym: 'rev' }, null, ID, NOW - 600000, null);
-  const saved = h.properties.get('GIB_M1_REPLY_ROUTE_FAULT'); assert.equal(JSON.parse(saved).eventId, ID);
-  h.context.pollBusinessAttendanceReplies(); assert.equal(h.posts.at(-1).routeFault.eventId, ID);
+  const saved = h.properties.get('GIB_M1_REPLY_ROUTE_FAULT'); assert.equal(JSON.parse(saved).faults[0].eventId, ID);
   h.context.gibM1ReplyRememberRoute_({ gym: 'rev' }, { shouldSend: true, rendered: { subject: fixture().event.subject } }, REVIEW, NOW, null);
   assert.equal(h.properties.get('GIB_M1_REPLY_ROUTE_FAULT'), saved);
   h.context.gibM1ReplyRememberRoute_({ gym: 'rev' }, null, REVIEW, NOW, null);
-  assert.equal(JSON.parse(h.properties.get('GIB_M1_REPLY_ROUTE_FAULT')).eventId, REVIEW);
+  h.context.pollBusinessAttendanceReplies(); const faults = plain(h.posts.at(-1).routeFaults);
+  assert.deepEqual(faults.map(f => f.eventId), [ID, REVIEW]);
+  const post = h.context.gibM1ReplyPost_;
+  h.context.gibM1ReplyPost_ = (scope, input) => ({ ...post(scope, input), routeFaultAcknowledgements: [faults[1]] });
+  h.context.pollBusinessAttendanceReplies();
+  assert.deepEqual(JSON.parse(h.properties.get('GIB_M1_REPLY_ROUTE_FAULT')).faults.map(f => f.eventId), [ID]);
+  h.context.gibM1ReplyPost_ = (scope, input) => ({ ...post(scope, input), routeFaultAcknowledgements: [faults[0]] });
+  h.context.pollBusinessAttendanceReplies();
+  assert.deepEqual(JSON.parse(h.properties.get('GIB_M1_REPLY_ROUTE_FAULT')).faults, []);
   assert.equal(h.context.gibM1ReplyMailOptions_({ gym: 'rev' }, { subject: 'Fallback', replyTo: 'andrew@revolutionbjj.com' }).replyTo, 'andrew@revolutionbjj.com');
+});
+
+test('fallback overflow retains an affected interval and count; acknowledgement cannot clear a newer overflow', async () => {
+  const h = googleHarness(); h.properties.set('GIB_M1_REPLY_ROUTING_ENABLED', 'true');
+  const id = index => '00000000-0000-4000-8000-' + String(index).padStart(12, '0');
+  for (let index = 1; index <= 22; index++) h.context.gibM1ReplyRememberRoute_({ gym: 'rev' }, null, id(index), NOW - 23000 + index * 1000, null);
+  h.context.pollBusinessAttendanceReplies();
+  const posted = plain(h.posts.at(-1)); assert.equal(posted.routeFaults.length, 20);
+  assert.equal(posted.routeFaultOverflow.count, 2); assert.equal(posted.routeFaultOverflow.at, NOW - 2000); assert.equal(posted.routeFaultOverflow.through, NOW - 1000);
+  assert.ok(h.properties.get('GIB_M1_REPLY_ROUTE_FAULT').length < 9000);
+  const f = await seeded(); const retained = await recordReplyPoll(f.store, 'rev', posted, NOW);
+  assert.deepEqual(retained.routeFaultAcknowledgements, []);
+  const q = await replyQueue(f.store, 'rev', NOW); assert.equal(q.routing.unresolvedFaults.length, 21);
+  assert.equal(q.routing.unresolvedFaults.find(f => f.code === 'sender-route-overflow').count, 2);
+  const post = h.context.gibM1ReplyPost_;
+  h.context.gibM1ReplyPost_ = (scope, input) => {
+    h.context.gibM1ReplyRememberRoute_({ gym: 'rev' }, null, id(23), NOW, null);
+    return { ...post(scope, input), routeFaultAcknowledgements: posted.routeFaults, routeFaultOverflowAcknowledged: posted.routeFaultOverflow };
+  };
+  h.context.pollBusinessAttendanceReplies();
+  const current = JSON.parse(h.properties.get('GIB_M1_REPLY_ROUTE_FAULT'));
+  assert.equal(current.faults.length, 0); assert.equal(current.overflow.count, 3); assert.equal(current.overflow.through, NOW);
 });
 test('hourly worker is disabled by default; approved business read polls are GET-only and cursor moves only after queue acknowledgement', () => {
   const off = googleHarness({ enabled: false }); assert.equal(off.context.pollBusinessAttendanceReplies().enabled, false); assert.equal(off.calls.length, 0);
