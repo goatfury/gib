@@ -62,6 +62,48 @@ test('recovered mailbox failures and silent gaps remain in immutable history bet
   assert.equal(episodes[1].code, 'poll-overdue'); assert.equal(episodes[1].firstFailureAt, NOW + 6 * 3600000); assert.equal(episodes[1].recoveredAt, NOW + 8 * 3600000);
   assert.deepEqual(replyHealthEpisodes([...polls].reverse(), 'rev', NOW + 8 * 3600000), episodes);
 });
+test('complete backlog polls retain their recovery for the next parent read in both gyms', async () => {
+  for (const gym of ['rev', 'richmond']) {
+    const store = memory();
+    await recordReplyPoll(store, gym, { requestId: ID, scanFrom: NOW - 26 * 3600000,
+      scanThrough: NOW - 25 * 3600000, createdAt: NOW, status: 'complete', messages: [] }, NOW);
+    const behind = await replyProjection(store, gym, NOW, ID);
+    assert.equal(behind.health[0][2], 'poll-backlog');
+    await recordReplyPoll(store, gym, { requestId: REVIEW, scanFrom: NOW - 25 * 3600000,
+      scanThrough: NOW + 3600000 - 120000, createdAt: NOW + 3600000, status: 'complete', messages: [] }, NOW + 3600000);
+    const recovered = await replyProjection(store, gym, NOW + 3600000, REVIEW);
+    assert.equal(recovered.health[0][2], 'healthy');
+    const result = verifyReplyProjection({ gym, before: recovered.health, after: recovered.health, replies: recovered.replies, now: NOW + 3600000 });
+    assert.equal(result.unseenEpisodes.length, 1);
+    const episode = result.unseenEpisodes[0];
+    assert.equal(episode[2], 'poll-backlog'); assert.equal(episode[16], NOW);
+    assert.equal(episode[17], NOW); assert.equal(episode[18], 1); assert.equal(episode[19], NOW + 3600000);
+    assert.equal(episode[15], behind.health[1][15]);
+    assert.notEqual(episode[20], behind.health[1][20]);
+    assert.equal(verifyReplyProjection({ gym, before: behind.health, after: behind.health, replies: behind.replies, now: NOW }).currentException, null);
+    const next = await replyProjection(store, gym, NOW + 2 * 3600000, ID);
+    const receipt = [gym, 'health', episode[15], episode[20], NOW + 3600000, 'parent-backlog-output'];
+    assert.equal(verifyReplyProjection({ gym, before: next.health, after: next.health, replies: next.replies,
+      now: NOW + 2 * 3600000, receipts: [receipt] }).unseenEpisodes.length, 0);
+  }
+});
+test('backlog episodes require caught-up coverage and distinguish repeated failures from a new occurrence', () => {
+  const poll = (id, hour, status, lag) => ({ gym: 'rev', requestId: id, checkedAt: NOW + hour * 3600000,
+    scanThrough: NOW + hour * 3600000 - lag, status });
+  const polls = [poll('revoked-before', -1, 'access-revoked', 0), poll('boundary', 0, 'complete', 24 * 3600000),
+    poll('backlog-a', 1, 'complete', 24 * 3600000 + 1), poll('backlog-b', 2, 'complete', 25 * 3600000),
+    poll('revoked-during', 3, 'access-revoked', 0), poll('backlog-c', 4, 'complete', 25 * 3600000),
+    poll('caught-up', 5, 'complete', 120000), poll('backlog-new', 6, 'complete', 25 * 3600000),
+    { ...poll('other-gym', 7, 'complete', 120000), gym: 'richmond' }];
+  const episodes = replyHealthEpisodes(polls, 'rev', NOW + 6 * 3600000);
+  const backlog = episodes.filter(e => e.code === 'poll-backlog');
+  assert.equal(backlog.length, 2); assert.equal(backlog[0].firstFailureAt, NOW + 3600000);
+  assert.equal(backlog[0].lastFailureAt, NOW + 4 * 3600000); assert.equal(backlog[0].failureCount, 3);
+  assert.equal(backlog[0].recoveredAt, NOW + 5 * 3600000); assert.equal(backlog[1].recoveredAt, '');
+  assert.notEqual(backlog[0].episodeId, backlog[1].episodeId);
+  assert.deepEqual(episodes.filter(e => e.code === 'access-revoked').map(e => e.recoveredAt), [NOW, NOW + 4 * 3600000]);
+  assert.deepEqual(replyHealthEpisodes([...polls].reverse(), 'rev', NOW + 6 * 3600000), episodes);
+});
 test('projection failures are retained across recovery and reject extra data', async () => {
   const store = memory(), fault = { code: 'projection-failed', episodeId: ID, firstFailureAt: NOW, lastFailureAt: NOW, failureCount: 1, recoveredAt: '', updatedAt: NOW };
   let s = await replyProjection(store, 'rev', NOW, REVIEW, fault);

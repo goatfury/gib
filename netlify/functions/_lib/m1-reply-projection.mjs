@@ -19,7 +19,8 @@ const minimalQuestion = q => ({ itemId: q.itemId, date: q.date, kind: q.kind, cl
     credit: r.duration, fingerprint: r.fingerprint, reviewRequired: Boolean(r.reviewRequired) })) });
 
 // Derive episodes from immutable poll history, including recovered failures and
-// silent gaps. A later successful poll never erases a failed poll's evidence.
+// silent gaps and completed scans still over 24 hours behind. Later caught-up
+// polls preserve earlier failure/backlog evidence and record its recovery.
 export function replyHealthEpisodes(polls, gym, now) {
   const ordered = polls.filter(p => p.gym === gym).sort((a, b) => a.checkedAt - b.checkedAt || a.requestId.localeCompare(b.requestId));
   const episodes = [], active = new Map(); let previous;
@@ -27,15 +28,19 @@ export function replyHealthEpisodes(polls, gym, now) {
     if (previous && poll.checkedAt - previous.checkedAt > 3 * 3600000) episodes.push({
       episodeId: digestHash([gym, 'poll-overdue', previous.requestId]), code: 'poll-overdue',
       firstFailureAt: previous.checkedAt + 3 * 3600000, lastFailureAt: poll.checkedAt, failureCount: 1, recoveredAt: poll.checkedAt });
+    const code = poll.status === 'complete'
+      ? poll.checkedAt - poll.scanThrough > 24 * 3600000 ? 'poll-backlog' : null : poll.status;
     if (poll.status === 'complete') {
-      for (const episode of active.values()) episode.recoveredAt = poll.checkedAt;
-      active.clear();
-    } else {
-      let episode = active.get(poll.status);
+      for (const [activeCode, episode] of active) if (activeCode !== code) {
+        episode.recoveredAt = poll.checkedAt; active.delete(activeCode);
+      }
+    }
+    if (code) {
+      let episode = active.get(code);
       if (!episode) {
-        episode = { episodeId: digestHash([gym, poll.status, poll.requestId]), code: poll.status,
+        episode = { episodeId: digestHash([gym, code, poll.requestId]), code,
           firstFailureAt: poll.checkedAt, lastFailureAt: poll.checkedAt, failureCount: 0, recoveredAt: '' };
-        episodes.push(episode); active.set(poll.status, episode);
+        episodes.push(episode); active.set(code, episode);
       }
       episode.lastFailureAt = poll.checkedAt; episode.failureCount++;
     }
