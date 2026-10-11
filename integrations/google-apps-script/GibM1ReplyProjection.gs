@@ -58,9 +58,9 @@ function publishBusinessAttendanceReplyProjection() {
     var input = { schema: GIB_M1_REPLY_SCHEMA_, action: 'projection', gym: scope.gym, target: 'production',
       requestId: Utilities.getUuid(), createdAt: now, expiresAt: now + 60000, projectionFault: fault };
     var snapshot = gibM1ReplyPost_(scope, input);
-    if (snapshot.schema !== 'm1-reply-sheet/v1' || snapshot.gym !== scope.gym || snapshot.generation !== input.requestId
+    if (snapshot.schema !== 'm1-reply-sheet/v2' || snapshot.gym !== scope.gym || snapshot.generation !== input.requestId
       || snapshot.tabs.replies !== destination.reply.title || snapshot.tabs.health !== destination.health.title
-      || snapshot.replyHeaders.length !== 18 || snapshot.healthHeaders.length !== 22
+      || snapshot.replyHeaders.length !== 19 || snapshot.healthHeaders.length !== 22
       || snapshot.replies.length > 2000 || snapshot.health.length > 2001) throw new Error('REPLY_PROJECTION_INVALID');
     var requests = [];
     [[destination.reply, snapshot.replyHeaders, snapshot.replies], [destination.health, snapshot.healthHeaders, snapshot.health]].forEach(function(part) {
@@ -77,7 +77,7 @@ function publishBusinessAttendanceReplyProjection() {
     // Sheets batchUpdate applies the two tab updates atomically. Explicit
     // stringValue keeps =,+,-,@ and quoted text literal, never executable.
     gibM1ReplyGoogle_('sheets', destination.id + ':batchUpdate', body);
-    var ranges = ["'" + destination.reply.title + "'!A1:R" + (snapshot.replies.length + 1), "'" + destination.health.title + "'!A1:V" + (snapshot.health.length + 1)];
+    var ranges = ["'" + destination.reply.title + "'!A1:S" + (snapshot.replies.length + 1), "'" + destination.health.title + "'!A1:V" + (snapshot.health.length + 1)];
     var back = gibM1ReplyGoogle_('sheets', destination.id + '/values:batchGet?valueRenderOption=UNFORMATTED_VALUE&ranges=' + ranges.map(encodeURIComponent).join('&ranges='));
     var expected = [[snapshot.replyHeaders].concat(snapshot.replies), [snapshot.healthHeaders].concat(snapshot.health)];
     if (back.valueRanges?.length !== 2) throw new Error('REPLY_PROJECTION_READBACK');

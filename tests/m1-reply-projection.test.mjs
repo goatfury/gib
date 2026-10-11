@@ -14,13 +14,15 @@ test('hosted verifier needs no Node or crypto and matches independent SHA256 vec
   assert.equal(context.GibReplySheetVerifier.hash('abc'),'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
   for(const value of ['', '😀 Kids’ BJJ', '\ud800',...Array.from({length:140},(_,i)=>'λ=x'.repeat(i)),{rows:[['rev',false,123,'=SUM(A1)']]}]) assert.equal(context.GibReplySheetVerifier.hash(value),digestHash(value));
 });
-function harness(gym = 'rev') {
+function harness(gym = 'rev', testOnly = false) {
   const name = gym === 'rev' ? 'Revolution' : 'Richmond', calls = [], contents = new Map();
   const props = new Map([['GIB_M1_REPLY_REVIEW_SHEET_ID', SHEET], ['GIB_M1_REPLY_PROJECTION_ENABLED', 'true']]);
   const tabs = [{sheetId:1,title:name+' Replies',gridProperties:{rowCount:1000,columnCount:26}}, {sheetId:2,title:name+' Health',gridProperties:{rowCount:1000,columnCount:26}}];
   let now = NOW, released = 0;
   const state = { shared:false, owner:OWNER, extraPermission:false, nextPage:false, failWrite:false, corruptRead:false, busy:false, failPost:false };
   const row = [gym, 'a'.repeat(64), 'b'.repeat(64), ID, NOW, 'manager@example.invalid', 'abcdef1234567890', 'abcdef1234567891', 'c'.repeat(64), 'needs-review', 'received', '=IMPORTXML("https://example.invalid", "//x")', false, false, '[]', '[]', ID];
+  if (testOnly) row[11] = 'Thanks, received.';
+  row.push(testOnly ? 'TEST ONLY' : '');
   row.push(digestHash(row));
   const health = HEALTH_HEADERS.map(()=> ''); Object.assign(health,{0:'current',1:gym,2:'healthy',3:NOW,4:NOW-120000,7:ID,8:NOW,9:1,10:digestHash([row]),11:0,12:digestHash([]),13:'d'.repeat(64),14:'ready'});health[21]=digestHash(health.slice(0,-1));
   const snapshot = {ok:true,schema:PROJECTION_SCHEMA,gym,generation:ID,tabs:{replies:tabs[0].title,health:tabs[1].title},replyHeaders:REPLY_HEADERS,healthHeaders:HEALTH_HEADERS,receiptHeaders:RECEIPT_HEADERS,replies:[row],health:[health]};
@@ -54,6 +56,17 @@ for(const gym of ['rev','richmond'])test(gym+' projection writes literal cells t
   assert.equal(result.ok,true);assert.equal(h.contents.get(1)[1][11],'=IMPORTXML("https://example.invalid", "//x")');
   assert.equal(h.contents.get(2)[1][1],gym);assert.equal(h.calls.filter(c=>c.options.method==='post').length,1);assert.equal(h.released(),1);
   assert.equal(h.props.has('GIB_M1_REPLY_PROJECTION_FAULT'),false);
+});
+for(const gym of ['rev','richmond'])test(gym+' actual Google projection retains the trusted test column for parent rendering',()=>{
+  const h=harness(gym,true);h.context.publishBusinessAttendanceReplyProjection();
+  assert.deepEqual(h.contents.get(1)[0],REPLY_HEADERS);
+  assert.equal(h.contents.get(1)[1][17],'TEST ONLY');
+  assert.equal(h.contents.get(1)[1][11],'Thanks, received.');
+  const context={};vm.createContext(context);
+  vm.runInContext(readFileSync(new URL('../tools/m1-reply-sheet-portable.js',import.meta.url),'utf8'),context);
+  const result=context.GibReplySheetVerifier.verify({gym,before:h.contents.get(2).slice(1),after:h.contents.get(2).slice(1),replies:h.contents.get(1).slice(1),now:NOW});
+  assert.equal(result.replyNotices[0].text,'TEST ONLY - '+gym+' reply: Thanks, received.');
+  assert.ok(h.calls.some(c=>c.url.includes('/values:batchGet?')&&decodeURIComponent(c.url).includes('!A1:S2')));
 });
 test('projection rejects wrong owner, public/shared, paginated permissions and missing destination before data writes',()=>{
   for(const patch of [{owner:'personal@example.invalid'},{shared:true},{extraPermission:true},{nextPage:true}]){

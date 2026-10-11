@@ -1,9 +1,9 @@
 import { digestHash } from './m1-attendance-digest.mjs';
 import { replyQueue, listReplyRecords, retainReplyRecord } from './m1-reply-intake.mjs';
 
-export const PROJECTION_SCHEMA = 'm1-reply-sheet/v1';
+export const PROJECTION_SCHEMA = 'm1-reply-sheet/v2';
 export const PROJECTION_LIMIT = 2000;
-export const REPLY_HEADERS = ['gym', 'sourceId', 'sourceVersion', 'eventId', 'receivedAt', 'managerAddress', 'gmailId', 'threadId', 'rfcIdHash', 'state', 'reviewState', 'replyText', 'incomplete', 'ambiguous', 'questionsJson', 'relatedSourceIdsJson', 'generation', 'rowHash'];
+export const REPLY_HEADERS = ['gym', 'sourceId', 'sourceVersion', 'eventId', 'receivedAt', 'managerAddress', 'gmailId', 'threadId', 'rfcIdHash', 'state', 'reviewState', 'replyText', 'incomplete', 'ambiguous', 'questionsJson', 'relatedSourceIdsJson', 'generation', 'testProvenance', 'rowHash'];
 export const HEALTH_HEADERS = ['rowType', 'gym', 'code', 'checkedAt', 'scanThrough', 'routeFaultsJson', 'routeOverflowJson', 'generation', 'projectedAt', 'replyRowCount', 'replySnapshotHash', 'episodeRowCount', 'episodeSnapshotHash', 'sourceRevision', 'projectionStatus', 'episodeId', 'firstFailureAt', 'lastFailureAt', 'failureCount', 'recoveredAt', 'episodeVersion', 'rowHash'];
 export const RECEIPT_HEADERS = ['gym', 'kind', 'sourceId', 'sourceVersion', 'surfacedAt', 'outputReference'];
 export const projectionTabs = gym => ({ replies: gym === 'rev' ? 'Revolution Replies' : 'Richmond Replies', health: gym === 'rev' ? 'Revolution Health' : 'Richmond Health' });
@@ -73,7 +73,8 @@ export async function replyProjection(store, gym, now, generation, projectionFau
       receivedAt: item.receivedAt, managerAddress: item.manager.address, gmailId: item.gmailId,
       threadId: item.threadId, rfcIdHash: item.rfcIdHash, state: item.state, replyText: item.body,
       incomplete: item.state === 'body-incomplete', ambiguous: item.state !== 'needs-review',
-      questionsJson: JSON.stringify(item.questions.map(minimalQuestion)) };
+      questionsJson: JSON.stringify(item.questions.map(minimalQuestion)),
+      ...(item.testProvenance === 'gib-reply-acceptance/v1' ? { testProvenance: item.testProvenance } : {}) };
     await retainReplyRecord(store, 'projection-replies/' + item.id + '/' + item.sourceVersion, record);
   }
   const [saved, polls, projectionFaults] = await Promise.all(['projection-replies', 'polls', 'projection-health'].map(kind => listReplyRecords(store, kind)));
@@ -85,6 +86,7 @@ export async function replyProjection(store, gym, now, generation, projectionFau
   episodes.sort((a,b) => a.firstFailureAt - b.firstFailureAt || a.episodeId.localeCompare(b.episodeId));
   if (sources.length > PROJECTION_LIMIT || episodes.length > PROJECTION_LIMIT) fail('REPLY_PROJECTION_CAPACITY');
   const rows = sources.map(r => row(REPLY_HEADERS, { ...r, generation,
+    testProvenance: r.testProvenance === 'gib-reply-acceptance/v1' ? 'TEST ONLY' : '',
     reviewState: queue.reviews.find(v => v.gym === gym && v.sourceId === r.sourceId && v.sourceVersion === r.sourceVersion)?.decision || 'received',
     relatedSourceIdsJson: JSON.stringify([...new Set(sources.filter(s => s.eventId === r.eventId && s.sourceId !== r.sourceId).map(s => s.sourceId))].sort()) }));
   const episodeRows = episodes.map(e => row(HEALTH_HEADERS, { rowType: 'episode', gym, generation, ...e }));
@@ -118,6 +120,7 @@ export function verifyReplyProjection({ gym, before, replies, after, receipts = 
     if (cells[headers.indexOf('gym')] !== gym || cells[headers.indexOf('generation')] !== current.generation
       || digestHash(cells.slice(0, -1)) !== cells.at(-1)) fail('REPLY_PROJECTION_HASH');
   }
+  if (rows.some(r => !['', 'TEST ONLY'].includes(r[17]))) fail('REPLY_PROJECTION_PROVENANCE');
   const delivered = new Set(receipts.filter(r => r[0] === gym && ['reply', 'health'].includes(r[1])
     && Number.isSafeInteger(r[4]) && r[4] <= now && typeof r[5] === 'string' && r[5].trim()).map(r => r.slice(0, 4).join(':')));
   const unseen = rows.filter(r => !delivered.has([gym, 'reply', r[1], r[2]].join(':')));
@@ -132,6 +135,11 @@ export function verifyReplyProjection({ gym, before, replies, after, receipts = 
   const currentException = health !== 'healthy' && !episodes.some(r => r[2] === health && !r[19])
     && !delivered.has([gym, 'health', exceptionId, exceptionVersion].join(':'))
     ? { kind: 'health', sourceId: exceptionId, sourceVersion: exceptionVersion, code: health } : null;
-  return { gym, generation: current.generation, health, currentException, unseenReplies: unseen, unseenEpisodes,
+  // The parent consumes these notices instead of reconstructing a title from
+  // untrusted reply text. Keep the original reply text as a separate value.
+  const replyNotices = unseen.map(r => ({ gym, kind: 'reply', sourceId: r[1], sourceVersion: r[2], eventId: r[3],
+    testOnly: r[17] === 'TEST ONLY', label: r[17] === 'TEST ONLY' ? 'TEST ONLY' : 'Attendance reply',
+    text: (r[17] === 'TEST ONLY' ? 'TEST ONLY - ' : '') + gym + ' reply: ' + r[11], replyText: r[11] }));
+  return { gym, generation: current.generation, health, currentException, unseenReplies: unseen, replyNotices, unseenEpisodes,
     attendanceWritesEnabled: false, payrollReleaseEnabled: false };
 }

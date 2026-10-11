@@ -74,10 +74,16 @@ export function replyEvent(check, scope, report) {
   // The existing system's canonical identity is the complete instructor name.
   // New/ambiguous names require a human to verify the roster, never fuzzy aliases.
   const instructors = [...new Set((ledger?.days || []).flatMap(d => d.records.map(r => r.instructor)))].filter(n => text(n, 100)).sort();
+  // Only the server's bounded acceptance registrar supplies this discriminator.
+  // Never infer it from an email's subject/body or accept real correction scope.
+  if (check.testProvenance !== undefined && (check.testProvenance !== 'gib-reply-acceptance/v1'
+    || questions.length || instructors.length
+    || report.rendered.subject !== 'GiB reply intake TEST ONLY - ' + (gym === 'rev' ? 'Revolution' : 'Richmond'))) fail('REPLY_EVENT_INVALID');
   return { schema: 'm1-reply-event/v1', eventId: id, gym, target: 'production', opportunityDate: check.binding.jobDate,
     createdAt: check.binding.createdAt, manager: MANAGERS[gym], mailbox: MAILBOX,
     subject: report.rendered.subject + ' ' + eventMarker(gym, id), questions, instructors,
-    digestHash: digestHash(check.digest), unattendedWrites: false, payrollRelease: false };
+    digestHash: digestHash(check.digest), unattendedWrites: false, payrollRelease: false,
+    ...(check.testProvenance ? { testProvenance: check.testProvenance } : {}) };
 }
 export async function prepareReplyEvent(check, scope, report, dependencies = {}) {
   const event = replyEvent(check, scope, report), store = await replyStore(scope, dependencies);
@@ -165,7 +171,8 @@ export async function ingestReply(store, gym, message, now) {
     manager: relevant ? event.manager : null, questions: relevant ? event.questions : [],
     supportedScope: relevant && event.questions.length === 1 ? [event.questions[0].itemId] : [],
     unresolvedRemainder: relevant && /\bboth\b/i.test(message.body) ? 'A second occurrence is not established by this reply; verify it separately.' : null,
-    payrollState: 'held-for-review', attendanceWritten: false, payrollReleased: false };
+    payrollState: 'held-for-review', attendanceWritten: false, payrollReleased: false,
+    ...(event?.testProvenance === 'gib-reply-acceptance/v1' ? { testProvenance: event.testProvenance, testLabel: 'TEST ONLY' } : {}) };
   const created = await retain(store, 'queue/' + id, record);
   await quarantineUnverifiedReply(store, record);
   return observeThreadEvidence(store, record, message, event, now, created);
@@ -190,7 +197,8 @@ function projectedReply(source, evidence, rejections) {
   const state = conflicting ? 'replay-conflict' : parents.length > 1 ? 'thread-evidence-conflict'
     : verified.find(e => e.state === 'stale-thread')?.state || verified[0]?.state || source.state;
   const evidenceIds = verified.map(e => e.id).sort();
-  return { ...source, state, evidenceIds, sourceVersion: digestHash([source.sourceHash, state, evidenceIds, conflicting]) };
+  return { ...source, state, evidenceIds, sourceVersion: digestHash([source.sourceHash, state, evidenceIds, conflicting,
+    ...(source.testProvenance ? [source.testProvenance] : [])]) };
 }
 async function quarantineUnverifiedReply(store, record) {
   if (!['sender-unverified', 'event-not-found'].includes(record.state)) return;
