@@ -226,6 +226,9 @@ function gibM1AttendanceEmailFirstTick_() {
     var checked = gibM1DigestDispatch_(binding);
     if (checked.ok === true && gibM1EmailFirstReportValid_(checked.dailyEmail, scope, date)) report = checked.dailyEmail;
   } catch (_) { /* A new unavailable check still follows the accepted warning policy. */ }
+  if (typeof gibM1ReplyRememberRoute_ === 'function') {
+    try { gibM1ReplyRememberRoute_(scope, report, claimed.requestId, now, checked?.replyRouteFault); } catch (_) { /* Keep the existing warning send policy. */ }
+  }
   var managerPolicy = scope.gym === 'rev' && (!report || report.schema === GIB_M1_EMAIL_FIRST_MANAGER_SCHEMA_);
   var faults = report?.monitorFaults || [{signature:managerHash_(['rev-repeat-unchanged-monitor/v1','rev','production','MONITOR_CHECK_UNAVAILABLE']),repeatable:true}];
   var repeated = managerPolicy ? faults.filter(function(f){return f.repeatable && priorFaults.some(function(p){return p.signature===f.signature && p.lastWarning;});}) : [];
@@ -271,7 +274,11 @@ function gibM1AttendanceEmailFirstTick_() {
     || properties.getProperty('GIB_M1_MAILAPP_LIVE_SEND_ENABLED') !== 'true'
     || properties.getProperty('GIB_M1_ATTENDANCE_DIGEST_LIVE_SCHEDULE_ENABLED') !== 'true') return;
   // Do not depend on Spreadsheet availability for a warning about unavailable records.
-  var hash = managerHash_({ ...rendered, from: GIB_M1_MAILAPP_SENDER_, ...expected, replyTo: 'andrew@revolutionbjj.com' });
+  var sendOptions = { to: expected.to[0], bcc: expected.bcc[0], replyTo: 'andrew@revolutionbjj.com',
+    subject: rendered.subject, body: rendered.text, htmlBody: rendered.html };
+  if (typeof gibM1ReplyMailOptions_ === 'function') sendOptions = gibM1ReplyMailOptions_(scope, sendOptions);
+  rendered = { subject: sendOptions.subject, text: sendOptions.body, html: sendOptions.htmlBody };
+  var hash = managerHash_({ ...rendered, from: GIB_M1_MAILAPP_SENDER_, ...expected, replyTo: sendOptions.replyTo });
   var attempt = { ...claimed, ...managerSummary, state: 'call-pending', attemptedAt: Date.now(), hash: hash, checkConfirmed: Boolean(report) };
   if (managerPolicy) attempt.monitorState=gibM1RevMonitorState_(date,faults,priorFaults,report,
     {date:date,requestId:claimed.requestId,payloadHash:hash,outcome:'call-pending'});
@@ -281,8 +288,7 @@ function gibM1AttendanceEmailFirstTick_() {
     || properties.getProperty('GIB_M1_MAILAPP_LIVE_SEND_ENABLED') !== 'true'
     || properties.getProperty('GIB_M1_ATTENDANCE_DIGEST_LIVE_SCHEDULE_ENABLED') !== 'true') return;
   var submitted = false;
-  try { MailApp.sendEmail({ to: expected.to[0], bcc: expected.bcc[0], replyTo: 'andrew@revolutionbjj.com',
-    subject: rendered.subject, body: rendered.text, htmlBody: rendered.html }); submitted = true; }
+  try { MailApp.sendEmail(sendOptions); submitted = true; }
   catch (_) { /* Google may have accepted it; never resend this date. */ }
   var completed = { ...attempt, state: submitted ? 'submitted' : 'uncertain', completedAt: Date.now(),
     code: submitted ? 'GOOGLE_ACCEPTED_SEND' : 'SEND_OUTCOME_UNCERTAIN' };

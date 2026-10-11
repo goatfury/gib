@@ -11,6 +11,7 @@ import { datesThrough, localNow } from '../netlify/functions/_lib/m1-manager-rev
 import { emailFirstSettings } from '../tools/package-m1-disabled-release.mjs';
 import { handleAttendanceDigestJob } from '../netlify/functions/m1-attendance-digest-job.mjs';
 import { makeDigestBinding, digestSignature } from '../netlify/functions/_lib/m1-attendance-digest-outbox.mjs';
+import { replyQueue } from '../netlify/functions/_lib/m1-reply-intake.mjs';
 import { handleUploadEvidence } from '../netlify/functions/m1-upload-evidence.mjs';
 import { createProductionDeviceCredential, PRODUCTION_DEVICE_COOKIE } from '../netlify/functions/_lib/m1-production-runtime.mjs';
 
@@ -161,6 +162,23 @@ test('deployed signed email-first job can be verified read-only, without central
   assert.equal(result.dailyEmail.coverageConfirmed,false);assert.equal(result.dailyEmail.operatorFaultCount,0);assert.equal(result.dailyEmail.managerWarningCount,1);assert.equal(result.dailyEmail.reportingEvidence.state,'none-observed');
   assert.equal(digestStore.entries.size,0);assert.equal(uploadStore.entries.size,0);
   assert.equal((await handleAttendanceDigestJob(makeRequest('0'.repeat(64)),dependencies)).status,403);assert.equal(digestStore.entries.size,0);
+});
+test('failed event registration keeps the existing email and durably exposes the old-route fallback', async () => {
+  const env = { GIB_M1_ATTENDANCE_EMAIL_FIRST_ENABLED: 'true', GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED: 'true', GIB_M1_REPLY_INTAKE_ENABLED: 'true',
+    GIB_M1_PRODUCTION_WEBHOOK_URL: 'https://script.google.com/macros/s/TEST_RECEIVER_PLACEHOLDER/exec',
+    GIB_M1_PRODUCTION_WEBHOOK_TOKEN: 'isolated-receiver-secret-0123456789', GIB_M1_ADMIN_ACTION_TOKEN: 'isolated-admin-secret-0123456789', GIB_M1_ADMIN_PASSPHRASE: 'isolated amber forest meadow',
+    GIB_M1_ATTENDANCE_DIGEST_SEND_ENABLED: 'true', GIB_M1_MAILAPP_LIVE_SEND_ENABLED: 'true' };
+  const replyStore = store(), originalSet = replyStore.set.bind(replyStore);
+  replyStore.set = async (key, ...args) => { if (key.includes('/events/')) throw Error('event store failed'); return originalSet(key, ...args); };
+  const body = JSON.stringify({ ...makeDigestBinding(DEVICE, 'scheduled', NOW, 'production'), gyms: [{ gym: 'rev', attendance: { ok: true, ledger: ledger() }, staff: { ok: true, complete: true, items: [], notApplicable: true } }] });
+  const request = new Request('https://gib-live.netlify.app/api/m1-attendance-digest-job', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-GIB-M1-Digest-Signature': digestSignature(body, env.GIB_M1_ADMIN_ACTION_TOKEN) }, body });
+  const response = await handleAttendanceDigestJob(request, { env, installationId: 'rev', clock: () => NOW, context: { site: { name: 'gib-live', id: 'f748e737-11e3-4fab-8e8c-bf185eab29ff' }, deploy: { context: 'production', published: true } },
+    replyStore, digestStore: store(), uploadStore: store(), loadSchedules: async () => schedules()[0], traceLog() {}, fetch: async () => { throw Error('No real network or send'); } });
+  assert.equal(response.status, 200); const result = await response.json();
+  assert.equal(result.dailyEmail.shouldSend, true); assert.doesNotMatch(result.dailyEmail.rendered.subject, /\[GiB/);
+  assert.equal(result.replyRouteFault.code, 'event-registration-unavailable');
+  const queue = await replyQueue(replyStore, 'rev', NOW); assert.equal(queue.routing.code, 'route-degraded');
+  assert.equal(queue.routing.unresolvedFaults[0].eventId, DEVICE);
 });
 test('background Sheet reader works with manager screen disabled and preserves originals and review history',()=>{
   const records=[{rowId:ROW,date:DATE,classLabel:'6:00 PM QA fixture',instructor:'QA fixture',duration:1,status:''}], original=structuredClone(records);

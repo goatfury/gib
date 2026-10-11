@@ -30,6 +30,7 @@ globalThis.fetch = async (input, options = {}) => {
   if (method === 'PUT') return new Response(null, { status: rejectConditionalWrite ? 412 : 200, headers: { etag: 'isolated-etag' } });
   return new Response(null, { status: 404 });
 };
+if (name === 'm1-reply-intake') process.env.GIB_M1_ATTENDANCE_REMINDERS_LIVE_ENABLED = 'true';
 await import(pathToFileURL(entry).href);
 const module = await import(pathToFileURL(main).href);
 const mainSource = await readFile(main, 'utf8');
@@ -63,4 +64,16 @@ if (name === 'm1-added-classes') {
   assert.equal(calls.length, reads, 'Rejected scope must not reach storage.');
   addedClassRead = true;
 }
-console.log(JSON.stringify({ name, storageImported, addedClassRead, fakeStorageCalls: calls.length }));
+let replyIntakeDisabled = false;
+if (name === 'm1-reply-intake') {
+  const origin = gym === 'rev' ? 'https://gib-live.netlify.app' : 'https://gib-richmond-live.netlify.app';
+  const context = { site: { id: gym === 'rev' ? 'f748e737-11e3-4fab-8e8c-bf185eab29ff' : '9b7757a9-70f4-4977-9ca2-270b41e34007',
+    name: gym === 'rev' ? 'gib-live' : 'gib-richmond-live' }, deploy: { context: 'production', published: true } };
+  const before = calls.length;
+  const response = await module.default(new Request(origin + '/api/m1-reply-intake'), context);
+  assert.equal(response.status, 503, 'The packaged reply pilot must remain disabled.');
+  assert.equal((await response.json()).code, 'REPLY_DISABLED');
+  assert.equal(calls.length, before, 'Disabled intake must not open storage.');
+  replyIntakeDisabled = true;
+}
+console.log(JSON.stringify({ name, storageImported, addedClassRead, replyIntakeDisabled, fakeStorageCalls: calls.length }));

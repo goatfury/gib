@@ -14,7 +14,8 @@ export async function verifyReleaseRuntime({ artifact, cliRoot, runtime, install
   const cliRequire = createRequire(resolve(cliRoot, 'package.json'));
   const { default: extract } = await import(pathToFileURL(cliRequire.resolve('extract-zip')).href);
   const manifest = JSON.parse(await readFile(resolve(artifact, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.functions.length, 35);
+  assert.equal(manifest.functions.length, 36);
+  assert.equal(manifest.functions.filter(fn => fn.name === 'm1-reply-intake').length, 1);
   const base = tmpdir(), isolated = await mkdtemp(join(base, 'gib-release-archives-'));
   // Do not inherit service credentials, NODE_PATH, NODE_OPTIONS or preloaders.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(PATH|SystemRoot|TEMP|TMP|HOME|USERPROFILE)$/i.test(key)));
@@ -41,6 +42,7 @@ export async function verifyReleaseRuntime({ artifact, cliRoot, runtime, install
     }
     assert.ok(results.filter(value => value.storageImported).length > 0, 'Real storage-library import chain must be exercised.');
     assert.equal(results.find(value => value.name === 'm1-added-classes').addedClassRead, true);
+    assert.equal(results.find(value => value.name === 'm1-reply-intake').replyIntakeDisabled, true);
     return { nodeVersion, archiveCount: results.length, isolatedFromCheckout: true, realNetworkRequests: 0, results };
   } finally {
     assert.equal(dirname(isolated), base);

@@ -202,6 +202,7 @@ function gibM1MailAppAction_(body) {
       ...(message.target === 'production' ? { replyTo: 'andrew@revolutionbjj.com' } : {}) };
     if (message.cc.length) options.cc = message.cc.join(',');
     if (message.bcc && message.bcc.length) options.bcc = message.bcc.join(',');
+    if (message.target === 'production' && typeof gibM1ReplyMailOptions_ === 'function') options = gibM1ReplyMailOptions_(scope, options);
     MailApp.sendEmail(options); returned = true;
   } catch (_) { /* May have sent. Preserve uncertainty; never retry this gym/day. */ }
   var completed = row.slice(); completed[1] = returned ? 'submitted' : 'exception'; completed[7] = new Date().toISOString();

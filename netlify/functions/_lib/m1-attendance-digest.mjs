@@ -41,7 +41,8 @@ export function latestEligibleOpportunity(configuration, assessedAt, gym) {
   const local = localNow(new Date(assessedAt)), [hours, minutes] = time.split(':').map(Number), beforeCutoff = local.minutes < hours * 60 + minutes;
   return { date: beforeCutoff ? datePlus(local.date, -1) : local.date, assessmentDate: local.date, localTime: time, beforeCutoff };
 }
-const labelKey = label => String(label).normalize('NFKC').replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase();
+export const digestLabelKey = label => String(label).normalize('NFKC').replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase();
+const labelKey = digestLabelKey;
 const safeText = (value, max = 240) => typeof value === 'string' && value.trim() && value.length <= max && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value);
 const iso = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

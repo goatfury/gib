@@ -199,7 +199,7 @@ export async function processDigestJob({ binding, gyms }, scope, dependencies = 
     }
     // The workflow consumes this fresh authenticated check, never an earlier
     // immutable daily capture. Its one bounded attempt stays fully awaited.
-    if (dependencies.onDigestCheck) await dependencies.onDigestCheck({ digest, configuration, binding, due, dueByGym, opportunityDueByGym,
+    if (dependencies.onDigestCheck) await dependencies.onDigestCheck({ digest, configuration, binding, due, dueByGym, opportunityDueByGym, snapshots, schedules,
       ...(configuration.emailFirst === true ? { uploadAssessment: snapshots[0].uploads } : {}) });
     if (due !== 'due') return completeRequest(store, binding.requestId, { state: due });
   }

@@ -4,6 +4,7 @@
 !GibM1ManagerReview.gs
 !GibM1AttendanceDigest.gs
 !GibM1MailApp.gs
+!GibM1ReplyIntake.gs
 !GibM1LiveFeatures.gs
 !GibM1AttendanceEmailFirst.gs
 !appsscript.json
